@@ -1,0 +1,2621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fund Insight - 基金观点追踪系统</title>
+    <script src="/web/vue.global.prod.js"></script>
+    <script src="/web/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #1890ff;
+            --success: #52c41a;
+            --warning: #faad14;
+            --danger: #ff4d4f;
+            --bg: #f5f7fa;
+            --card-bg: #fff;
+            --text: #333;
+            --text-secondary: #666;
+            --border: #e8e8e8;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            padding: 16px 24px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 22px;
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .header-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .header-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+
+        .stats-mini-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .stat-mini {
+            background: var(--card-bg);
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .stat-mini:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-mini .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-mini .label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .action-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            flex: 1;
+            min-width: 120px;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .action-btn.primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .action-btn.success {
+            background: var(--success);
+            color: white;
+        }
+
+        .action-btn.warning {
+            background: var(--warning);
+            color: white;
+        }
+
+        .action-btn.danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .action-btn.default {
+            background: #f0f0f0;
+            color: #666;
+        }
+
+        .action-btn.small {
+            padding: 6px 12px;
+            font-size: 12px;
+            flex: none;
+        }
+
+        .action-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .filter-tabs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filter-tab {
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+            border-radius: 16px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+
+        .filter-tab:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .filter-tab.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title::before {
+            content: '';
+            width: 3px;
+            height: 16px;
+            background: var(--primary);
+            border-radius: 2px;
+        }
+
+        .data-table {
+            background: var(--card-bg);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            margin-bottom: 16px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #fafafa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        td {
+            padding: 12px;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:hover {
+            background: #fafafa;
+        }
+
+        .grade-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .grade-S {
+            background: #fff2f0;
+            color: #ff4d4f;
+        }
+
+        .grade-A {
+            background: #fff7e6;
+            color: #fa8c16;
+        }
+
+        .grade-B {
+            background: #e6f7ff;
+            color: #1890ff;
+        }
+
+        .grade-C {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+
+        .grade-D {
+            background: #f5f5f5;
+            color: #999;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+        }
+
+        .status-pending {
+            background: #fff7e6;
+            color: #fa8c16;
+        }
+
+        .status-success {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+
+        .status-failed {
+            background: #fff1f0;
+            color: #ff4d4f;
+        }
+
+        .verify-type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+        }
+
+        .verify-final {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+
+        .verify-process {
+            background: #e6f7ff;
+            color: #1890ff;
+        }
+
+        .verify-partial {
+            background: #fffbe6;
+            color: #faad14;
+        }
+
+        .verify-llm_verify {
+            background: #f9f0ff;
+            color: #722ed1;
+        }
+
+        .verify-failed {
+            background: #fff1f0;
+            color: #ff4d4f;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .loading-spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+
+        .modal.wide {
+            max-width: 800px;
+        }
+
+        .modal-header {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .modal-btn.primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .modal-btn.danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .modal-btn.default {
+            background: #f0f0f0;
+        }
+
+        .advice-box {
+            background: linear-gradient(135deg, #fff7e6 0%, #fff1f0 100%);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 16px;
+            border-left: 4px solid var(--warning);
+        }
+
+        .advice-box h3 {
+            color: var(--warning);
+            margin-bottom: 12px;
+        }
+
+        .advice-box p {
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+
+        .sub-actions {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .row-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .row-btn {
+            padding: 4px 8px;
+            font-size: 11px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .row-btn.primary {
+            background: #e6f7ff;
+            color: #1890ff;
+        }
+
+        .row-btn.danger {
+            background: #fff1f0;
+            color: #ff4d4f;
+        }
+
+        .row-btn.success {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+
+        .detail-section {
+            margin-bottom: 16px;
+        }
+
+        .detail-section h4 {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 4px;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .detail-item {
+            font-size: 13px;
+        }
+
+        .detail-item label {
+            color: var(--text-secondary);
+        }
+
+        .detail-item span {
+            font-weight: 500;
+        }
+
+        .history-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .history-item .date {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .history-item .content {
+            font-size: 13px;
+            margin-top: 4px;
+        }
+
+        .history-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .history-item-header .date {
+            font-weight: 500;
+        }
+
+        .advice-type-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .advice-type-badge.type-buy {
+            background: #e6f7e6;
+            color: #52c41a;
+        }
+
+        .advice-type-badge.type-sell {
+            background: #fff1f0;
+            color: #ff4d4f;
+        }
+
+        .advice-type-badge.type-hold {
+            background: #e6f7ff;
+            color: #1890ff;
+        }
+
+        .advice-type-badge.type-watch {
+            background: #fffbe6;
+            color: #faad14;
+        }
+
+        .history-item-header .confidence {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .history-item-meta {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--border);
+        }
+
+        .history-item-meta .meta-row {
+            display: flex;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .history-item-meta .meta-label {
+            color: var(--text-secondary);
+            min-width: 70px;
+        }
+
+        .history-item-meta .meta-value {
+            color: var(--text-primary);
+        }
+
+        .history-item-meta .sectors-bullish {
+            color: #52c41a;
+        }
+
+        .history-item-meta .sectors-bearish {
+            color: #ff4d4f;
+        }
+
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .config-item label {
+            font-weight: 500;
+        }
+
+        .config-item input {
+            width: 300px;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+
+        .trend-status {
+            background: #f6ffed;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .trend-status h4 {
+            margin-bottom: 8px;
+        }
+
+        .advice-view {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 16px;
+            padding: 24px;
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .advice-view::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .advice-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .advice-header h2 {
+            font-size: 24px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .advice-type-badge {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .advice-type-buy {
+            background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+        }
+
+        .advice-type-sell {
+            background: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%);
+        }
+
+        .advice-type-hold {
+            background: linear-gradient(135deg, #faad14 0%, #d48806 100%);
+        }
+
+        .advice-type-watch {
+            background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+        }
+
+        .advice-content-box {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .advice-content-box h3 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            opacity: 0.9;
+        }
+
+        .advice-content-box p {
+            font-size: 15px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+        }
+
+        .advice-meta-row {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .advice-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .advice-meta-item .label {
+            opacity: 0.8;
+            font-size: 13px;
+        }
+
+        .advice-meta-item .value {
+            font-weight: 600;
+            font-size: 15px;
+        }
+
+        .advice-confidence-bar {
+            width: 120px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .advice-confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #52c41a, #faad14, #ff4d4f);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        .advice-sectors {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .advice-sector-tag {
+            padding: 6px 14px;
+            border-radius: 16px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .sector-bullish {
+            background: rgba(82, 196, 26, 0.3);
+            border: 1px solid rgba(82, 196, 26, 0.5);
+        }
+
+        .sector-bearish {
+            background: rgba(255, 77, 79, 0.3);
+            border: 1px solid rgba(255, 77, 79, 0.5);
+        }
+
+        .advice-details-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .advice-detail-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .advice-detail-card h4 {
+            font-size: 13px;
+            opacity: 0.8;
+            margin-bottom: 8px;
+        }
+
+        .advice-detail-card p {
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .advice-term-section {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .term-card {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 12px 16px;
+        }
+
+        .term-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .term-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .term-label {
+            font-size: 13px;
+            opacity: 0.7;
+            min-width: 70px;
+            flex-shrink: 0;
+        }
+
+        .term-value {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .term-value.action-text {
+            font-weight: 600;
+            color: #ffd700;
+        }
+
+        .risk-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .risk-badge.risk-high {
+            background: rgba(255, 82, 82, 0.2);
+            color: #ff5252;
+        }
+
+        .risk-badge.risk-medium {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+        }
+
+        .risk-badge.risk-low {
+            background: rgba(76, 175, 80, 0.2);
+            color: #4caf50;
+        }
+
+        .advice-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+
+        .advice-action-btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .advice-action-btn.primary {
+            background: white;
+            color: #764ba2;
+        }
+
+        .advice-action-btn.secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .advice-action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .advice-empty {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .advice-empty-icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .advice-empty h3 {
+            font-size: 20px;
+            margin-bottom: 8px;
+        }
+
+        .advice-empty p {
+            opacity: 0.7;
+            margin-bottom: 20px;
+        }
+
+        .sentiment-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sentiment-icon {
+            font-size: 20px;
+        }
+
+        .new-badge {
+            background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+            padding: 4px 10px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .trend-analysis-box {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .trend-summary {
+            font-size: 15px;
+            color: #333;
+            margin-bottom: 16px;
+            line-height: 1.6;
+        }
+
+        .trend-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .trend-stat-item {
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .trend-label {
+            display: block;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        .trend-value {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .trend-periods {
+            border-top: 1px solid #e8e8e8;
+            padding-top: 12px;
+        }
+
+        .trend-periods h5 {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .trend-period-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            background: white;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .period-date {
+            color: #666;
+            min-width: 180px;
+        }
+
+        .period-trend {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .trend-up {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+        
+        .trend-stats {
+            display: flex;
+            gap: 15px;
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+        }
+        
+        .stat-item {
+            font-size: 13px;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+        
+        .stat-item.up {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+        
+        .stat-item.down {
+            background: #fff2f0;
+            color: #ff4d4f;
+        }
+        
+        .stat-item.flat {
+            background: #f5f5f5;
+            color: #666;
+        }
+        
+        .daily-trends {
+            margin-top: 15px;
+        }
+        
+        .daily-trend-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        
+        .daily-trend-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            min-width: 50px;
+        }
+        
+        .daily-trend-item.trend-up {
+            background: #f6ffed;
+        }
+        
+        .daily-trend-item.trend-down {
+            background: #fff2f0;
+        }
+        
+        .daily-trend-item.trend-flat {
+            background: #f5f5f5;
+        }
+        
+        .daily-date {
+            color: #666;
+            font-size: 10px;
+        }
+        
+        .daily-icon {
+            font-size: 14px;
+            margin: 2px 0;
+        }
+        
+        .daily-change {
+            font-weight: 500;
+        }
+
+        .trend-down {
+            background: #fff2f0;
+            color: #ff4d4f;
+        }
+
+        .trend-flat {
+            background: #fffbe6;
+            color: #faad14;
+        }
+
+        .period-change {
+            min-width: 60px;
+            font-weight: 500;
+        }
+
+        .period-duration {
+            color: #999;
+            margin-left: auto;
+        }
+
+        .pending-summary-box {
+            background: #fff7e6;
+            border: 1px solid #ffd591;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+
+        .pending-summary-box h4 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: #d46b08;
+        }
+
+        .pending-dates {
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        .pending-date-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+
+        .pending-summary {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .summary-row {
+            background: #f0f5ff !important;
+        }
+
+        .summary-badge {
+            background: #1890ff;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-right: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div class="header">
+            <h1>📊 Fund Insight - 基金观点追踪系统</h1>
+            <div class="header-actions">
+                <button class="header-btn" @click="showConfig = true">⚙️ 配置</button>
+            </div>
+        </div>
+        <div class="container">
+            <div v-if="loading" class="loading">
+                <div class="loading-spinner"></div>
+                <div>加载中...</div>
+            </div>
+            <div v-else>
+                <div class="stats-mini-grid">
+                    <div class="stat-mini" @click="loadView('bloggers')">
+                        <div class="value">{{ stats.overall?.total_bloggers || 0 }}</div>
+                        <div class="label">博主</div>
+                    </div>
+                    <div class="stat-mini" @click="loadView('posts')">
+                        <div class="value">{{ stats.overall?.total_posts || 0 }}</div>
+                        <div class="label">帖子</div>
+                    </div>
+                    <div class="stat-mini" @click="loadView('predictions')">
+                        <div class="value">{{ stats.overall?.total_predictions || 0 }} ({{
+                            stats.overall?.pending_predictions || 0 }}待验证)</div>
+                        <div class="label">预测</div>
+                    </div>
+                    <div class="stat-mini" @click="loadView('viewpoints')">
+                        <div class="value">{{ stats.overall?.total_viewpoints || 0 }}</div>
+                        <div class="label">观点</div>
+                    </div>
+                    <div class="stat-mini" @click="loadView('funds')">
+                        <div class="value">{{ stats.overall?.total_funds || 0 }}</div>
+                        <div class="label">基金</div>
+                    </div>
+                    <div class="stat-mini" @click="loadView('cleanup')">
+                        <div class="value">{{ cleanupPreview?.summary?.total || 0 }}</div>
+                        <div class="label">待清理</div>
+                    </div>
+                </div>
+                <div class="action-bar">
+                    <button class="action-btn primary" @click="showAddBlogger = true">👥 管理博主</button>
+                    <button class="action-btn primary" @click="showAddPost = true">📝 管理帖子</button>
+                    <button class="action-btn primary" @click="loadView('predictions')">🎯 管理预测</button>
+                    <button class="action-btn primary" @click="loadView('viewpoints')">💡 管理观点</button>
+                    <button class="action-btn success" @click="loadView('advice')">💰 投资建议</button>
+                    <button class="action-btn danger" @click="cleanupData">🗑️ 一键清理</button>
+                </div>
+                <!-- 博主视图 -->
+                <div v-if="currentView === 'bloggers'">
+                    <div class="section-title">管理博主</div>
+                    <div class="sub-actions"><button class="action-btn warning small" @click="showTopBloggers">🏆
+                            TOP博主排行</button></div>
+                    <div class="data-table" v-if="bloggers.length > 0">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>排名</th>
+                                    <th>名称</th>
+                                    <th>等级</th>
+                                    <th>加权准确率</th>
+                                    <th>预测数</th>
+                                    <th>正确数</th>
+                                    <th>未过期帖子</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(b, index) in bloggers" :key="b.id">
+                                    <td><strong>{{ index + 1 }}</strong></td>
+                                    <td>{{ b.name }}</td>
+                                    <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
+                                            }}</span></td>
+                                    <td>{{ b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%' : '-' }}</td>
+                                    <td>{{ b.total_predictions || 0 }}</td>
+                                    <td>{{ b.correct_predictions || 0 }}</td>
+                                    <td>{{ b.active_posts_count || 0 }}</td>
+                                    <td>
+                                        <div class="row-actions"><button class="row-btn danger"
+                                                @click="deleteBlogger(b.id)">删除</button></div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="empty-state">暂无博主数据</div>
+                </div>
+                <!-- 帖子视图 -->
+                <div v-if="currentView === 'posts'">
+                    <div class="section-title">管理帖子</div>
+                    <div class="sub-actions">
+                        <button class="action-btn success small" @click="showWeChatFetch = true">📱 微信文章抓取</button>
+                        <button class="action-btn warning small" @click="batchAnalyzePosts" :disabled="analyzing">{{
+                            analyzing ? '分析中...' : '🔄 批量分析未分析帖子' }}</button>
+                    </div>
+                    <div class="data-table" v-if="posts.length > 0">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>标题</th>
+                                    <th>博主</th>
+                                    <th>日期</th>
+                                    <th>已分析</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="p in posts" :key="p.id">
+                                    <td>{{ p.title || '(无标题)' }}</td>
+                                    <td>{{ p.blogger_name }}</td>
+                                    <td>{{ p.post_date }}</td>
+                                    <td><span class="status-badge"
+                                            :class="p.analyzed ? 'status-success' : 'status-pending'">{{ p.analyzed ?
+                                            '已分析' : '未分析' }}</span></td>
+                                    <td>
+                                        <div class="row-actions"><button class="row-btn primary"
+                                                @click="viewPostDetail(p.id)">详情</button><button class="row-btn danger"
+                                                @click="deletePost(p.id)">删除</button></div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="empty-state">暂无帖子数据</div>
+                </div>
+                <!-- 预测视图 -->
+                <div v-if="currentView === 'predictions'">
+                    <div class="section-title">管理预测</div>
+                    <div class="sub-actions">
+                        <button class="action-btn small" :class="predictionFilter === 'all' ? 'primary' : 'default'"
+                            @click="predictionFilter = 'all'">全部 ({{ predictions.length }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
+                            @click="predictionFilter = 'pending'">待验证 ({{ predictions.filter(p => !p.is_expired).length
+                            }})</button>
+                        <button class="action-btn small"
+                            :class="predictionFilter === 'verified' ? 'success' : 'default'"
+                            @click="predictionFilter = 'verified'">已验证 ({{ predictions.filter(p => p.is_expired).length
+                            }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'correct' ? 'success' : 'default'"
+                            @click="predictionFilter = 'correct'">正确 ({{ predictions.filter(p => p.is_expired &&
+                            p.is_correct).length }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'wrong' ? 'danger' : 'default'"
+                            @click="predictionFilter = 'wrong'">错误 ({{ predictions.filter(p => p.is_expired &&
+                            !p.is_correct).length }})</button>
+                    </div>
+                    <div class="sub-actions">
+                        <button class="action-btn warning small" @click="batchAnalyzePredictions"
+                            :disabled="analyzing">{{ analyzing ? '分析中...' : '🚀 一键AI分析' }}</button>
+                        <button class="action-btn info small" @click="mergeSimilarPredictions" :disabled="analyzing">{{
+                            analyzing ? '处理中...' : '🔀 合并同类预测' }}</button>
+                        <button class="action-btn danger small" @click="rollbackInvalidVerifications"
+                            :disabled="analyzing">{{
+                            analyzing ? '处理中...' : '🔄 回溯无效验证' }}</button>
+                    </div>
+                    <div class="data-table" v-if="filteredPredictions.length > 0">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>基金</th>
+                                    <th>博主</th>
+                                    <th>类型</th>
+                                    <th>置信度</th>
+                                    <th>目标日期</th>
+                                    <th>状态</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="p in filteredPredictions" :key="p.id">
+                                    <td>{{ p.fund_name || p.fund_code || p.sector || '-' }}</td>
+                                    <td>{{ p.blogger_name }}</td>
+                                    <td>{{ p.prediction_type === 'up' ? '看涨' : p.prediction_type === 'down' ? '看跌' :
+                                        '中性' }}</td>
+                                    <td>{{ p.confidence }}%</td>
+                                    <td>{{ p.target_date }}</td>
+                                    <td><span class="status-badge"
+                                            :class="'status-' + (p.is_expired ? (p.is_correct ? 'success' : 'failed') : 'pending')">{{
+                                            p.is_expired ? (p.is_correct ? '正确' : '错误') : '待验证' }}</span></td>
+                                    <td>
+                                        <div class="row-actions"><button v-if="p.is_expired" class="row-btn primary"
+                                                @click="viewPredictionDetail(p.id)">详情</button><button
+                                                class="row-btn danger" @click="deletePrediction(p.id)">删除</button></div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="empty-state">暂无预测数据</div>
+                </div>
+                <!-- 观点视图 -->
+                <div v-if="currentView === 'viewpoints'">
+                    <div class="section-title">管理观点</div>
+                    <div class="sub-actions">
+                        <button class="action-btn success small" @click="crawlEastmoneyBlog">📰 东方财富博客</button>
+                        <button class="action-btn success small" @click="crawlEastmoneyGuide">📖 东方财富指南</button>
+                        <button class="action-btn success small" @click="crawlSinaFinance">🌐 新浪财经</button>
+                        <button class="action-btn success small" @click="crawlSinaBlog">🌐 新浪博客</button>
+                        <button class="action-btn warning small" @click="batchAnalyzeViewpoints"
+                            :disabled="analyzing">{{ analyzing ? '分析中...' : '🚀 一键AI分析' }}</button>
+                        <button class="action-btn primary small" @click="showSummaryModal" :disabled="summarizing">{{
+                            summarizing ? '汇总中...' : '📊 一键汇总观点' }}</button>
+                    </div>
+
+                    <div v-if="summaryStats && summaryStats.pending_dates && summaryStats.pending_dates.length > 0"
+                        class="pending-summary-box">
+                        <h4>⚠️ 待汇总观点提示</h4>
+                        <div class="pending-dates">
+                            <div v-for="d in summaryStats.pending_dates" :key="d.date" class="pending-date-item">
+                                <span class="date">📅 {{ d.date }}</span>
+                                <span class="count">{{ d.count }} 条观点待汇总</span>
+                            </div>
+                        </div>
+                        <div class="pending-summary">
+                            共 <strong>{{ summaryStats.total_pending_viewpoints }}</strong> 条观点待汇总，
+                            涉及 <strong>{{ summaryStats.pending_dates.length }}</strong> 天
+                        </div>
+                    </div>
+
+                    <div class="data-table" v-if="viewpoints.length > 0">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>内容</th>
+                                    <th>作者</th>
+                                    <th>方向</th>
+                                    <th>置信度</th>
+                                    <th>日期</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="v in viewpoints" :key="v.id" :class="{'summary-row': v.is_summary}">
+                                    <td>
+                                        <span v-if="v.is_summary" class="summary-badge">📊 汇总</span>
+                                        {{ v.content ? v.content.substring(0, 40) + '...' : '-' }}
+                                    </td>
+                                    <td>{{ v.author }}</td>
+                                    <td><span class="status-badge"
+                                            :class="'status-' + (v.market_direction === 'bullish' ? 'success' : v.market_direction === 'bearish' ? 'failed' : 'pending')">{{
+                                            v.market_direction === 'bullish' ? '看多' : v.market_direction === 'bearish' ?
+                                            '看空' : '中性' }}</span></td>
+                                    <td>{{ v.confidence }}%</td>
+                                    <td>{{ v.viewpoint_date }}</td>
+                                    <td>
+                                        <div class="row-actions"><button class="row-btn primary"
+                                                @click="viewViewpointDetail(v.id)">详情</button><button
+                                                class="row-btn danger" @click="deleteViewpoint(v.id)">删除</button></div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="empty-state">暂无观点数据</div>
+                </div>
+                <!-- 基金视图 -->
+                <div v-if="currentView === 'funds'">
+                    <div class="section-title">管理基金</div>
+                    <div class="sub-actions">
+                        <button class="action-btn primary small" @click="showAddFund = true">➕ 添加基金</button>
+                        <button class="action-btn warning small" @click="updateAllFunds" :disabled="analyzing">{{
+                            analyzing ? '更新中...' : '🔄 更新所有基金' }}</button>
+                    </div>
+                    <div class="filter-tabs" style="margin: 15px 0;">
+                        <button :class="['filter-tab', { active: fundFilter === 'has_prediction' }]" @click="fundFilter = 'has_prediction'">有预测 ({{ fundsWithPredictions.length }})</button>
+                        <button :class="['filter-tab', { active: fundFilter === 'no_prediction' }]" @click="fundFilter = 'no_prediction'">无预测 ({{ fundsWithoutPredictions.length }})</button>
+                        <button :class="['filter-tab', { active: fundFilter === 'all' }]" @click="fundFilter = 'all'">全部 ({{ funds.length }})</button>
+                    </div>
+                    <div class="data-table" v-if="filteredFunds.length > 0">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>代码</th>
+                                    <th>名称</th>
+                                    <th>板块</th>
+                                    <th>净值</th>
+                                    <th>日涨幅</th>
+                                    <th>预测数</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="f in filteredFunds" :key="f.id">
+                                    <td>{{ f.fund_code }}</td>
+                                    <td>{{ f.fund_name }}</td>
+                                    <td>{{ f.sector_type || '-' }}</td>
+                                    <td>{{ f.latest_nav || '-' }}</td>
+                                    <td :style="{ color: (f.day_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
+                                        f.day_growth ? f.day_growth.toFixed(2) + '%' : '-' }}</td>
+                                    <td>{{ predictions.filter(p => p.fund_code === f.fund_code && !p.is_deleted).length || 0 }}</td>
+                                    <td>
+                                        <div class="row-actions"><button class="row-btn primary"
+                                                @click="viewFundDetail(f.fund_code)">详情</button></div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="empty-state">暂无基金数据</div>
+                </div>
+                <!-- 待清理视图 -->
+                <div v-if="currentView === 'cleanup'">
+                    <div class="section-title">待清理数据</div>
+                    <div class="sub-actions"><button class="action-btn danger small" @click="cleanupData">🗑️
+                            一键清理过期数据</button></div>
+                    
+                    <!-- 基金历史数据统计 -->
+                    <div style="margin-bottom: 20px; padding: 15px; background: #fffbe6; border-radius: 8px; border: 1px solid #ffe58f;">
+                        <h4 style="color: #d48806; margin-bottom: 10px;">📊 基金历史净值数据</h4>
+                        <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
+                            清理规则：最近30天完整保留，30-90天每周保留1条，超过90天删除
+                        </p>
+                        <div style="display: flex; gap: 20px; font-size: 13px;">
+                            <span>总记录数: <strong>{{ stats.funds?.fund_history_count || 0 }}</strong></span>
+                            <span>基金数: <strong>{{ stats.funds?.fund_count || 0 }}</strong></span>
+                            <span>平均每基金: <strong>{{ stats.funds?.fund_count ? ((stats.funds?.fund_history_count || 0) / stats.funds.fund_count).toFixed(1) : 0 }}</strong> 条</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 可清理数据汇总 -->
+                    <div v-if="cleanupPreview && cleanupPreview.summary" style="margin-bottom: 20px; padding: 15px; background: #fff1f0; border-radius: 8px; border: 1px solid #ffa39e;">
+                        <h4 style="color: #cf1322; margin-bottom: 10px;">📋 可清理数据汇总</h4>
+                        <div style="display: flex; gap: 20px; font-size: 13px; flex-wrap: wrap;">
+                            <span v-if="cleanupPreview.summary.predictions_count > 0">过期预测: <strong>{{ cleanupPreview.summary.predictions_count }}</strong>个</span>
+                            <span v-if="cleanupPreview.summary.viewpoints_count > 0">过期观点: <strong>{{ cleanupPreview.summary.viewpoints_count }}</strong>个</span>
+                            <span v-if="cleanupPreview.summary.posts_count > 0">空帖子: <strong>{{ cleanupPreview.summary.posts_count }}</strong>个</span>
+                            <span v-if="cleanupPreview.summary.funds_count > 0">无用基金: <strong>{{ cleanupPreview.summary.funds_count }}</strong>个</span>
+                            <span v-if="cleanupPreview.summary.bloggers_count > 0">无用博主: <strong>{{ cleanupPreview.summary.bloggers_count }}</strong>个</span>
+                        </div>
+                    </div>
+                    
+                    <div v-if="cleanupPreview && cleanupPreview.predictions && cleanupPreview.predictions.length > 0" style="margin-bottom: 20px;">
+                        <h4 style="color: #ff4d4f; margin-bottom: 10px;">⏰ 过期预测 ({{ cleanupPreview.predictions.length }})</h4>
+                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：目标日期 < 今天-7天</p>
+                        <div class="data-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>博主</th>
+                                        <th>板块</th>
+                                        <th>预测内容</th>
+                                        <th>目标日期</th>
+                                        <th>结果</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="p in cleanupPreview.predictions" :key="p.id">
+                                        <td>{{ p.blogger_name }}</td>
+                                        <td>{{ p.sector }}</td>
+                                        <td>{{ (p.prediction_content || '').substring(0, 30) }}...</td>
+                                        <td>{{ p.target_date }}</td>
+                                        <td><span class="status-badge"
+                                                :class="p.is_correct ? 'status-success' : 'status-failed'">{{
+                                                p.is_correct ? '正确' : '错误' }}</span></td>
+                                        <td><button class="row-btn danger" @click="deletePrediction(p.id)">删除</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="cleanupPreview && cleanupPreview.viewpoints && cleanupPreview.viewpoints.length > 0" style="margin-bottom: 20px;">
+                        <h4 style="color: #ff4d4f; margin-bottom: 10px;">⏰ 过期观点 ({{ cleanupPreview.viewpoints.length }})</h4>
+                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：观点日期 < 今天-10天</p>
+                        <div class="data-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>来源</th>
+                                        <th>作者</th>
+                                        <th>内容</th>
+                                        <th>有效期至</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="v in cleanupPreview.viewpoints" :key="v.id">
+                                        <td>{{ v.source }}</td>
+                                        <td>{{ v.author }}</td>
+                                        <td>{{ (v.content || '').substring(0, 30) }}...</td>
+                                        <td>{{ v.valid_until }}</td>
+                                        <td><button class="row-btn danger" @click="deleteViewpoint(v.id)">删除</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="cleanupPreview && cleanupPreview.posts && cleanupPreview.posts.length > 0" style="margin-bottom: 20px;">
+                        <h4 style="color: #fa8c16; margin-bottom: 10px;">📭 空帖子 ({{ cleanupPreview.posts.length }})</h4>
+                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：帖子没有任何预测</p>
+                        <div class="data-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>标题</th>
+                                        <th>博主</th>
+                                        <th>日期</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="p in cleanupPreview.posts" :key="p.id">
+                                        <td>{{ p.title }}</td>
+                                        <td>{{ p.blogger_name }}</td>
+                                        <td>{{ p.post_date }}</td>
+                                        <td><button class="row-btn danger" @click="deletePost(p.id)">删除</button></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="cleanupPreview && cleanupPreview.funds && cleanupPreview.funds.length > 0" style="margin-bottom: 20px;">
+                        <h4 style="color: #722ed1; margin-bottom: 10px;">💰 无用基金 ({{ cleanupPreview.funds.length }})</h4>
+                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：基金没有预测关联</p>
+                        <div class="data-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>代码</th>
+                                        <th>名称</th>
+                                        <th>板块</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="f in cleanupPreview.funds" :key="f.id">
+                                        <td>{{ f.fund_code }}</td>
+                                        <td>{{ f.fund_name }}</td>
+                                        <td>{{ f.sector_type || '-' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="cleanupPreview && cleanupPreview.bloggers && cleanupPreview.bloggers.length > 0" style="margin-bottom: 20px;">
+                        <h4 style="color: #13c2c2; margin-bottom: 10px;">👤 无用博主 ({{ cleanupPreview.bloggers.length }})</h4>
+                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：博主没有任何预测</p>
+                        <div class="data-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>名称</th>
+                                        <th>等级</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="b in cleanupPreview.bloggers" :key="b.id">
+                                        <td>{{ b.name }}</td>
+                                        <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-' }}</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="cleanupPreview && cleanupPreview.summary && cleanupPreview.summary.total === 0"
+                        class="empty-state">✅ 暂无待清理数据</div>
+
+                    <!-- 测试数据区域 -->
+                    <div v-if="testData && testData.summary && testData.summary.total > 0" style="margin-top: 30px;">
+                        <h4 style="color: #ff9800; margin-bottom: 10px;">🧪 测试数据 ({{ testData.summary.total }})</h4>
+                        <div class="sub-actions" style="margin-bottom: 15px;">
+                            <button class="action-btn warning small" @click="previewTestData">👁️ 预览测试数据</button>
+                            <button class="action-btn danger small" @click="cleanupTestData">🗑️ 一键清理测试数据</button>
+                        </div>
+                        <div class="test-data-summary"
+                            style="background: #fff3e0; padding: 15px; border-radius: 6px; margin-bottom: 15px;">
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+                                <div v-if="testData.summary.total_bloggers > 0">
+                                    <strong>测试博主:</strong> {{ testData.summary.total_bloggers }}个
+                                </div>
+                                <div v-if="testData.summary.total_posts > 0">
+                                    <strong>测试帖子:</strong> {{ testData.summary.total_posts }}条
+                                </div>
+                                <div v-if="testData.summary.total_funds > 0">
+                                    <strong>测试基金:</strong> {{ testData.summary.total_funds }}个
+                                </div>
+                                <div v-if="testData.summary.total_viewpoints > 0">
+                                    <strong>测试观点:</strong> {{ testData.summary.total_viewpoints }}条
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- 投资建议视图 -->
+                <div v-if="currentView === 'advice'">
+                    <div v-if="adviceGenerating" class="advice-view">
+                        <div class="advice-empty">
+                            <div class="loading-spinner"
+                                style="border-color: rgba(255,255,255,0.3); border-top-color: white;"></div>
+                            <h3>正在生成投资建议...</h3>
+                            <p>AI 正在分析市场数据，请稍候</p>
+                        </div>
+                    </div>
+                    <div v-else-if="advice" class="advice-view">
+                        <div class="advice-header">
+                            <h2>
+                                💰 投资建议
+                                <span v-if="adviceIsNew" class="new-badge">新生成</span>
+                            </h2>
+                            <span class="advice-type-badge" :class="'advice-type-' + advice.advice_type">
+                                {{ advice.advice_type === 'buy' ? '📈 建议买入' : advice.advice_type === 'sell' ? '📉 建议卖出'
+                                : advice.advice_type === 'hold' ? '🔄 建议持有' : '👀 建议观望' }}
+                            </span>
+                        </div>
+
+                        <div class="advice-meta-row">
+                            <div class="advice-meta-item">
+                                <span class="label">📅 日期：</span>
+                                <span class="value">{{ advice.advice_date }}</span>
+                            </div>
+                            <div class="advice-meta-item">
+                                <span class="label">🎯 置信度：</span>
+                                <span class="value">{{ advice.confidence }}%</span>
+                                <div class="advice-confidence-bar">
+                                    <div class="advice-confidence-fill" :style="{ width: advice.confidence + '%' }">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="advice-meta-item sentiment-indicator">
+                                <span class="label">💭 市场情绪：</span>
+                                <span class="sentiment-icon">{{ advice.market_sentiment === 'greedy' ? '🤑' :
+                                    advice.market_sentiment === 'fearful' ? '😰' : '😐' }}</span>
+                                <span class="value">{{ advice.market_sentiment === 'greedy' ? '贪婪' :
+                                    advice.market_sentiment === 'fearful' ? '恐惧' : '中性' }}</span>
+                            </div>
+                        </div>
+
+                        <div class="advice-content-box">
+                            <h3>📋 建议内容</h3>
+                            <p>{{ advice.advice_content }}</p>
+                        </div>
+
+                        <div v-if="advice.short_term_advice && Object.keys(advice.short_term_advice).length > 0" 
+                            class="advice-term-section" style="margin-bottom: 20px;">
+                            <h4 style="font-size: 15px; opacity: 0.95; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                                <span>⚡ 短期建议</span>
+                                <span style="font-size: 12px; opacity: 0.7;">(1-3天)</span>
+                                <span v-if="advice.short_term_advice.risk_level" 
+                                    :class="'risk-badge risk-' + advice.short_term_advice.risk_level">
+                                    {{ advice.short_term_advice.risk_level === 'high' ? '高风险' : 
+                                       advice.short_term_advice.risk_level === 'medium' ? '中风险' : '低风险' }}
+                                </span>
+                            </h4>
+                            <div class="term-card">
+                                <div class="term-row" v-if="advice.short_term_advice.action">
+                                    <span class="term-label">操作：</span>
+                                    <span class="term-value action-text">{{ advice.short_term_advice.action }}</span>
+                                </div>
+                                <div class="term-row" v-if="advice.short_term_advice.watch_sectors && advice.short_term_advice.watch_sectors.length > 0">
+                                    <span class="term-label">关注板块：</span>
+                                    <div class="advice-sectors">
+                                        <span v-for="s in advice.short_term_advice.watch_sectors" :key="s"
+                                            class="advice-sector-tag sector-bullish">{{ s }}</span>
+                                    </div>
+                                </div>
+                                <div class="term-row" v-if="advice.short_term_advice.reasoning">
+                                    <span class="term-label">理由：</span>
+                                    <span class="term-value">{{ advice.short_term_advice.reasoning }}</span>
+                                </div>
+                                <div class="term-row" v-if="advice.short_term_advice.valid_days">
+                                    <span class="term-label">有效期：</span>
+                                    <span class="term-value">{{ advice.short_term_advice.valid_days }}天</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="advice.mid_term_advice && Object.keys(advice.mid_term_advice).length > 0" 
+                            class="advice-term-section" style="margin-bottom: 20px;">
+                            <h4 style="font-size: 15px; opacity: 0.95; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                                <span>📅 中期建议</span>
+                                <span style="font-size: 12px; opacity: 0.7;">(1-2周)</span>
+                                <span v-if="advice.mid_term_advice.risk_level" 
+                                    :class="'risk-badge risk-' + advice.mid_term_advice.risk_level">
+                                    {{ advice.mid_term_advice.risk_level === 'high' ? '高风险' : 
+                                       advice.mid_term_advice.risk_level === 'medium' ? '中风险' : '低风险' }}
+                                </span>
+                            </h4>
+                            <div class="term-card">
+                                <div class="term-row" v-if="advice.mid_term_advice.action">
+                                    <span class="term-label">操作：</span>
+                                    <span class="term-value action-text">{{ advice.mid_term_advice.action }}</span>
+                                </div>
+                                <div class="term-row" v-if="advice.mid_term_advice.buy_sectors && advice.mid_term_advice.buy_sectors.length > 0">
+                                    <span class="term-label">布局板块：</span>
+                                    <div class="advice-sectors">
+                                        <span v-for="s in advice.mid_term_advice.buy_sectors" :key="s"
+                                            class="advice-sector-tag sector-bullish">{{ s }}</span>
+                                    </div>
+                                </div>
+                                <div class="term-row" v-if="advice.mid_term_advice.reasoning">
+                                    <span class="term-label">理由：</span>
+                                    <span class="term-value">{{ advice.mid_term_advice.reasoning }}</span>
+                                </div>
+                                <div class="term-row" v-if="advice.mid_term_advice.valid_days">
+                                    <span class="term-label">有效期：</span>
+                                    <span class="term-value">{{ advice.mid_term_advice.valid_days }}天</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="advice.suggested_sectors && advice.suggested_sectors.length > 0"
+                            style="margin-bottom: 20px;">
+                            <h4 style="font-size: 14px; opacity: 0.9; margin-bottom: 12px;">✅ 建议关注板块</h4>
+                            <div class="advice-sectors">
+                                <span v-for="s in advice.suggested_sectors" :key="s"
+                                    class="advice-sector-tag sector-bullish">{{ s }}</span>
+                            </div>
+                        </div>
+
+                        <div v-if="advice.avoid_sectors && advice.avoid_sectors.length > 0"
+                            style="margin-bottom: 20px;">
+                            <h4 style="font-size: 14px; opacity: 0.9; margin-bottom: 12px;">⚠️ 建议规避板块</h4>
+                            <div class="advice-sectors">
+                                <span v-for="s in advice.avoid_sectors" :key="s"
+                                    class="advice-sector-tag sector-bearish">{{ s }}</span>
+                            </div>
+                            <p v-if="advice.avoid_reasoning" style="font-size: 13px; opacity: 0.8; margin-top: 8px;">
+                                {{ advice.avoid_reasoning }}
+                            </p>
+                        </div>
+
+                        <div class="advice-details-grid">
+                            <div v-if="advice.reasoning" class="advice-detail-card">
+                                <h4>🧠 分析理由</h4>
+                                <p>{{ advice.reasoning }}</p>
+                            </div>
+                            <div v-if="advice.risk_warning" class="advice-detail-card">
+                                <h4>⚠️ 风险提示</h4>
+                                <p>{{ advice.risk_warning }}</p>
+                            </div>
+                        </div>
+
+                        <div class="advice-actions">
+                            <button class="advice-action-btn primary" @click="generateAdvice(true)">🔄 重新生成</button>
+                            <button class="advice-action-btn secondary" @click="showAdviceHistory = true">📜
+                                查看历史</button>
+                        </div>
+                    </div>
+                    <div v-else class="advice-view">
+                        <div class="advice-empty">
+                            <div class="advice-empty-icon">📊</div>
+                            <h3>暂无投资建议</h3>
+                            <p>点击下方按钮生成 AI 投资建议</p>
+                            <div class="advice-actions" style="margin-top: 20px;">
+                                <button class="advice-action-btn primary" @click="generateAdvice(false)">🚀
+                                    生成投资建议</button>
+                                <button class="advice-action-btn secondary" @click="showAdviceHistory = true">📜
+                                    查看历史</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 弹窗们 -->
+        <div v-if="showAddBlogger" class="modal-overlay" @click.self="showAddBlogger = false">
+            <div class="modal">
+                <div class="modal-header">添加博主</div>
+                <div class="form-group"><label>博主名称</label><input v-model="newBlogger.name" placeholder="输入博主名称"></div>
+                <div class="form-group"><label>平台</label><select v-model="newBlogger.platform">
+                        <option value="xiaohongshu">小红书</option>
+                        <option value="eastmoney">东方财富</option>
+                        <option value="sina">新浪</option>
+                    </select></div>
+                <div class="modal-footer"><button class="modal-btn default"
+                        @click="showAddBlogger = false">取消</button><button class="modal-btn primary"
+                        @click="addBlogger">添加</button></div>
+            </div>
+        </div>
+        <div v-if="showAddPost" class="modal-overlay" @click.self="showAddPost = false">
+            <div class="modal">
+                <div class="modal-header">添加帖子</div>
+                <div class="form-group"><label>选择博主</label><select v-model="newPost.blogger_id">
+                        <option v-for="b in bloggers" :value="b.id">{{ b.name }}</option>
+                    </select></div>
+                <div class="form-group"><label>帖子内容</label><textarea v-model="newPost.content" rows="5"
+                        placeholder="输入帖子内容"></textarea></div>
+                <div class="form-group"><label>发布日期</label><input type="date" v-model="newPost.post_date"></div>
+                <div class="modal-footer"><button class="modal-btn default"
+                        @click="showAddPost = false">取消</button><button class="modal-btn primary"
+                        @click="addPost">添加</button></div>
+            </div>
+        </div>
+        <div v-if="showAddFund" class="modal-overlay" @click.self="showAddFund = false">
+            <div class="modal">
+                <div class="modal-header">添加基金</div>
+                <div class="form-group"><label>基金代码</label><input v-model="newFund.fund_code" placeholder="如: 110022">
+                </div>
+                <div class="form-group"><label>基金名称（可选）</label><input v-model="newFund.fund_name" placeholder="留空自动获取">
+                </div>
+                <div class="form-group"><label>板块类型（可选）</label><input v-model="newFund.sector_type"
+                        placeholder="如: 消费、科技"></div>
+                <div class="modal-footer"><button class="modal-btn default"
+                        @click="showAddFund = false">取消</button><button class="modal-btn primary"
+                        @click="addFund">添加</button></div>
+            </div>
+        </div>
+        <div v-if="showPostDetail" class="modal-overlay" @click.self="showPostDetail = false">
+            <div class="modal wide">
+                <div class="modal-header">帖子详情<button class="modal-close" @click="showPostDetail = false">×</button>
+                </div>
+                <div v-if="postDetail">
+                    <div class="detail-grid">
+                        <div class="detail-item"><label>标题：</label><span>{{ postDetail.title || '(无标题)' }}</span></div>
+                        <div class="detail-item"><label>博主：</label><span>{{ postDetail.blogger_name }}</span></div>
+                        <div class="detail-item"><label>日期：</label><span>{{ postDetail.post_date }}</span></div>
+                        <div class="detail-item"><label>状态：</label><span
+                                :class="postDetail.analyzed ? 'status-success' : 'status-pending'">{{
+                                postDetail.analyzed ? '已分析' : '未分析' }}</span></div>
+                    </div>
+                    <div v-if="postDetail.predictions && postDetail.predictions.length > 0"
+                        class="detail-section"
+                        style="margin-top: 16px; background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%); padding: 16px; border-radius: 8px;">
+                        <h4 style="color: #1890ff;">📊 分析结果</h4>
+                        <div v-for="(pred, idx) in postDetail.predictions" :key="pred.id || idx"
+                            style="background: #fff; padding: 12px; border-radius: 6px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                            <div style="margin-bottom: 6px;"><strong>板块：</strong>{{ pred.sector || '-' }} <span
+                                    v-if="pred.sector_type" style="color: #666;">({{ pred.sector_type }})</span></div>
+                            <div style="margin-bottom: 6px;"><strong>方向：</strong><span
+                                    :style="{ color: pred.prediction_type === 'up' ? '#52c41a' : pred.prediction_type === 'down' ? '#ff4d4f' : '#666' }">{{
+                                    pred.prediction_type === 'up' ? '看涨' : pred.prediction_type === 'down' ? '看跌' : '中性'
+                                    }}</span></div>
+                            <div style="margin-bottom: 6px;"><strong>预测：</strong>{{ pred.prediction_content || '-' }}
+                            </div>
+                            <div style="margin-bottom: 6px;"><strong>周期：</strong>{{ pred.prediction_period || '-' }} |
+                                <strong>置信度：</strong>{{ pred.confidence || 0 }}%
+                            </div>
+                            <div v-if="pred.fund_name"><strong>关联基金：</strong>{{ pred.fund_name }} ({{ pred.fund_code ||
+                                '自动匹配' }})</div>
+                        </div>
+                    </div>
+                    <div class="detail-section" style="margin-top: 16px;">
+                        <h4>📝 帖子内容</h4>
+                        <p style="white-space: pre-wrap; line-height: 1.6; max-height: 400px; overflow-y: auto;">{{
+                            postDetail.content }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div v-if="showViewpointDetail" class="modal-overlay" @click.self="showViewpointDetail = false">
+            <div class="modal wide">
+                <div class="modal-header">观点详情<button class="modal-close"
+                        @click="showViewpointDetail = false">×</button></div>
+                <div v-if="viewpointDetail">
+                    <div class="detail-grid">
+                        <div class="detail-item"><label>作者：</label><span>{{ viewpointDetail.author }}</span></div>
+                        <div class="detail-item"><label>来源：</label><span>{{ viewpointDetail.source }}</span></div>
+                        <div class="detail-item"><label>方向：</label><span
+                                :class="'status-' + (viewpointDetail.market_direction === 'bullish' ? 'success' : viewpointDetail.market_direction === 'bearish' ? 'failed' : 'pending')">{{
+                                viewpointDetail.market_direction === 'bullish' ? '看多' : viewpointDetail.market_direction
+                                === 'bearish' ? '看空' : '中性' }}</span></div>
+                        <div class="detail-item"><label>置信度：</label><span>{{ viewpointDetail.confidence }}%</span></div>
+                        <div class="detail-item"><label>可信度：</label><span
+                                :class="'status-' + (viewpointDetail.credibility_score >= 70 ? 'success' : viewpointDetail.credibility_score >= 50 ? 'pending' : 'failed')">{{
+                                viewpointDetail.credibility_score || 50 }}分</span></div>
+                        <div class="detail-item"><label>风险等级：</label><span
+                                :class="'status-' + (viewpointDetail.risk_level === 'low' ? 'success' : viewpointDetail.risk_level === 'high' ? 'failed' : 'pending')">{{
+                                viewpointDetail.risk_level === 'low' ? '低风险' : viewpointDetail.risk_level === 'high' ?
+                                '高风险' : '中风险' }}</span></div>
+                        <div class="detail-item"><label>操作建议：</label><span
+                                :class="'status-' + (viewpointDetail.action_suggestion === '买入' ? 'success' : viewpointDetail.action_suggestion === '卖出' ? 'failed' : 'pending')">{{
+                                viewpointDetail.action_suggestion || '观望' }}</span></div>
+                        <div class="detail-item"><label>日期：</label><span>{{ viewpointDetail.viewpoint_date }}</span>
+                        </div>
+                    </div>
+                    <div v-if="viewpointDetail.summary && !viewpointDetail.is_summary" class="detail-section" style="margin-top: 16px;">
+                        <h4>一句话摘要</h4>
+                        <p style="font-size: 16px; color: #1890ff; font-weight: 500; line-height: 1.6;">{{
+                            viewpointDetail.summary }}</p>
+                    </div>
+                    <div v-if="viewpointDetail.is_summary" class="detail-section" style="margin-top: 16px; background: #e6f7ff; padding: 10px; border-radius: 6px;">
+                        <h4 style="color: #1890ff;">📊 汇总观点</h4>
+                        <p style="font-size: 13px; color: #666;">此观点由系统自动汇总 {{ viewpointDetail.original_count || 0 }} 条原始观点生成</p>
+                    </div>
+                    <div class="detail-section" style="margin-top: 16px;">
+                        <h4>内容</h4>
+                        <p style="white-space: pre-wrap; line-height: 1.6;">{{ viewpointDetail.content }}</p>
+                    </div>
+                    <div v-if="viewpointDetail.reasoning" class="detail-section">
+                        <h4>分析理由</h4>
+                        <p style="white-space: pre-wrap; line-height: 1.6;">{{ viewpointDetail.reasoning }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div v-if="showPredictionDetail" class="modal-overlay" @click.self="showPredictionDetail = false">
+            <div class="modal wide">
+                <div class="modal-header">预测详情<button class="modal-close"
+                        @click="showPredictionDetail = false">×</button></div>
+                <div v-if="predictionDetail">
+                    <div class="detail-grid">
+                        <div class="detail-item"><label>基金：</label><span>{{ predictionDetail.fund_name ||
+                                predictionDetail.fund_code || '-' }}</span></div>
+                        <div class="detail-item"><label>博主：</label><span>{{ predictionDetail.blogger_name }}</span>
+                        </div>
+                        <div class="detail-item"><label>板块：</label><span>{{ predictionDetail.sector || '-' }}</span>
+                        </div>
+                        <div class="detail-item"><label>板块类型：</label><span>{{ predictionDetail.sector_type || '-'
+                                }}</span></div>
+                        <div class="detail-item"><label>预测方向：</label><span class="status-badge"
+                                :class="'status-' + (predictionDetail.prediction_type === 'up' ? 'success' : predictionDetail.prediction_type === 'down' ? 'failed' : 'pending')">{{
+                                predictionDetail.prediction_type === 'up' ? '看涨' : predictionDetail.prediction_type ===
+                                'down' ? '看跌' : '中性' }}</span></div>
+                        <div class="detail-item"><label>置信度：</label><span>{{ predictionDetail.confidence }}%</span>
+                        </div>
+                        <div class="detail-item"><label>预测日期：</label><span>{{ predictionDetail.prediction_date }}</span>
+                        </div>
+                        <div class="detail-item"><label>目标日期：</label><span>{{ predictionDetail.target_date }}</span>
+                        </div>
+                        <div class="detail-item"><label>预测周期：</label><span>{{ predictionDetail.prediction_period || '-'
+                                }}</span></div>
+                        <div class="detail-item"><label>验证次数：</label><span>{{ predictionDetail.verify_count || 0
+                                }}次</span></div>
+                        <div class="detail-item"><label>状态：</label><span class="status-badge"
+                                :class="'status-' + (predictionDetail.is_expired ? (predictionDetail.is_correct ? 'success' : 'failed') : 'pending')">{{
+                                predictionDetail.is_expired ? (predictionDetail.is_correct ? '正确' : '错误') : '待验证'
+                                }}</span></div>
+                        <div class="detail-item"><label>实际涨跌：</label><span
+                                :style="{ color: (predictionDetail.actual_change || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
+                                predictionDetail.actual_change ? predictionDetail.actual_change.toFixed(2) + '%' : '-'
+                                }}</span></div>
+                    </div>
+                    <div v-if="predictionDetail.prediction_content" class="detail-section" style="margin-top: 16px;">
+                        <h4>预测内容</h4>
+                        <p style="white-space: pre-wrap; line-height: 1.6;">{{ predictionDetail.prediction_content }}
+                        </p>
+                    </div>
+                    <div v-if="predictionDetail.is_expired && predictionDetail.verify_score !== null"
+                        class="detail-section"
+                        style="background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%); padding: 16px; border-radius: 8px; margin-top: 16px;">
+                        <h4 style="color: #1890ff;">📊 验证分数详情</h4>
+                        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 16px;">
+                            <div style="font-size: 48px; font-weight: 700;"
+                                :style="{ color: (predictionDetail.verify_score || 0) >= 60 ? '#52c41a' : '#ff4d4f' }">
+                                {{ predictionDetail.verify_score || 0 }}
+                            </div>
+                            <div>
+                                <div style="font-size: 14px; color: #666;">验证得分</div>
+                                <div style="font-size: 16px; font-weight: 600;"
+                                    :style="{ color: (predictionDetail.verify_score || 0) >= 60 ? '#52c41a' : '#ff4d4f' }">
+                                    {{ (predictionDetail.verify_score || 0) >= 80 ? '优秀' :
+                                    (predictionDetail.verify_score || 0) >= 60 ? '良好' : (predictionDetail.verify_score
+                                    || 0) >= 40 ? '一般' : '较差' }}
+                                </div>
+                            </div>
+                        </div>
+                        <div style="background: #fff; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
+                            <h5 style="margin-bottom: 8px; color: #333;">📐 分数计算规则</h5>
+                            <table style="width: 100%; font-size: 12px;">
+                                <thead>
+                                    <tr style="background: #fafafa;">
+                                        <th style="padding: 6px; text-align: left;">验证类型</th>
+                                        <th style="padding: 6px; text-align: center;">分数范围</th>
+                                        <th style="padding: 6px; text-align: left;">判断条件</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'final' ? '#f6ffed' : '' }">
+                                        <td style="padding: 6px;">✅ 最终正确</td>
+                                        <td style="padding: 6px; text-align: center; font-weight: 600; color: #52c41a;">
+                                            100分</td>
+                                        <td style="padding: 6px;">最终涨跌方向与预测一致</td>
+                                    </tr>
+                                    <tr
+                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'process' ? '#f6ffed' : '' }">
+                                        <td style="padding: 6px;">📈 过程正确</td>
+                                        <td style="padding: 6px; text-align: center; font-weight: 600; color: #52c41a;">
+                                            60-90分</td>
+                                        <td style="padding: 6px;">过程中≥50%时间方向正确</td>
+                                    </tr>
+                                    <tr
+                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'partial' ? '#fffbe6' : '' }">
+                                        <td style="padding: 6px;">⚠️ 部分正确</td>
+                                        <td style="padding: 6px; text-align: center; font-weight: 600; color: #faad14;">
+                                            40-60分</td>
+                                        <td style="padding: 6px;">过程中30%-50%时间方向正确</td>
+                                    </tr>
+                                    <tr
+                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'failed' ? '#fff2f0' : '' }">
+                                        <td style="padding: 6px;">❌ 验证失败</td>
+                                        <td style="padding: 6px; text-align: center; font-weight: 600; color: #ff4d4f;">
+                                            0分</td>
+                                        <td style="padding: 6px;">方向完全错误</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0"
+                            style="background: #fff; padding: 12px; border-radius: 6px;">
+                            <h5 style="margin-bottom: 8px; color: #333;">🔍 本次验证详情</h5>
+                            <div style="font-size: 13px; line-height: 1.8;">
+                                <div v-if="predictionDetail.verify_history[0].process_metrics">
+                                    <div
+                                        style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 8px;">
+                                        <div style="background: #f6ffed; padding: 8px; border-radius: 4px;">
+                                            <div style="color: #666; font-size: 11px;">最大涨幅</div>
+                                            <div style="font-weight: 600; color: #52c41a;">+{{
+                                                (predictionDetail.verify_history[0].process_metrics.max_change ||
+                                                0).toFixed(2) }}%</div>
+                                        </div>
+                                        <div style="background: #fff2f0; padding: 8px; border-radius: 4px;">
+                                            <div style="color: #666; font-size: 11px;">最大跌幅</div>
+                                            <div style="font-weight: 600; color: #ff4d4f;">{{
+                                                (predictionDetail.verify_history[0].process_metrics.min_change ||
+                                                0).toFixed(2) }}%</div>
+                                        </div>
+                                    </div>
+                                    <div style="margin-bottom: 8px;">
+                                        <strong>方向正确时间占比：</strong>
+                                        <span
+                                            :style="{ color: (predictionDetail.verify_history[0].process_metrics.peak_hit_ratio || 0) >= 0.5 ? '#52c41a' : '#faad14', fontWeight: 600 }">
+                                            {{
+                                            Math.round((predictionDetail.verify_history[0].process_metrics.peak_hit_ratio
+                                            || 0) * 100) }}%
+                                        </span>
+                                        <span style="color: #999; font-size: 11px;">（{{
+                                            predictionDetail.verify_history[0].process_metrics.peak_hit_days || 0 }}/{{
+                                            predictionDetail.verify_history[0].process_metrics.total_days || 0
+                                            }}天）</span>
+                                    </div>
+                                    <div style="margin-bottom: 8px;">
+                                        <strong>最终涨跌：</strong>
+                                        <span
+                                            :style="{ color: (predictionDetail.verify_history[0].change || 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }">
+                                            {{ (predictionDetail.verify_history[0].change || 0) >= 0 ? '+' : '' }}{{
+                                            (predictionDetail.verify_history[0].change || 0).toFixed(2) }}%
+                                        </span>
+                                    </div>
+                                </div>
+                                <div
+                                    style="background: #fafafa; padding: 8px; border-radius: 4px; border-left: 3px solid #1890ff;">
+                                    <strong>验证结论：</strong>{{ predictionDetail.verify_history[0].analysis || '-' }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0"
+                        class="detail-section">
+                        <h4>验证历史（新规则：过程验证 + 分数机制）</h4>
+                        <table style="width: 100%; font-size: 12px;">
+                            <thead>
+                                <tr>
+                                    <th>验证日期</th>
+                                    <th>验证类型</th>
+                                    <th>得分</th>
+                                    <th>涨跌幅</th>
+                                    <th>过程指标</th>
+                                    <th>结果</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(h, idx) in predictionDetail.verify_history" :key="idx">
+                                    <td>{{ h.date }}</td>
+                                    <td>
+                                        <span class="verify-type-badge" :class="'verify-' + h.verify_type">
+                                            {{ h.verify_type === 'final' ? '最终验证' :
+                                            h.verify_type === 'process' ? '过程验证' :
+                                            h.verify_type === 'partial' ? '部分正确' :
+                                            h.verify_type === 'llm_verify' ? 'AI验证' : '验证失败' }}
+                                        </span>
+                                    </td>
+                                    <td><strong :style="{ color: (h.score || 0) >= 60 ? '#52c41a' : '#ff4d4f' }">{{
+                                            h.score || 0 }}</strong></td>
+                                    <td :style="{ color: (h.change || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{ h.change ?
+                                        h.change.toFixed(2) + '%' : '-' }}</td>
+                                    <td v-if="h.process_metrics" style="font-size: 11px; color: #666;">
+                                        最大涨{{ h.process_metrics.max_change >= 0 ? '+' : '' }}{{
+                                        (h.process_metrics.max_change || 0).toFixed(2) }}%<br>
+                                        最大跌{{ h.process_metrics.min_change >= 0 ? '+' : '' }}{{
+                                        (h.process_metrics.min_change || 0).toFixed(2) }}%<br>
+                                        方向正确{{ Math.round((h.process_metrics.peak_hit_ratio || 0) * 100) }}%
+                                    </td>
+                                    <td v-else>-</td>
+                                    <td>
+                                        <span class="status-badge"
+                                            :class="'status-' + (h.is_correct ? 'success' : 'failed')">{{ h.is_correct ?
+                                            '正确' : '错误' }}</span>
+                                        <div v-if="h.analysis" style="font-size: 11px; color: #888; margin-top: 4px;">{{
+                                            h.analysis }}</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div v-if="showFundDetail" class="modal-overlay" @click.self="showFundDetail = false">
+            <div class="modal wide">
+                <div class="modal-header">基金详情<button class="modal-close" @click="showFundDetail = false">×</button>
+                </div>
+                <div v-if="fundDetail">
+                    <div class="detail-grid">
+                        <div class="detail-item"><label>代码：</label><span>{{ fundDetail.fund_code }}</span></div>
+                        <div class="detail-item"><label>名称：</label><span>{{ fundDetail.fund_name }}</span></div>
+                        <div class="detail-item"><label>类型：</label><span>{{ fundDetail.fund_type || '-' }}</span></div>
+                        <div class="detail-item"><label>板块：</label><span>{{ fundDetail.sector_type || '-' }}</span>
+                        </div>
+                        <div class="detail-item"><label>净值：</label><span>{{ fundDetail.latest_nav || '-' }}</span></div>
+                        <div class="detail-item"><label>日涨幅：</label><span
+                                :style="{ color: (fundDetail.day_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
+                                fundDetail.day_growth ? fundDetail.day_growth.toFixed(2) + '%' : '-' }}</span></div>
+                        <div class="detail-item"><label>周涨幅：</label><span
+                                :style="{ color: (fundDetail.week_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
+                                fundDetail.week_growth ? fundDetail.week_growth.toFixed(2) + '%' : '-' }}</span></div>
+                        <div class="detail-item"><label>月涨幅：</label><span
+                                :style="{ color: (fundDetail.month_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
+                                fundDetail.month_growth ? fundDetail.month_growth.toFixed(2) + '%' : '-' }}</span></div>
+                    </div>
+                    <div v-if="fundDetail.history && fundDetail.history.length > 0" class="detail-section">
+                        <h4>历史净值（最近{{ fundDetail.history.length }}天）</h4>
+                        <table style="width: 100%; font-size: 12px;">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>净值</th>
+                                    <th>涨跌幅</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="h in fundDetail.history" :key="h.date">
+                                    <td>{{ h.date }}</td>
+                                    <td>{{ h.nav }}</td>
+                                    <td :style="{ color: (h.day_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
+                                        h.day_growth ? h.day_growth.toFixed(2) + '%' : '-' }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="detail-section">
+                        <h4>历史净值</h4>
+                        <div
+                            style="padding: 20px; text-align: center; color: #999; background: #f5f5f5; border-radius: 6px;">
+                            <p>暂无历史净值数据</p>
+                            <p style="font-size: 12px; margin-top: 8px;">请点击"更新基金"按钮获取历史净值数据</p>
+                        </div>
+                    </div>
+                </div>
+                <div v-else style="padding: 40px; text-align: center; color: #999;">
+                    <p>加载中...</p>
+                </div>
+            </div>
+        </div>
+        <div v-if="showTopBloggersModal" class="modal-overlay" @click.self="showTopBloggersModal = false">
+            <div class="modal">
+                <div class="modal-header">🏆 TOP博主排行<button class="modal-close"
+                        @click="showTopBloggersModal = false">×</button></div>
+                <div class="data-table" v-if="topBloggers.length > 0" style="box-shadow: none;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>排名</th>
+                                <th>名称</th>
+                                <th>等级</th>
+                                <th>加权准确率</th>
+                                <th>预测数</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(b, idx) in topBloggers" :key="b.id">
+                                <td><strong>{{ idx + 1 }}</strong></td>
+                                <td>{{ b.name }}</td>
+                                <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
+                                        }}</span></td>
+                                <td>{{ b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%' : '-' }}</td>
+                                <td>{{ b.total_predictions || 0 }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div v-else class="empty-state">暂无数据</div>
+            </div>
+        </div>
+        <div v-if="showAdviceHistory" class="modal-overlay" @click.self="showAdviceHistory = false">
+            <div class="modal wide">
+                <div class="modal-header">📜 投资建议历史<button class="modal-close"
+                        @click.self="showAdviceHistory = false">×</button></div>
+                <div v-if="adviceHistory.length > 0" class="history-list">
+                    <div v-for="a in adviceHistory" :key="a.id" class="history-item">
+                        <div class="history-item-header">
+                            <span class="date">{{ a.advice_date }}</span>
+                            <span class="advice-type-badge" :class="'type-' + a.advice_type">
+                                {{ a.advice_type === 'buy' ? '买入' : a.advice_type === 'sell' ? '卖出' : a.advice_type ===
+                                'hold' ? '持有' : '观望' }}
+                            </span>
+                            <span class="confidence">置信度: {{ a.confidence }}%</span>
+                        </div>
+                        <div class="content">{{ a.advice_content }}</div>
+                        <div class="history-item-meta">
+                            <div class="meta-row" v-if="a.referenced_bloggers && a.referenced_bloggers.length > 0">
+                                <span class="meta-label">引用博主:</span>
+                                <span class="meta-value">{{ a.referenced_bloggers.join('、') }}</span>
+                            </div>
+                            <div class="meta-row" v-if="a.short_term_advice && a.short_term_advice.watch_sectors && a.short_term_advice.watch_sectors.length > 0">
+                                <span class="meta-label">⚡ 短期关注:</span>
+                                <span class="meta-value sectors-bullish">{{ a.short_term_advice.watch_sectors.join('、') }}</span>
+                                <span class="meta-sub" v-if="a.short_term_advice.action">({{ a.short_term_advice.action }})</span>
+                            </div>
+                            <div class="meta-row" v-if="a.mid_term_advice && a.mid_term_advice.buy_sectors && a.mid_term_advice.buy_sectors.length > 0">
+                                <span class="meta-label">📅 中期布局:</span>
+                                <span class="meta-value sectors-bullish">{{ a.mid_term_advice.buy_sectors.join('、') }}</span>
+                                <span class="meta-sub" v-if="a.mid_term_advice.action">({{ a.mid_term_advice.action }})</span>
+                            </div>
+                            <div class="meta-row" v-if="a.suggested_sectors && a.suggested_sectors.length > 0">
+                                <span class="meta-label">建议关注:</span>
+                                <span class="meta-value sectors-bullish">{{ a.suggested_sectors.join('、') }}</span>
+                            </div>
+                            <div class="meta-row" v-if="a.avoid_sectors && a.avoid_sectors.length > 0">
+                                <span class="meta-label">建议回避:</span>
+                                <span class="meta-value sectors-bearish">{{ a.avoid_sectors.join('、') }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div v-else class="empty-state">暂无历史建议</div>
+            </div>
+        </div>
+        <div v-if="showConfig" class="modal-overlay" @click.self="showConfig = false">
+            <div class="modal wide">
+                <div class="modal-header">⚙️ 系统配置<button class="modal-close" @click="showConfig = false">×</button>
+                </div>
+                <div v-if="configData">
+                    <div class="config-item">
+                        <label>LLM 提供商</label>
+                        <select v-model="configData.llm_provider">
+                            <option value="siliconflow">硅基流动 (SiliconFlow)</option>
+                            <option value="volcengine">火山引擎 (Volcengine)</option>
+                        </select>
+                    </div>
+                    <div v-if="configData.llm_provider === 'volcengine'" style="background: #fff7e6; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+                        <h4 style="color: #d46b08; margin-bottom: 8px;">🔥 火山引擎配置</h4>
+                        <div class="config-item"><label>API Key</label><input :type="showApiKey ? 'text' : 'password'"
+                                v-model="configData.volcengine_api_key" :placeholder="configData.volcengine_api_key_set ? '已设置' : '未设置'"></div>
+                        <div class="config-item"><label>对话模型</label><input v-model="configData.volcengine_model" placeholder="如: deepseek-v3-2-251201"></div>
+                        <div class="config-item"><label>视觉模型 (Pro)</label><input v-model="configData.volcengine_vision_model" placeholder="如: doubao-seed-2-0-pro-260215"></div>
+                        <div class="config-item"><label>视觉模型 (Lite)</label><input v-model="configData.volcengine_vision_lite_model" placeholder="如: doubao-seed-2-0-lite-260215"></div>
+                    </div>
+                    <div v-else style="background: #f6ffed; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+                        <h4 style="color: #389e0d; margin-bottom: 8px;">🌿 硅基流动配置</h4>
+                        <div class="config-item"><label>API Key</label><input :type="showApiKey ? 'text' : 'password'"
+                                v-model="configData.llm_api_key" :placeholder="configData.llm_api_key_set ? '已设置' : '未设置'"></div>
+                        <div class="config-item"><label>Base URL</label><input v-model="configData.llm_base_url"></div>
+                        <div class="config-item"><label>主模型</label><input v-model="configData.llm_model"></div>
+                        <div class="config-item"><label>轻量模型</label><input v-model="configData.llm_light_model"></div>
+                    </div>
+                    <div class="config-item"><label>爬虫状态</label><span>{{ configData.crawler_enabled ? '✅ 已启用' : '❌ 未启用'
+                            }}</span></div>
+                    
+                    <!-- LLM测试区域 -->
+                    <div style="margin-top: 15px; padding: 12px; background: #e6f7ff; border-radius: 8px; border: 1px solid #91d5ff;">
+                        <h4 style="color: #1890ff; margin-bottom: 10px;">🧪 LLM 连接测试</h4>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <button class="action-btn small" @click="testLLM" :disabled="llmTesting">
+                                {{ llmTesting ? '测试中...' : '测试对话模型' }}
+                            </button>
+                            <button v-if="configData.llm_provider === 'volcengine'" class="action-btn small" @click="testVision" :disabled="visionTesting">
+                                {{ visionTesting ? '测试中...' : '测试视觉模型' }}
+                            </button>
+                        </div>
+                        <div v-if="testResult" style="margin-top: 10px; padding: 10px; background: #f6ffed; border-radius: 6px;">
+                            <div :style="{ color: testResult.success ? '#52c41a' : '#ff4d4f', fontWeight: 'bold' }">
+                                {{ testResult.success ? '✅ ' + testResult.message : '❌ ' + testResult.message }}
+                            </div>
+                            <div v-if="testResult.data" style="margin-top: 8px; font-size: 12px; color: #666;">
+                                <div>提供商: {{ testResult.data.provider }}</div>
+                                <div v-if="testResult.data.model">模型: {{ testResult.data.model }}</div>
+                                <div v-if="testResult.data.response" style="margin-top: 5px; padding: 8px; background: #fafafa; border-radius: 4px;">
+                                    响应: {{ testResult.data.response }}
+                                </div>
+                                <div v-if="testResult.data.error" style="color: #ff4d4f;">
+                                    错误: {{ testResult.data.error }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn default" @click="showConfig = false">取消</button>
+                    <button class="modal-btn primary" @click="updateConfig">保存配置</button>
+                </div>
+            </div>
+        </div>
+        <div v-if="showWeChatFetch" class="modal-overlay" @click.self="showWeChatFetch = false">
+            <div class="modal">
+                <div class="modal-header">📱 微信文章抓取<button class="modal-close"
+                        @click="showWeChatFetch = false">×</button></div>
+                <div v-if="!wechatFetching">
+                    <div class="form-group">
+                        <label>文章链接</label>
+                        <input v-model="wechatUrl" placeholder="粘贴微信公众号文章链接，如：https://mp.weixin.qq.com/s/xxx">
+                    </div>
+                    <div class="form-group">
+                        <label>发布日期</label>
+                        <input type="date" v-model="wechatPostDate">
+                        <p style="font-size: 11px; color: #999; margin-top: 4px;">
+                            💡 留空则自动从文章中提取日期
+                        </p>
+                    </div>
+                    <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                        💡 提示：从微信App中分享文章
+                        复制链接后粘贴到此处
+                    </p>
+                </div>
+                <div v-else class="loading" style="padding: 20px;">
+                    <div class="loading-spinner"></div>
+                    <div>正在抓取并分析文章...</div>
+                </div>
+                <div v-if="wechatFetchResult"
+                    style="background: #f6ffed; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+                    <div style="font-weight: 500; margin-bottom: 6px;">✅ {{ wechatFetchResult.title }}</div>
+                    <div style="font-size: 12px; color: #666;">
+                        博主: {{ wechatFetchResult.blogger_name }} |
+                        预测数: {{ wechatFetchResult.predictions_created }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn default" @click="showWeChatFetch = false">关闭</button>
+                    <button class="modal-btn primary" @click="fetchWeChatArticle"
+                        :disabled="wechatFetching || !wechatUrl">抓取</button>
+                </div>
+            </div>
+        </div>
+        <div v-if="showSummaryConfirmModal" class="modal-overlay" @click.self="showSummaryConfirmModal = false">
+            <div class="modal" style="max-width: 450px;">
+                <div class="modal-header">📊 确认汇总观点<button class="modal-close"
+                        @click="showSummaryConfirmModal = false">×</button></div>
+                <div style="padding: 16px;">
+                    <p style="margin-bottom: 12px;">将汇总以下日期的观点：</p>
+                    <div
+                        style="max-height: 200px; overflow-y: auto; background: #f5f5f5; border-radius: 8px; padding: 12px;">
+                        <div v-for="d in summaryStats.pending_dates" :key="d.date"
+                            style="display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px;">
+                            <span>📅 {{ d.date }}</span>
+                            <span style="color: #666;">{{ d.count }} 条</span>
+                        </div>
+                    </div>
+                    <p style="margin-top: 12px; font-size: 13px; color: #666;">
+                        共 <strong>{{ summaryStats.total_pending_viewpoints }}</strong> 条观点，
+                        汇总后原观点将被删除。
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn default" @click="showSummaryConfirmModal = false">取消</button>
+                    <button class="modal-btn primary" @click="executeSummary" :disabled="summarizing">
+                        {{ summarizing ? '汇总中...' : '确认汇总' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div v-if="showCrawlerResult" class="modal-overlay" @click.self="showCrawlerResult = false">
+            <div class="modal wide">
+                <div class="modal-header">{{ crawlerResult.title }}<button class="modal-close"
+                        @click="showCrawlerResult = false">×</button></div>
+                <div v-if="crawlerLoading" class="loading" style="padding: 40px;">
+                    <div class="loading-spinner"></div>
+                    <div>正在抓取数据...</div>
+                </div>
+                <div v-else>
+                    <div v-if="crawlerResult.error" style="color: #ff4d4f; padding: 20px; text-align: center;">{{
+                        crawlerResult.error }}</div>
+                    <div v-else-if="crawlerResult.articles && crawlerResult.articles.length > 0">
+                        <div style="margin-bottom: 12px; color: #666;">共采纳 {{ crawlerResult.articles.length }} 条内容</div>
+                        <div style="max-height: 400px; overflow-y: auto;">
+                            <div v-for="(a, idx) in crawlerResult.articles" :key="idx"
+                                style="padding: 12px; border-bottom: 1px solid #eee;">
+                                <div style="font-weight: 500; margin-bottom: 6px;">{{ a.title || '(无标题)' }}</div>
+                                <div style="font-size: 12px; color: #666;">作者: {{ a.author || '未知' }} | <span
+                                        :style="{ color: a.sentiment === 'bullish' ? '#52c41a' : a.sentiment === 'bearish' ? '#ff4d4f' : '#999' }">{{ a.sentiment === 'bullish' ? '看多' : a.sentiment === 'bearish' ? '看空' : '中性' }}</span> | 评分: {{ a.score || '-' }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else style="padding: 40px; text-align: center; color: #999;">未采纳任何内容</div>
+                </div>
+                <div class="modal-footer"><button class="modal-btn default"
+                        @click="showCrawlerResult = false">关闭</button></div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const { createApp, ref, reactive, onMounted, computed } = Vue;
+        createApp({
+            setup() {
+                const loading = ref(true), currentView = ref('bloggers'), stats = ref({}), bloggers = ref([]), posts = ref([]), predictions = ref([]), viewpoints = ref([]), funds = ref([]);
+                const predictionFilter = ref('all');
+                const fundFilter = ref('has_prediction');
+                const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false), summarizing = ref(false), summaryStats = ref(null), showSummaryConfirmModal = ref(false);
+                const showAddBlogger = ref(false), showAddPost = ref(false), showAddFund = ref(false), showPostDetail = ref(false), showViewpointDetail = ref(false), showFundDetail = ref(false), showPredictionDetail = ref(false);
+                const showTopBloggersModal = ref(false), showAdviceHistory = ref(false), showConfig = ref(false), showCrawlerResult = ref(false), crawlerLoading = ref(false);
+                const showWeChatFetch = ref(false), wechatFetching = ref(false), wechatUrl = ref(''), wechatFetchResult = ref(null), wechatPostDate = ref('');
+                const crawlerResult = reactive({ title: '', articles: [], error: '' });
+                const newBlogger = reactive({ name: '', platform: 'xiaohongshu' }), newPost = reactive({ blogger_id: null, content: '', post_date: new Date().toISOString().split('T')[0] }), newFund = reactive({ fund_code: '', fund_name: '', sector_type: '' });
+                const expiredPredictionsList = computed(() => predictions.value.filter(p => p.is_expired)), expiredViewpointsList = computed(() => viewpoints.value.filter(v => v.is_expired));
+                const expiredPredictions = computed(() => expiredPredictionsList.value.length), expiredViewpoints = computed(() => expiredViewpointsList.value.length);
+                
+                const fundsWithPredictions = computed(() => {
+                    const fundCodes = new Set(predictions.value.filter(p => !p.is_deleted).map(p => p.fund_code));
+                    return funds.value.filter(f => fundCodes.has(f.fund_code));
+                });
+                const fundsWithoutPredictions = computed(() => {
+                    const fundCodes = new Set(predictions.value.filter(p => !p.is_deleted).map(p => p.fund_code));
+                    return funds.value.filter(f => !fundCodes.has(f.fund_code));
+                });
+                const filteredFunds = computed(() => {
+                    if (fundFilter.value === 'has_prediction') {
+                        return fundsWithPredictions.value;
+                    } else if (fundFilter.value === 'no_prediction') {
+                        return fundsWithoutPredictions.value;
+                    }
+                    return funds.value;
+                });
+                
+                const filteredPredictions = computed(() => {
+                    let filtered = predictions.value;
+                    if (predictionFilter.value === 'pending') {
+                        filtered = predictions.value.filter(p => !p.is_expired);
+                    } else if (predictionFilter.value === 'verified') {
+                        filtered = predictions.value.filter(p => p.is_expired);
+                    } else if (predictionFilter.value === 'correct') {
+                        filtered = predictions.value.filter(p => p.is_expired && p.is_correct);
+                    } else if (predictionFilter.value === 'wrong') {
+                        filtered = predictions.value.filter(p => p.is_expired && !p.is_correct);
+                    }
+                    return filtered.sort((a, b) => {
+                        if (a.is_expired !== b.is_expired) {
+                            return a.is_expired ? 1 : -1;
+                        }
+                        if (!a.is_expired) {
+                            return new Date(a.target_date) - new Date(b.target_date);
+                        }
+                        return new Date(b.target_date) - new Date(a.target_date);
+                    });
+                });
+                const postDetail = ref(null), viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null);
+                const fetchStats = async () => { try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
+                const fetchBloggers = async () => { const res = await axios.get('/api/bloggers'); if (res.data.success) bloggers.value = res.data.data.sort((a, b) => (b.accuracy_rate || 0) - (a.accuracy_rate || 0)); };
+                const fetchPosts = async () => { const res = await axios.get('/api/posts'); if (res.data.success) posts.value = res.data.data; };
+                const fetchPredictions = async () => { const res = await axios.get('/api/predictions'); if (res.data.success) predictions.value = res.data.data; };
+                const fetchViewpoints = async () => { const res = await axios.get('/api/viewpoints'); if (res.data.success) viewpoints.value = res.data.data; };
+                const fetchFunds = async () => { const res = await axios.get('/api/funds?group_by_sector=false'); if (res.data.success) funds.value = res.data.data.sort((a, b) => (b.day_growth || 0) - (a.day_growth || 0)); };
+                const fetchCleanupPreview = async () => { try { const res = await axios.get('/api/config/cleanup/preview'); if (res.data.success) cleanupPreview.value = res.data.data; } catch (e) { console.error(e); } };
+                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await fetchViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } };
+                const addBlogger = async () => { try { await axios.post('/api/bloggers', newBlogger); showAddBlogger.value = false; newBlogger.name = ''; await fetchBloggers(); await fetchStats(); } catch (e) { alert('添加失败'); } };
+                const addPost = async () => { 
+                    try { 
+                        const res = await axios.post('/api/posts', { ...newPost, async_mode: true }); 
+                        if (res.data.success) {
+                            showAddPost.value = false; 
+                            newPost.content = ''; 
+                            alert(res.data.message);
+                            await fetchPosts(); 
+                            await fetchStats(); 
+                        } else {
+                            alert('添加失败: ' + (res.data.message || '未知错误'));
+                        }
+                    } catch (e) { 
+                        alert('添加失败: ' + (e.response?.data?.detail || e.message)); 
+                    } 
+                };
+                const addFund = async () => { try { const res = await axios.post('/api/funds', newFund); if (res.data.success) { showAddFund.value = false; newFund.fund_code = ''; await fetchFunds(); await fetchStats(); alert('添加成功'); } else { alert(res.data.message || '添加失败'); } } catch (e) { alert('添加失败: ' + e.message); } };
+                const deleteBlogger = async (id) => { if (!confirm('确定删除该博主？')) return; try { await axios.delete(`/api/bloggers/${id}`); await fetchBloggers(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败'); } };
+                const deletePost = async (id) => { if (!confirm('确定删除该帖子？')) return; try { await axios.delete(`/api/posts/${id}`); await fetchPosts(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败'); } };
+                const deletePrediction = async (id) => { if (!confirm('确定删除该预测？')) return; try { await axios.delete(`/api/predictions/${id}`); await fetchPredictions(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败'); } };
+                const deleteViewpoint = async (id) => { if (!confirm('确定删除该观点？')) return; try { await axios.delete(`/api/viewpoints/${id}`); await fetchViewpoints(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败'); } };
+                const viewPostDetail = async (id) => { try { const res = await axios.get(`/api/posts/${id}`); if (res.data.success) { postDetail.value = res.data.data; showPostDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const viewViewpointDetail = async (id) => { try { const res = await axios.get(`/api/viewpoints/${id}`); if (res.data.success) { viewpointDetail.value = res.data.data; showViewpointDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
+                const viewPredictionDetail = async (id) => { try { const res = await axios.get(`/api/predictions/${id}`); if (res.data.success) { predictionDetail.value = res.data.data; showPredictionDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const showTopBloggers = async () => { try { const res = await axios.get('/api/bloggers/top?limit=10'); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('获取失败'); } };
+                const batchAnalyzePosts = async () => { analyzing.value = true; try { const res = await axios.post('/api/posts/batch-analyze'); alert(res.data.message); await fetchPosts(); await fetchPredictions(); } catch (e) { alert('分析失败'); } analyzing.value = false; };
+                const batchAnalyzePredictions = async () => { analyzing.value = true; try { await axios.post('/api/predictions/verify-all'); await fetchPredictions(); await fetchStats(); alert('分析完成'); } catch (e) { alert('分析失败'); } analyzing.value = false; };
+                const mergeSimilarPredictions = async () => { if (!confirm('确定要合并同类预测吗？\n\n合并规则：相同博主、相同基金、相同判断、相同目标日期的预测将被合并，置信度取平均值。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/merge-similar'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '合并失败'); } } catch (e) { alert('合并失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
+                const rollbackInvalidVerifications = async () => { if (!confirm('确定要回溯无效验证吗？\n\n将检查所有已验证的预测，如果基金数据不足（少于2个数据点），则重置验证状态，等数据充足后重新验证。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/rollback-invalid'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '回溯失败'); } } catch (e) { alert('回溯失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
+                const batchAnalyzeViewpoints = async () => { analyzing.value = true; try { await axios.post('/api/viewpoints/batch-analyze', { limit: 30 }); await fetchViewpoints(); alert('分析完成'); } catch (e) { alert('分析失败'); } analyzing.value = false; };
+                const fetchSummaryStats = async () => { try { const res = await axios.get('/api/viewpoints/summary/stats'); if (res.data.success) summaryStats.value = res.data.data; } catch (e) { console.error('获取汇总统计失败:', e); } };
+                const showSummaryModal = async () => { await fetchSummaryStats(); if (!summaryStats.value || summaryStats.value.total_pending_viewpoints === 0) { alert('没有待汇总的观点'); return; } showSummaryConfirmModal.value = true; };
+                const executeSummary = async () => { summarizing.value = true; showSummaryConfirmModal.value = false; try { const res = await axios.post('/api/viewpoints/summary/execute', {}); alert(res.data.message); await fetchViewpoints(); await fetchStats(); await fetchSummaryStats(); } catch (e) { alert('汇总失败: ' + (e.response?.data?.message || e.message)); } summarizing.value = false; };
+                const updateAllFunds = async () => { analyzing.value = true; try { const res = await axios.post('/api/funds/update-all'); alert(res.data.message); await fetchFunds(); } catch (e) { alert('更新失败'); } analyzing.value = false; };
+                const crawlEastmoneyBlog = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📰 东方财富博客（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-blog/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
+                const crawlEastmoneyGuide = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📖 东方财富指南（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-guide/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
+                const crawlSinaFinance = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '🌐 新浪财经（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/sina-finance/auto-adopt', { category: 'finance', max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
+                const crawlSinaBlog = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '🌐 新浪博客（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/sina-blog/auto-adopt', { max_posts: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
+                const fetchWeChatArticle = async () => { if (!wechatUrl.value) return; wechatFetching.value = true; wechatFetchResult.value = null; try { const res = await axios.post('/api/crawler/wechat/fetch', { url: wechatUrl.value, post_date: wechatPostDate.value || null }); if (res.data.success) { wechatFetchResult.value = res.data.data; wechatUrl.value = ''; wechatPostDate.value = ''; await fetchPosts(); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '抓取失败'); } } catch (e) { alert('抓取失败: ' + (e.response?.data?.message || e.message)); } wechatFetching.value = false; };
+                const generateAdvice = async (force = false) => {
+                    currentView.value = 'advice';
+                    adviceGenerating.value = true;
+                    adviceIsNew.value = false;
+                    try {
+                        const res = await axios.post('/api/advice', { force: force });
+                        if (res.data.success) {
+                            advice.value = res.data.data;
+                            adviceIsNew.value = res.data.data.is_new;
+                            await loadAdviceHistory();
+                        }
+                    } catch (e) {
+                        alert('生成失败: ' + (e.response?.data?.message || e.message));
+                    }
+                    adviceGenerating.value = false;
+                };
+                const loadAdviceHistory = async () => { try { const res = await axios.get('/api/advice/history'); if (res.data.success) { adviceHistory.value = res.data.data; console.log('历史记录已更新:', adviceHistory.value.length); } } catch (e) { console.error('加载历史失败:', e); } };
+                const loadConfig = async () => { try { const res = await axios.get('/api/config'); if (res.data.success) configData.value = res.data.data; } catch (e) { console.error(e); } };
+                const updateConfig = async () => { try { const res = await axios.post('/api/config', configData.value); alert(res.data.message); showConfig.value = false; } catch (e) { alert('保存失败'); } };
+                const cleanupData = async () => { if (!confirm('确定要清理过期数据吗？')) return; analyzing.value = true; try { const res = await axios.post('/api/config/cleanup'); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
+                const testData = ref(null);
+                const llmTesting = ref(false);
+                const visionTesting = ref(false);
+                const testResult = ref(null);
+                const testLLM = async () => { llmTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-llm'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } llmTesting.value = false; };
+                const testVision = async () => { visionTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-vision'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } visionTesting.value = false; };
+                const loadTestData = async () => { try { const res = await axios.get('/api/test-data/find'); if (res.data.success) testData.value = res.data.data; } catch (e) { console.error('加载测试数据失败:', e); } };
+                const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
+                const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
+                onMounted(() => { fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats(); });
+                return { loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrl, wechatFetchResult, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatArticle, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVision };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

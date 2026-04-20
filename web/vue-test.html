@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fund Insight - Vue 测试</title>
+    <script src="/web/vue.global.prod.js"></script>
+    <script src="/web/axios.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <h1>Vue 测试 - {{ message }}</h1>
+        <p>axios: {{ axiosLoaded }}</p>
+    </div>
+
+    <script>
+        console.log('Vue:', typeof Vue);
+        console.log('axios:', typeof axios);
+
+        if (typeof Vue === 'undefined') {
+            document.body.innerHTML = '<h1 style="color:red">Vue 未加载！</h1>';
+        } else if (typeof axios === 'undefined') {
+            document.body.innerHTML = '<h1 style="color:red">axios 未加载！</h1>';
+        } else {
+            const { createApp, ref } = Vue;
+            createApp({
+                setup() {
+                    const message = ref('加载成功！');
+                    const axiosLoaded = ref(typeof axios !== 'undefined' ? '已加载' : '未加载');
+                    return { message, axiosLoaded };
+                }
+            }).mount('#app');
+            console.log('Vue app mounted');
+        }
+    </script>
+</body>
+
+</html>

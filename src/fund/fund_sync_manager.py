@@ -1,0 +1,451 @@
+"""
+智能基金同步管理器
+功能：
+1. 检测预测与基金的匹配情况
+2. 自动抓取缺失的基金
+3. 同类型基金去重（一个板块只保留一个基金）
+4. 更新基金信息
+"""
+import json
+from typing import Dict, List, Optional, Tuple
+from datetime import date, datetime
+from sqlalchemy.orm import Session
+
+from src.models.database import FundInfo, Prediction, SessionLocal
+from src.fund.fund_api import fund_api
+from src.fund.fund_auto_manager import fund_auto_manager
+
+
+class FundSyncManager:
+    """基金同步管理器"""
+    
+    def __init__(self):
+        pass
+    
+    def check_prediction_fund_match(self, db: Session) -> Dict:
+        """
+        检查预测与基金的匹配情况
+        
+        Returns:
+            {
+                "total_predictions": 总预测数,
+                "matched_predictions": 已匹配预测数,
+                "unmatched_predictions": 未匹配预测数,
+                "unmatched_list": [未匹配的预测信息],
+                "missing_sectors": [缺失的板块],
+                "missing_funds": [缺失的基金]
+            }
+        """
+        predictions = db.query(Prediction).filter(Prediction.is_deleted == False).all()
+        funds = db.query(FundInfo).all()
+        
+        # 构建基金查找表
+        fund_sectors = {f.sector_type: f for f in funds if f.sector_type}
+        fund_codes = {f.fund_code: f for f in funds}
+        
+        matched = 0
+        unmatched = 0
+        unmatched_list = []
+        missing_sectors = set()
+        missing_funds = set()
+        
+        for pred in predictions:
+            has_match = False
+            
+            # 1. 检查是否有直接关联的基金
+            if pred.fund_code and pred.fund_code in fund_codes:
+                has_match = True
+            # 2. 检查板块是否已有基金
+            elif pred.sector_type and pred.sector_type in fund_sectors:
+                has_match = True
+                # 自动关联已有基金
+                if not pred.fund_code:
+                    fund = fund_sectors[pred.sector_type]
+                    pred.fund_code = fund.fund_code
+                    pred.fund_name = fund.fund_name
+            # 3. 检查sector是否已有基金
+            elif pred.sector and pred.sector in fund_sectors:
+                has_match = True
+                # 自动关联已有基金
+                if not pred.fund_code:
+                    fund = fund_sectors[pred.sector]
+                    pred.fund_code = fund.fund_code
+                    pred.fund_name = fund.fund_name
+            
+            if has_match:
+                matched += 1
+            else:
+                unmatched += 1
+                unmatched_list.append({
+                    "prediction_id": pred.id,
+                    "sector": pred.sector,
+                    "sector_type": pred.sector_type,
+                    "fund_code": pred.fund_code,
+                    "fund_name": pred.fund_name
+                })
+                
+                # 记录缺失的板块或基金
+                if pred.sector_type:
+                    missing_sectors.add(pred.sector_type)
+                elif pred.sector:
+                    missing_sectors.add(pred.sector)
+                
+                if pred.fund_code:
+                    missing_funds.add(pred.fund_code)
+        
+        db.commit()
+        
+        return {
+            "total_predictions": len(predictions),
+            "matched_predictions": matched,
+            "unmatched_predictions": unmatched,
+            "unmatched_list": unmatched_list,
+            "missing_sectors": list(missing_sectors),
+            "missing_funds": list(missing_funds)
+        }
+    
+    def sync_missing_funds(self, db: Session) -> Dict:
+        """
+        同步缺失的基金
+        
+        Returns:
+            {
+                "checked": 检查的预测数,
+                "added": 添加的基金数,
+                "linked": 关联的预测数,
+                "skipped": 跳过的（同类型已有）,
+                "failed": 失败的,
+                "details": [详细操作记录]
+            }
+        """
+        result = {
+            "checked": 0,
+            "added": 0,
+            "linked": 0,
+            "skipped": 0,
+            "failed": 0,
+            "details": []
+        }
+        
+        # 获取所有预测
+        predictions = db.query(Prediction).filter(Prediction.is_deleted == False).all()
+        
+        # 获取现有基金
+        existing_funds = db.query(FundInfo).all()
+        existing_sectors = {f.sector_type: f for f in existing_funds if f.sector_type}
+        
+        for pred in predictions:
+            result["checked"] += 1
+            
+            # 确定板块
+            sector = pred.sector_type or pred.sector
+            if not sector:
+                result["details"].append({
+                    "prediction_id": pred.id,
+                    "action": "跳过",
+                    "reason": "预测没有板块信息"
+                })
+                continue
+            
+            # 1. 检查该板块是否已有基金（同类型去重）
+            if sector in existing_sectors:
+                # 已有同类型基金，直接关联
+                fund = existing_sectors[sector]
+                if pred.fund_code != fund.fund_code:
+                    pred.fund_code = fund.fund_code
+                    pred.fund_name = fund.fund_name
+                    db.commit()
+                    result["linked"] += 1
+                    result["details"].append({
+                        "prediction_id": pred.id,
+                        "action": "关联",
+                        "fund_code": fund.fund_code,
+                        "fund_name": fund.fund_name,
+                        "reason": f"板块 '{sector}' 已有基金，直接关联"
+                    })
+                continue
+            
+            # 2. 检查预测是否有指定基金代码
+            if pred.fund_code:
+                # 检查基金是否已存在
+                existing = db.query(FundInfo).filter(FundInfo.fund_code == pred.fund_code).first()
+                if existing:
+                    # 基金已存在，更新sector_type
+                    if not existing.sector_type:
+                        existing.sector_type = sector
+                        db.commit()
+                    result["linked"] += 1
+                    result["details"].append({
+                        "prediction_id": pred.id,
+                        "action": "关联",
+                        "fund_code": existing.fund_code,
+                        "fund_name": existing.fund_name,
+                        "reason": "基金已存在"
+                    })
+                    continue
+                
+                # 基金不存在，尝试抓取
+                try:
+                    fund_info = fund_api.get_fund_info(pred.fund_code)
+                    if fund_info:
+                        history = fund_api.get_fund_history(pred.fund_code, days=1)
+                        actual_day_growth = None
+                        if history:
+                            actual_day_growth = history[0].get('growth')
+                        
+                        day_growth = actual_day_growth if actual_day_growth is not None else fund_info.get('day_growth')
+                        
+                        new_fund = FundInfo(
+                            fund_code=pred.fund_code,
+                            fund_name=fund_info.get('fund_name', pred.fund_name or '未知'),
+                            fund_type=fund_info.get('fund_type', '未知类型'),
+                            sector_type=sector,
+                            latest_nav=fund_info.get('nav'),
+                            nav_date=date.today(),
+                            day_growth=day_growth,
+                            can_delete=True
+                        )
+                        db.add(new_fund)
+                        db.commit()
+                        
+                        # 获取历史数据（用于AI分析）
+                        try:
+                            from src.fund.fund_api import fund_data_manager
+                            fund_data_manager.update_fund_history(pred.fund_code, days=30, db=db)
+                            print(f"[FundSync] 已获取基金 {pred.fund_code} 的历史数据")
+                        except Exception as e:
+                            print(f"[FundSync] 获取基金 {pred.fund_code} 历史数据失败: {e}")
+                        
+                        # 更新查找表
+                        existing_sectors[sector] = new_fund
+                        
+                        result["added"] += 1
+                        result["details"].append({
+                            "prediction_id": pred.id,
+                            "action": "添加",
+                            "fund_code": new_fund.fund_code,
+                            "fund_name": new_fund.fund_name,
+                            "reason": f"根据预测指定代码抓取"
+                        })
+                        continue
+                except Exception as e:
+                    result["failed"] += 1
+                    result["details"].append({
+                        "prediction_id": pred.id,
+                        "action": "失败",
+                        "fund_code": pred.fund_code,
+                        "reason": f"抓取失败: {str(e)}"
+                    })
+                    continue
+            
+            # 3. 没有指定基金，自动抓取板块对应基金
+            try:
+                success, message, fund = fund_auto_manager.auto_add_fund_for_prediction(sector, db)
+                if success and fund:
+                    # 获取历史数据（用于AI分析）
+                    try:
+                        from src.fund.fund_api import fund_data_manager
+                        fund_data_manager.update_fund_history(fund.fund_code, days=30, db=db)
+                        print(f"[FundSync] 已获取基金 {fund.fund_code} 的历史数据")
+                    except Exception as e:
+                        print(f"[FundSync] 获取基金 {fund.fund_code} 历史数据失败: {e}")
+                    
+                    # 更新查找表
+                    existing_sectors[sector] = fund
+                    
+                    # 关联预测
+                    pred.fund_code = fund.fund_code
+                    pred.fund_name = fund.fund_name
+                    db.commit()
+                    
+                    result["added"] += 1
+                    result["linked"] += 1
+                    result["details"].append({
+                        "prediction_id": pred.id,
+                        "action": "添加并关联",
+                        "fund_code": fund.fund_code,
+                        "fund_name": fund.fund_name,
+                        "reason": f"自动抓取板块 '{sector}' 的基金"
+                    })
+                else:
+                    result["failed"] += 1
+                    result["details"].append({
+                        "prediction_id": pred.id,
+                        "action": "失败",
+                        "sector": sector,
+                        "reason": message
+                    })
+            except Exception as e:
+                result["failed"] += 1
+                result["details"].append({
+                    "prediction_id": pred.id,
+                    "action": "失败",
+                    "sector": sector,
+                    "reason": f"自动抓取失败: {str(e)}"
+                })
+        
+        return result
+    
+    def update_all_funds_info(self, db: Session) -> Dict:
+        """
+        更新所有基金信息（净值、涨跌幅等）
+        
+        注意：日涨幅(day_growth)优先使用历史净值中的实际涨跌幅，而不是估值涨跌幅
+        
+        Returns:
+            {
+                "total": 总基金数,
+                "updated": 更新成功数,
+                "failed": 更新失败数,
+                "details": [详细记录]
+            }
+        """
+        from src.fund.fund_api import fund_data_manager
+        
+        funds = db.query(FundInfo).all()
+        
+        result = {
+            "total": len(funds),
+            "updated": 0,
+            "failed": 0,
+            "details": []
+        }
+        
+        for fund in funds:
+            try:
+                fund_info = fund_api.get_fund_info(fund.fund_code)
+                if fund_info:
+                    fund.latest_nav = fund_info.get('nav', fund.latest_nav)
+                    fund.nav_date = date.today()
+                    fund.updated_at = datetime.now()
+                    
+                    history = fund_api.get_fund_history(fund.fund_code, days=1)
+                    actual_day_growth = None
+                    if history:
+                        actual_day_growth = history[0].get('growth')
+                    
+                    if actual_day_growth is not None:
+                        fund.day_growth = actual_day_growth
+                    else:
+                        fund.day_growth = fund_info.get('day_growth', fund.day_growth)
+                    
+                    fund.week_growth = fund_info.get('week_growth', fund.week_growth)
+                    fund.month_growth = fund_info.get('month_growth', fund.month_growth)
+                    
+                    db.commit()
+                    
+                    try:
+                        history_count = fund_data_manager.update_fund_history(fund.fund_code, days=30, db=db)
+                    except Exception as e:
+                        print(f"[FundSync] 更新基金 {fund.fund_code} 历史净值失败: {e}")
+                        history_count = 0
+                    
+                    result["updated"] += 1
+                    result["details"].append({
+                        "fund_code": fund.fund_code,
+                        "fund_name": fund.fund_name,
+                        "action": "更新",
+                        "nav": fund.latest_nav,
+                        "day_growth": fund.day_growth,
+                        "day_growth_source": "实际涨跌幅" if actual_day_growth is not None else "估值涨跌幅",
+                        "history_count": history_count
+                    })
+                else:
+                    result["failed"] += 1
+                    result["details"].append({
+                        "fund_code": fund.fund_code,
+                        "fund_name": fund.fund_name,
+                        "action": "失败",
+                        "reason": "无法获取基金信息"
+                    })
+            except Exception as e:
+                result["failed"] += 1
+                result["details"].append({
+                    "fund_code": fund.fund_code,
+                    "fund_name": fund.fund_name,
+                    "action": "失败",
+                    "reason": str(e)
+                })
+        
+        return result
+    
+    def full_sync(self, db: Session = None) -> Dict:
+        """
+        执行完整的基金同步流程
+        
+        1. 检测预测-基金匹配情况
+        2. 同步缺失的基金
+        3. 更新所有基金信息
+        
+        Returns:
+            完整的同步报告
+        """
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
+        
+        try:
+            print("[FundSync] 开始完整基金同步...")
+            
+            # 1. 检测匹配情况
+            print("[FundSync] 步骤1: 检测预测-基金匹配情况...")
+            match_report = self.check_prediction_fund_match(db)
+            print(f"[FundSync] 检测完成: 总预测 {match_report['total_predictions']}, "
+                  f"已匹配 {match_report['matched_predictions']}, "
+                  f"未匹配 {match_report['unmatched_predictions']}")
+            
+            # 2. 同步缺失的基金
+            print("[FundSync] 步骤2: 同步缺失的基金...")
+            sync_report = self.sync_missing_funds(db)
+            print(f"[FundSync] 同步完成: 添加 {sync_report['added']}, "
+                  f"关联 {sync_report['linked']}, "
+                  f"跳过 {sync_report['skipped']}, "
+                  f"失败 {sync_report['failed']}")
+            
+            # 3. 更新基金信息
+            print("[FundSync] 步骤3: 更新基金信息...")
+            update_report = self.update_all_funds_info(db)
+            print(f"[FundSync] 更新完成: 成功 {update_report['updated']}, "
+                  f"失败 {update_report['failed']}")
+            
+            if update_report['failed'] > 0:
+                print("[FundSync] 失败详情:")
+                for detail in update_report['details']:
+                    if detail.get('action') == '失败':
+                        print(f"  - {detail['fund_code']} ({detail['fund_name']}): {detail.get('reason', '未知原因')}")
+            
+            return {
+                "success": True,
+                "match_report": match_report,
+                "sync_report": sync_report,
+                "update_report": update_report,
+                "summary": {
+                    "total_predictions": match_report['total_predictions'],
+                    "total_funds": update_report['total'],
+                    "new_funds_added": sync_report['added'],
+                    "predictions_linked": sync_report['linked'],
+                    "funds_updated": update_report['updated']
+                }
+            }
+            
+        except Exception as e:
+            print(f"[FundSync] 同步失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e)
+            }
+        finally:
+            if close_db:
+                db.close()
+
+
+# 全局实例
+fund_sync_manager = FundSyncManager()
+
+
+def get_sync_manager() -> FundSyncManager:
+    """获取基金同步管理器实例"""
+    return fund_sync_manager

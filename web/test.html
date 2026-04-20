@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fund Insight - 测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Fund Insight API 测试</h1>
+    <div id="status"></div>
+    <div id="data"></div>
+
+    <script>
+        async function test() {
+            const statusDiv = document.getElementById('status');
+            const dataDiv = document.getElementById('data');
+
+            try {
+                statusDiv.innerHTML = '<div class="success">正在测试 API...</div>';
+
+                const response = await fetch('/api/stats');
+                const data = await response.json();
+
+                if (data.success) {
+                    statusDiv.innerHTML = '<div class="success">✅ API 连接成功！</div>';
+                    dataDiv.innerHTML = '<pre>' + JSON.stringify(data.data, null, 2) + '</pre>';
+                } else {
+                    statusDiv.innerHTML = '<div class="error">❌ API 返回失败</div>';
+                }
+            } catch (e) {
+                statusDiv.innerHTML = '<div class="error">❌ 错误：' + e.message + '</div>';
+            }
+        }
+
+        test();
+    </script>
+</body>
+
+</html>

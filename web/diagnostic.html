@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>诊断页面</title>
+    <style>
+        body {
+            font-family: Arial;
+            padding: 20px;
+        }
+
+        .test {
+            margin: 10px 0;
+            padding: 10px;
+            border-left: 4px solid #ccc;
+        }
+
+        .pass {
+            border-color: #22c55e;
+            background: #f0fdf4;
+        }
+
+        .fail {
+            border-color: #ef4444;
+            background: #fef2f2;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Fund Insight 诊断页面</h1>
+    <div id="results"></div>
+
+    <script src="vue.global.prod.js"></script>
+    <script src="axios.min.js"></script>
+    <script>
+        const results = document.getElementById('results');
+
+        function addResult(name, passed, message) {
+            const div = document.createElement('div');
+            div.className = 'test ' + (passed ? 'pass' : 'fail');
+            div.innerHTML = '<strong>' + name + ':</strong> ' + (passed ? '✅ ' : '❌ ') + message;
+            results.appendChild(div);
+        }
+
+        // 测试 1: Vue 加载
+        addResult('Vue.js', typeof Vue !== 'undefined', typeof Vue !== 'undefined' ? '加载成功' : '加载失败 - 请检查 CDN 连接');
+
+        // 测试 2: Axios 加载
+        addResult('Axios', typeof axios !== 'undefined', typeof axios !== 'undefined' ? '加载成功' : '加载失败 - 请检查 CDN 连接');
+
+        // 测试 3: API 连接
+        fetch('/api/stats')
+            .then(r => r.json())
+            .then(data => {
+                addResult('API 连接', data.success === true, '返回数据：' + JSON.stringify(data.data));
+            })
+            .catch(e => {
+                addResult('API 连接', false, '错误：' + e.message);
+            });
+
+        // 测试 4: 检查 Vue 版本
+        if (typeof Vue !== 'undefined') {
+            addResult('Vue 版本', true, Vue.version);
+        }
+    </script>
+</body>
+
+</html>

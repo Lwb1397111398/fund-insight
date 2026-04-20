@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>观点管理 - Fund Insight</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            padding: 20px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+        }
+
+        .stats-bar {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            flex: 1;
+        }
+
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-card .label {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .toolbar {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a6fd6;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .viewpoint-list {
+            display: grid;
+            gap: 15px;
+        }
+
+        .viewpoint-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            border-left: 4px solid #ddd;
+            transition: all 0.3s;
+        }
+
+        .viewpoint-card:hover {
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .viewpoint-card.bullish {
+            border-left-color: #28a745;
+        }
+
+        .viewpoint-card.bearish {
+            border-left-color: #dc3545;
+        }
+
+        .viewpoint-card.neutral {
+            border-left-color: #6c757d;
+        }
+
+        .viewpoint-card.expired {
+            opacity: 0.7;
+            background: #fafafa;
+        }
+
+        .viewpoint-card.expired .card-content {
+            color: #999;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 12px;
+        }
+
+        .card-meta {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .tag {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .tag-eastmoney {
+            background: #fff3e0;
+            color: #e65100;
+        }
+
+        .tag-fund {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .tag-crawler {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .author {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .date {
+            color: #999;
+            font-size: 12px;
+        }
+
+        .card-content {
+            color: #333;
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sentiment {
+            display: flex;
+            gap: 15px;
+            font-size: 13px;
+        }
+
+        .sentiment-bullish {
+            color: #28a745;
+        }
+
+        .sentiment-bearish {
+            color: #dc3545;
+        }
+
+        .sentiment-neutral {
+            color: #6c757d;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state i {
+            font-size: 64px;
+            color: #ddd;
+            margin-bottom: 20px;
+        }
+
+        .message {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 1000;
+            display: none;
+        }
+
+        .message.success {
+            background: #28a745;
+        }
+
+        .message.error {
+            background: #dc3545;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .content-wrapper {
+            position: relative;
+        }
+
+        .content-text {
+            color: #333;
+            line-height: 1.6;
+            margin-bottom: 8px;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .content-text.collapsed {
+            max-height: 4.8em;
+            overflow: hidden;
+        }
+
+        .expand-btn {
+            color: #667eea;
+            cursor: pointer;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .expand-btn:hover {
+            color: #5a6fd6;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1><i class="ri-lightbulb-line"></i> 观点管理</h1>
+        <p>管理所有从爬虫抓取的观点，支持删除不需要的内容</p>
+    </div>
+
+    <div class="stats-bar">
+        <div class="stat-card">
+            <div class="number" id="total-count">0</div>
+            <div class="label">总观点数</div>
+        </div>
+        <div class="stat-card">
+            <div class="number" id="eastmoney-count">0</div>
+            <div class="label">东财博客</div>
+        </div>
+        <div class="stat-card">
+            <div class="number" id="guide-count">0</div>
+            <div class="label">博客导读</div>
+        </div>
+        <div class="stat-card">
+            <div class="number" id="sina-count">0</div>
+            <div class="label">新浪财经</div>
+        </div>
+        <div class="stat-card">
+            <div class="number" id="blog-count">0</div>
+            <div class="label">新浪博文</div>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div>
+            <button class="btn btn-primary" onclick="loadViewpoints()">
+                <i class="ri-refresh-line"></i> 刷新列表
+            </button>
+            <button class="btn btn-primary" onclick="batchAnalyzeViewpoints()"
+                style="margin-left: 10px; background: #28a745;">
+                <i class="ri-brain-line"></i> 一键AI分析
+            </button>
+        </div>
+        <div>
+            <button class="btn btn-secondary" onclick="window.close()">
+                <i class="ri-close-line"></i> 关闭页面
+            </button>
+        </div>
+    </div>
+
+    <div id="viewpoints-list" class="viewpoint-list">
+        <div class="empty-state">
+            <i class="ri-loader-4-line loading"></i>
+            <p>正在加载观点...</p>
+        </div>
+    </div>
+
+    <div id="message" class="message"></div>
+
+    <script>
+        function showMessage(text, type = 'success') {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = `message ${type}`;
+            msg.style.display = 'block';
+            setTimeout(() => {
+                msg.style.display = 'none';
+            }, 3000);
+        }
+
+        function updateStats(viewpoints) {
+            document.getElementById('total-count').textContent = viewpoints.length;
+            document.getElementById('eastmoney-count').textContent =
+                viewpoints.filter(v => v.source === 'eastmoney_blog').length;
+            document.getElementById('guide-count').textContent =
+                viewpoints.filter(v => v.source === 'eastmoney_guide').length;
+            document.getElementById('sina-count').textContent =
+                viewpoints.filter(v => v.source === 'sina_finance').length;
+            document.getElementById('blog-count').textContent =
+                viewpoints.filter(v => v.source === 'sina_blog').length;
+        }
+
+        async function loadViewpoints() {
+            const listDiv = document.getElementById('viewpoints-list');
+            listDiv.innerHTML = `
+                <div class="empty-state">
+                    <i class="ri-loader-4-line loading"></i>
+                    <p>正在加载观点...</p>
+                </div>
+            `;
+
+            try {
+                const res = await axios.get('/api/viewpoints');
+                const viewpoints = res.data.data || [];
+
+                updateStats(viewpoints);
+
+                if (viewpoints.length === 0) {
+                    listDiv.innerHTML = `
+                        <div class="empty-state">
+                            <i class="ri-inbox-line"></i>
+                            <p>暂无观点数据</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                listDiv.innerHTML = viewpoints.map(v => {
+                    const tagClass = {
+                        'eastmoney_blog': 'tag-eastmoney',
+                        'eastmoney_guide': 'tag-crawler',
+                        'sina_finance': 'tag-fund',
+                        'sina_blog': 'tag-crawler'
+                    }[v.source] || 'tag-crawler';
+
+                    const tagName = {
+                        'eastmoney_blog': '东财博客',
+                        'eastmoney_guide': '博客导读',
+                        'sina_finance': '新浪财经',
+                        'sina_blog': '新浪博文'
+                    }[v.source] || v.source;
+
+                    const sentimentClass = v.market_direction || 'neutral';
+                    const sentimentIcon = {
+                        'bullish': 'ri-arrow-up-line',
+                        'bearish': 'ri-arrow-down-line',
+                        'neutral': 'ri-subtract-line'
+                    }[sentimentClass];
+
+                    const sentimentText = {
+                        'bullish': '看涨',
+                        'bearish': '看跌',
+                        'neutral': '中性'
+                    }[sentimentClass];
+
+                    // 时间周期显示
+                    const timeHorizonMap = {
+                        'short': '短期',
+                        'medium': '中期',
+                        'long': '长期'
+                    };
+                    const timeHorizonText = timeHorizonMap[v.time_horizon] || '中期';
+
+                    // 有效期显示
+                    const isExpired = v.is_expired;
+                    const validUntilText = v.valid_until ? v.valid_until.substring(0, 10) : '';
+                    const expiredClass = isExpired ? 'expired' : '';
+                    const expiredBadge = isExpired ? '<span class="tag" style="background: #ffebee; color: #c62828;">已过期</span>' : '';
+                    const validityBadge = validUntilText ? `<span class="tag validity-tag" style="background: #e3f2fd; color: #1565c0; font-size: 11px; margin-left: 5px;">截止: ${validUntilText}</span>` : '';
+                    
+                    const contentText = v.content || '无内容';
+                    const needExpand = contentText.length > 200;
+
+                    return `
+                        <div class="viewpoint-card ${sentimentClass} ${expiredClass}">
+                            <div class="card-header">
+                                <div class="card-meta">
+                                    <span class="tag ${tagClass}">${tagName}</span>
+                                    <span class="author"><i class="ri-user-line"></i> ${v.author || '未知'}</span>
+                                    <span class="date"><i class="ri-calendar-line"></i> ${v.viewpoint_date || '未知日期'}</span>
+                                    <span class="time-horizon" style="color: #666; font-size: 12px;">
+                                        <i class="ri-time-line"></i> ${timeHorizonText}
+                                    </span>
+                                    ${validityBadge}
+                                    ${expiredBadge}
+                                </div>
+                            </div>
+                            <div class="content-wrapper">
+                                <div class="content-text ${needExpand ? 'collapsed' : ''}" id="content-${v.id}">
+                                    ${contentText}
+                                </div>
+                                ${needExpand ? `
+                                    <span class="expand-btn" onclick="toggleContent(${v.id})">
+                                        <i class="ri-arrow-down-s-line" id="icon-${v.id}"></i>
+                                        <span id="btn-text-${v.id}">展开全文</span>
+                                    </span>
+                                ` : ''}
+                            </div>
+                            <div class="card-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                                <div class="sentiment">
+                                    <span class="sentiment-${sentimentClass}">
+                                        <i class="${sentimentIcon}"></i> ${sentimentText} ${v.confidence || 0}%
+                                    </span>
+                                    ${v.sectors_bullish?.length ? `
+                                        <span class="sentiment-bullish">
+                                            <i class="ri-arrow-up-circle-line"></i> 看好: ${v.sectors_bullish.join(', ')}
+                                        </span>
+                                    ` : ''}
+                                    ${v.sectors_bearish?.length ? `
+                                        <span class="sentiment-bearish">
+                                            <i class="ri-arrow-down-circle-line"></i> 看空: ${v.sectors_bearish.join(', ')}
+                                        </span>
+                                    ` : ''}
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="btn btn-primary" onclick="analyzeViewpoint(${v.id})" style="background: #17a2b8; font-size: 12px; padding: 6px 12px;">
+                                        <i class="ri-brain-line"></i> AI分析
+                                    </button>
+                                    <button class="btn btn-danger" onclick="deleteViewpoint(${v.id})" style="font-size: 12px; padding: 6px 12px;">
+                                        <i class="ri-delete-bin-line"></i> 删除
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error('加载失败:', e);
+                listDiv.innerHTML = `
+                    <div class="empty-state">
+                        <i class="ri-error-warning-line" style="color: #dc3545;"></i>
+                        <p>加载失败: ${e.message}</p>
+                        <button class="btn btn-primary" onclick="loadViewpoints()" style="margin-top: 15px;">
+                            重试
+                        </button>
+                    </div>
+                `;
+                showMessage('加载观点失败: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteViewpoint(id) {
+            if (!confirm('确定要删除这条观点吗？\n\n删除后无法恢复！')) return;
+
+            try {
+                const res = await axios.delete(`/api/viewpoints/${id}`);
+                if (res.data.success) {
+                    showMessage('删除成功！', 'success');
+                    await loadViewpoints();
+                } else {
+                    showMessage('删除失败: ' + res.data.message, 'error');
+                }
+            } catch (e) {
+                console.error('删除失败:', e);
+                showMessage('删除失败: ' + (e.response?.data?.message || e.message), 'error');
+            }
+        }
+
+        async function analyzeViewpoint(id) {
+            if (!confirm('确定要对这个观点进行AI深度分析吗？\n\n这将使用DeepSeek V3.2模型进行分析，可能需要一些时间。')) return;
+
+            try {
+                showMessage('开始AI分析，请稍候...', 'success');
+
+                const res = await axios.post(`/api/viewpoints/${id}/analyze`);
+
+                if (res.data.success) {
+                    const analysis = res.data.data.analysis;
+                    showMessage(`分析完成！情绪: ${analysis.market_direction}, 置信度: ${analysis.confidence}%`, 'success');
+                    await loadViewpoints(); // 刷新列表显示分析结果
+                } else {
+                    showMessage('分析失败: ' + res.data.message, 'error');
+                }
+            } catch (e) {
+                console.error('分析失败:', e);
+                showMessage('分析失败: ' + (e.response?.data?.message || e.message), 'error');
+            }
+        }
+
+        async function batchAnalyzeViewpoints() {
+            if (!confirm('确定要对未分析的观点进行AI深度分析吗？\n\n这将使用DeepSeek V3.2模型对观点进行分析，可能需要一些时间。')) return;
+
+            const btn = document.querySelector('button[onclick="batchAnalyzeViewpoints()"]');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="ri-loader-4-line loading"></i> 分析中...';
+            btn.disabled = true;
+
+            try {
+                showMessage('开始批量AI分析，请稍候...', 'success');
+
+                const res = await axios.post('/api/viewpoints/batch-analyze', {
+                    limit: 10,
+                    source: 'all'
+                });
+
+                if (res.data.success) {
+                    const data = res.data.data;
+                    showMessage(`分析完成！成功: ${data.analyzed_count} 个, 失败: ${data.failed_count} 个`, 'success');
+                    await loadViewpoints(); // 刷新列表显示分析结果
+                } else {
+                    showMessage('分析失败: ' + res.data.message, 'error');
+                }
+            } catch (e) {
+                console.error('批量分析失败:', e);
+                showMessage('批量分析失败: ' + (e.response?.data?.message || e.message), 'error');
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        // 页面加载时获取观点列表
+        window.onload = loadViewpoints;
+
+        function toggleContent(id) {
+            const contentDiv = document.getElementById(`content-${id}`);
+            const icon = document.getElementById(`icon-${id}`);
+            const btnText = document.getElementById(`btn-text-${id}`);
+            
+            if (contentDiv.classList.contains('collapsed')) {
+                contentDiv.classList.remove('collapsed');
+                icon.className = 'ri-arrow-up-s-line';
+                btnText.textContent = '收起';
+            } else {
+                contentDiv.classList.add('collapsed');
+                icon.className = 'ri-arrow-down-s-line';
+                btnText.textContent = '展开全文';
+            }
+        }
+    </script>
+</body>
+
+</html>
