@@ -238,12 +238,14 @@ async def serve_vue_test():
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    from src.tasks.scheduler import start_scheduler
-    start_scheduler()
+    import os
+    if os.environ.get('CRAWLER_ENABLED', 'false') == 'true':
+        from src.tasks.scheduler import start_scheduler
+        start_scheduler()
+        print(f"[Startup] 定时任务调度器已启动")
     print(f"[Startup] Fund Insight API v2.0.0 已启动")
     print(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
     print(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
-    print(f"[Startup] 定时任务调度器已启动")
 
 
 if __name__ == "__main__":

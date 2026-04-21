@@ -10,8 +10,7 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from a2wsgi import WSGIMiddleware
+from a2wsgi import ASGIMiddleware
 from src.api.main import app
 
-# 创建WSGI应用
-application = WSGIMiddleware(app)
+application = ASGIMiddleware(app)
