@@ -117,7 +117,6 @@ def read_root():
 @app.get("/api/health")
 def health_check():
     from src.models.database import DB_TYPE, SessionLocal
-    # 附加数据库记录数，方便排查导入问题
     try:
         db = SessionLocal()
         from src.models.database import Blogger, Post, Prediction, Viewpoint, FundInfo, FundHistory
@@ -125,10 +124,21 @@ def health_check():
             "bloggers": db.query(Blogger).count(),
             "posts": db.query(Post).count(),
             "predictions": db.query(Prediction).filter(Prediction.is_deleted == False).count(),
+            "predictions_total": db.query(Prediction).count(),
             "viewpoints": db.query(Viewpoint).filter(Viewpoint.is_deleted == False).count(),
             "fund_info": db.query(FundInfo).count(),
             "fund_history": db.query(FundHistory).count(),
         }
+        # 检查 id 范围和关联完整性
+        try:
+            blogger_ids = [r[0] for r in db.query(Blogger.id).all()]
+            pred_blogger_ids = [r[0] for r in db.query(Prediction.blogger_id).filter(Prediction.is_deleted == False).distinct().all()]
+            orphan_preds = len([pid for pid in pred_blogger_ids if pid not in blogger_ids])
+            counts["blogger_id_range"] = f"{min(blogger_ids)}-{max(blogger_ids)}" if blogger_ids else "empty"
+            counts["pred_blogger_ids_sample"] = pred_blogger_ids[:5] if pred_blogger_ids else []
+            counts["orphan_predictions"] = orphan_preds
+        except Exception as e:
+            counts["id_check_error"] = str(e)[:100]
         db.close()
     except Exception as e:
         counts = {"error": str(e)}
@@ -776,13 +786,15 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                         
                         # 用 SQLAlchemy Core insert 语句写入（避免 ORM relationship 级联问题）
                         target_db.execute(sa_insert(ModelClass.__table__).values(**cleaned))
+                        target_db.commit()  # 每行单独提交，避免 PostgreSQL 事务 aborted 问题
                     except Exception as e:
+                        target_db.rollback()  # 必须先 rollback 才能继续后续 INSERT
                         row_skipped += 1
-                        if row_skipped <= 3:
+                        if row_skipped <= 5:
                             print(f"[导入] 跳过 {table_name} 一行: {str(e)[:200]}")
                         continue
                 
-                target_db.commit()
+                # 每行已单独 commit，无需再 commit
                 imported_counts[table_name] = len(rows) - row_skipped
                 if row_skipped > 0:
                     skipped_counts[table_name] = row_skipped
