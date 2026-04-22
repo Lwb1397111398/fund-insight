@@ -21,10 +21,27 @@ from src.core.config import config
 
 # 支持 PostgreSQL 和 SQLite
 DATABASE_URL = os.getenv("DATABASE_URL")
+DB_TYPE = "sqlite"  # 默认值
 
 if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
     # PostgreSQL 数据库
-    engine = create_engine(DATABASE_URL, echo=False)
+    try:
+        import psycopg2  # 检查驱动是否可用
+        engine = create_engine(
+            DATABASE_URL,
+            echo=False,
+            pool_size=5,
+            max_overflow=10,
+            pool_recycle=300,
+            pool_pre_ping=True
+        )
+        DB_TYPE = "postgresql"
+        print(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+10）")
+    except ImportError:
+        print(f"[数据库] psycopg2 未安装，回退到 SQLite")
+        DB_PATH = Path(config.DB_PATH)
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
 else:
     # 回退到 SQLite
     DB_PATH = Path(config.DB_PATH)
@@ -1025,7 +1042,10 @@ class AdviceFeedback(Base):
 def init_db():
     """初始化数据库 - 创建所有表"""
     Base.metadata.create_all(engine)
-    print(f"[数据库] 已初始化: {DB_PATH}")
+    if DB_TYPE == "postgresql":
+        print(f"[数据库] 已初始化: PostgreSQL")
+    else:
+        print(f"[数据库] 已初始化: SQLite: {DB_PATH}")
 
 
 def get_db():

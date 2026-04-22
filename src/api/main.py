@@ -49,6 +49,10 @@ app = FastAPI(
 # 密码验证中间件
 @app.middleware("http")
 async def password_auth_middleware(request: Request, call_next):
+    # 放行所有非 /api/ 路径的请求（静态资源、HTML 页面等）
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    
     # 放行健康检查接口
     if request.url.path == "/api/health":
         return await call_next(request)
@@ -112,7 +116,8 @@ def read_root():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+    from src.models.database import DB_TYPE
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
 
 
 @app.get("/api/market-sentiment")
@@ -577,17 +582,21 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         source_db = SourceSession()
         
         # 连接目标数据库（PostgreSQL 或 SQLite）
-        from src.models.database import SessionLocal, engine as target_engine
+        from src.models.database import SessionLocal, engine as target_engine, DB_TYPE
         target_db = SessionLocal()
         
         # 要导入的表
         tables_to_import = [
             'bloggers', 'posts', 'predictions', 'viewpoints', 
             'fund_info', 'fund_history', 'sector_fund_mapping',
-            'investment_advice', 'crawler_article_records'
+            'investment_advice', 'crawler_article_records',
+            'prediction_groups', 'batch_analysis_tasks',
+            'user_fund_bindings', 'sync_logs', 'fund_holdings',
+            'market_data', 'policy_data', 'sentiment_data', 'sector_fund_flow'
         ]
         
         imported_counts = {}
+        skipped_counts = {}
         
         for table_name in tables_to_import:
             try:
@@ -602,7 +611,7 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                 # 获取列名
                 columns = result.keys()
                 
-                # 清空目标表（可选，防止重复）
+                # 清空目标表（防止重复）
                 try:
                     target_db.execute(text(f"DELETE FROM {table_name}"))
                     target_db.commit()
@@ -610,6 +619,7 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                     target_db.rollback()
                 
                 # 导入数据
+                row_skipped = 0
                 for row in rows:
                     # 转换为字典
                     row_dict = dict(zip(columns, row))
@@ -627,15 +637,36 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                         try:
                             target_db.execute(text(insert_sql), row_dict)
                         except Exception as e:
-                            print(f"跳过一行数据: {e}")
+                            row_skipped += 1
+                            print(f"[导入] 跳过 {table_name} 一行数据: {e}")
                             continue
                 
                 target_db.commit()
-                imported_counts[table_name] = len(rows)
+                imported_counts[table_name] = len(rows) - row_skipped
+                if row_skipped > 0:
+                    skipped_counts[table_name] = row_skipped
                 
             except Exception as e:
-                print(f"导入表 {table_name} 失败: {e}")
+                print(f"[导入] 表 {table_name} 失败: {e}")
                 imported_counts[table_name] = 0
+                target_db.rollback()
+        
+        # PostgreSQL 序列重置：确保自增 ID 从最大值继续
+        if DB_TYPE == "postgresql":
+            for table_name in tables_to_import:
+                try:
+                    seq_sql = text(
+                        f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), "
+                        f"COALESCE((SELECT MAX(id) FROM {table_name}), 1), "
+                        f"COALESCE((SELECT MAX(id) FROM {table_name}) IS NOT NULL, false))"
+                    )
+                    target_db.execute(seq_sql)
+                except Exception as e:
+                    print(f"[导入] 重置 {table_name} 序列跳过: {e}")
+            try:
+                target_db.commit()
+                print("[导入] PostgreSQL 序列重置完成")
+            except:
                 target_db.rollback()
         
         # 清理
@@ -649,11 +680,14 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         except:
             pass
         
-        return {
+        result_data = {
             "success": True,
             "message": "数据库导入成功",
             "imported": imported_counts
         }
+        if skipped_counts:
+            result_data["skipped"] = skipped_counts
+        return result_data
         
     except Exception as e:
         return {

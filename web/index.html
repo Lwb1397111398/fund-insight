@@ -1853,6 +1853,25 @@
                 </div>
             </div>
         </div>
+        <!-- 密码输入弹窗 -->
+        <div v-if="showPasswordModal" class="modal-overlay" style="z-index: 10000;">
+            <div class="modal" style="max-width: 400px;">
+                <div class="modal-header">访问验证</div>
+                <div style="padding: 16px 0;">
+                    <p style="color: #666; margin-bottom: 12px;">请输入访问密码以使用系统</p>
+                    <div class="form-group">
+                        <input type="password" v-model="passwordInput" placeholder="请输入访问密码" 
+                            @keyup.enter="submitPassword" style="width: 100%; padding: 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px;">
+                    </div>
+                    <p v-if="passwordError" style="color: #ff4d4f; font-size: 13px; margin-top: 8px;">{{ passwordError }}</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn primary" @click="submitPassword" :disabled="passwordVerifying" 
+                        style="width: 100%;">{{ passwordVerifying ? '验证中...' : '确认' }}</button>
+                </div>
+            </div>
+        </div>
+
         <!-- 弹窗们 -->
         <div v-if="showAddBlogger" class="modal-overlay" @click.self="showAddBlogger = false">
             <div class="modal">
@@ -2479,10 +2498,74 @@
         </div>
     </div>
     <script>
+        // axios 密码配置 - 在 createApp 之前设置
+        (function() {
+            const savedPassword = localStorage.getItem('access_password');
+            if (savedPassword) {
+                axios.defaults.headers.common['X-Access-Password'] = savedPassword;
+            }
+            // 响应拦截器：401 时清除密码并触发重新输入
+            axios.interceptors.response.use(
+                function(response) { return response; },
+                function(error) {
+                    if (error.response && error.response.status === 401) {
+                        localStorage.removeItem('access_password');
+                        delete axios.defaults.headers.common['X-Access-Password'];
+                        // 触发自定义事件，通知 Vue 应用显示密码输入框
+                        window.dispatchEvent(new CustomEvent('auth-required'));
+                    }
+                    return Promise.reject(error);
+                }
+            );
+        })();
+
         const { createApp, ref, reactive, onMounted, computed } = Vue;
         createApp({
             setup() {
                 const loading = ref(true), currentView = ref('bloggers'), stats = ref({}), bloggers = ref([]), posts = ref([]), predictions = ref([]), viewpoints = ref([]), funds = ref([]);
+                // 密码认证相关
+                const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false), passwordError = ref(''), authReady = ref(false);
+                const checkAuth = async () => {
+                    const savedPassword = localStorage.getItem('access_password');
+                    if (savedPassword) {
+                        // 已有密码，先验证是否有效
+                        axios.defaults.headers.common['X-Access-Password'] = savedPassword;
+                        try {
+                            await axios.get('/api/stats');
+                            authReady.value = true;
+                            // 密码有效，加载数据
+                            fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats();
+                            return;
+                        } catch (e) {
+                            // 密码失效，清除并弹出输入框
+                            localStorage.removeItem('access_password');
+                            delete axios.defaults.headers.common['X-Access-Password'];
+                        }
+                    }
+                    // 没有密码或密码失效，弹出输入框（不加载数据）
+                    showPasswordModal.value = true;
+                };
+                const submitPassword = async () => {
+                    if (!passwordInput.value.trim()) { passwordError.value = '请输入访问密码'; return; }
+                    passwordVerifying.value = true; passwordError.value = '';
+                    try {
+                        axios.defaults.headers.common['X-Access-Password'] = passwordInput.value;
+                        const res = await axios.get('/api/stats');
+                        if (res.data) {
+                            localStorage.setItem('access_password', passwordInput.value);
+                            showPasswordModal.value = false; passwordInput.value = '';
+                            authReady.value = true;
+                            // 密码验证成功，加载数据
+                            fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats();
+                        }
+                    } catch (e) {
+                        passwordError.value = '密码错误，请重新输入';
+                        delete axios.defaults.headers.common['X-Access-Password'];
+                        localStorage.removeItem('access_password');
+                    }
+                    passwordVerifying.value = false;
+                };
+                onMounted(() => { checkAuth(); window.addEventListener('auth-required', () => { showPasswordModal.value = true; passwordError.value = '密码已失效，请重新输入'; authReady.value = false; }); });
                 const predictionFilter = ref('all');
                 const fundFilter = ref('has_prediction');
                 const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false), summarizing = ref(false), summaryStats = ref(null), showSummaryConfirmModal = ref(false);
@@ -2612,8 +2695,8 @@
                 const loadTestData = async () => { try { const res = await axios.get('/api/test-data/find'); if (res.data.success) testData.value = res.data.data; } catch (e) { console.error('加载测试数据失败:', e); } };
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
-                onMounted(() => { fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats(); });
-                return { loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrl, wechatFetchResult, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatArticle, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVision };
+                // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
+                return { loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrl, wechatFetchResult, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatArticle, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVision };
             }
         }).mount('#app');
     </script>
