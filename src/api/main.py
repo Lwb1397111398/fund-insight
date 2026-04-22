@@ -2,7 +2,7 @@
 Fund Insight API - FastAPI 主应用
 模块化架构入口文件
 """
-from fastapi import FastAPI, Response, Request, status
+from fastapi import FastAPI, Response, Request, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -10,6 +10,10 @@ from datetime import datetime
 from pathlib import Path
 import os
 import sys
+import shutil
+import tempfile
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if project_root not in sys.path:
@@ -256,6 +260,406 @@ async def serve_vue_test():
     if html_file.exists():
         return FileResponse(str(html_file), media_type="text/html")
     return {"error": "vue-test.html not found"}
+
+
+@app.get("/import-data.html")
+async def serve_import_page():
+    """服务数据导入页面"""
+    html_content = """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据导入工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 2.5rem;
+        }
+        h1 {
+            color: #1a202c;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #718096;
+            margin-bottom: 2rem;
+        }
+        .upload-area {
+            border: 3px dashed #cbd5e0;
+            border-radius: 12px;
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #667eea;
+            background: #f7fafc;
+        }
+        .upload-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+        .upload-text {
+            color: #4a5568;
+            font-size: 1.1rem;
+        }
+        .upload-hint {
+            color: #a0aec0;
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .progress-area {
+            margin-top: 2rem;
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e2e8f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .status-text {
+            margin-top: 1rem;
+            color: #4a5568;
+        }
+        .result-area {
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: #f7fafc;
+            border-radius: 8px;
+            display: none;
+        }
+        .result-success {
+            color: #2f855a;
+            font-weight: 600;
+        }
+        .result-error {
+            color: #c53030;
+            font-weight: 600;
+        }
+        .result-details {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: #4a5568;
+        }
+        .password-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            transition: border-color 0.3s ease;
+        }
+        .password-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .label {
+            display: block;
+            color: #4a5568;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 数据导入工具</h1>
+        <p class="subtitle">将本地 SQLite 数据库导入到云端 PostgreSQL</p>
+        
+        <div class="label">访问密码</div>
+        <input type="password" id="password" class="password-input" placeholder="请输入访问密码">
+        
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">点击或拖拽上传数据库文件</div>
+            <div class="upload-hint">支持 .db 和 .sqlite 文件</div>
+        </div>
+        <input type="file" id="fileInput" accept=".db,.sqlite">
+        
+        <button class="btn" id="uploadBtn" disabled>开始导入</button>
+        
+        <div class="progress-area" id="progressArea">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="status-text" id="statusText">准备中...</div>
+        </div>
+        
+        <div class="result-area" id="resultArea">
+            <div id="resultText"></div>
+            <div class="result-details" id="resultDetails"></div>
+        </div>
+    </div>
+    
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const progressArea = document.getElementById('progressArea');
+        const progressFill = document.getElementById('progressFill');
+        const statusText = document.getElementById('statusText');
+        const resultArea = document.getElementById('resultArea');
+        const resultText = document.getElementById('resultText');
+        const resultDetails = document.getElementById('resultDetails');
+        const passwordInput = document.getElementById('password');
+        
+        let selectedFile = null;
+        
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        function handleFile(file) {
+            if (file.name.endsWith('.db') || file.name.endsWith('.sqlite')) {
+                selectedFile = file;
+                uploadArea.innerHTML = `
+                    <div class="upload-icon">✅</div>
+                    <div class="upload-text">已选择: ${file.name}</div>
+                    <div class="upload-hint">文件大小: ${(file.size / 1024).toFixed(2)} KB</div>
+                `;
+                uploadBtn.disabled = false;
+            } else {
+                alert('请选择 .db 或 .sqlite 格式的数据库文件');
+            }
+        }
+        
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            
+            const password = passwordInput.value;
+            if (!password) {
+                alert('请输入访问密码');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            
+            progressArea.style.display = 'block';
+            uploadBtn.disabled = true;
+            
+            try {
+                progressFill.style.width = '10%';
+                statusText.textContent = '正在上传文件...';
+                
+                const response = await fetch('/api/import-database', {
+                    method: 'POST',
+                    headers: {
+                        'X-Access-Password': password
+                    },
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                progressFill.style.width = '100%';
+                
+                resultArea.style.display = 'block';
+                
+                if (result.success) {
+                    resultText.className = 'result-success';
+                    resultText.textContent = '✅ 导入成功！';
+                    resultDetails.innerHTML = `
+                        <p>📊 导入详情：</p>
+                        <ul>
+                            ${Object.entries(result.imported || {}).map(([table, count]) => 
+                                `<li>${table}: ${count} 条记录</li>`
+                            ).join('')}
+                        </ul>
+                    `;
+                    statusText.textContent = '导入完成！';
+                } else {
+                    resultText.className = 'result-error';
+                    resultText.textContent = '❌ 导入失败';
+                    resultDetails.textContent = result.error || '未知错误';
+                    statusText.textContent = '导入失败';
+                }
+            } catch (error) {
+                resultArea.style.display = 'block';
+                resultText.className = 'result-error';
+                resultText.textContent = '❌ 导入失败';
+                resultDetails.textContent = error.message;
+                statusText.textContent = '导入失败';
+            }
+        });
+    </script>
+</body>
+</html>
+    """
+    return Response(content=html_content, media_type="text/html")
+
+
+@app.post("/api/import-database")
+async def import_database(file: UploadFile = File(...), request: Request = None):
+    """导入 SQLite 数据库到 PostgreSQL"""
+    try:
+        import tempfile
+        
+        # 创建临时文件
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, "import.db")
+        
+        # 保存上传的文件
+        with open(temp_file, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # 连接源数据库（SQLite）
+        source_engine = create_engine(f"sqlite:///{temp_file}")
+        SourceSession = sessionmaker(bind=source_engine)
+        source_db = SourceSession()
+        
+        # 连接目标数据库（PostgreSQL 或 SQLite）
+        from src.models.database import SessionLocal, engine as target_engine
+        target_db = SessionLocal()
+        
+        # 要导入的表
+        tables_to_import = [
+            'bloggers', 'posts', 'predictions', 'viewpoints', 
+            'fund_info', 'fund_history', 'sector_fund_mapping',
+            'investment_advice', 'crawler_article_records'
+        ]
+        
+        imported_counts = {}
+        
+        for table_name in tables_to_import:
+            try:
+                # 从源数据库读取数据
+                result = source_db.execute(text(f"SELECT * FROM {table_name}"))
+                rows = result.fetchall()
+                
+                if not rows:
+                    imported_counts[table_name] = 0
+                    continue
+                
+                # 获取列名
+                columns = result.keys()
+                
+                # 清空目标表（可选，防止重复）
+                try:
+                    target_db.execute(text(f"DELETE FROM {table_name}"))
+                    target_db.commit()
+                except:
+                    target_db.rollback()
+                
+                # 导入数据
+                for row in rows:
+                    # 转换为字典
+                    row_dict = dict(zip(columns, row))
+                    
+                    # 处理自增ID - 让数据库自动生成
+                    if 'id' in row_dict:
+                        del row_dict['id']
+                    
+                    # 构建 INSERT 语句
+                    placeholders = ', '.join([f":{col}" for col in row_dict.keys()])
+                    columns_str = ', '.join(row_dict.keys())
+                    
+                    if columns_str and placeholders:
+                        insert_sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+                        try:
+                            target_db.execute(text(insert_sql), row_dict)
+                        except Exception as e:
+                            print(f"跳过一行数据: {e}")
+                            continue
+                
+                target_db.commit()
+                imported_counts[table_name] = len(rows)
+                
+            except Exception as e:
+                print(f"导入表 {table_name} 失败: {e}")
+                imported_counts[table_name] = 0
+                target_db.rollback()
+        
+        # 清理
+        source_db.close()
+        target_db.close()
+        
+        # 删除临时文件
+        try:
+            os.remove(temp_file)
+            os.rmdir(temp_dir)
+        except:
+            pass
+        
+        return {
+            "success": True,
+            "message": "数据库导入成功",
+            "imported": imported_counts
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 @app.on_event("startup")
