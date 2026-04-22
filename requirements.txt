@@ -2,6 +2,7 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
 a2wsgi>=1.10.0  # ASGI转WSGI，用于PythonAnywhere部署
+python-multipart>=0.0.10  # FastAPI文件上传依赖
 
 # Database
 sqlalchemy>=2.0.0
