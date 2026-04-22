@@ -116,8 +116,23 @@ def read_root():
 
 @app.get("/api/health")
 def health_check():
-    from src.models.database import DB_TYPE
-    return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
+    from src.models.database import DB_TYPE, SessionLocal
+    # 附加数据库记录数，方便排查导入问题
+    try:
+        db = SessionLocal()
+        from src.models.database import Blogger, Post, Prediction, Viewpoint, FundInfo, FundHistory
+        counts = {
+            "bloggers": db.query(Blogger).count(),
+            "posts": db.query(Post).count(),
+            "predictions": db.query(Prediction).filter(Prediction.is_deleted == False).count(),
+            "viewpoints": db.query(Viewpoint).filter(Viewpoint.is_deleted == False).count(),
+            "fund_info": db.query(FundInfo).count(),
+            "fund_history": db.query(FundHistory).count(),
+        }
+        db.close()
+    except Exception as e:
+        counts = {"error": str(e)}
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0", "counts": counts}
 
 
 @app.get("/favicon.ico")
@@ -599,9 +614,17 @@ async def serve_import_page():
 
 @app.post("/api/import-database")
 async def import_database(file: UploadFile = File(...), request: Request = None):
-    """导入 SQLite 数据库到 PostgreSQL"""
+    """导入 SQLite 数据库到 PostgreSQL（使用 ORM 自动处理类型转换）"""
     try:
         import tempfile
+        import json as json_module
+        from src.models.database import (
+            Blogger, Post, Prediction, Viewpoint, FundInfo, FundHistory,
+            SectorFundMapping, InvestmentAdvice, CrawlerArticleRecord,
+            PredictionGroup, BatchAnalysisTask, UserFundBinding, SyncLog,
+            FundHolding, MarketData, PolicyData, SentimentData, SectorFundFlow,
+            Base as TargetBase
+        )
         
         # 创建临时文件
         temp_dir = tempfile.mkdtemp()
@@ -611,41 +634,76 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         with open(temp_file, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # 连接源数据库（SQLite）
+        # 连接源数据库（SQLite）- 使用反射获取表结构
         source_engine = create_engine(f"sqlite:///{temp_file}")
         SourceSession = sessionmaker(bind=source_engine)
         source_db = SourceSession()
         
-        # 连接目标数据库（PostgreSQL 或 SQLite）
+        # 连接目标数据库
         from src.models.database import SessionLocal, engine as target_engine, DB_TYPE
         target_db = SessionLocal()
         
-        # 要导入的表
-        tables_to_import = [
-            'bloggers', 'posts', 'predictions', 'viewpoints', 
-            'fund_info', 'fund_history', 'sector_fund_mapping',
-            'investment_advice', 'crawler_article_records',
-            'prediction_groups', 'batch_analysis_tasks',
-            'user_fund_bindings', 'sync_logs', 'fund_holdings',
-            'market_data', 'policy_data', 'sentiment_data', 'sector_fund_flow'
+        # ORM 模型映射：表名 -> (源查询类, 目标ORM类)
+        orm_map = [
+            ('bloggers', Blogger),
+            ('posts', Post),
+            ('predictions', Prediction),
+            ('viewpoints', Viewpoint),
+            ('fund_info', FundInfo),
+            ('fund_history', FundHistory),
+            ('sector_fund_mapping', SectorFundMapping),
+            ('investment_advice', InvestmentAdvice),
+            ('crawler_article_records', CrawlerArticleRecord),
+            ('prediction_groups', PredictionGroup),
+            ('batch_analysis_tasks', BatchAnalysisTask),
+            ('user_fund_bindings', UserFundBinding),
+            ('sync_logs', SyncLog),
+            ('fund_holdings', FundHolding),
+            ('market_data', MarketData),
+            ('policy_data', PolicyData),
+            ('sentiment_data', SentimentData),
+            ('sector_fund_flow', SectorFundFlow),
         ]
+        
+        # 清空顺序：反向删除
+        tables_to_delete = [name for name, _ in reversed(orm_map)]
         
         imported_counts = {}
         skipped_counts = {}
+        errors = []
         
-        # PostgreSQL: 临时禁用外键约束，避免导入顺序问题
+        # PostgreSQL: 尝试禁用外键约束
+        fk_disabled = False
         if DB_TYPE == "postgresql":
             try:
                 target_db.execute(text("SET session_replication_role = 'replica'"))
                 target_db.commit()
+                fk_disabled = True
                 print("[导入] 已禁用 PostgreSQL 外键约束检查")
             except Exception as e:
-                print(f"[导入] 禁用外键约束失败（非超级用户可能不支持）: {e}")
+                print(f"[导入] 禁用外键约束失败: {e}")
                 target_db.rollback()
         
-        for table_name in tables_to_import:
+        # 第一步：清空所有目标表
+        print("[导入] 开始清空目标表...")
+        for table_name in tables_to_delete:
             try:
-                # 从源数据库读取数据
+                target_db.execute(text(f"DELETE FROM {table_name}"))
+                target_db.commit()
+            except Exception as e:
+                target_db.rollback()
+                if DB_TYPE == "postgresql":
+                    try:
+                        target_db.execute(text(f"TRUNCATE TABLE {table_name} CASCADE"))
+                        target_db.commit()
+                    except:
+                        target_db.rollback()
+        
+        # 第二步：逐表导入数据（使用 ORM 方式，自动处理类型转换）
+        print("[导入] 开始导入数据（ORM 模式）...")
+        for table_name, ModelClass in orm_map:
+            try:
+                # 从源数据库用原始 SQL 读取（因为源库没有 ORM 模型）
                 result = source_db.execute(text(f"SELECT * FROM {table_name}"))
                 rows = result.fetchall()
                 
@@ -653,51 +711,93 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                     imported_counts[table_name] = 0
                     continue
                 
-                # 获取列名
-                columns = result.keys()
+                columns = list(result.keys())
+                # 获取目标 ORM 模型的列信息
+                model_columns = {c.name: c for c in ModelClass.__table__.columns}
                 
-                # 清空目标表（防止重复）
-                try:
-                    target_db.execute(text(f"DELETE FROM {table_name}"))
-                    target_db.commit()
-                except:
-                    target_db.rollback()
-                
-                # 导入数据
                 row_skipped = 0
                 for row in rows:
-                    # 转换为字典
-                    row_dict = dict(zip(columns, row))
-                    
-                    # 保留原始 id，确保关联关系不断裂
-                    # （posts.blogger_id、predictions.post_id 等外键依赖原始 id）
-                    
-                    # 构建 INSERT 语句
-                    placeholders = ', '.join([f":{col}" for col in row_dict.keys()])
-                    columns_str = ', '.join(row_dict.keys())
-                    
-                    if columns_str and placeholders:
-                        insert_sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
-                        try:
-                            target_db.execute(text(insert_sql), row_dict)
-                        except Exception as e:
-                            row_skipped += 1
-                            print(f"[导入] 跳过 {table_name} 一行数据: {e}")
-                            continue
+                    try:
+                        row_dict = dict(zip(columns, row))
+                        cleaned = {}
+                        
+                        for key, val in row_dict.items():
+                            if key not in model_columns:
+                                continue  # 跳过目标表中不存在的列
+                            
+                            col = model_columns[key]
+                            col_type = str(col.type)
+                            
+                            # 类型转换
+                            if val is None:
+                                cleaned[key] = None
+                            # Date 类型
+                            elif 'DATE' in col_type.upper() and 'TIME' not in col_type.upper():
+                                if isinstance(val, str) and val:
+                                    from datetime import date as date_type
+                                    try:
+                                        cleaned[key] = date_type.fromisoformat(val[:10])
+                                    except:
+                                        cleaned[key] = None
+                                elif isinstance(val, date):
+                                    cleaned[key] = val
+                                else:
+                                    cleaned[key] = None
+                            # DateTime 类型
+                            elif 'DATETIME' in col_type.upper() or 'TIMESTAMP' in col_type.upper():
+                                if isinstance(val, str) and val:
+                                    try:
+                                        cleaned[key] = datetime.fromisoformat(val.replace('Z', '+00:00'))
+                                    except:
+                                        cleaned[key] = None
+                                elif isinstance(val, datetime):
+                                    cleaned[key] = val
+                                else:
+                                    cleaned[key] = None
+                            # Boolean 类型
+                            elif 'BOOLEAN' in col_type.upper():
+                                if isinstance(val, int):
+                                    cleaned[key] = bool(val)
+                                elif isinstance(val, str):
+                                    cleaned[key] = val.lower() in ('true', '1', 'yes')
+                                else:
+                                    cleaned[key] = val
+                            # JSON 类型
+                            elif 'JSON' in col_type.upper():
+                                if isinstance(val, str):
+                                    try:
+                                        cleaned[key] = json_module.loads(val) if val.strip() else None
+                                    except:
+                                        cleaned[key] = val
+                                else:
+                                    cleaned[key] = val
+                            else:
+                                cleaned[key] = val
+                        
+                        # 用 ORM 创建对象并添加
+                        obj = ModelClass(**cleaned)
+                        target_db.add(obj)
+                    except Exception as e:
+                        row_skipped += 1
+                        if row_skipped <= 3:
+                            print(f"[导入] 跳过 {table_name} 一行: {str(e)[:200]}")
+                        continue
                 
                 target_db.commit()
                 imported_counts[table_name] = len(rows) - row_skipped
                 if row_skipped > 0:
                     skipped_counts[table_name] = row_skipped
+                print(f"[导入] 表 {table_name}: 导入 {len(rows) - row_skipped}/{len(rows)} 行")
                 
             except Exception as e:
-                print(f"[导入] 表 {table_name} 失败: {e}")
+                print(f"[导入] 表 {table_name} 完全失败: {e}")
                 imported_counts[table_name] = 0
+                errors.append(f"表 {table_name} 失败: {str(e)[:200]}")
                 target_db.rollback()
         
-        # PostgreSQL 序列重置：确保自增 ID 从最大值继续
+        # PostgreSQL 序列重置
         if DB_TYPE == "postgresql":
-            for table_name in tables_to_import:
+            for table_name, _ in orm_map:
                 try:
                     seq_sql = text(
                         f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), "
@@ -705,28 +805,24 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                         f"COALESCE((SELECT MAX(id) FROM {table_name}) IS NOT NULL, false))"
                     )
                     target_db.execute(seq_sql)
-                except Exception as e:
-                    print(f"[导入] 重置 {table_name} 序列跳过: {e}")
+                except:
+                    pass
             try:
                 target_db.commit()
                 print("[导入] PostgreSQL 序列重置完成")
             except:
                 target_db.rollback()
-        
-        # PostgreSQL: 恢复外键约束检查
-        if DB_TYPE == "postgresql":
-            try:
-                target_db.execute(text("SET session_replication_role = 'origin'"))
-                target_db.commit()
-                print("[导入] 已恢复 PostgreSQL 外键约束检查")
-            except:
-                target_db.rollback()
+            
+            if fk_disabled:
+                try:
+                    target_db.execute(text("SET session_replication_role = 'origin'"))
+                    target_db.commit()
+                except:
+                    target_db.rollback()
         
         # 清理
         source_db.close()
         target_db.close()
-        
-        # 删除临时文件
         try:
             os.remove(temp_file)
             os.rmdir(temp_dir)
@@ -740,6 +836,8 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         }
         if skipped_counts:
             result_data["skipped"] = skipped_counts
+        if errors:
+            result_data["errors"] = errors
         return result_data
         
     except Exception as e:
