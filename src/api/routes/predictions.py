@@ -151,6 +151,15 @@ async def verify_all_predictions(db: Session = Depends(get_db)):
     return result
 
 
+@router.post("/verify-expired")
+async def verify_expired_predictions(db: Session = Depends(get_db)):
+    """补救验证所有已过期但尚未验证的预测"""
+    service = PredictionVerifyService(db)
+    result = service.verify_expired_pending()
+    
+    return result
+
+
 @router.get("/stats/overview")
 async def get_prediction_stats(
     blogger_id: Optional[int] = None,

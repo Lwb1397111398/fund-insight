@@ -443,14 +443,15 @@ class PredictionVerifyService:
             
             has_verified = (prediction.verify_count or 0) > 0
             
-            if has_verified:
-                if days_to_target < -config['window_days_after']:
+            if has_verified and prediction.status not in ('pending',):
+                grace_period_days = 30
+                if days_to_target < -grace_period_days:
                     return {
                         "success": False,
-                        "message": "验证通道已关闭（已完成验证的预测）"
+                        "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
                     }
-            else:
-                grace_period_days = 7
+            elif not has_verified:
+                grace_period_days = 30
                 if days_to_target < -grace_period_days:
                     return {
                         "success": False,
@@ -733,6 +734,89 @@ class PredictionVerifyService:
             "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个",
             "data": {
                 "total": len(pending_predictions),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "results": results
+            }
+        }
+    
+    def verify_expired_pending(self) -> Dict:
+        """验证所有已过期但尚未验证的预测（补救验证）"""
+        today = date.today()
+        
+        expired_pending = self.db.query(Prediction).filter(
+            Prediction.status == 'pending',
+            Prediction.is_deleted == False,
+            Prediction.target_date < today
+        ).all()
+        
+        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个已过期待验证预测")
+        
+        results = []
+        success_count = 0
+        failed_count = 0
+        
+        for prediction in expired_pending:
+            self.db.expire_all()
+            
+            fund_code, fund_name = self.match_fund_for_prediction(prediction)
+            if not fund_code:
+                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 无法匹配基金，跳过")
+                failed_count += 1
+                results.append({
+                    "prediction_id": prediction.id,
+                    "success": False,
+                    "message": f"无法匹配基金：{prediction.sector}"
+                })
+                continue
+            
+            period_days = self.parse_period_days(prediction.prediction_period)
+            verify_config = self.get_verify_config(period_days)
+            
+            target_date = prediction.target_date
+            window_end = target_date + timedelta(days=verify_config['window_days_after'])
+            
+            nav_start_days = max(verify_config['nav_start_days'], 5)
+            if verify_config['is_ultra_short'] and prediction.prediction_date:
+                nav_start_date = prediction.prediction_date
+            else:
+                nav_start_date = target_date - timedelta(days=verify_config['window_days_before']) - timedelta(days=nav_start_days)
+            
+            data_check = self._check_fund_data_availability(
+                fund_code=fund_code,
+                nav_start_date=nav_start_date,
+                window_end=window_end,
+                min_data_points=2
+            )
+            
+            if not data_check['available']:
+                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 基金数据不足: {data_check['message']}")
+                failed_count += 1
+                results.append({
+                    "prediction_id": prediction.id,
+                    "success": False,
+                    "message": data_check['message']
+                })
+                continue
+            
+            result = self.verify_prediction(prediction.id)
+            results.append({
+                "prediction_id": prediction.id,
+                "success": result.get("success"),
+                "message": result.get("message")
+            })
+            
+            if result.get("success"):
+                success_count += 1
+            else:
+                failed_count += 1
+                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 验证失败: {result.get('message')}")
+        
+        return {
+            "success": True,
+            "message": f"补救验证完成：成功 {success_count} 个，失败 {failed_count} 个",
+            "data": {
+                "total": len(expired_pending),
                 "success_count": success_count,
                 "failed_count": failed_count,
                 "results": results

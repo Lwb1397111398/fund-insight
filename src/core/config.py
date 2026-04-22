@@ -93,6 +93,8 @@ class Config:
     VOLCENGINE_VISION_MODEL = os.getenv("VOLCENGINE_VISION_MODEL", "doubao-seed-2-0-pro-260215")
     VOLCENGINE_VISION_LITE_MODEL = os.getenv("VOLCENGINE_VISION_LITE_MODEL", "doubao-seed-2-0-lite-260215")
     
+    # 数据库配置
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
     DB_PATH = DATA_DIR / "fund_insight.db"
     
     SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")

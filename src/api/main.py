@@ -2,10 +2,10 @@
 Fund Insight API - FastAPI 主应用
 模块化架构入口文件
 """
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from datetime import datetime
 from pathlib import Path
 import os
@@ -41,6 +41,29 @@ app = FastAPI(
     description="基金观点追踪与分析系统",
     version="2.0.0"
 )
+
+# 密码验证中间件
+@app.middleware("http")
+async def password_auth_middleware(request: Request, call_next):
+    # 放行健康检查接口
+    if request.url.path == "/api/health":
+        return await call_next(request)
+    
+    # 从环境变量获取密码
+    expected_password = os.getenv("ACCESS_PASSWORD", "Lwb1397111398")
+    
+    # 从请求头获取密码
+    provided_password = request.headers.get("X-Access-Password")
+    
+    # 验证密码
+    if provided_password != expected_password:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Unauthorized: Invalid or missing access password"}
+        )
+    
+    # 密码正确，继续处理请求
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -238,14 +261,12 @@ async def serve_vue_test():
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    import os
-    if os.environ.get('CRAWLER_ENABLED', 'false') == 'true':
-        from src.tasks.scheduler import start_scheduler
-        start_scheduler()
-        print(f"[Startup] 定时任务调度器已启动")
+    from src.tasks.scheduler import start_scheduler
+    start_scheduler()
     print(f"[Startup] Fund Insight API v2.0.0 已启动")
     print(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
     print(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
+    print(f"[Startup] 定时任务调度器已启动")
 
 
 if __name__ == "__main__":

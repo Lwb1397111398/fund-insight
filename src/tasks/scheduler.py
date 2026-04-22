@@ -41,6 +41,7 @@ class TaskScheduler:
         # 启动时先更新基金数据，再执行验证
         self._run_fund_update()
         self._run_prediction_verify()
+        self._run_expired_verify()
         
         last_cleanup_date = None
         last_verify_date = None
@@ -56,6 +57,7 @@ class TaskScheduler:
                     if last_verify_date != current_date:
                         self._run_fund_update()
                         self._run_prediction_verify()
+                        self._run_expired_verify()
                         last_verify_date = current_date
                 
                 # 每天执行一次清理任务
@@ -117,6 +119,31 @@ class TaskScheduler:
                 
         except Exception as e:
             logger.error(f"执行预测验证任务失败: {e}")
+    
+    def _run_expired_verify(self):
+        """执行已过期待验证预测的补救验证"""
+        try:
+            from src.services.prediction_verify_service import PredictionVerifyService
+            from src.models.database import SessionLocal
+            
+            logger.info("开始执行补救验证任务...")
+            
+            db = SessionLocal()
+            try:
+                service = PredictionVerifyService(db)
+                result = service.verify_expired_pending()
+                
+                if result.get("success"):
+                    data = result.get("data", {})
+                    logger.info(f"补救验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
+                else:
+                    logger.error(f"补救验证失败: {result}")
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"执行补救验证任务失败: {e}")
     
     def _run_fund_update(self):
         """执行基金数据更新"""

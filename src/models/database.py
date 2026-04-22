@@ -19,10 +19,18 @@ if __name__ == "__main__":
 
 from src.core.config import config
 
-DB_PATH = Path(config.DB_PATH)
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# 支持 PostgreSQL 和 SQLite
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
+if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
+    # PostgreSQL 数据库
+    engine = create_engine(DATABASE_URL, echo=False)
+else:
+    # 回退到 SQLite
+    DB_PATH = Path(config.DB_PATH)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
+
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine)
 
