@@ -120,6 +120,12 @@ def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
 
 
+@app.get("/favicon.ico")
+async def favicon():
+    """避免浏览器请求 favicon 时产生 404 日志"""
+    return Response(status_code=204)
+
+
 @app.get("/api/market-sentiment")
 def get_market_sentiment():
     """获取市场情绪"""
@@ -505,6 +511,21 @@ async def serve_import_page():
                 return;
             }
             
+            // 先验证密码是否正确
+            try {
+                const testRes = await fetch('/api/health');
+                const testRes2 = await fetch('/api/stats', {
+                    headers: { 'X-Access-Password': password }
+                });
+                if (testRes2.status === 401) {
+                    alert('密码错误，请重新输入');
+                    return;
+                }
+            } catch (e) {
+                alert('无法连接到服务器，请检查网络');
+                return;
+            }
+            
             const formData = new FormData();
             formData.append('file', selectedFile);
             
@@ -513,15 +534,25 @@ async def serve_import_page():
             
             try {
                 progressFill.style.width = '10%';
-                statusText.textContent = '正在上传文件...';
+                statusText.textContent = '正在上传文件（大文件可能需要较长时间，请耐心等待）...';
+                
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5分钟超时
                 
                 const response = await fetch('/api/import-database', {
                     method: 'POST',
                     headers: {
                         'X-Access-Password': password
                     },
-                    body: formData
+                    body: formData,
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
+                }
                 
                 const result = await response.json();
                 
@@ -551,7 +582,11 @@ async def serve_import_page():
                 resultArea.style.display = 'block';
                 resultText.className = 'result-error';
                 resultText.textContent = '❌ 导入失败';
-                resultDetails.textContent = error.message;
+                if (error.name === 'AbortError') {
+                    resultDetails.textContent = '请求超时（5分钟），文件可能过大，请尝试使用更小的数据库文件';
+                } else {
+                    resultDetails.textContent = error.message || '网络错误，请检查服务器是否正常运行';
+                }
                 statusText.textContent = '导入失败';
             }
         });
