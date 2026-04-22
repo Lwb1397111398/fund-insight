@@ -12,7 +12,7 @@ import os
 import sys
 import shutil
 import tempfile
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, insert as sa_insert
 from sqlalchemy.orm import sessionmaker
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -774,9 +774,8 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                             else:
                                 cleaned[key] = val
                         
-                        # 用 ORM 创建对象并添加
-                        obj = ModelClass(**cleaned)
-                        target_db.add(obj)
+                        # 用 SQLAlchemy Core insert 语句写入（避免 ORM relationship 级联问题）
+                        target_db.execute(sa_insert(ModelClass.__table__).values(**cleaned))
                     except Exception as e:
                         row_skipped += 1
                         if row_skipped <= 3:
