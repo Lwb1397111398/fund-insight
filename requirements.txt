@@ -31,3 +31,5 @@ json5>=0.9.0
 
 # WeChat Crawler (Playwright for browser automation)
 playwright>=1.40.0
+
+python-multipart>=0.0.10
