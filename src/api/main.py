@@ -633,6 +633,16 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         imported_counts = {}
         skipped_counts = {}
         
+        # PostgreSQL: 临时禁用外键约束，避免导入顺序问题
+        if DB_TYPE == "postgresql":
+            try:
+                target_db.execute(text("SET session_replication_role = 'replica'"))
+                target_db.commit()
+                print("[导入] 已禁用 PostgreSQL 外键约束检查")
+            except Exception as e:
+                print(f"[导入] 禁用外键约束失败（非超级用户可能不支持）: {e}")
+                target_db.rollback()
+        
         for table_name in tables_to_import:
             try:
                 # 从源数据库读取数据
@@ -659,9 +669,8 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                     # 转换为字典
                     row_dict = dict(zip(columns, row))
                     
-                    # 处理自增ID - 让数据库自动生成
-                    if 'id' in row_dict:
-                        del row_dict['id']
+                    # 保留原始 id，确保关联关系不断裂
+                    # （posts.blogger_id、predictions.post_id 等外键依赖原始 id）
                     
                     # 构建 INSERT 语句
                     placeholders = ', '.join([f":{col}" for col in row_dict.keys()])
@@ -701,6 +710,15 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
             try:
                 target_db.commit()
                 print("[导入] PostgreSQL 序列重置完成")
+            except:
+                target_db.rollback()
+        
+        # PostgreSQL: 恢复外键约束检查
+        if DB_TYPE == "postgresql":
+            try:
+                target_db.execute(text("SET session_replication_role = 'origin'"))
+                target_db.commit()
+                print("[导入] 已恢复 PostgreSQL 外键约束检查")
             except:
                 target_db.rollback()
         
