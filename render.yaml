@@ -2,13 +2,13 @@ services:
   - type: web
     name: fund-insight
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
     startCommand: uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
       - key: CRAWLER_ENABLED
-        value: "false"
+        value: "true"
       - key: ACCESS_PASSWORD
         sync: false
       - key: DATABASE_URL
