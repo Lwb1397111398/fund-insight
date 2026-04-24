@@ -195,9 +195,7 @@ class LLMAnalyzer:
         self.volcengine_api_key = config.VOLCENGINE_API_KEY
         self.volcengine_base_url = config.VOLCENGINE_BASE_URL
         self.volcengine_model = config.VOLCENGINE_MODEL
-        self.volcengine_search_model = config.VOLCENGINE_SEARCH_MODEL
-        self.volcengine_vision_model = config.VOLCENGINE_VISION_MODEL
-        self.volcengine_vision_lite_model = config.VOLCENGINE_VISION_LITE_MODEL
+        self.volcengine_light_model = config.VOLCENGINE_LIGHT_MODEL
         
         if self.provider == 'volcengine':
             if not self.volcengine_api_key:
@@ -207,8 +205,8 @@ class LLMAnalyzer:
                 base_url=self.volcengine_base_url
             )
             self.model = self.volcengine_model
-            self.light_model = self.volcengine_model
-            logger.info(f"[LLM] 使用火山引擎 (对话模型: {self.model}, 视觉模型: {self.volcengine_vision_model})")
+            self.light_model = self.volcengine_light_model
+            logger.info(f"[LLM] 使用火山引擎 (主力模型: {self.model}, 辅助模型: {self.light_model})")
         else:
             if not self.api_key:
                 raise ValueError("请设置 LLM_API_KEY 环境变量")
@@ -1899,21 +1897,14 @@ class LLMAnalyzer:
     
     def analyze_image(self, image_url: str, question: str = "请描述这张图片的内容") -> str:
         """
-        分析图片内容（使用火山引擎视觉模型）
-        
-        Args:
-            image_url: 图片URL或Base64编码
-            question: 要问的问题
-        
-        Returns:
-            分析结果文本
+        分析图片内容（使用火山引擎主力模型的多模态能力）
         """
         if self.provider != 'volcengine':
             logger.warning("[LLM] 图片分析仅支持火山引擎")
             return "图片分析功能需要使用火山引擎"
         
         try:
-            model = self.volcengine_vision_model
+            model = self.model
             
             if image_url.startswith('data:image'):
                 image_content = {
@@ -1948,21 +1939,14 @@ class LLMAnalyzer:
     
     def analyze_image_lite(self, image_url: str, question: str = "请描述这张图片的内容") -> str:
         """
-        分析图片内容（使用火山引擎轻量视觉模型）
-        
-        Args:
-            image_url: 图片URL或Base64编码
-            question: 要问的问题
-        
-        Returns:
-            分析结果文本
+        分析图片内容（使用火山引擎辅助模型的多模态能力）
         """
         if self.provider != 'volcengine':
             logger.warning("[LLM] 图片分析仅支持火山引擎")
             return "图片分析功能需要使用火山引擎"
         
         try:
-            model = self.volcengine_vision_lite_model
+            model = self.light_model
             
             if image_url.startswith('data:image'):
                 image_content = {
@@ -1994,6 +1978,19 @@ class LLMAnalyzer:
         except Exception as e:
             logger.error(f"[LLM] 图片分析失败: {e}")
             return f"图片分析失败: {str(e)}"
+
+    def _call_llm_with_model(self, model: str, prompt: str, max_tokens: int = 500, temperature: float = 0.7) -> str:
+        """使用指定模型调用LLM（用于测试特定模型）"""
+        response = self.client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        return response.choices[0].message.content.strip()
 
 
     def get_stats(self) -> Dict:

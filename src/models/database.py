@@ -1020,6 +1020,18 @@ class AdvicePerformance(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class SystemConfig(Base):
+    """系统配置表 - 持久化存储API配置（解决Render部署配置丢失问题）"""
+    __tablename__ = 'system_config'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    config_key = Column(String(100), unique=True, nullable=False, index=True)
+    config_value = Column(Text)
+    description = Column(String(200))
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class AdviceFeedback(Base):
     """建议反馈表"""
     __tablename__ = 'advice_feedback'

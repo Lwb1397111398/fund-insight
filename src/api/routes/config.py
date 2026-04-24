@@ -24,8 +24,7 @@ class ConfigUpdate(BaseModel):
     llm_provider: Optional[str] = None
     volcengine_api_key: Optional[str] = None
     volcengine_model: Optional[str] = None
-    volcengine_vision_model: Optional[str] = None
-    volcengine_vision_lite_model: Optional[str] = None
+    volcengine_light_model: Optional[str] = None
 
 
 @router.get("")
@@ -43,9 +42,7 @@ async def get_config():
             "volcengine_api_key_set": bool(config.VOLCENGINE_API_KEY),
             "volcengine_base_url": config.VOLCENGINE_BASE_URL,
             "volcengine_model": config.VOLCENGINE_MODEL,
-            "volcengine_search_model": config.VOLCENGINE_SEARCH_MODEL,
-            "volcengine_vision_model": config.VOLCENGINE_VISION_MODEL,
-            "volcengine_vision_lite_model": config.VOLCENGINE_VISION_LITE_MODEL,
+            "volcengine_light_model": config.VOLCENGINE_LIGHT_MODEL,
             "server_host": config.SERVER_HOST,
             "server_port": config.SERVER_PORT,
             "crawler_enabled": config.CRAWLER_ENABLED,
@@ -89,18 +86,15 @@ async def update_config(config_update: ConfigUpdate):
         config.VOLCENGINE_MODEL = config_update.volcengine_model
         updated.append("volcengine_model")
     
-    if config_update.volcengine_vision_model:
-        config.VOLCENGINE_VISION_MODEL = config_update.volcengine_vision_model
-        updated.append("volcengine_vision_model")
-    
-    if config_update.volcengine_vision_lite_model:
-        config.VOLCENGINE_VISION_LITE_MODEL = config_update.volcengine_vision_lite_model
-        updated.append("volcengine_vision_lite_model")
+    if config_update.volcengine_light_model:
+        config.VOLCENGINE_LIGHT_MODEL = config_update.volcengine_light_model
+        updated.append("volcengine_light_model")
     
     if updated:
         from src.analyzer.llm_analyzer import reset_analyzer
         reset_analyzer()
-    
+        config.save_persisted_config()
+
     return {
         "success": True,
         "message": f"已更新配置: {', '.join(updated)}" if updated else "无更新",
@@ -322,9 +316,9 @@ async def test_llm():
         }
 
 
-@router.post("/test-vision")
-async def test_vision():
-    """测试视觉模型"""
+@router.post("/test-volcengine-light")
+async def test_volcengine_light():
+    """测试火山引擎辅助模型"""
     try:
         from src.analyzer.llm_analyzer import get_analyzer
         
@@ -333,26 +327,31 @@ async def test_vision():
         if config.LLM_PROVIDER != 'volcengine':
             return {
                 "success": False,
-                "message": "视觉模型测试仅支持火山引擎",
+                "message": "辅助模型测试仅支持火山引擎",
                 "data": None
             }
         
-        test_image_url = "https://ark-project.tos-cn-beijing.volces.com/doc_image/ark_demo_img_1.png"
-        result = analyzer.analyze_image_lite(test_image_url, "请简单描述这张图片的内容，用一句话回答。")
+        test_prompt = "你好，请回复'辅助模型连接成功！'这六个字，不要回复其他内容。"
+        result = analyzer._call_llm_with_model(
+            config.VOLCENGINE_LIGHT_MODEL,
+            test_prompt,
+            max_tokens=50,
+            temperature=0.1
+        )
         
         return {
             "success": True,
-            "message": "视觉模型测试成功",
+            "message": "火山引擎辅助模型测试成功",
             "data": {
                 "provider": config.LLM_PROVIDER,
-                "vision_model": config.VOLCENGINE_VISION_LITE_MODEL,
-                "response": result
+                "light_model": config.VOLCENGINE_LIGHT_MODEL,
+                "response": result.strip() if result else None
             }
         }
     except Exception as e:
         return {
             "success": False,
-            "message": f"视觉模型测试失败: {str(e)}",
+            "message": f"辅助模型测试失败: {str(e)}",
             "data": {
                 "provider": config.LLM_PROVIDER,
                 "error": str(e)
