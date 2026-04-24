@@ -2401,42 +2401,55 @@
             </div>
         </div>
         <div v-if="showWeChatFetch" class="modal-overlay" @click.self="showWeChatFetch = false">
-            <div class="modal">
+            <div class="modal" style="max-width: 600px;">
                 <div class="modal-header">📱 微信文章抓取<button class="modal-close"
                         @click="showWeChatFetch = false">×</button></div>
                 <div v-if="!wechatFetching">
                     <div class="form-group">
-                        <label>文章链接</label>
-                        <input v-model="wechatUrl" placeholder="粘贴微信公众号文章链接，如：https://mp.weixin.qq.com/s/xxx">
-                    </div>
-                    <div class="form-group">
-                        <label>发布日期</label>
-                        <input type="date" v-model="wechatPostDate">
-                        <p style="font-size: 11px; color: #999; margin-top: 4px;">
-                            💡 留空则自动从文章中提取日期
+                        <label>文章链接 <span style="font-size: 11px; color: #999;">（支持多个链接，每行一个）</span></label>
+                        <textarea v-model="wechatUrls" rows="6" placeholder="粘贴微信公众号文章链接，每行一个：&#10;https://mp.weixin.qq.com/s/xxx&#10;https://mp.weixin.qq.com/s/yyy&#10;https://mp.weixin.qq.com/s/zzz" style="width: 100%; padding: 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 13px; resize: vertical; font-family: inherit;"></textarea>
+                        <p v-if="wechatUrlCount > 0" style="font-size: 11px; color: #1890ff; margin-top: 4px;">
+                            ✅ 已识别 {{ wechatUrlCount }} 个有效链接
                         </p>
                     </div>
+                    <div class="form-group">
+                        <label>发布日期 <span style="font-size: 11px; color: #999;">（留空则自动从文章中提取）</span></label>
+                        <input type="date" v-model="wechatPostDate">
+                    </div>
                     <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
-                        💡 提示：从微信App中分享文章
-                        复制链接后粘贴到此处
+                        💡 提示：从微信App中分享文章复制链接后粘贴到此处，支持一次粘贴多个链接
                     </p>
                 </div>
                 <div v-else class="loading" style="padding: 20px;">
                     <div class="loading-spinner"></div>
-                    <div>正在抓取并分析文章...</div>
-                </div>
-                <div v-if="wechatFetchResult"
-                    style="background: #f6ffed; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
-                    <div style="font-weight: 500; margin-bottom: 6px;">✅ {{ wechatFetchResult.title }}</div>
-                    <div style="font-size: 12px; color: #666;">
-                        博主: {{ wechatFetchResult.blogger_name }} |
-                        预测数: {{ wechatFetchResult.predictions_created }}
+                    <div>正在批量抓取并分析文章（{{ wechatBatchProgress }}）...</div>
+                    <div style="margin-top: 8px; background: #f0f0f0; border-radius: 4px; height: 6px; overflow: hidden;">
+                        <div :style="{ width: wechatBatchPercent + '%', background: '#1890ff', height: '100%', transition: 'width 0.3s' }"></div>
                     </div>
+                </div>
+                <div v-if="wechatBatchResults.length > 0" style="max-height: 250px; overflow-y: auto; margin-bottom: 12px;">
+                    <div v-for="(r, idx) in wechatBatchResults" :key="idx"
+                        :style="{ background: r.status === 'success' ? '#f6ffed' : r.status === 'skipped' ? '#fffbe6' : '#fff2f0', padding: '8px 12px', borderRadius: '6px', marginBottom: '6px', fontSize: '13px' }">
+                        <div style="font-weight: 500;">
+                            {{ r.status === 'success' ? '✅' : r.status === 'skipped' ? '⏭️' : '❌' }}
+                            {{ r.title || r.url }}
+                        </div>
+                        <div style="font-size: 11px; color: #666; margin-top: 2px;">
+                            <span v-if="r.blogger_name">博主: {{ r.blogger_name }}</span>
+                            <span v-if="r.predictions_created"> | 预测数: {{ r.predictions_created }}</span>
+                            <span v-if="r.message"> | {{ r.message }}</span>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="wechatBatchSummary" style="background: #e6f7ff; padding: 10px; border-radius: 8px; margin-bottom: 12px; font-size: 13px;">
+                    📊 {{ wechatBatchSummary }}
                 </div>
                 <div class="modal-footer">
                     <button class="modal-btn default" @click="showWeChatFetch = false">关闭</button>
-                    <button class="modal-btn primary" @click="fetchWeChatArticle"
-                        :disabled="wechatFetching || !wechatUrl">抓取</button>
+                    <button class="modal-btn primary" @click="fetchWeChatBatch"
+                        :disabled="wechatFetching || wechatUrlCount === 0">
+                        {{ wechatFetching ? '抓取中...' : (wechatUrlCount > 1 ? `批量抓取 (${wechatUrlCount}篇)` : '抓取') }}
+                    </button>
                 </div>
             </div>
         </div>
@@ -2570,7 +2583,36 @@
                 const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false), summarizing = ref(false), summaryStats = ref(null), showSummaryConfirmModal = ref(false);
                 const showAddBlogger = ref(false), showAddPost = ref(false), showAddFund = ref(false), showPostDetail = ref(false), showViewpointDetail = ref(false), showFundDetail = ref(false), showPredictionDetail = ref(false);
                 const showTopBloggersModal = ref(false), showAdviceHistory = ref(false), showConfig = ref(false), showCrawlerResult = ref(false), crawlerLoading = ref(false);
-                const showWeChatFetch = ref(false), wechatFetching = ref(false), wechatUrl = ref(''), wechatFetchResult = ref(null), wechatPostDate = ref('');
+                const showWeChatFetch = ref(false), wechatFetching = ref(false), wechatUrls = ref(''), wechatBatchResults = ref([]), wechatBatchSummary = ref(''), wechatBatchProgress = ref(''), wechatBatchPercent = ref(0), wechatPostDate = ref('');
+const wechatUrlCount = computed(() => { const lines = wechatUrls.value.split('\n').map(l => l.trim()).filter(l => l && l.includes('mp.weixin.qq.com')); return lines.length; });
+const fetchWeChatBatch = async () => {
+    const urls = wechatUrls.value.split('\n').map(l => l.trim()).filter(l => l && l.includes('mp.weixin.qq.com'));
+    if (urls.length === 0) return;
+    wechatFetching.value = true;
+    wechatBatchResults.value = [];
+    wechatBatchSummary.value = '';
+    wechatBatchProgress.value = `0/${urls.length}`;
+    wechatBatchPercent.value = 0;
+    try {
+        const res = await axios.post('/api/crawler/wechat/batch-fetch', { urls: urls, post_date: wechatPostDate.value || null });
+        if (res.data.success) {
+            wechatBatchResults.value = res.data.data.results || [];
+            wechatBatchSummary.value = res.data.message;
+            wechatBatchProgress.value = `${res.data.data.total}/${res.data.data.total}`;
+            wechatBatchPercent.value = 100;
+            wechatUrls.value = '';
+            wechatPostDate.value = '';
+            await fetchPosts();
+            await fetchPredictions();
+            await fetchStats();
+        } else {
+            alert(res.data.message || '批量抓取失败');
+        }
+    } catch (e) {
+        alert('批量抓取失败: ' + (e.response?.data?.message || e.message));
+    }
+    wechatFetching.value = false;
+};
                 const crawlerResult = reactive({ title: '', articles: [], error: '' });
                 const newBlogger = reactive({ name: '', platform: 'xiaohongshu' }), newPost = reactive({ blogger_id: null, content: '', post_date: new Date().toISOString().split('T')[0] }), newFund = reactive({ fund_code: '', fund_name: '', sector_type: '' });
                 const expiredPredictionsList = computed(() => predictions.value.filter(p => p.is_expired)), expiredViewpointsList = computed(() => viewpoints.value.filter(v => v.is_expired));
@@ -2664,7 +2706,6 @@
                 const crawlEastmoneyGuide = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📖 东方财富指南（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-guide/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
                 const crawlSinaFinance = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '🌐 新浪财经（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/sina-finance/auto-adopt', { category: 'finance', max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
                 const crawlSinaBlog = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '🌐 新浪博客（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/sina-blog/auto-adopt', { max_posts: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
-                const fetchWeChatArticle = async () => { if (!wechatUrl.value) return; wechatFetching.value = true; wechatFetchResult.value = null; try { const res = await axios.post('/api/crawler/wechat/fetch', { url: wechatUrl.value, post_date: wechatPostDate.value || null }); if (res.data.success) { wechatFetchResult.value = res.data.data; wechatUrl.value = ''; wechatPostDate.value = ''; await fetchPosts(); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '抓取失败'); } } catch (e) { alert('抓取失败: ' + (e.response?.data?.message || e.message)); } wechatFetching.value = false; };
                 const generateAdvice = async (force = false) => {
                     currentView.value = 'advice';
                     adviceGenerating.value = true;
@@ -2695,7 +2736,7 @@
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrl, wechatFetchResult, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatArticle, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
+                return { loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
             }
         }).mount('#app');
     </script>
