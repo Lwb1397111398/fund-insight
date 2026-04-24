@@ -96,70 +96,22 @@ async def create_post(post: PostCreate, background_tasks: BackgroundTasks, db: S
 
 @router.post("/batch-analyze")
 async def batch_analyze_posts(
-    concurrent: bool = True,
-    max_workers: int = 3,
     db: Session = Depends(get_db)
 ):
     """
     批量分析帖子（一键分析未分析的帖子）
-    
-    Args:
-        concurrent: 是否使用并发模式，默认True
-        max_workers: 并发数，默认3，最大5
     """
-    if concurrent:
-        from src.utils.concurrent_analyzer import get_concurrent_analyzer
-        from src.models.database import get_db as get_db_session
-        
-        service = PostService(db)
-        unanalyzed_posts = service.get_unanalyzed(limit=100)
-        
-        if not unanalyzed_posts:
-            return {
-                "success": True,
-                "message": "没有需要分析的帖子",
-                "data": {"analyzed": 0, "failed": 0, "total": 0}
-            }
-        
-        posts_data = [
-            {
-                "id": p.id,
-                "blogger_id": p.blogger_id,
-                "title": p.title,
-                "content": p.content,
-                "post_date": p.post_date
-            }
-            for p in unanalyzed_posts
-        ]
-        
-        analyzer = get_concurrent_analyzer(max_workers=min(max_workers, 5))
-        progress = analyzer.analyze_posts_concurrent(
-            posts=posts_data,
-            db_session_factory=lambda: next(get_db_session()),
-            delay=0.5
-        )
-        
-        return {
-            "success": True,
-            "message": f"批量分析完成: 成功 {progress.completed} 个, 失败 {progress.failed} 个",
-            "data": {
-                "analyzed": progress.completed,
-                "failed": progress.failed,
-                "total": progress.total
-            }
+    service = PostService(db)
+    result = service.batch_analyze_posts()
+    
+    return {
+        "success": True,
+        "message": result["message"],
+        "data": {
+            "analyzed": result["analyzed"],
+            "failed": result["failed"]
         }
-    else:
-        service = PostService(db)
-        result = service.batch_analyze_posts()
-        
-        return {
-            "success": True,
-            "message": result["message"],
-            "data": {
-                "analyzed": result["analyzed"],
-                "failed": result["failed"]
-            }
-        }
+    }
 
 
 @router.get("/{post_id}")
