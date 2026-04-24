@@ -17,6 +17,12 @@ services:
         value: volcengine
       - key: VOLCENGINE_API_KEY
         sync: false
+      - key: VOLCENGINE_BASE_URL
+        value: "https://ark.cn-beijing.volces.com/api/v3"
+      - key: VOLCENGINE_MODEL
+        value: "ep-20260424143452-nhsrm"
+      - key: VOLCENGINE_LIGHT_MODEL
+        value: "ep-20260424143452-nhsrm"
 
 databases:
   - name: fund-insight-db

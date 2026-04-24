@@ -141,20 +141,18 @@ class Config:
 
     @classmethod
     def load_persisted_config(cls):
-        db_loaded = cls._load_from_database()
-        if db_loaded:
-            return
-
         if PERSIST_CONFIG_FILE.exists():
             try:
                 with open(PERSIST_CONFIG_FILE, 'r', encoding='utf-8') as f:
                     saved = json.load(f)
                 for field in PERSIST_FIELDS:
-                    if field in saved and saved[field]:
+                    if field in saved and saved[field] and not os.getenv(field):
                         setattr(cls, field, saved[field])
                 print(f"[Config] 已从持久化文件加载配置: {list(saved.keys())}")
             except (json.JSONDecodeError, IOError, OSError) as e:
                 print(f"[Config] 加载持久化配置失败: {e}")
+
+        cls._load_from_database()
 
     @classmethod
     def _load_from_database(cls) -> bool:
@@ -168,11 +166,24 @@ class Config:
                 rows = result.fetchall()
                 if not rows:
                     return False
+                loaded = 0
+                env_overridden = []
                 for row in rows:
                     key, value = row[0], row[1]
+                    if os.getenv(key):
+                        env_overridden.append(key)
+                        continue
                     if key in PERSIST_FIELDS and value:
                         setattr(cls, key, value)
-                print(f"[Config] 已从数据库加载配置: {len(rows)} 项")
+                        loaded += 1
+                if env_overridden:
+                    conn.execute(
+                        text("DELETE FROM system_config WHERE config_key = ANY(:keys)"),
+                        {"keys": env_overridden}
+                    )
+                    conn.commit()
+                    print(f"[Config] 清理数据库中已被环境变量覆盖的配置: {env_overridden}")
+                print(f"[Config] 已从数据库加载配置: {loaded} 项（环境变量优先，跳过 {len(env_overridden)} 项）")
                 return True
         except Exception as e:
             print(f"[Config] 从数据库加载配置失败: {e}")
@@ -182,6 +193,8 @@ class Config:
     def save_persisted_config(cls):
         data = {}
         for field in PERSIST_FIELDS:
+            if os.getenv(field):
+                continue
             val = getattr(cls, field, None)
             if val is not None:
                 data[field] = val
@@ -191,7 +204,7 @@ class Config:
         try:
             with open(PERSIST_CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"[Config] 配置已持久化保存")
+            print(f"[Config] 配置已持久化保存: {len(data)} 项（环境变量字段跳过）")
         except (IOError, OSError) as e:
             print(f"[Config] 保存持久化配置失败: {e}")
 
