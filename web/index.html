@@ -2593,24 +2593,37 @@ const fetchWeChatBatch = async () => {
     wechatBatchSummary.value = '';
     wechatBatchProgress.value = `0/${urls.length}`;
     wechatBatchPercent.value = 0;
-    try {
-        const res = await axios.post('/api/crawler/wechat/batch-fetch', { urls: urls, post_date: wechatPostDate.value || null });
-        if (res.data.success) {
-            wechatBatchResults.value = res.data.data.results || [];
-            wechatBatchSummary.value = res.data.message;
-            wechatBatchProgress.value = `${res.data.data.total}/${res.data.data.total}`;
-            wechatBatchPercent.value = 100;
-            wechatUrls.value = '';
-            wechatPostDate.value = '';
-            await fetchPosts();
-            await fetchPredictions();
-            await fetchStats();
-        } else {
-            alert(res.data.message || '批量抓取失败');
+    let successCount = 0, skipCount = 0, failCount = 0;
+    for (let i = 0; i < urls.length; i++) {
+        const url = urls[i];
+        wechatBatchProgress.value = `${i + 1}/${urls.length}`;
+        wechatBatchPercent.value = Math.round(((i + 1) / urls.length) * 100);
+        try {
+            const res = await axios.post('/api/crawler/wechat/fetch', { url: url, post_date: wechatPostDate.value || null });
+            if (res.data.success) {
+                const d = res.data.data || {};
+                if (d.already_exists) {
+                    skipCount++;
+                    wechatBatchResults.value.push({ status: 'skipped', title: d.title, blogger_name: d.blogger_name, message: '该文章已存在' });
+                } else {
+                    successCount++;
+                    wechatBatchResults.value.push({ status: 'success', title: d.title, blogger_name: d.blogger_name, predictions_created: d.predictions_created });
+                }
+            } else {
+                failCount++;
+                wechatBatchResults.value.push({ status: 'failed', url: url, message: res.data.message || '抓取失败' });
+            }
+        } catch (e) {
+            failCount++;
+            wechatBatchResults.value.push({ status: 'failed', url: url, message: e.response?.data?.message || e.message });
         }
-    } catch (e) {
-        alert('批量抓取失败: ' + (e.response?.data?.message || e.message));
     }
+    wechatBatchSummary.value = `批量抓取完成：成功 ${successCount} 篇，跳过 ${skipCount} 篇，失败 ${failCount} 篇`;
+    wechatUrls.value = '';
+    wechatPostDate.value = '';
+    await fetchPosts();
+    await fetchPredictions();
+    await fetchStats();
     wechatFetching.value = false;
 };
                 const crawlerResult = reactive({ title: '', articles: [], error: '' });

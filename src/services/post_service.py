@@ -313,7 +313,7 @@ class PostService(BaseService[Post]):
                 "auto_titled": auto_titled,
                 "analyzed": False,
                 "predictions_created": 0,
-                "message": "帖子已添加，正在后台分析中..."
+                "message": "帖子已添加，请手动点击分析"
             }
         
         analysis_result = None

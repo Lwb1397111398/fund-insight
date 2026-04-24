@@ -17,8 +17,6 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
-_PLAYWRIGHT_BROWSER_OK = None
-
 
 class WeChatArticleFetcher:
     """微信文章抓取器，支持 Playwright + HTTP 双模式"""
@@ -42,16 +40,24 @@ class WeChatArticleFetcher:
     def __init__(self):
         self._playwright = None
         self._browser = None
+        self._browser_ok = None
 
-    async def _ensure_browser(self):
-        global _PLAYWRIGHT_BROWSER_OK
+    async def _get_browser(self):
         if self._browser is not None:
-            return True
+            try:
+                if self._browser.is_connected():
+                    return self._browser
+            except Exception:
+                pass
+            await self._close_browser()
+
         if not PLAYWRIGHT_AVAILABLE:
-            _PLAYWRIGHT_BROWSER_OK = False
-            return False
-        if _PLAYWRIGHT_BROWSER_OK is False:
-            return False
+            self._browser_ok = False
+            return None
+
+        if self._browser_ok is False:
+            return None
+
         try:
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
@@ -64,14 +70,14 @@ class WeChatArticleFetcher:
                     '--single-process',
                 ]
             )
-            _PLAYWRIGHT_BROWSER_OK = True
+            self._browser_ok = True
             print("[WeChatFetcher] Playwright 浏览器启动成功")
-            return True
+            return self._browser
         except Exception as e:
             print(f"[WeChatFetcher] Playwright 浏览器启动失败，将使用 HTTP 降级模式: {e}")
-            _PLAYWRIGHT_BROWSER_OK = False
+            self._browser_ok = False
             await self._close_browser()
-            return False
+            return None
 
     async def _close_browser(self):
         if self._browser:
@@ -87,16 +93,12 @@ class WeChatArticleFetcher:
                 pass
             self._playwright = None
 
+    async def _restart_browser(self):
+        await self._close_browser()
+        self._browser_ok = None
+        return await self._get_browser()
+
     async def fetch(self, url: str) -> Optional[Dict]:
-        """
-        抓取微信文章，优先 Playwright，失败降级为 HTTP
-
-        Args:
-            url: 微信文章URL
-
-        Returns:
-            文章信息字典，包含 title, author, content, publish_time
-        """
         if not url or 'mp.weixin.qq.com' not in url:
             return None
 
@@ -108,12 +110,20 @@ class WeChatArticleFetcher:
         return await self._fetch_with_http(url)
 
     async def _fetch_with_playwright(self, url: str) -> Optional[Dict]:
-        browser_ok = await self._ensure_browser()
-        if not browser_ok:
+        browser = await self._get_browser()
+        if not browser:
             return None
 
+        context = None
+        page = None
         try:
-            context = await self._browser.new_context(
+            if not browser.is_connected():
+                print("[WeChatFetcher] 浏览器已断开，尝试重启...")
+                browser = await self._restart_browser()
+                if not browser:
+                    return None
+
+            context = await browser.new_context(
                 user_agent=random.choice(self.USER_AGENTS),
                 viewport={'width': 1920, 'height': 1080},
                 locale='zh-CN',
@@ -125,41 +135,50 @@ class WeChatArticleFetcher:
 
             page = await context.new_page()
 
-            try:
-                await page.goto(url, wait_until='domcontentloaded', timeout=20000)
-                await asyncio.sleep(0.5)
+            await page.goto(url, wait_until='domcontentloaded', timeout=20000)
+            await asyncio.sleep(1)
 
-                content = await page.content()
-                soup = BeautifulSoup(content, 'html.parser')
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
 
-                title = self._extract_title(soup)
-                author = self._extract_author(soup)
-                publish_time = self._extract_publish_time(soup)
-                article_content = self._extract_content(soup)
+            title = self._extract_title(soup)
+            author = self._extract_author(soup)
+            publish_time = self._extract_publish_time(soup)
+            article_content = self._extract_content(soup)
 
-                if not title or not article_content:
-                    return None
+            if not title or not article_content:
+                return None
 
-                return {
-                    'title': title,
-                    'author': author,
-                    'content': article_content,
-                    'publish_time': publish_time,
-                    'url': url,
-                    'crawl_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'mode': 'playwright',
-                }
-
-            finally:
-                await page.close()
-                await context.close()
+            return {
+                'title': title,
+                'author': author,
+                'content': article_content,
+                'publish_time': publish_time,
+                'url': url,
+                'crawl_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'mode': 'playwright',
+            }
 
         except Exception as e:
             print(f"[WeChatFetcher] Playwright 抓取失败: {e}")
+            if self._browser and not self._browser.is_connected():
+                print("[WeChatFetcher] 浏览器已断开，标记需要重启")
+                self._browser = None
+                self._browser_ok = None
             return None
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
     async def _fetch_with_http(self, url: str) -> Optional[Dict]:
-        """使用 HTTP 请求降级抓取微信文章"""
         try:
             headers = dict(self.HTTP_HEADERS)
             headers['User-Agent'] = random.choice(self.USER_AGENTS)
@@ -206,7 +225,6 @@ class WeChatArticleFetcher:
             return None
 
     def _extract_from_js_var(self, html: str) -> Optional[Dict]:
-        """从微信页面的 JS 变量中提取文章内容（降级方案）"""
         result = {}
 
         title_match = re.search(r"var\s+msg_title\s*=\s*'([^']*)'", html)
@@ -294,13 +312,4 @@ wechat_fetcher = WeChatArticleFetcher()
 
 
 def fetch_wechat_article(url: str) -> Optional[Dict]:
-    """
-    同步接口：抓取微信文章
-
-    Args:
-        url: 微信文章URL
-
-    Returns:
-        文章信息字典
-    """
     return asyncio.run(wechat_fetcher.fetch(url))

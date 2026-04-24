@@ -5,9 +5,8 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import traceback
-import asyncio
 
 from src.api.deps import get_db
 from src.services.crawler_service import CrawlerService
@@ -17,11 +16,6 @@ router = APIRouter(prefix="/crawler", tags=["爬虫"])
 
 class WeChatArticleRequest(BaseModel):
     url: str
-    post_date: Optional[str] = None
-
-
-class WeChatBatchRequest(BaseModel):
-    urls: List[str]
     post_date: Optional[str] = None
 
 
@@ -139,15 +133,14 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
     2. 自动创建/匹配博主
     3. 创建帖子并分析
     """
-    from src.crawler.wechat_fetcher import WeChatArticleFetcher
+    from src.crawler.wechat_fetcher import wechat_fetcher
     from src.models.database import Blogger, Post
     from src.services.post_service import PostService
     from src.analyzer.llm_analyzer import get_analyzer
     from datetime import datetime as dt
     
     try:
-        fetcher = WeChatArticleFetcher()
-        article = await fetcher.fetch(data.url)
+        article = await wechat_fetcher.fetch(data.url)
         
         if not article:
             return {"success": False, "message": "抓取文章失败，请检查URL是否正确"}
@@ -202,7 +195,8 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
             blogger_id=blogger.id,
             content=article['content'],
             post_date=post_date,
-            source_url=data.url
+            source_url=data.url,
+            async_mode=True
         )
         
         return {
@@ -222,129 +216,3 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
     except Exception as e:
         traceback.print_exc()
         return {"success": False, "message": f"抓取失败: {str(e)}"}
-
-
-@router.post("/wechat/batch-fetch")
-async def batch_fetch_wechat_articles(data: WeChatBatchRequest, db: Session = Depends(get_db)):
-    """
-    批量抓取微信公众号文章并自动添加博主和帖子
-
-    逐个抓取，返回每篇文章的抓取结果
-    """
-    from src.crawler.wechat_fetcher import WeChatArticleFetcher
-    from src.models.database import Blogger, Post
-    from src.services.post_service import PostService
-    from datetime import datetime as dt
-
-    if not data.urls:
-        return {"success": False, "message": "请提供至少一个URL"}
-
-    urls = [u.strip() for u in data.urls if u.strip() and 'mp.weixin.qq.com' in u.strip()]
-    if not urls:
-        return {"success": False, "message": "未找到有效的微信文章链接"}
-
-    fetcher = WeChatArticleFetcher()
-    results = []
-    success_count = 0
-    fail_count = 0
-    skip_count = 0
-
-    for i, url in enumerate(urls):
-        try:
-            article = await fetcher.fetch(url)
-
-            if not article:
-                results.append({
-                    "url": url,
-                    "status": "failed",
-                    "message": "抓取文章失败，请检查URL"
-                })
-                fail_count += 1
-                continue
-
-            author_name = article.get('author', '未知博主')
-
-            blogger = db.query(Blogger).filter(Blogger.name == author_name).first()
-            if not blogger:
-                blogger = Blogger(
-                    name=author_name,
-                    platform='wechat',
-                    description=f'来自微信公众号'
-                )
-                db.add(blogger)
-                db.commit()
-                db.refresh(blogger)
-
-            existing_post = db.query(Post).filter(Post.source_url == url).first()
-            if existing_post:
-                results.append({
-                    "url": url,
-                    "status": "skipped",
-                    "message": "该文章已存在",
-                    "title": existing_post.title,
-                    "blogger_name": author_name
-                })
-                skip_count += 1
-                continue
-
-            if data.post_date:
-                try:
-                    post_date = dt.strptime(data.post_date, '%Y-%m-%d').date()
-                except:
-                    post_date = dt.now().date()
-            else:
-                publish_time = article.get('publish_time', '')
-                post_date = dt.now().date()
-                if publish_time:
-                    try:
-                        for fmt in ['%Y年%m月%d日', '%Y-%m-%d', '%Y/%m/%d']:
-                            try:
-                                post_date = dt.strptime(publish_time[:10], fmt).date()
-                                break
-                            except:
-                                continue
-                    except:
-                        pass
-
-            post_service = PostService(db)
-            result = post_service.create_post_with_analysis(
-                blogger_id=blogger.id,
-                content=article['content'],
-                post_date=post_date,
-                source_url=url
-            )
-
-            results.append({
-                "url": url,
-                "status": "success",
-                "title": article['title'],
-                "blogger_name": author_name,
-                "blogger_id": blogger.id,
-                "post_id": result['id'],
-                "predictions_created": result['predictions_created'],
-                "analyzed": result['analyzed']
-            })
-            success_count += 1
-
-        except Exception as e:
-            results.append({
-                "url": url,
-                "status": "failed",
-                "message": str(e)[:200]
-            })
-            fail_count += 1
-
-        if i < len(urls) - 1:
-            await asyncio.sleep(1)
-
-    return {
-        "success": True,
-        "message": f"批量抓取完成：成功 {success_count} 篇，跳过 {skip_count} 篇，失败 {fail_count} 篇",
-        "data": {
-            "total": len(urls),
-            "success_count": success_count,
-            "skip_count": skip_count,
-            "fail_count": fail_count,
-            "results": results
-        }
-    }

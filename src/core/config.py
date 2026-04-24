@@ -202,6 +202,8 @@ class Config:
             if DB_TYPE != "postgresql":
                 return
             from sqlalchemy import text
+            from datetime import datetime
+            now = datetime.now()
             with engine.connect() as conn:
                 for key, value in data.items():
                     if value is None:
@@ -209,11 +211,11 @@ class Config:
                     conn.execute(
                         text("""
                             INSERT INTO system_config (config_key, config_value, updated_at)
-                            VALUES (:key, :value, NOW())
+                            VALUES (:key, :value, :now)
                             ON CONFLICT (config_key)
-                            DO UPDATE SET config_value = :value, updated_at = NOW()
+                            DO UPDATE SET config_value = :value, updated_at = :now
                         """),
-                        {"key": key, "value": str(value)}
+                        {"key": key, "value": str(value), "now": now}
                     )
                 conn.commit()
             print(f"[Config] 配置已保存到数据库: {len(data)} 项")
@@ -267,4 +269,3 @@ class Config:
 
 
 config = Config()
-config.load_persisted_config()

@@ -861,12 +861,10 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    from src.tasks.scheduler import start_scheduler
-    start_scheduler()
+    config.load_persisted_config()
     print(f"[Startup] Fund Insight API v2.0.0 已启动")
     print(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
     print(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
-    print(f"[Startup] 定时任务调度器已启动")
 
 
 if __name__ == "__main__":
