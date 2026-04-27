@@ -30,13 +30,14 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
         engine = create_engine(
             DATABASE_URL,
             echo=False,
-            pool_size=5,
-            max_overflow=10,
-            pool_recycle=300,
-            pool_pre_ping=True
+            pool_size=2,
+            max_overflow=3,
+            pool_recycle=180,
+            pool_pre_ping=True,
+            pool_timeout=20
         )
         DB_TYPE = "postgresql"
-        print(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+10）")
+        print(f"[数据库] 使用 PostgreSQL 引擎（连接池: 2+3）")
     except ImportError:
         print(f"[数据库] psycopg2 未安装，回退到 SQLite")
         DB_PATH = Path(config.DB_PATH)

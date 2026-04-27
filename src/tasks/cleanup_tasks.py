@@ -4,7 +4,7 @@
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
-from src.models.database import Prediction, Viewpoint, Post, FundHistory, InvestmentAdvice, get_db
+from src.models.database import Prediction, Viewpoint, Post, FundHistory, InvestmentAdvice, SessionLocal
 from src.services.prediction_verify_service import PredictionVerifyService
 import logging
 
@@ -12,20 +12,21 @@ logger = logging.getLogger(__name__)
 
 
 class CleanupManager:
-    """清理管理器"""
+    """清理管理器 - 每次操作创建独立会话，避免连接泄漏"""
     
-    def __init__(self):
-        self.db: Session = next(get_db())
+    def _get_db(self) -> Session:
+        return SessionLocal()
     
     def cleanup_expired_predictions(self) -> dict:
         """
         清理过期的预测
         规则：target_date + 7天后自动删除
         """
+        db = self._get_db()
         try:
             cutoff_date = date.today() - timedelta(days=7)
             
-            expired_predictions = self.db.query(Prediction).filter(
+            expired_predictions = db.query(Prediction).filter(
                 Prediction.target_date < cutoff_date,
                 Prediction.is_deleted == False
             ).all()
@@ -51,7 +52,7 @@ class CleanupManager:
             affected_posts = set(p['post_id'] for p in prediction_data)
             deleted_count = 0
             
-            verify_service = PredictionVerifyService(self.db)
+            verify_service = PredictionVerifyService(db)
             
             for data in prediction_data:
                 if data['verify_count'] and data['verify_count'] > 0:
@@ -61,13 +62,13 @@ class CleanupManager:
                         is_correct=data['is_correct']
                     )
                 
-                self.db.query(Prediction).filter(Prediction.id == data['id']).delete()
+                db.query(Prediction).filter(Prediction.id == data['id']).delete()
                 deleted_count += 1
                 logger.info(f"删除过期预测 ID: {data['id']}, 帖子ID: {data['post_id']}")
             
-            self.db.commit()
+            db.commit()
             
-            cleaned_posts = self._cleanup_empty_posts(affected_posts)
+            cleaned_posts = self._cleanup_empty_posts(db, affected_posts)
             
             return {
                 "success": True,
@@ -76,7 +77,7 @@ class CleanupManager:
             }
             
         except Exception as e:
-            self.db.rollback()
+            db.rollback()
             logger.error(f"清理过期预测失败: {e}")
             return {
                 "success": False,
@@ -84,28 +85,31 @@ class CleanupManager:
                 "deleted_predictions": 0,
                 "cleaned_posts": 0
             }
+        finally:
+            db.close()
     
     def cleanup_expired_viewpoints(self) -> dict:
         """
         清理过期的观点
         规则：viewpoint_date + 7天后删除
         """
+        db = self._get_db()
         try:
             today = date.today()
             cutoff = today - timedelta(days=7)
             
             deleted_count = 0
             
-            old_viewpoints = self.db.query(Viewpoint).filter(
+            old_viewpoints = db.query(Viewpoint).filter(
                 Viewpoint.viewpoint_date < cutoff
             ).all()
             
             for viewpoint in old_viewpoints:
-                self.db.delete(viewpoint)
+                db.delete(viewpoint)
                 deleted_count += 1
                 logger.info(f"删除过期观点 ID: {viewpoint.id}, 日期: {viewpoint.viewpoint_date}")
             
-            self.db.commit()
+            db.commit()
             
             logger.info(f"观点清理完成: 删除 {deleted_count} 个")
             
@@ -115,13 +119,15 @@ class CleanupManager:
             }
             
         except Exception as e:
-            self.db.rollback()
+            db.rollback()
             logger.error(f"清理过期观点失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "deleted_viewpoints": 0
             }
+        finally:
+            db.close()
     
     def manual_cleanup_viewpoints(self, days: int = 10) -> dict:
         """
@@ -132,21 +138,22 @@ class CleanupManager:
         Args:
             days: 保留天数，默认10天
         """
+        db = self._get_db()
         try:
             cutoff_date = date.today() - timedelta(days=days)
             
-            old_viewpoints = self.db.query(Viewpoint).filter(
+            old_viewpoints = db.query(Viewpoint).filter(
                 Viewpoint.viewpoint_date < cutoff_date
             ).all()
             
             deleted_count = 0
             
             for viewpoint in old_viewpoints:
-                self.db.delete(viewpoint)
+                db.delete(viewpoint)
                 deleted_count += 1
                 logger.info(f"手动删除观点 ID: {viewpoint.id}, 日期: {viewpoint.viewpoint_date}, 来源: {viewpoint.source}")
             
-            self.db.commit()
+            db.commit()
             
             logger.info(f"手动清理观点完成: 删除 {deleted_count} 个超过 {days} 天的观点")
             
@@ -158,15 +165,17 @@ class CleanupManager:
             }
             
         except Exception as e:
-            self.db.rollback()
+            db.rollback()
             logger.error(f"手动清理观点失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "deleted_viewpoints": 0
             }
+        finally:
+            db.close()
     
-    def _cleanup_empty_posts(self, post_ids: set) -> int:
+    def _cleanup_empty_posts(self, db: Session, post_ids: set) -> int:
         """
         清理没有预测的帖子
         返回清理的帖子数量
@@ -174,35 +183,27 @@ class CleanupManager:
         cleaned_count = 0
         
         for post_id in post_ids:
-            # 检查帖子是否还有预测
-            remaining_predictions = self.db.query(Prediction).filter(
+            remaining_predictions = db.query(Prediction).filter(
                 Prediction.post_id == post_id
             ).count()
             
             if remaining_predictions == 0:
-                # 删除帖子
-                post = self.db.query(Post).filter(Post.id == post_id).first()
+                post = db.query(Post).filter(Post.id == post_id).first()
                 if post:
-                    self.db.delete(post)
+                    db.delete(post)
                     cleaned_count += 1
                     logger.info(f"删除空帖子 ID: {post_id}")
         
         if cleaned_count > 0:
-            self.db.commit()
+            db.commit()
         
         return cleaned_count
     
     def cleanup_old_fund_history(self) -> dict:
         """
         清理过期的基金历史净值数据
-        
-        规则：
-        1. 检查是否有活跃的长期预测（目标日期超过90天）
-        2. 如果有， 保留预测日期到目标日期之间的数据
-        3. 默认规则：
-           - 最近90天：完整保留
-           - 超过90天：删除（除非有长期预测需要保留）
         """
+        db = self._get_db()
         try:
             today = date.today()
             cutoff_90 = today - timedelta(days=90)
@@ -212,7 +213,7 @@ class CleanupManager:
             
             from src.models.database import FundInfo
             
-            active_long_predictions = self.db.query(Prediction).filter(
+            active_long_predictions = db.query(Prediction).filter(
                 Prediction.status == 'pending',
                 Prediction.target_date > cutoff_90
             ).all()
@@ -233,12 +234,12 @@ class CleanupManager:
             if fund_extended_cutoff:
                 logger.info(f"[清理] 发现 {len(fund_extended_cutoff)} 个基金有长期活跃预测，延长数据保留")
             
-            funds = self.db.query(FundInfo).all()
+            funds = db.query(FundInfo).all()
             
             for fund in funds:
                 extended_cutoff = fund_extended_cutoff.get(fund.fund_code)
                 
-                history = self.db.query(FundHistory).filter(
+                history = db.query(FundHistory).filter(
                     FundHistory.fund_code == fund.fund_code
                 ).order_by(FundHistory.nav_date.desc()).all()
                 
@@ -252,11 +253,11 @@ class CleanupManager:
                         preserved_for_predictions += 1
                         continue
                     
-                    self.db.delete(h)
+                    db.delete(h)
                     deleted_count += 1
                     logger.debug(f"删除基金历史(>90天): {fund.fund_code} {nav_date}")
             
-            self.db.commit()
+            db.commit()
             
             logger.info(f"清理基金历史净值完成: 删除 {deleted_count} 条记录, 为长期预测保留 {preserved_for_predictions} 条记录")
             
@@ -268,35 +269,38 @@ class CleanupManager:
             }
             
         except Exception as e:
-            self.db.rollback()
+            db.rollback()
             logger.error(f"清理基金历史净值失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "deleted_fund_history": 0
             }
+        finally:
+            db.close()
     
     def cleanup_empty_posts(self) -> dict:
         """
         清理没有预测的空帖子（无论时间）
         """
+        db = self._get_db()
         try:
-            posts_with_predictions = self.db.query(Prediction.post_id).filter(
+            posts_with_predictions = db.query(Prediction.post_id).filter(
                 Prediction.is_deleted == False
             ).distinct().subquery()
             
-            empty_posts = self.db.query(Post).filter(
+            empty_posts = db.query(Post).filter(
                 ~Post.id.in_(posts_with_predictions)
             ).all()
             
             deleted_count = 0
             for post in empty_posts:
-                self.db.delete(post)
+                db.delete(post)
                 deleted_count += 1
                 logger.info(f"删除空帖子 ID: {post.id}, 标题: {post.title}")
             
             if deleted_count > 0:
-                self.db.commit()
+                db.commit()
             
             return {
                 "success": True,
@@ -304,33 +308,36 @@ class CleanupManager:
             }
             
         except Exception as e:
-            self.db.rollback()
+            db.rollback()
             logger.error(f"清理空帖子失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "deleted_empty_posts": 0
             }
+        finally:
+            db.close()
     
     def cleanup_old_advice(self) -> dict:
         """
         清理超过一周的投资建议
         """
+        db = self._get_db()
         try:
             cutoff_date = date.today() - timedelta(days=7)
             
-            old_advice = self.db.query(InvestmentAdvice).filter(
+            old_advice = db.query(InvestmentAdvice).filter(
                 InvestmentAdvice.advice_date < cutoff_date
             ).all()
             
             deleted_count = 0
             for advice in old_advice:
-                self.db.delete(advice)
+                db.delete(advice)
                 deleted_count += 1
                 logger.info(f"删除过期投资建议 ID: {advice.id}, 日期: {advice.advice_date}")
             
             if deleted_count > 0:
-                self.db.commit()
+                db.commit()
             
             return {
                 "success": True,
@@ -338,13 +345,15 @@ class CleanupManager:
             }
             
         except Exception as e:
-            self.db.rollback()
+            db.rollback()
             logger.error(f"清理投资建议失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "deleted_advice": 0
             }
+        finally:
+            db.close()
     
     def run_full_cleanup(self) -> dict:
         """运行完整清理"""
@@ -395,7 +404,6 @@ class CleanupManager:
         return result
 
 
-# 全局清理管理器实例
 _cleanup_manager = None
 
 
@@ -414,6 +422,5 @@ def run_cleanup_task():
 
 
 if __name__ == '__main__':
-    # 测试清理功能
     result = run_cleanup_task()
     print(f"清理结果: {result}")

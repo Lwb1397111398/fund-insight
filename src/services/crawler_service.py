@@ -3,7 +3,7 @@
 处理爬虫相关的业务逻辑
 """
 from typing import List, Dict, Optional, Tuple
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -168,11 +168,31 @@ class CrawlerService:
         def analyze_single(article: Dict) -> Tuple[Dict, bool, Dict]:
             """分析单篇文章"""
             try:
-                # 每个线程使用独立的数据库会话
                 db = SessionLocal()
                 try:
-                    # 检查标题是否重复
-                    if self._is_duplicate_title(article['title']):
+                    recent_date = date.today() - timedelta(days=7)
+                    recent_viewpoints = db.query(Viewpoint).filter(
+                        Viewpoint.viewpoint_date >= recent_date,
+                        Viewpoint.is_deleted == False
+                    ).all()
+                    title_lower = article['title'].lower().strip()
+                    title_words = set(title_lower)
+                    is_dup = False
+                    for vp in recent_viewpoints:
+                        if not vp.content:
+                            continue
+                        vp_title = vp.content[:100].lower().strip() if len(vp.content) > 50 else vp.content.lower().strip()
+                        if title_lower == vp_title:
+                            is_dup = True
+                            break
+                        vp_words = set(vp_title)
+                        if title_words and vp_words:
+                            similarity = len(title_words & vp_words) / len(title_words | vp_words) if len(title_words | vp_words) > 0 else 0
+                            if similarity >= 0.8:
+                                is_dup = True
+                                break
+                    
+                    if is_dup:
                         return article, False, {
                             'score': 0,
                             'reason': '标题与已有观点重复',

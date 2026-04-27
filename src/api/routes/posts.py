@@ -25,8 +25,8 @@ class PostCreate(BaseModel):
 
 def analyze_post_background(blogger_id: int, post_id: int, content: str, title: str, post_date: date):
     """后台分析帖子的任务"""
-    from src.models.database import get_db
-    db = next(get_db())
+    from src.models.database import SessionLocal
+    db = SessionLocal()
     try:
         service = PostService(db)
         service.analyze_post_async(post_id)

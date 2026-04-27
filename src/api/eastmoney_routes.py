@@ -7,22 +7,14 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date
 
-from src.models.database import SessionLocal, Viewpoint
+from src.models.database import Viewpoint
+from src.api.deps import get_db
 from src.core.config import config
 
 router = APIRouter(prefix="/api/crawler", tags=["东方财富博客爬虫"])
 
-# 请求模型
 class EastmoneyBlogRequest(BaseModel):
     max_articles: int = 15
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post("/eastmoney-blog")
