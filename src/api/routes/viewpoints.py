@@ -2,7 +2,7 @@
 观点路由
 处理观点相关的 API 请求
 """
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date, timedelta
@@ -12,6 +12,95 @@ import time
 from src.api.deps import get_db
 from src.services.viewpoint_service import ViewpointService
 from src.models.database import Viewpoint
+
+_viewpoint_batch_analyzing = False
+
+
+def _viewpoint_batch_analyze_background(limit: int, source: str):
+    """后台批量分析观点任务"""
+    global _viewpoint_batch_analyzing
+    from src.models.database import SessionLocal
+    db = SessionLocal()
+    try:
+        service = ViewpointService(db)
+        viewpoints_to_analyze = service.get_viewpoints_for_batch_analyze(
+            limit=limit,
+            source=source,
+            days=7
+        )
+        
+        if not viewpoints_to_analyze:
+            print("[Viewpoint Batch Analyze] 没有需要分析的观点")
+            return
+        
+        print(f"[Viewpoint Batch Analyze] 后台开始分析 {len(viewpoints_to_analyze)} 个观点")
+        
+        from src.analyzer.viewpoint_analyzer import get_viewpoint_analyzer
+        from src.analyzer.llm_analyzer import get_analyzer as get_llm_analyzer
+        
+        analyzer = get_viewpoint_analyzer()
+        llm_analyzer = get_llm_analyzer()
+        
+        analyzed_count = 0
+        failed_count = 0
+        
+        for viewpoint in viewpoints_to_analyze:
+            try:
+                result = analyzer.analyze_viewpoint(
+                    title=viewpoint.content[:100] if viewpoint.content else "",
+                    content=viewpoint.content or "",
+                    author=viewpoint.author or "",
+                    source=viewpoint.source or ""
+                )
+                
+                time_horizon = result.get('time_horizon', 'medium')
+                validity_map = {
+                    'short': '1周',
+                    'medium': '1个月',
+                    'long': '3个月'
+                }
+                validity_period = validity_map.get(time_horizon, '1个月')
+                
+                valid_until = llm_analyzer.calculate_target_date(
+                    date.today(),
+                    validity_period
+                )
+                
+                reasoning = f"【AI深度分析】{result.get('analysis', '')}\n\n【判断理由】{result.get('reasoning', '')}"
+                
+                service.update_viewpoint_analysis(
+                    viewpoint_id=viewpoint.id,
+                    market_direction=result.get('market_direction', 'neutral'),
+                    confidence=result.get('confidence', 50),
+                    sectors_bullish=result.get('sectors_bullish', []),
+                    sectors_bearish=result.get('sectors_bearish', []),
+                    reasoning=reasoning,
+                    time_horizon=time_horizon,
+                    validity_period=validity_period,
+                    valid_until=valid_until,
+                    summary=result.get('summary', ''),
+                    credibility=result.get('credibility', 50),
+                    key_points=result.get('key_points', []),
+                    action_suggestion=result.get('action_suggestion', '观望'),
+                    risk_level=result.get('risk_level', 'medium'),
+                    sentiment_score=result.get('sentiment_score', 0.5)
+                )
+                
+                analyzed_count += 1
+                time.sleep(0.5)
+                
+            except Exception as e:
+                print(f"[Viewpoint Batch Analyze] 分析观点 {viewpoint.id} 失败: {e}")
+                failed_count += 1
+                continue
+        
+        print(f"[Viewpoint Batch Analyze] 后台分析完成: 成功={analyzed_count}, 失败={failed_count}")
+        
+    except Exception as e:
+        print(f"[Viewpoint Batch Analyze] 后台分析失败: {e}")
+    finally:
+        db.close()
+        _viewpoint_batch_analyzing = False
 
 router = APIRouter(prefix="/viewpoints", tags=["观点"])
 
@@ -115,114 +204,57 @@ async def delete_viewpoint(viewpoint_id: int, db: Session = Depends(get_db)):
 @router.post("/batch-analyze")
 async def batch_analyze_viewpoints(
     data: dict = Body(...),
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     """
-    批量分析观点（一键分析未分析的观点）
+    批量分析观点（异步模式，立即返回，后台逐个分析）
+    避免同步分析超时导致重复触发
 
     请求体:
     {
-        "limit": 30,  // 最多分析数量，默认30
-        "source": "all"  // 来源筛选: all/eastmoney_blog/eastmoney_guide/sina_finance/sina_blog
+        "limit": 30,
+        "source": "all"
     }
     """
+    global _viewpoint_batch_analyzing
+    
+    if _viewpoint_batch_analyzing:
+        return {
+            "success": True,
+            "message": "观点批量分析正在进行中，请稍候...",
+            "data": {"analyzed_count": 0, "total": 0, "in_progress": True}
+        }
+    
     try:
         limit = data.get('limit', 10)
         source = data.get('source', 'all')
-
-        print(f"[Viewpoint Batch Analyze API] 开始批量分析: limit={limit}, source={source}")
-
+        
         service = ViewpointService(db)
         viewpoints_to_analyze = service.get_viewpoints_for_batch_analyze(
             limit=limit,
             source=source,
             days=7
         )
-
-        print(f"[Viewpoint Batch Analyze API] 找到 {len(viewpoints_to_analyze)} 个需要分析的观点")
-
-        if not viewpoints_to_analyze:
+        
+        total = len(viewpoints_to_analyze)
+        
+        if total == 0:
             return {
                 "success": True,
                 "message": "没有需要分析的观点",
-                "data": {
-                    "analyzed_count": 0,
-                    "total": 0
-                }
+                "data": {"analyzed_count": 0, "total": 0}
             }
-
-        from src.analyzer.viewpoint_analyzer import get_viewpoint_analyzer
-        from src.analyzer.llm_analyzer import get_analyzer as get_llm_analyzer
-
-        analyzer = get_viewpoint_analyzer()
-        llm_analyzer = get_llm_analyzer()
-
-        analyzed_count = 0
-        failed_count = 0
-
-        for viewpoint in viewpoints_to_analyze:
-            try:
-                result = analyzer.analyze_viewpoint(
-                    title=viewpoint.content[:100] if viewpoint.content else "",
-                    content=viewpoint.content or "",
-                    author=viewpoint.author or "",
-                    source=viewpoint.source or ""
-                )
-
-                time_horizon = result.get('time_horizon', 'medium')
-                validity_map = {
-                    'short': '1周',
-                    'medium': '1个月',
-                    'long': '3个月'
-                }
-                validity_period = validity_map.get(time_horizon, '1个月')
-
-                valid_until = llm_analyzer.calculate_target_date(
-                    date.today(),
-                    validity_period
-                )
-
-                reasoning = f"【AI深度分析】{result.get('analysis', '')}\n\n【判断理由】{result.get('reasoning', '')}"
-
-                service.update_viewpoint_analysis(
-                    viewpoint_id=viewpoint.id,
-                    market_direction=result.get('market_direction', 'neutral'),
-                    confidence=result.get('confidence', 50),
-                    sectors_bullish=result.get('sectors_bullish', []),
-                    sectors_bearish=result.get('sectors_bearish', []),
-                    reasoning=reasoning,
-                    time_horizon=time_horizon,
-                    validity_period=validity_period,
-                    valid_until=valid_until,
-                    summary=result.get('summary', ''),
-                    credibility=result.get('credibility', 50),
-                    key_points=result.get('key_points', []),
-                    action_suggestion=result.get('action_suggestion', '观望'),
-                    risk_level=result.get('risk_level', 'medium'),
-                    sentiment_score=result.get('sentiment_score', 0.5)
-                )
-
-                analyzed_count += 1
-                time.sleep(0.5)
-
-            except Exception as e:
-                print(f"[Viewpoint Batch Analyze API] 分析观点 {viewpoint.id} 失败: {e}")
-                traceback.print_exc()
-                failed_count += 1
-                continue
-
-        print(f"[Viewpoint Batch Analyze API] 批量分析完成: 成功={analyzed_count}, 失败={failed_count}")
-
+        
+        _viewpoint_batch_analyzing = True
+        background_tasks.add_task(_viewpoint_batch_analyze_background, limit, source)
+        
         return {
             "success": True,
-            "message": f"批量分析完成: 成功 {analyzed_count} 个, 失败 {failed_count} 个",
-            "data": {
-                "analyzed_count": analyzed_count,
-                "failed_count": failed_count,
-                "total": len(viewpoints_to_analyze)
-            }
+            "message": f"已开始后台分析 {total} 个观点，请稍后刷新查看结果",
+            "data": {"analyzed_count": 0, "total": total, "in_progress": True}
         }
-
+        
     except Exception as e:
         print(f"[Viewpoint Batch Analyze API] 批量分析失败: {e}")
         traceback.print_exc()

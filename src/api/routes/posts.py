@@ -23,18 +23,23 @@ class PostCreate(BaseModel):
     async_mode: bool = True
 
 
-def analyze_post_background(blogger_id: int, post_id: int, content: str, title: str, post_date: date):
-    """后台分析帖子的任务"""
+_batch_analyzing = False
+
+
+def _batch_analyze_background():
+    """后台批量分析任务（独立会话，避免连接泄漏）"""
+    global _batch_analyzing
     from src.models.database import SessionLocal
     db = SessionLocal()
     try:
         service = PostService(db)
-        service.analyze_post_async(post_id)
-        print(f"[Background] 帖子 {post_id} 分析完成")
+        result = service.batch_analyze_posts()
+        print(f"[Batch Analyze] 后台批量分析完成: {result['message']}")
     except Exception as e:
-        print(f"[Background] 帖子 {post_id} 分析失败: {e}")
+        print(f"[Batch Analyze] 后台批量分析失败: {e}")
     finally:
         db.close()
+        _batch_analyzing = False
 
 
 @router.get("")
@@ -61,8 +66,8 @@ async def get_posts(
 
 
 @router.post("")
-async def create_post(post: PostCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """添加帖子并自动分析（支持异步模式）"""
+async def create_post(post: PostCreate, db: Session = Depends(get_db)):
+    """添加帖子（async_mode=True 时不自动分析，需手动触发）"""
     service = PostService(db)
     
     try:
@@ -75,16 +80,6 @@ async def create_post(post: PostCreate, background_tasks: BackgroundTasks, db: S
             async_mode=post.async_mode
         )
         
-        if post.async_mode and result.get("id"):
-            background_tasks.add_task(
-                analyze_post_background,
-                post.blogger_id,
-                result["id"],
-                post.content,
-                result["title"],
-                post.post_date
-            )
-        
         return {
             "success": True,
             "message": result.get("message", "帖子添加成功"),
@@ -96,21 +91,39 @@ async def create_post(post: PostCreate, background_tasks: BackgroundTasks, db: S
 
 @router.post("/batch-analyze")
 async def batch_analyze_posts(
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
-    批量分析帖子（一键分析未分析的帖子）
+    批量分析帖子（异步模式，立即返回，后台逐个分析）
+    避免同步分析超时导致重复触发
     """
+    global _batch_analyzing
+    
+    if _batch_analyzing:
+        return {
+            "success": True,
+            "message": "批量分析正在进行中，请稍候...",
+            "data": {"analyzed": 0, "failed": 0, "in_progress": True}
+        }
+    
     service = PostService(db)
-    result = service.batch_analyze_posts()
+    unanalyzed_count = len(service.get_unanalyzed(limit=100))
+    
+    if unanalyzed_count == 0:
+        return {
+            "success": True,
+            "message": "没有需要分析的帖子",
+            "data": {"analyzed": 0, "failed": 0}
+        }
+    
+    _batch_analyzing = True
+    background_tasks.add_task(_batch_analyze_background)
     
     return {
         "success": True,
-        "message": result["message"],
-        "data": {
-            "analyzed": result["analyzed"],
-            "failed": result["failed"]
-        }
+        "message": f"已开始后台分析 {unanalyzed_count} 个帖子，请稍后刷新查看结果",
+        "data": {"analyzed": 0, "failed": 0, "in_progress": True, "total": unanalyzed_count}
     }
 
 

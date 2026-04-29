@@ -1,9 +1,8 @@
 """
 微信文章抓取服务
 用于从微信公众号文章URL抓取内容
-优先使用 Playwright（无头浏览器），失败时降级为 HTTP 请求
+Render 等云平台不支持 Playwright，直接使用 HTTP 模式
 """
-import asyncio
 import re
 import random
 from datetime import datetime
@@ -11,15 +10,9 @@ from typing import Optional, Dict
 from bs4 import BeautifulSoup
 import requests
 
-try:
-    from playwright.async_api import async_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-
 
 class WeChatArticleFetcher:
-    """微信文章抓取器，支持 Playwright + HTTP 双模式"""
+    """微信文章抓取器，使用 HTTP 模式"""
 
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -38,145 +31,13 @@ class WeChatArticleFetcher:
     }
 
     def __init__(self):
-        self._playwright = None
-        self._browser = None
-        self._browser_ok = None
-
-    async def _get_browser(self):
-        if self._browser is not None:
-            try:
-                if self._browser.is_connected():
-                    return self._browser
-            except Exception:
-                pass
-            await self._close_browser()
-
-        if not PLAYWRIGHT_AVAILABLE:
-            self._browser_ok = False
-            return None
-
-        if self._browser_ok is False:
-            return None
-
-        try:
-            self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--single-process',
-                ]
-            )
-            self._browser_ok = True
-            print("[WeChatFetcher] Playwright 浏览器启动成功")
-            return self._browser
-        except Exception as e:
-            print(f"[WeChatFetcher] Playwright 浏览器启动失败，将使用 HTTP 降级模式: {e}")
-            self._browser_ok = False
-            await self._close_browser()
-            return None
-
-    async def _close_browser(self):
-        if self._browser:
-            try:
-                await self._browser.close()
-            except Exception:
-                pass
-            self._browser = None
-        if self._playwright:
-            try:
-                await self._playwright.stop()
-            except Exception:
-                pass
-            self._playwright = None
-
-    async def _restart_browser(self):
-        await self._close_browser()
-        self._browser_ok = None
-        return await self._get_browser()
+        pass
 
     async def fetch(self, url: str) -> Optional[Dict]:
         if not url or 'mp.weixin.qq.com' not in url:
             return None
 
-        result = await self._fetch_with_playwright(url)
-        if result:
-            return result
-
-        print("[WeChatFetcher] Playwright 模式失败，尝试 HTTP 降级模式...")
         return await self._fetch_with_http(url)
-
-    async def _fetch_with_playwright(self, url: str) -> Optional[Dict]:
-        browser = await self._get_browser()
-        if not browser:
-            return None
-
-        context = None
-        page = None
-        try:
-            if not browser.is_connected():
-                print("[WeChatFetcher] 浏览器已断开，尝试重启...")
-                browser = await self._restart_browser()
-                if not browser:
-                    return None
-
-            context = await browser.new_context(
-                user_agent=random.choice(self.USER_AGENTS),
-                viewport={'width': 1920, 'height': 1080},
-                locale='zh-CN',
-            )
-
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            """)
-
-            page = await context.new_page()
-
-            await page.goto(url, wait_until='domcontentloaded', timeout=20000)
-            await asyncio.sleep(1)
-
-            content = await page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-
-            title = self._extract_title(soup)
-            author = self._extract_author(soup)
-            publish_time = self._extract_publish_time(soup)
-            article_content = self._extract_content(soup)
-
-            if not title or not article_content:
-                return None
-
-            return {
-                'title': title,
-                'author': author,
-                'content': article_content,
-                'publish_time': publish_time,
-                'url': url,
-                'crawl_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'mode': 'playwright',
-            }
-
-        except Exception as e:
-            print(f"[WeChatFetcher] Playwright 抓取失败: {e}")
-            if self._browser and not self._browser.is_connected():
-                print("[WeChatFetcher] 浏览器已断开，标记需要重启")
-                self._browser = None
-                self._browser_ok = None
-            return None
-        finally:
-            if page:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-            if context:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
 
     async def _fetch_with_http(self, url: str) -> Optional[Dict]:
         try:
@@ -204,7 +65,7 @@ class WeChatArticleFetcher:
                     author = author or var_content.get('author', '未知博主')
 
             if not title or not article_content:
-                print("[WeChatFetcher] HTTP 模式也无法提取文章内容（可能被反爬拦截）")
+                print("[WeChatFetcher] HTTP 模式无法提取文章内容（可能被反爬拦截）")
                 return None
 
             return {
@@ -312,4 +173,5 @@ wechat_fetcher = WeChatArticleFetcher()
 
 
 def fetch_wechat_article(url: str) -> Optional[Dict]:
+    import asyncio
     return asyncio.run(wechat_fetcher.fetch(url))
