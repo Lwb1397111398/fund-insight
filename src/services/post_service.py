@@ -498,17 +498,25 @@ class PostService(BaseService[Post]):
     def batch_analyze_posts(self) -> Dict:
         """
         批量分析未分析的帖子
+        每个帖子使用独立会话，LLM调用期间不持有数据库连接
         
         Returns:
             分析结果统计
         """
         from src.fund.fund_auto_manager import fund_auto_manager
+        from src.models.database import SessionLocal
         
         llm_analyzer = get_analyzer()
         
-        unanalyzed_posts = self.get_unanalyzed(limit=100)
+        db_query = SessionLocal()
+        try:
+            post_ids = [p.id for p in db_query.query(Post).filter(
+                Post.analyzed == False
+            ).order_by(Post.created_at.desc()).limit(100).all()]
+        finally:
+            db_query.close()
         
-        if not unanalyzed_posts:
+        if not post_ids:
             return {
                 "analyzed": 0,
                 "failed": 0,
@@ -518,70 +526,88 @@ class PostService(BaseService[Post]):
         analyzed_count = 0
         failed_count = 0
         
-        for post in unanalyzed_posts:
+        for post_id in post_ids:
+            db = SessionLocal()
+            try:
+                post = db.query(Post).filter(Post.id == post_id).first()
+                if not post or post.analyzed:
+                    continue
+                
+                title = post.title or ""
+                content = post.content
+                post_date_str = post.post_date.isoformat() if post.post_date else None
+                post_date_val = post.post_date
+                blogger_id = post.blogger_id
+            finally:
+                db.close()
+            
             try:
                 result = llm_analyzer.analyze_post(
-                    title=post.title or "",
-                    content=post.content,
-                    post_date=post.post_date.isoformat() if post.post_date else None
+                    title=title,
+                    content=content,
+                    post_date=post_date_str
                 )
                 
-                post.analyzed = True
-                post.analysis_result = result
-                
-                # 先提交帖子状态
-                self.db.commit()
-                
-                # 再创建预测
-                for pred in result.get("predictions", []):
-                    sector = pred.get("sector", "")
+                db2 = SessionLocal()
+                try:
+                    post = db2.query(Post).filter(Post.id == post_id).first()
+                    if not post:
+                        continue
                     
-                    fund_code, fund_name = self._match_fund_for_prediction(
-                        pred=pred,
-                        sector=sector,
-                        fund_auto_manager=fund_auto_manager,
-                        llm_analyzer=llm_analyzer
-                    )
+                    post.analyzed = True
+                    post.analysis_result = result
+                    db2.commit()
                     
-                    prediction = Prediction(
-                        post_id=post.id,
-                        blogger_id=post.blogger_id,
-                        fund_code=fund_code,
-                        fund_name=fund_name,
-                        sector=sector,
-                        sector_type=pred.get("sector_type", fund_auto_manager.get_category_for_sector(sector) if sector else "其他"),
-                        prediction_type=pred.get("prediction_type"),
-                        prediction_content=pred.get("prediction_content"),
-                        confidence=pred.get("confidence", 50),
-                        prediction_date=post.post_date,
-                        prediction_period=pred.get("prediction_period", "1周"),
-                        target_date=llm_analyzer.calculate_target_date(
-                            post.post_date,
-                            pred.get("prediction_period", "1周")
-                        ),
-                        next_verify_date=llm_analyzer.calculate_next_verify_date(
-                            post.post_date,
-                            llm_analyzer.calculate_target_date(
-                                post.post_date,
+                    for pred in result.get("predictions", []):
+                        sector = pred.get("sector", "")
+                        
+                        fund_code, fund_name = self._match_fund_for_prediction(
+                            pred=pred,
+                            sector=sector,
+                            fund_auto_manager=fund_auto_manager,
+                            llm_analyzer=llm_analyzer
+                        )
+                        
+                        prediction = Prediction(
+                            post_id=post.id,
+                            blogger_id=blogger_id,
+                            fund_code=fund_code,
+                            fund_name=fund_name,
+                            sector=sector,
+                            sector_type=pred.get("sector_type", fund_auto_manager.get_category_for_sector(sector) if sector else "其他"),
+                            prediction_type=pred.get("prediction_type"),
+                            prediction_content=pred.get("prediction_content"),
+                            confidence=pred.get("confidence", 50),
+                            prediction_date=post_date_val,
+                            prediction_period=pred.get("prediction_period", "1周"),
+                            target_date=llm_analyzer.calculate_target_date(
+                                post_date_val,
                                 pred.get("prediction_period", "1周")
+                            ),
+                            next_verify_date=llm_analyzer.calculate_next_verify_date(
+                                post_date_val,
+                                llm_analyzer.calculate_target_date(
+                                    post_date_val,
+                                    pred.get("prediction_period", "1周")
+                                )
                             )
                         )
-                    )
-                    self.db.add(prediction)
-                
-                # 提交预测
-                self.db.commit()
-                analyzed_count += 1
-                
+                        db2.add(prediction)
+                    
+                    db2.commit()
+                    analyzed_count += 1
+                except Exception as e:
+                    db2.rollback()
+                    failed_count += 1
+                    print(f"[PostService] 写入帖子 {post_id} 分析结果失败: {e}")
+                finally:
+                    db2.close()
+                    
             except Exception as e:
-                print(f"[PostService] 分析帖子 {post.id} 失败: {e}")
+                print(f"[PostService] 分析帖子 {post_id} 失败: {e}")
                 import traceback
                 traceback.print_exc()
-                self.db.rollback()
                 failed_count += 1
-        
-        # 最终提交（确保所有更改）
-        self.db.commit()
         
         return {
             "analyzed": analyzed_count,

@@ -2,7 +2,7 @@
 预测路由
 处理预测相关的 API 请求
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -142,13 +142,48 @@ async def rollback_invalid_verifications(db: Session = Depends(get_db)):
     return result
 
 
+_verify_batch_running = False
+
+
+def _verify_all_background():
+    """后台验证所有待验证预测"""
+    global _verify_batch_running
+    from src.models.database import SessionLocal
+    db = SessionLocal()
+    try:
+        service = PredictionVerifyService(db)
+        result = service.verify_all_pending()
+        print(f"[Verify All] 后台验证完成: {result.get('message')}")
+    except Exception as e:
+        print(f"[Verify All] 后台验证失败: {e}")
+    finally:
+        db.close()
+        _verify_batch_running = False
+
+
 @router.post("/verify-all")
-async def verify_all_predictions(db: Session = Depends(get_db)):
-    """验证所有待验证的预测"""
-    service = PredictionVerifyService(db)
-    result = service.verify_all_pending()
+async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """验证所有待验证的预测（异步模式，跳过通道未开放的）"""
+    global _verify_batch_running
     
-    return result
+    if _verify_batch_running:
+        return {"success": True, "message": "验证正在进行中，请稍候...", "data": {"in_progress": True}}
+    
+    service = PredictionVerifyService(db)
+    today = date.today()
+    pending_count = db.query(Prediction).filter(
+        Prediction.status == 'pending',
+        Prediction.is_deleted == False,
+        Prediction.target_date <= today + timedelta(days=7)
+    ).count()
+    
+    if pending_count == 0:
+        return {"success": True, "message": "没有需要验证的预测", "data": {"total": 0}}
+    
+    _verify_batch_running = True
+    background_tasks.add_task(_verify_all_background)
+    
+    return {"success": True, "message": f"已开始后台验证 {pending_count} 个预测，请稍后刷新查看结果", "data": {"total": pending_count, "in_progress": True}}
 
 
 @router.post("/verify-expired")

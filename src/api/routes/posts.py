@@ -27,18 +27,20 @@ _batch_analyzing = False
 
 
 def _batch_analyze_background():
-    """后台批量分析任务（独立会话，避免连接泄漏）"""
+    """后台批量分析任务（batch_analyze_posts内部自行管理会话）"""
     global _batch_analyzing
-    from src.models.database import SessionLocal
-    db = SessionLocal()
     try:
-        service = PostService(db)
-        result = service.batch_analyze_posts()
-        print(f"[Batch Analyze] 后台批量分析完成: {result['message']}")
+        from src.models.database import SessionLocal
+        db = SessionLocal()
+        try:
+            service = PostService(db)
+            result = service.batch_analyze_posts()
+            print(f"[Batch Analyze] 后台批量分析完成: {result['message']}")
+        finally:
+            db.close()
     except Exception as e:
         print(f"[Batch Analyze] 后台批量分析失败: {e}")
     finally:
-        db.close()
         _batch_analyzing = False
 
 

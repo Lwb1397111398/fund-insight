@@ -696,16 +696,26 @@ class PredictionVerifyService:
         }
     
     def verify_all_pending(self) -> Dict:
-        """验证所有待验证的预测"""
+        """验证所有待验证的预测（跳过验证通道未开放的）"""
         today = date.today()
         
-        pending_predictions = self.db.query(Prediction).filter(
+        all_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
             Prediction.target_date <= today + timedelta(days=7)
         ).all()
         
-        logger.info(f"[Verify] 找到 {len(pending_predictions)} 个待验证预测")
+        pending_predictions = []
+        skipped_count = 0
+        for p in all_pending:
+            period_days = self.parse_period_days(p.prediction_period)
+            cfg = self.get_verify_config(period_days)
+            if p.target_date and (p.target_date - today).days > cfg['window_days_before']:
+                skipped_count += 1
+                continue
+            pending_predictions.append(p)
+        
+        logger.info(f"[Verify] 找到 {len(all_pending)} 个待验证预测，跳过 {skipped_count} 个通道未开放，实际验证 {len(pending_predictions)} 个")
         
         results = []
         success_count = 0
@@ -731,26 +741,29 @@ class PredictionVerifyService:
         
         return {
             "success": True,
-            "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个",
+            "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个，跳过 {skipped_count} 个通道未开放",
             "data": {
                 "total": len(pending_predictions),
                 "success_count": success_count,
                 "failed_count": failed_count,
+                "skipped": skipped_count,
                 "results": results
             }
         }
     
     def verify_expired_pending(self) -> Dict:
-        """验证所有已过期但尚未验证的预测（补救验证）"""
+        """验证所有已过期但尚未验证的预测（补救验证，跳过超过30天补救期的）"""
         today = date.today()
+        grace_cutoff = today - timedelta(days=30)
         
         expired_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
-            Prediction.target_date < today
+            Prediction.target_date < today,
+            Prediction.target_date >= grace_cutoff
         ).all()
         
-        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个已过期待验证预测")
+        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个已过期待验证预测（30天补救期内）")
         
         results = []
         success_count = 0
