@@ -52,7 +52,11 @@ async def password_auth_middleware(request: Request, call_next):
     # 放行所有非 /api/ 路径的请求（静态资源、HTML 页面等）
     if not request.url.path.startswith("/api/"):
         return await call_next(request)
-    
+
+    # 放行 CORS 预检请求
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # 放行健康检查接口
     if request.url.path == "/api/health":
         return await call_next(request)
@@ -102,6 +106,7 @@ app.include_router(advice_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(test_data_router, prefix="/api")
+app.include_router(batch_analysis_router, prefix="/api")
 
 
 @app.get("/api")

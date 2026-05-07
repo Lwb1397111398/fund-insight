@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 import logging
 
 from src.api.deps import get_db
+from src.models.database import Prediction
 from src.services.prediction_service import PredictionService
 from src.services.prediction_verify_service import PredictionVerifyService
 

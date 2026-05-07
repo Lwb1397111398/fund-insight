@@ -3,6 +3,7 @@
 包含：多维度统计、观点-基金-预测关联、极端观点预警
 """
 import os
+import sys
 import json
 import logging
 from typing import Dict, List, Optional, Tuple
@@ -12,8 +13,8 @@ from collections import defaultdict, Counter
 
 if __name__ == "__main__":
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if project_root not in os.sys.path:
-        os.sys.path.insert(0, project_root)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_

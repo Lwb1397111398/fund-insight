@@ -35,10 +35,6 @@ from src.core.config import config
 from src.utils.prediction_utils import PERIOD_MAP, ULTRA_SHORT_PERIODS, parse_period_to_days
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 

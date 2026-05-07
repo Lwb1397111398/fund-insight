@@ -557,8 +557,6 @@ class DataQualityValidator:
         return [v for v in viewpoints if self.validate_viewpoint(v)[0]]
 
 
-from typing import Tuple
-
 
 def get_market_fetcher(db: Session = None) -> MarketDataFetcher:
     return MarketDataFetcher(db)

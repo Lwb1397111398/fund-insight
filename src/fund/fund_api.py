@@ -136,10 +136,9 @@ class FundAPI:
                 'm': '1',
                 'key': keyword
             }
-            response = requests.get(
+            response = self.session.get(
                 self.search_url,
                 params=params,
-                headers=self.headers,
                 timeout=self.timeout
             )
             response.encoding = 'utf-8'
