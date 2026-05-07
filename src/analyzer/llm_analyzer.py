@@ -46,30 +46,34 @@ class CircuitBreakerState:
     state: str = "closed"
     failure_threshold: int = 5
     recovery_timeout: float = 60.0
-    
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
     def record_failure(self):
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-        if self.failure_count >= self.failure_threshold:
-            self.state = "open"
-            logger.warning(f"[CircuitBreaker] 熔断器打开，连续失败 {self.failure_count} 次")
-    
+        with self._lock:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            if self.failure_count >= self.failure_threshold:
+                self.state = "open"
+                logger.warning(f"[CircuitBreaker] 熔断器打开，连续失败 {self.failure_count} 次")
+
     def record_success(self):
-        self.failure_count = 0
-        self.state = "closed"
-    
+        with self._lock:
+            self.failure_count = 0
+            self.state = "closed"
+
     def can_execute(self) -> bool:
-        if not self.enabled:
-            return True
-        if self.state == "closed":
-            return True
-        if self.state == "open":
-            if time.time() - self.last_failure_time >= self.recovery_timeout:
-                self.state = "half_open"
-                logger.info("[CircuitBreaker] 熔断器进入半开状态，尝试恢复")
+        with self._lock:
+            if not self.enabled:
                 return True
-            return False
-        return True
+            if self.state == "closed":
+                return True
+            if self.state == "open":
+                if time.time() - self.last_failure_time >= self.recovery_timeout:
+                    self.state = "half_open"
+                    logger.info("[CircuitBreaker] 熔断器进入半开状态，尝试恢复")
+                    return True
+                return False
+            return True
 
 
 @dataclass

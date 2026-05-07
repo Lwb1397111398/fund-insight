@@ -67,7 +67,7 @@ class TestOptimizedTrendAnalysis:
         mock_call_llm.assert_called_once()
         call_args = mock_call_llm.call_args
         
-        assert call_args[1]['task_type'] == 'light'
+        assert call_args[1]['task_type'] == 'extraction'
         assert call_args[1]['max_tokens'] == 600
     
     def test_prompt_simplification(self):

@@ -36,27 +36,25 @@ class TestFundRoutes:
         
         assert callable(get_trend_status)
     
-    @patch('src.api.routes.funds.FundInfo')
-    def test_trend_status_success(self, mock_fund_info):
+    def test_trend_status_success(self):
         """测试趋势状态获取成功"""
         from src.api.routes.funds import get_trend_status
         import asyncio
-        
+
         mock_db = Mock()
-        
-        mock_fund1 = Mock()
-        mock_fund1.last_analyze_date = date.today()
-        
-        mock_fund2 = Mock()
-        mock_fund2.last_analyze_date = None
-        
-        mock_fund3 = Mock()
-        mock_fund3.last_analyze_date = date.today() - __import__('datetime').timedelta(days=1)
-        
-        mock_db.query.return_value.all.return_value = [mock_fund1, mock_fund2, mock_fund3]
-        
+
+        # 每次 db.query() 返回独立的 mock，filter() 也返回 mock，count() 返回具体值
+        query_mocks = []
+        for count_val in [3, 2, 1]:  # total=3, analyzed=2, today_analyzed=1
+            qm = Mock()
+            qm.filter.return_value = qm  # filter() 返回自身，支持链式调用
+            qm.count.return_value = count_val
+            query_mocks.append(qm)
+
+        mock_db.query.side_effect = query_mocks
+
         result = asyncio.run(get_trend_status(mock_db))
-        
+
         assert result["success"] is True
         assert result["data"]["total"] == 3
         assert result["data"]["analyzed"] == 2

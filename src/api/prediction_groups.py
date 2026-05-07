@@ -13,7 +13,8 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import json
 
-from src.models.database import get_db, Prediction, PredictionGroup, Blogger, FundInfo
+from src.api.deps import get_db
+from src.models.database import Prediction, PredictionGroup, Blogger, FundInfo
 from src.analyzer.llm_analyzer import get_analyzer
 
 router = APIRouter(prefix="/api/prediction-groups", tags=["预测组"])

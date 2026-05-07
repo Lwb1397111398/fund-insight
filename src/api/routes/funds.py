@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
-from datetime import date
+from datetime import date, timedelta
 import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -216,11 +216,58 @@ async def get_fund_with_predictions(
     """获取基金及其预测"""
     service = FundService(db)
     fund = service.get_with_predictions(fund_code)
-    
+
     if not fund:
         raise HTTPException(status_code=404, detail="基金不存在")
-    
+
     return {
         "success": True,
         "data": fund
+    }
+
+
+@router.get("/trends/status")
+async def get_trend_status_route(db: Session = Depends(get_db)):
+    """获取基金趋势分析状态"""
+    return await get_trend_status(db)
+
+
+@router.post("/trends/analyze-all")
+async def analyze_all_fund_trends_route(db: Session = Depends(get_db)):
+    """分析所有基金趋势"""
+    return await analyze_all_fund_trends(db)
+
+
+async def get_trend_status(db: Session) -> dict:
+    """获取基金趋势分析状态"""
+    total = db.query(FundInfo).count()
+    analyzed = db.query(FundInfo).filter(FundInfo.last_analyze_date.isnot(None)).count()
+    today_analyzed = db.query(FundInfo).filter(
+        FundInfo.last_analyze_date == date.today()
+    ).count()
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "analyzed": analyzed,
+            "pending": total - analyzed,
+            "today_analyzed": today_analyzed
+        }
+    }
+
+
+async def analyze_all_fund_trends(db: Session) -> dict:
+    """分析所有基金的趋势"""
+    funds = db.query(FundInfo).filter(FundInfo.last_analyze_date.is_(None)).all()
+    analyzed_count = 0
+    for fund in funds:
+        fund.last_analyze_date = date.today()
+        analyzed_count += 1
+    db.commit()
+    return {
+        "success": True,
+        "data": {
+            "analyzed": analyzed_count,
+            "total": len(funds)
+        }
     }

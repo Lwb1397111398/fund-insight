@@ -1061,14 +1061,5 @@ def init_db():
         print(f"[数据库] 已初始化: SQLite: {DB_PATH}")
 
 
-def get_db():
-    """获取数据库会话"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 # 自动创建表（向后兼容）
 Base.metadata.create_all(engine)

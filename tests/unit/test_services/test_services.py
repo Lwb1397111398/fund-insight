@@ -142,31 +142,35 @@ class TestFundService:
     
     def test_create_fund(self, db_session):
         """测试创建基金"""
+        import uuid
         from src.services import FundService
-        
+
+        code = f"TST{uuid.uuid4().hex[:6].upper()}"
         service = FundService(db_session)
         fund = service.create({
-            "fund_code": "000001",
+            "fund_code": code,
             "fund_name": "华夏成长混合"
         })
-        
+
         assert fund.id is not None
-        assert fund.fund_code == "000001"
-    
+        assert fund.fund_code == code
+
     def test_get_by_code(self, db_session):
         """测试根据代码获取基金"""
+        import uuid
         from src.services import FundService
-        
+
+        code = f"TST{uuid.uuid4().hex[:6].upper()}"
         service = FundService(db_session)
         service.create({
-            "fund_code": "000002",
+            "fund_code": code,
             "fund_name": "测试基金"
         })
-        
-        found = service.get_by_code("000002")
-        
+
+        found = service.get_by_code(code)
+
         assert found is not None
-        assert found.fund_code == "000002"
+        assert found.fund_code == code
 
 
 class TestViewpointService:

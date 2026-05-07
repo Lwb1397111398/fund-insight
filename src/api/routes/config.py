@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from src.core.config import config
-from src.models.database import get_db, Prediction, Viewpoint, Post, FundInfo, Blogger
+from src.api.deps import get_db
+from src.models.database import Prediction, Viewpoint, Post, FundInfo, Blogger
 
 router = APIRouter(prefix="/config", tags=["配置"])
 

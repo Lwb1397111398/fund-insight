@@ -12,20 +12,23 @@ if project_root not in sys.path:
 
 @pytest.fixture
 def db_session():
-    """数据库会话 fixture"""
+    """数据库会话 fixture，每次测试前清理测试数据"""
     from src.models.database import SessionLocal
     db = SessionLocal()
     try:
         yield db
     finally:
+        # 回滚所有未提交的操作，避免测试数据污染
+        db.rollback()
         db.close()
 
 
 @pytest.fixture
 def sample_blogger_data():
-    """示例博主数据"""
+    """示例博主数据（使用 UUID 避免名称冲突）"""
+    import uuid
     return {
-        "name": "测试博主",
+        "name": f"测试博主_{uuid.uuid4().hex[:8]}",
         "platform": "xiaohongshu",
         "description": "这是一个测试博主"
     }
@@ -47,10 +50,11 @@ def sample_post_data():
 def sample_prediction_data():
     """示例预测数据"""
     from datetime import date
+    import uuid
     return {
         "post_id": 1,
         "blogger_id": 1,
-        "fund_code": "000001",
+        "fund_code": f"TEST{uuid.uuid4().hex[:6].upper()}",
         "fund_name": "测试基金",
         "sector": "白酒",
         "prediction_type": "bullish",

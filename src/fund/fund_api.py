@@ -36,7 +36,7 @@ class FundAPI:
             'Referer': 'https://fund.eastmoney.com/'
         }
         self.timeout = config.FUND_API_TIMEOUT
-        
+
         self.session = requests.Session()
         retry_strategy = Retry(
             total=config.FUND_API_MAX_RETRIES,
@@ -47,6 +47,17 @@ class FundAPI:
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
+
+    def close(self):
+        """关闭 Session，释放连接池资源"""
+        if self.session:
+            self.session.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
     
     def get_fund_info(self, fund_code: str) -> Optional[Dict]:
         """获取基金实时信息"""

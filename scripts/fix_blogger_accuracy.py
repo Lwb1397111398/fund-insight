@@ -14,7 +14,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import func, case
-from src.models.database import get_db, Blogger, Prediction
+from src.api.deps import get_db
+from src.models.database import Blogger, Prediction
 
 
 def fix_blogger_accuracy():

@@ -14,24 +14,31 @@ class TaskScheduler:
     """任务调度器"""
     
     def __init__(self):
-        self.running = False
+        self._running = False
+        self._lock = threading.Lock()
         self.thread = None
         self.cleanup_interval_hours = 24  # 每天运行一次
-    
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._running
+
     def start(self):
-        """启动调度器"""
-        if self.running:
-            logger.warning("调度器已在运行中")
-            return
-        
-        self.running = True
+        """启动调度器（线程安全）"""
+        with self._lock:
+            if self._running:
+                logger.warning("调度器已在运行中")
+                return
+            self._running = True
         self.thread = threading.Thread(target=self._run_scheduler, daemon=True)
         self.thread.start()
         logger.info(f"定时任务调度器已启动，清理间隔: {self.cleanup_interval_hours}小时")
-    
+
     def stop(self):
         """停止调度器"""
-        self.running = False
+        with self._lock:
+            self._running = False
         if self.thread:
             self.thread.join(timeout=5)
         logger.info("定时任务调度器已停止")
@@ -42,41 +49,43 @@ class TaskScheduler:
         self._run_fund_update()
         self._run_prediction_verify()
         self._run_expired_verify()
-        
+
         last_cleanup_date = None
         last_verify_date = None
         last_fund_update_date = None
-        
+
         while self.running:
             try:
                 now = datetime.now()
                 current_date = now.date()
-                
-                # 每天早上10点执行预测验证
-                if now.hour == 10 and now.minute == 0:
+                current_minute = now.hour * 60 + now.minute  # 当前分钟数（0-1439）
+
+                # 每天早上 10:00-10:59 之间执行预测验证（只需执行一次）
+                if 600 <= current_minute < 660:
                     if last_verify_date != current_date:
                         self._run_fund_update()
                         self._run_prediction_verify()
                         self._run_expired_verify()
                         last_verify_date = current_date
-                
-                # 每天执行一次清理任务
-                if last_cleanup_date != current_date:
-                    self._run_cleanup()
-                    last_cleanup_date = current_date
-                
-                # 每天下午3点更新基金数据（收盘后）
-                if now.hour == 15 and now.minute >= 30:
+
+                # 每天凌晨 2:00-2:59 执行清理任务
+                if 120 <= current_minute < 180:
+                    if last_cleanup_date != current_date:
+                        self._run_cleanup()
+                        last_cleanup_date = current_date
+
+                # 每天下午 15:30-15:59 更新基金数据（收盘后）
+                if 930 <= current_minute < 960:
                     if last_fund_update_date != current_date:
                         self._run_fund_update()
                         last_fund_update_date = current_date
-                
-                # 每分钟检查一次
-                time.sleep(60)
-                    
+
+                # 每30秒检查一次，避免错过时间窗口
+                time.sleep(30)
+
             except Exception as e:
                 logger.error(f"调度器异常: {e}")
-                time.sleep(3600)  # 异常后等待1小时再试
+                time.sleep(300)  # 异常后等待5分钟再试
     
     def _run_cleanup(self):
         """执行清理任务"""

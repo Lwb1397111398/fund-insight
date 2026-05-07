@@ -859,6 +859,13 @@ async def startup_event():
     print(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    from src.fund.fund_api import fund_api
+    fund_api.close()
+    print("[Shutdown] 资源已释放")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8002)

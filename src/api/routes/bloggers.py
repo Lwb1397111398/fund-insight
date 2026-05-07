@@ -9,7 +9,8 @@ from typing import Optional
 from pydantic import BaseModel
 from datetime import date, timedelta
 
-from src.models.database import get_db, Prediction
+from src.api.deps import get_db
+from src.models.database import Prediction
 from src.services import BloggerService
 
 router = APIRouter(prefix="/bloggers", tags=["博主"])
