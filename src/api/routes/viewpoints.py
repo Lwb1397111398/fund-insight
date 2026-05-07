@@ -215,8 +215,8 @@ async def delete_viewpoint(viewpoint_id: int, db: Session = Depends(get_db)):
 
 @router.post("/batch-analyze")
 async def batch_analyze_viewpoints(
+    background_tasks: BackgroundTasks,
     data: dict = Body(...),
-    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     """
