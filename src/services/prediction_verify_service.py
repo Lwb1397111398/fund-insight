@@ -21,11 +21,14 @@ logger = logging.getLogger(__name__)
 
 class PredictionVerifyService:
     """预测验证服务"""
-    
+
     def __init__(self, db: Session):
         self.db = db
         self.llm_analyzer = get_analyzer()
         self.fund_api = FundAPI()
+        # 实例级净值缓存，用于批量验证时避免 N+1 查询
+        # 结构: {(fund_code, date_str): nav, '_history': {fund_code: [FundHistory,...]}}
+        self._nav_cache: Dict = {}
     
     def get_verify_config(self, period_days: int) -> Dict:
         """
@@ -94,42 +97,62 @@ class PredictionVerifyService:
         return parse_period_to_days(period_str)
     
     def get_nav_by_date(self, fund_code: str, target_date: date):
-        """获取指定日期的基金净值"""
+        """获取指定日期的基金净值（优先读缓存）"""
+        cache_key = (fund_code, target_date.isoformat())
+        if cache_key in self._nav_cache:
+            return self._nav_cache[cache_key]
+
         nav_record = self.db.query(FundHistory).filter(
             FundHistory.fund_code == fund_code,
             FundHistory.nav_date <= target_date
         ).order_by(FundHistory.nav_date.desc()).first()
-        
+
         if nav_record:
+            self._nav_cache[cache_key] = nav_record.nav
             return nav_record.nav
-        
+
         fund_info = self.fund_api.get_fund_info(fund_code)
         if fund_info:
-            return fund_info.get('nav')
-        
+            nav = fund_info.get('nav')
+            self._nav_cache[cache_key] = nav
+            return nav
+
+        self._nav_cache[cache_key] = None
         return None
     
     def get_nav_history(self, fund_code: str, start_date: date, end_date: date) -> List[Dict]:
         """
-        获取净值历史数据
-        
+        获取净值历史数据（优先读缓存）
+
         Args:
             fund_code: 基金代码
             start_date: 开始日期
             end_date: 结束日期
-            
+
         Returns:
             净值历史列表 [{date, nav}, ...]
         """
+        # 尝试从缓存获取
+        history_cache = self._nav_cache.get('_history', {})
+        if fund_code in history_cache:
+            cached_records = history_cache[fund_code]
+            result = [
+                {"date": r.nav_date, "nav": r.nav}
+                for r in cached_records
+                if start_date <= r.nav_date <= end_date
+            ]
+            if result:
+                return sorted(result, key=lambda x: x["date"])
+
         records = self.db.query(FundHistory).filter(
             FundHistory.fund_code == fund_code,
             FundHistory.nav_date >= start_date,
             FundHistory.nav_date <= end_date
         ).order_by(FundHistory.nav_date.asc()).all()
-        
+
         if records:
             return [{"date": r.nav_date, "nav": r.nav} for r in records]
-        
+
         return []
     
     def _check_fund_data_availability(
@@ -140,14 +163,14 @@ class PredictionVerifyService:
         min_data_points: int = 2
     ) -> Dict:
         """
-        检查基金数据是否充足以进行验证
-        
+        检查基金数据是否充足以进行验证（优先读缓存）
+
         Args:
             fund_code: 基金代码
             nav_start_date: 净值起始日期
             window_end: 验证窗口结束日期
             min_data_points: 最少需要的数据点数
-            
+
         Returns:
             {
                 'available': bool,  # 数据是否充足
@@ -156,20 +179,39 @@ class PredictionVerifyService:
                 'latest_date': date # 最新数据日期
             }
         """
-        records = self.db.query(FundHistory).filter(
-            FundHistory.fund_code == fund_code,
-            FundHistory.nav_date >= nav_start_date,
-            FundHistory.nav_date <= window_end
-        ).order_by(FundHistory.nav_date.asc()).all()
-        
+        records = None
+        # 尝试从缓存获取
+        history_cache = self._nav_cache.get('_history', {})
+        if fund_code in history_cache:
+            cached_records = history_cache[fund_code]
+            records = [
+                r for r in cached_records
+                if nav_start_date <= r.nav_date <= window_end
+            ]
+            records.sort(key=lambda r: r.nav_date)
+
+        if records is None:
+            records = self.db.query(FundHistory).filter(
+                FundHistory.fund_code == fund_code,
+                FundHistory.nav_date >= nav_start_date,
+                FundHistory.nav_date <= window_end
+            ).order_by(FundHistory.nav_date.asc()).all()
+
         data_points = len(records)
         latest_date = records[-1].nav_date if records else None
-        
+
         if data_points < min_data_points:
-            latest_record = self.db.query(FundHistory).filter(
-                FundHistory.fund_code == fund_code
-            ).order_by(FundHistory.nav_date.desc()).first()
-            
+            # 尝试从缓存获取最新记录
+            latest_record = None
+            if fund_code in history_cache:
+                cached = history_cache[fund_code]
+                if cached:
+                    latest_record = max(cached, key=lambda r: r.nav_date)
+            else:
+                latest_record = self.db.query(FundHistory).filter(
+                    FundHistory.fund_code == fund_code
+                ).order_by(FundHistory.nav_date.desc()).first()
+
             if latest_record:
                 latest_date = latest_record.nav_date
                 days_behind = (window_end - latest_date).days
@@ -187,7 +229,7 @@ class PredictionVerifyService:
                     'data_points': 0,
                     'latest_date': None
                 }
-        
+
         return {
             'available': True,
             'message': f"数据充足，共 {data_points} 个数据点",
@@ -696,15 +738,15 @@ class PredictionVerifyService:
         }
     
     def verify_all_pending(self) -> Dict:
-        """验证所有待验证的预测（跳过验证通道未开放的）"""
+        """验证所有待验证的预测（跳过验证通道未开放，带缓存预热）"""
         today = date.today()
-        
+
         all_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
             Prediction.target_date <= today + timedelta(days=7)
         ).all()
-        
+
         pending_predictions = []
         skipped_count = 0
         for p in all_pending:
@@ -714,31 +756,35 @@ class PredictionVerifyService:
                 skipped_count += 1
                 continue
             pending_predictions.append(p)
-        
+
         logger.info(f"[Verify] 找到 {len(all_pending)} 个待验证预测，跳过 {skipped_count} 个通道未开放，实际验证 {len(pending_predictions)} 个")
-        
+
+        # 预热：收集所有涉及的 fund_code，批量查询 FundHistory 并填充缓存
+        self._warm_cache(pending_predictions, today)
+
         results = []
         success_count = 0
         failed_count = 0
-        
+
         for prediction in pending_predictions:
-            self.db.expire_all()
-            
             logger.info(f"[Verify] 正在验证预测 {prediction.id}: fund_code={prediction.fund_code}, sector={prediction.sector}, target_date={prediction.target_date}")
-            
+
             result = self.verify_prediction(prediction.id)
             results.append({
                 "prediction_id": prediction.id,
                 "success": result.get("success"),
                 "message": result.get("message")
             })
-            
+
             if result.get("success"):
                 success_count += 1
             else:
                 failed_count += 1
                 logger.warning(f"[Verify] 预测 {prediction.id} 验证失败: {result.get('message')}")
-        
+
+        # 清理缓存，释放内存
+        self._nav_cache.clear()
+
         return {
             "success": True,
             "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个，跳过 {skipped_count} 个通道未开放",
@@ -750,27 +796,78 @@ class PredictionVerifyService:
                 "results": results
             }
         }
+
+    def _warm_cache(self, predictions: List, today: date):
+        """
+        预热基金净值缓存：批量查询所有涉及基金的 FundHistory
+
+        Args:
+            predictions: 待验证预测列表
+            today: 当前日期
+        """
+        if not predictions:
+            return
+
+        # 收集所有 fund_code
+        fund_codes = set()
+        for p in predictions:
+            if p.fund_code:
+                fund_codes.add(p.fund_code)
+
+        if not fund_codes:
+            logger.info("[Verify] 无 fund_code 可预热，跳过缓存")
+            return
+
+        # 计算需要查询的日期范围（取最大范围以覆盖所有预测）
+        min_date = today - timedelta(days=120)  # 最多回溯 120 天
+        max_date = today + timedelta(days=14)   # 最多前瞻 14 天
+
+        logger.info(f"[Verify] 预热缓存：{len(fund_codes)} 个基金，日期范围 {min_date} ~ {max_date}")
+
+        # 批量查询所有基金的 FundHistory
+        all_records = self.db.query(FundHistory).filter(
+            FundHistory.fund_code.in_(fund_codes),
+            FundHistory.nav_date >= min_date,
+            FundHistory.nav_date <= max_date
+        ).order_by(FundHistory.fund_code, FundHistory.nav_date.asc()).all()
+
+        # 按基金代码分组存入缓存
+        history_cache: Dict[str, List] = {}
+        nav_cache: Dict = {}
+        for r in all_records:
+            key = (r.fund_code, r.nav_date.isoformat())
+            nav_cache[key] = r.nav
+            if r.fund_code not in history_cache:
+                history_cache[r.fund_code] = []
+            history_cache[r.fund_code].append(r)
+
+        self._nav_cache.update(nav_cache)
+        self._nav_cache['_history'] = history_cache
+
+        logger.info(f"[Verify] 预热完成：{len(all_records)} 条记录，{len(history_cache)} 个基金")
     
     def verify_expired_pending(self) -> Dict:
-        """验证所有已过期但尚未验证的预测（补救验证，跳过超过30天补救期的）"""
+        """验证所有已过期但尚未验证的预测（补救验证，跳过超过30天补救期的，带缓存预热）"""
         today = date.today()
         grace_cutoff = today - timedelta(days=30)
-        
+
         expired_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
             Prediction.target_date < today,
             Prediction.target_date >= grace_cutoff
         ).all()
-        
+
         logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个已过期待验证预测（30天补救期内）")
-        
+
+        # 预热缓存
+        self._warm_cache(expired_pending, today)
+
         results = []
         success_count = 0
         failed_count = 0
-        
+
         for prediction in expired_pending:
-            self.db.expire_all()
             
             fund_code, fund_name = self.match_fund_for_prediction(prediction)
             if not fund_code:
@@ -824,7 +921,10 @@ class PredictionVerifyService:
             else:
                 failed_count += 1
                 logger.warning(f"[Verify-Expired] 预测 {prediction.id} 验证失败: {result.get('message')}")
-        
+
+        # 清理缓存
+        self._nav_cache.clear()
+
         return {
             "success": True,
             "message": f"补救验证完成：成功 {success_count} 个，失败 {failed_count} 个",
