@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fund Insight - 基金观点追踪系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <script src="/web/vue.global.prod.js"></script>
     <script src="/web/axios.min.js"></script>
     <style>
@@ -15,29 +16,138 @@
         }
 
         :root {
-            --primary: #1890ff;
-            --success: #52c41a;
-            --warning: #faad14;
-            --danger: #ff4d4f;
-            --bg: #f5f7fa;
-            --card-bg: #fff;
-            --text: #333;
-            --text-secondary: #666;
-            --border: #e8e8e8;
+            /* 主色调 */
+            --color-primary: #2563eb;
+            --color-primary-hover: #1d4ed8;
+            --color-primary-active: #1e40af;
+            --color-primary-light: #eff6ff;
+            --color-primary-border: #93bbfd;
+
+            /* 语义色 */
+            --color-success: #16a34a;
+            --color-success-light: #f0fdf4;
+            --color-success-border: #86efac;
+            --color-warning: #d97706;
+            --color-warning-light: #fffbeb;
+            --color-warning-border: #fcd34d;
+            --color-danger: #dc2626;
+            --color-danger-light: #fef2f2;
+            --color-danger-border: #fca5a5;
+            --color-info: #0891b2;
+            --color-info-light: #ecfeff;
+
+            /* 涨跌色 */
+            --color-up: #16a34a;
+            --color-up-bg: #f0fdf4;
+            --color-down: #dc2626;
+            --color-down-bg: #fef2f2;
+            --color-flat: #d97706;
+            --color-flat-bg: #fffbeb;
+
+            /* 中性色 */
+            --color-bg: #f8fafc;
+            --color-bg-elevated: #ffffff;
+            --color-bg-muted: #f1f5f9;
+            --color-bg-overlay: rgba(0, 0, 0, 0.5);
+
+            --color-text: #0f172a;
+            --color-text-secondary: #475569;
+            --color-text-tertiary: #94a3b8;
+            --color-text-inverse: #ffffff;
+
+            --color-border: #e2e8f0;
+            --color-border-hover: #cbd5e1;
+
+            /* 阴影 */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+            /* 圆角 */
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+            --radius-full: 9999px;
+
+            /* 间距 */
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 12px;
+            --space-4: 16px;
+            --space-5: 20px;
+            --space-6: 24px;
+
+            /* 过渡 */
+            --transition-fast: 150ms ease;
+            --transition-normal: 200ms ease;
+
+            /* 兼容旧变量名 */
+            --primary: var(--color-primary);
+            --success: var(--color-success);
+            --warning: var(--color-warning);
+            --danger: var(--color-danger);
+            --bg: var(--color-bg);
+            --card-bg: var(--color-bg-elevated);
+            --text: var(--color-text);
+            --text-secondary: var(--color-text-secondary);
+            --border: var(--color-border);
+        }
+
+        [data-theme="dark"] {
+            --color-primary: #3b82f6;
+            --color-primary-hover: #60a5fa;
+            --color-primary-active: #93bbfd;
+            --color-primary-light: #1e293b;
+            --color-primary-border: #1e40af;
+
+            --color-success: #22c55e;
+            --color-success-light: #052e16;
+            --color-success-border: #166534;
+            --color-warning: #f59e0b;
+            --color-warning-light: #451a03;
+            --color-warning-border: #92400e;
+            --color-danger: #ef4444;
+            --color-danger-light: #450a0a;
+            --color-danger-border: #991b1b;
+
+            --color-up: #22c55e;
+            --color-up-bg: #052e16;
+            --color-down: #ef4444;
+            --color-down-bg: #450a0a;
+            --color-flat: #f59e0b;
+            --color-flat-bg: #451a03;
+
+            --color-bg: #0f172a;
+            --color-bg-elevated: #1e293b;
+            --color-bg-muted: #1e293b;
+            --color-bg-overlay: rgba(0, 0, 0, 0.7);
+
+            --color-text: #f1f5f9;
+            --color-text-secondary: #94a3b8;
+            --color-text-tertiary: #64748b;
+            --color-text-inverse: #0f172a;
+
+            --color-border: #334155;
+            --color-border-hover: #475569;
+
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            background: var(--color-bg);
+            color: var(--color-text);
             min-height: 100vh;
+            transition: background-color var(--transition-normal), color var(--transition-normal);
         }
 
         .header {
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: white;
-            padding: 16px 24px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: var(--space-4) var(--space-6);
+            box-shadow: var(--shadow-md);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -46,6 +156,9 @@
         .header h1 {
             font-size: 22px;
             font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
         }
 
         .header-actions {
@@ -58,10 +171,13 @@
             border: 1px solid rgba(255, 255, 255, 0.3);
             color: white;
             padding: 8px 16px;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             cursor: pointer;
             font-size: 13px;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
         }
 
         .header-btn:hover {
@@ -71,98 +187,99 @@
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 16px;
+            padding: var(--space-4);
         }
 
         .stats-mini-grid {
             display: grid;
             grid-template-columns: repeat(6, 1fr);
-            gap: 12px;
-            margin-bottom: 16px;
+            gap: var(--space-3);
+            margin-bottom: var(--space-4);
         }
 
         .stat-mini {
-            background: var(--card-bg);
-            border-radius: 10px;
-            padding: 12px;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--space-3);
             text-align: center;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+            box-shadow: var(--shadow-sm);
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
         }
 
         .stat-mini:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            box-shadow: var(--shadow-md);
         }
 
         .stat-mini .value {
             font-size: 24px;
             font-weight: 700;
-            color: var(--primary);
+            color: var(--color-primary);
         }
 
         .stat-mini .label {
             font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 4px;
+            color: var(--color-text-secondary);
+            margin-top: var(--space-1);
         }
 
         .action-bar {
             display: flex;
-            gap: 10px;
-            margin-bottom: 16px;
+            gap: var(--space-2);
+            margin-bottom: var(--space-4);
             flex-wrap: wrap;
         }
 
         .action-btn {
             flex: 1;
             min-width: 120px;
-            padding: 12px 16px;
+            padding: var(--space-3) var(--space-4);
             border: none;
-            border-radius: 10px;
+            border-radius: var(--radius-lg);
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
+            gap: var(--space-2);
         }
 
         .action-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            box-shadow: var(--shadow-md);
         }
 
         .action-btn.primary {
-            background: var(--primary);
-            color: white;
+            background: var(--color-primary);
+            color: var(--color-text-inverse);
         }
 
         .action-btn.success {
-            background: var(--success);
-            color: white;
+            background: var(--color-success);
+            color: var(--color-text-inverse);
         }
 
         .action-btn.warning {
-            background: var(--warning);
-            color: white;
+            background: var(--color-warning);
+            color: var(--color-text-inverse);
         }
 
         .action-btn.danger {
-            background: var(--danger);
-            color: white;
+            background: var(--color-danger);
+            color: var(--color-text-inverse);
         }
 
         .action-btn.default {
-            background: #f0f0f0;
-            color: #666;
+            background: var(--color-bg-muted);
+            color: var(--color-text-secondary);
         }
 
         .action-btn.small {
-            padding: 6px 12px;
+            padding: var(--space-1) var(--space-3);
             font-size: 12px;
             flex: none;
         }
@@ -172,57 +289,130 @@
             cursor: not-allowed;
         }
 
+        /* 新按钮系统 */
+        .fi-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--space-2);
+            padding: var(--space-2) var(--space-4);
+            font-size: 14px;
+            font-weight: 500;
+            border: 1px solid transparent;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            font-family: inherit;
+            text-decoration: none;
+        }
+
+        .fi-btn:focus-visible {
+            outline: 2px solid var(--color-primary);
+            outline-offset: 2px;
+        }
+
+        .fi-btn--primary {
+            background: var(--color-primary);
+            color: var(--color-text-inverse);
+        }
+        .fi-btn--primary:hover {
+            background: var(--color-primary-hover);
+        }
+
+        .fi-btn--secondary {
+            background: var(--color-bg-elevated);
+            color: var(--color-text);
+            border-color: var(--color-border);
+        }
+        .fi-btn--secondary:hover {
+            background: var(--color-bg-muted);
+            border-color: var(--color-border-hover);
+        }
+
+        .fi-btn--danger {
+            background: var(--color-danger);
+            color: var(--color-text-inverse);
+        }
+        .fi-btn--danger:hover {
+            background: #b91c1c;
+        }
+
+        .fi-btn--ghost {
+            background: transparent;
+            color: var(--color-text-secondary);
+        }
+        .fi-btn--ghost:hover {
+            background: var(--color-bg-muted);
+        }
+
+        .fi-btn--sm {
+            padding: var(--space-1) var(--space-2);
+            font-size: 12px;
+        }
+
+        .fi-btn--lg {
+            padding: var(--space-3) var(--space-6);
+            font-size: 16px;
+        }
+
+        .fi-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         .filter-tabs {
             display: flex;
-            gap: 8px;
+            gap: var(--space-2);
             flex-wrap: wrap;
         }
 
         .filter-tab {
-            padding: 6px 14px;
-            border: 1px solid var(--border);
-            background: var(--card-bg);
-            border-radius: 16px;
+            padding: var(--space-1) var(--space-3);
+            border: 1px solid var(--color-border);
+            background: var(--color-bg-elevated);
+            border-radius: var(--radius-full);
             cursor: pointer;
             font-size: 13px;
-            color: var(--text-secondary);
-            transition: all 0.2s;
+            color: var(--color-text-secondary);
+            transition: all var(--transition-fast);
         }
 
         .filter-tab:hover {
-            border-color: var(--primary);
-            color: var(--primary);
+            border-color: var(--color-primary);
+            color: var(--color-primary);
         }
 
         .filter-tab.active {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
+            background: var(--color-primary);
+            border-color: var(--color-primary);
+            color: var(--color-text-inverse);
         }
 
         .section-title {
             font-size: 16px;
             font-weight: 600;
-            margin-bottom: 12px;
+            margin-bottom: var(--space-3);
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--space-2);
+            color: var(--color-text);
         }
 
         .section-title::before {
             content: '';
             width: 3px;
             height: 16px;
-            background: var(--primary);
+            background: var(--color-primary);
             border-radius: 2px;
         }
 
         .data-table {
-            background: var(--card-bg);
-            border-radius: 12px;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            margin-bottom: 16px;
+            box-shadow: var(--shadow-sm);
+            margin-bottom: var(--space-4);
         }
 
         table {
@@ -231,131 +421,155 @@
         }
 
         th {
-            background: #fafafa;
-            padding: 12px;
+            background: var(--color-bg-muted);
+            padding: var(--space-3) var(--space-4);
             text-align: left;
             font-weight: 600;
             font-size: 13px;
-            color: var(--text-secondary);
+            color: var(--color-text-secondary);
+            border-bottom: 1px solid var(--color-border);
         }
 
         td {
-            padding: 12px;
+            padding: var(--space-3) var(--space-4);
             font-size: 13px;
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid var(--color-border);
+            color: var(--color-text);
         }
 
-        tr:hover {
-            background: #fafafa;
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: var(--color-bg-muted);
         }
 
         .grade-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-full);
             font-size: 12px;
             font-weight: 600;
         }
 
         .grade-S {
-            background: #fff2f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
+            border: 1px solid var(--color-danger-border);
         }
 
         .grade-A {
-            background: #fff7e6;
-            color: #fa8c16;
+            background: var(--color-warning-light);
+            color: var(--color-warning);
+            border: 1px solid var(--color-warning-border);
         }
 
         .grade-B {
-            background: #e6f7ff;
-            color: #1890ff;
+            background: var(--color-primary-light);
+            color: var(--color-primary);
+            border: 1px solid var(--color-primary-border);
         }
 
         .grade-C {
-            background: #f6ffed;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
+            border: 1px solid var(--color-success-border);
         }
 
         .grade-D {
-            background: #f5f5f5;
-            color: #999;
+            background: var(--color-bg-muted);
+            color: var(--color-text-tertiary);
+            border: 1px solid var(--color-border);
         }
 
         .status-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-full);
             font-size: 11px;
+            font-weight: 500;
         }
 
         .status-pending {
-            background: #fff7e6;
-            color: #fa8c16;
+            background: var(--color-warning-light);
+            color: var(--color-warning);
+            border: 1px solid var(--color-warning-border);
         }
 
         .status-success {
-            background: #f6ffed;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
+            border: 1px solid var(--color-success-border);
         }
 
         .status-failed {
-            background: #fff1f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
+            border: 1px solid var(--color-danger-border);
         }
 
         .verify-type-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-full);
             font-size: 11px;
+            font-weight: 500;
         }
 
         .verify-final {
-            background: #f6ffed;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
+            border: 1px solid var(--color-success-border);
         }
 
         .verify-process {
-            background: #e6f7ff;
-            color: #1890ff;
+            background: var(--color-primary-light);
+            color: var(--color-primary);
+            border: 1px solid var(--color-primary-border);
         }
 
         .verify-partial {
-            background: #fffbe6;
-            color: #faad14;
+            background: var(--color-warning-light);
+            color: var(--color-warning);
+            border: 1px solid var(--color-warning-border);
         }
 
         .verify-llm_verify {
             background: #f9f0ff;
             color: #722ed1;
+            border: 1px solid #d3adf7;
         }
 
         .verify-failed {
-            background: #fff1f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
+            border: 1px solid var(--color-danger-border);
         }
 
         .empty-state {
             text-align: center;
-            padding: 40px;
-            color: var(--text-secondary);
+            padding: var(--space-10);
+            color: var(--color-text-secondary);
         }
 
         .loading {
             text-align: center;
-            padding: 40px;
-            color: var(--text-secondary);
+            padding: var(--space-10);
+            color: var(--color-text-secondary);
         }
 
         .loading-spinner {
             width: 30px;
             height: 30px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid var(--primary);
+            border: 3px solid var(--color-bg-muted);
+            border-top: 3px solid var(--color-primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
-            margin: 0 auto 12px;
+            margin: 0 auto var(--space-3);
         }
 
         @keyframes spin {
@@ -369,24 +583,42 @@
         }
 
         .form-group {
-            margin-bottom: 12px;
+            margin-bottom: var(--space-3);
         }
 
         .form-group label {
             display: block;
             font-size: 13px;
             font-weight: 500;
-            margin-bottom: 6px;
+            margin-bottom: var(--space-1);
+            color: var(--color-text);
         }
 
         .form-group input,
         .form-group textarea,
         .form-group select {
             width: 100%;
-            padding: 10px;
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            padding: var(--space-2) var(--space-3);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
             font-size: 14px;
+            color: var(--color-text);
+            transition: border-color var(--transition-fast);
+            font-family: inherit;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px var(--color-primary-light);
+        }
+
+        .form-group input::placeholder,
+        .form-group textarea::placeholder {
+            color: var(--color-text-tertiary);
         }
 
         .modal-overlay {
@@ -395,21 +627,25 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
+            background: var(--color-bg-overlay);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 1000;
+            animation: fadeIn 150ms ease;
         }
 
         .modal {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--space-5);
             max-width: 600px;
             width: 90%;
             max-height: 85vh;
             overflow-y: auto;
+            box-shadow: var(--shadow-lg);
+            animation: slideUp 200ms ease;
         }
 
         .modal.wide {
@@ -419,10 +655,11 @@
         .modal-header {
             font-size: 18px;
             font-weight: 600;
-            margin-bottom: 16px;
+            margin-bottom: var(--space-4);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            color: var(--color-text);
         }
 
         .modal-close {
@@ -430,107 +667,152 @@
             border: none;
             font-size: 20px;
             cursor: pointer;
-            color: #999;
+            color: var(--color-text-tertiary);
+            transition: color var(--transition-fast);
+        }
+
+        .modal-close:hover {
+            color: var(--color-text);
         }
 
         .modal-footer {
             display: flex;
-            gap: 10px;
+            gap: var(--space-2);
             justify-content: flex-end;
-            margin-top: 16px;
+            margin-top: var(--space-4);
         }
 
         .modal-btn {
-            padding: 8px 16px;
+            padding: var(--space-2) var(--space-4);
             border: none;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             cursor: pointer;
             font-size: 14px;
+            font-weight: 500;
+            transition: all var(--transition-fast);
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
         }
 
         .modal-btn.primary {
-            background: var(--primary);
-            color: white;
+            background: var(--color-primary);
+            color: var(--color-text-inverse);
+        }
+        .modal-btn.primary:hover {
+            background: var(--color-primary-hover);
         }
 
         .modal-btn.danger {
-            background: var(--danger);
-            color: white;
+            background: var(--color-danger);
+            color: var(--color-text-inverse);
+        }
+        .modal-btn.danger:hover {
+            background: #b91c1c;
         }
 
         .modal-btn.default {
-            background: #f0f0f0;
+            background: var(--color-bg-muted);
+            color: var(--color-text-secondary);
+            border: 1px solid var(--color-border);
+        }
+        .modal-btn.default:hover {
+            background: var(--color-bg);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
         }
 
         .advice-box {
-            background: linear-gradient(135deg, #fff7e6 0%, #fff1f0 100%);
-            border-radius: 12px;
-            padding: 20px;
-            margin-top: 16px;
-            border-left: 4px solid var(--warning);
+            background: var(--color-warning-light);
+            border-radius: var(--radius-lg);
+            padding: var(--space-5);
+            margin-top: var(--space-4);
+            border-left: 4px solid var(--color-warning);
         }
 
         .advice-box h3 {
-            color: var(--warning);
-            margin-bottom: 12px;
+            color: var(--color-warning);
+            margin-bottom: var(--space-3);
         }
 
         .advice-box p {
             white-space: pre-wrap;
             line-height: 1.6;
+            color: var(--color-text);
         }
 
         .sub-actions {
             display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
+            gap: var(--space-2);
+            margin-bottom: var(--space-3);
             flex-wrap: wrap;
         }
 
         .row-actions {
             display: flex;
-            gap: 6px;
+            gap: var(--space-1);
         }
 
         .row-btn {
-            padding: 4px 8px;
+            padding: var(--space-1) var(--space-2);
             font-size: 11px;
             border: none;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             cursor: pointer;
+            transition: all var(--transition-fast);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
 
         .row-btn.primary {
-            background: #e6f7ff;
-            color: #1890ff;
+            background: var(--color-primary-light);
+            color: var(--color-primary);
+        }
+        .row-btn.primary:hover {
+            background: var(--color-primary-border);
         }
 
         .row-btn.danger {
-            background: #fff1f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
+        }
+        .row-btn.danger:hover {
+            background: var(--color-danger-border);
         }
 
         .row-btn.success {
-            background: #f6ffed;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
+        }
+        .row-btn.success:hover {
+            background: var(--color-success-border);
         }
 
         .detail-section {
-            margin-bottom: 16px;
+            margin-bottom: var(--space-4);
         }
 
         .detail-section h4 {
             font-size: 14px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 4px;
+            color: var(--color-text-secondary);
+            margin-bottom: var(--space-2);
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: var(--space-1);
         }
 
         .detail-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
+            gap: var(--space-3);
         }
 
         .detail-item {
@@ -538,11 +820,12 @@
         }
 
         .detail-item label {
-            color: var(--text-secondary);
+            color: var(--color-text-secondary);
         }
 
         .detail-item span {
             font-weight: 500;
+            color: var(--color-text);
         }
 
         .history-list {
@@ -551,126 +834,132 @@
         }
 
         .history-item {
-            padding: 12px;
-            border-bottom: 1px solid var(--border);
+            padding: var(--space-3);
+            border-bottom: 1px solid var(--color-border);
         }
 
         .history-item .date {
             font-size: 12px;
-            color: var(--text-secondary);
+            color: var(--color-text-secondary);
         }
 
         .history-item .content {
             font-size: 13px;
-            margin-top: 4px;
+            margin-top: var(--space-1);
+            color: var(--color-text);
         }
 
         .history-item-header {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--space-2);
             flex-wrap: wrap;
         }
 
         .history-item-header .date {
             font-weight: 500;
+            color: var(--color-text);
         }
 
         .advice-type-badge {
-            padding: 2px 8px;
-            border-radius: 4px;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-sm);
             font-size: 11px;
             font-weight: 500;
         }
 
         .advice-type-badge.type-buy {
-            background: #e6f7e6;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
         }
 
         .advice-type-badge.type-sell {
-            background: #fff1f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
         }
 
         .advice-type-badge.type-hold {
-            background: #e6f7ff;
-            color: #1890ff;
+            background: var(--color-primary-light);
+            color: var(--color-primary);
         }
 
         .advice-type-badge.type-watch {
-            background: #fffbe6;
-            color: #faad14;
+            background: var(--color-warning-light);
+            color: var(--color-warning);
         }
 
         .history-item-header .confidence {
             font-size: 12px;
-            color: var(--text-secondary);
+            color: var(--color-text-secondary);
         }
 
         .history-item-meta {
-            margin-top: 8px;
-            padding-top: 8px;
-            border-top: 1px dashed var(--border);
+            margin-top: var(--space-2);
+            padding-top: var(--space-2);
+            border-top: 1px dashed var(--color-border);
         }
 
         .history-item-meta .meta-row {
             display: flex;
             font-size: 12px;
-            margin-bottom: 4px;
+            margin-bottom: var(--space-1);
         }
 
         .history-item-meta .meta-label {
-            color: var(--text-secondary);
+            color: var(--color-text-secondary);
             min-width: 70px;
         }
 
         .history-item-meta .meta-value {
-            color: var(--text-primary);
+            color: var(--color-text);
         }
 
         .history-item-meta .sectors-bullish {
-            color: #52c41a;
+            color: var(--color-success);
         }
 
         .history-item-meta .sectors-bearish {
-            color: #ff4d4f;
+            color: var(--color-danger);
         }
 
         .config-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 12px 0;
-            border-bottom: 1px solid var(--border);
+            padding: var(--space-3) 0;
+            border-bottom: 1px solid var(--color-border);
         }
 
         .config-item label {
             font-weight: 500;
+            color: var(--color-text);
         }
 
         .config-item input {
             width: 300px;
-            padding: 6px 10px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
+            padding: var(--space-1) var(--space-2);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            background: var(--color-bg-elevated);
+            color: var(--color-text);
         }
 
         .trend-status {
-            background: #f6ffed;
-            padding: 16px;
-            border-radius: 8px;
-            margin-bottom: 16px;
+            background: var(--color-success-light);
+            padding: var(--space-4);
+            border-radius: var(--radius-md);
+            margin-bottom: var(--space-4);
         }
 
         .trend-status h4 {
-            margin-bottom: 8px;
+            margin-bottom: var(--space-2);
+            color: var(--color-text);
         }
 
         .advice-view {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 16px;
-            padding: 24px;
+            border-radius: var(--radius-lg);
+            padding: var(--space-6);
             color: white;
             position: relative;
             overflow: hidden;
@@ -691,7 +980,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
+            margin-bottom: var(--space-5);
         }
 
         .advice-header h2 {
@@ -699,12 +988,12 @@
             font-weight: 700;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: var(--space-2);
         }
 
         .advice-type-badge {
-            padding: 6px 16px;
-            border-radius: 20px;
+            padding: var(--space-1) var(--space-4);
+            border-radius: var(--radius-full);
             font-size: 14px;
             font-weight: 600;
         }
@@ -727,15 +1016,15 @@
 
         .advice-content-box {
             background: rgba(255, 255, 255, 0.15);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
+            border-radius: var(--radius-lg);
+            padding: var(--space-5);
+            margin-bottom: var(--space-5);
             backdrop-filter: blur(10px);
         }
 
         .advice-content-box h3 {
             font-size: 16px;
-            margin-bottom: 12px;
+            margin-bottom: var(--space-3);
             opacity: 0.9;
         }
 
@@ -747,15 +1036,15 @@
 
         .advice-meta-row {
             display: flex;
-            gap: 24px;
-            margin-bottom: 20px;
+            gap: var(--space-6);
+            margin-bottom: var(--space-5);
             flex-wrap: wrap;
         }
 
         .advice-meta-item {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--space-2);
         }
 
         .advice-meta-item .label {
@@ -772,27 +1061,27 @@
             width: 120px;
             height: 8px;
             background: rgba(255, 255, 255, 0.2);
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             overflow: hidden;
         }
 
         .advice-confidence-fill {
             height: 100%;
             background: linear-gradient(90deg, #52c41a, #faad14, #ff4d4f);
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             transition: width 0.3s;
         }
 
         .advice-sectors {
             display: flex;
-            gap: 12px;
-            margin-bottom: 20px;
+            gap: var(--space-3);
+            margin-bottom: var(--space-5);
             flex-wrap: wrap;
         }
 
         .advice-sector-tag {
-            padding: 6px 14px;
-            border-radius: 16px;
+            padding: var(--space-1) var(--space-3);
+            border-radius: var(--radius-full);
             font-size: 13px;
             font-weight: 500;
         }
@@ -810,19 +1099,19 @@
         .advice-details-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 16px;
+            gap: var(--space-4);
         }
 
         .advice-detail-card {
             background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 16px;
+            border-radius: var(--radius-lg);
+            padding: var(--space-4);
         }
 
         .advice-detail-card h4 {
             font-size: 13px;
             opacity: 0.8;
-            margin-bottom: 8px;
+            margin-bottom: var(--space-2);
         }
 
         .advice-detail-card p {
@@ -832,21 +1121,21 @@
 
         .advice-term-section {
             background: rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            padding: 16px;
+            border-radius: var(--radius-lg);
+            padding: var(--space-4);
         }
 
         .term-card {
             background: rgba(0, 0, 0, 0.2);
-            border-radius: 8px;
-            padding: 12px 16px;
+            border-radius: var(--radius-md);
+            padding: var(--space-3) var(--space-4);
         }
 
         .term-row {
             display: flex;
             align-items: flex-start;
-            gap: 8px;
-            margin-bottom: 8px;
+            gap: var(--space-2);
+            margin-bottom: var(--space-2);
         }
 
         .term-row:last-child {
@@ -872,8 +1161,8 @@
 
         .risk-badge {
             font-size: 11px;
-            padding: 2px 8px;
-            border-radius: 10px;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-full);
             font-weight: 500;
         }
 
@@ -894,19 +1183,19 @@
 
         .advice-actions {
             display: flex;
-            gap: 12px;
-            margin-top: 20px;
+            gap: var(--space-3);
+            margin-top: var(--space-5);
             justify-content: center;
         }
 
         .advice-action-btn {
-            padding: 10px 20px;
-            border-radius: 8px;
+            padding: var(--space-2) var(--space-5);
+            border-radius: var(--radius-md);
             border: none;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
         }
 
         .advice-action-btn.primary {
@@ -927,29 +1216,31 @@
 
         .advice-empty {
             text-align: center;
-            padding: 60px 20px;
+            padding: var(--space-10) var(--space-5);
         }
 
         .advice-empty-icon {
             font-size: 64px;
-            margin-bottom: 16px;
+            margin-bottom: var(--space-4);
             opacity: 0.5;
         }
 
         .advice-empty h3 {
             font-size: 20px;
-            margin-bottom: 8px;
+            margin-bottom: var(--space-2);
+            color: var(--color-text);
         }
 
         .advice-empty p {
             opacity: 0.7;
-            margin-bottom: 20px;
+            margin-bottom: var(--space-5);
+            color: var(--color-text-secondary);
         }
 
         .sentiment-indicator {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--space-2);
         }
 
         .sentiment-icon {
@@ -958,8 +1249,8 @@
 
         .new-badge {
             background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
-            padding: 4px 10px;
-            border-radius: 10px;
+            padding: var(--space-1) var(--space-2);
+            border-radius: var(--radius-full);
             font-size: 11px;
             font-weight: 600;
             animation: pulse 2s infinite;
@@ -978,167 +1269,168 @@
         }
 
         .trend-analysis-box {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 16px;
+            background: var(--color-bg-muted);
+            border-radius: var(--radius-lg);
+            padding: var(--space-4);
         }
 
         .trend-summary {
             font-size: 15px;
-            color: #333;
-            margin-bottom: 16px;
+            color: var(--color-text);
+            margin-bottom: var(--space-4);
             line-height: 1.6;
         }
 
         .trend-stats {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
-            margin-bottom: 16px;
+            gap: var(--space-3);
+            margin-bottom: var(--space-4);
         }
 
         .trend-stat-item {
-            background: white;
-            border-radius: 8px;
-            padding: 12px;
+            background: var(--color-bg-elevated);
+            border-radius: var(--radius-md);
+            padding: var(--space-3);
             text-align: center;
         }
 
         .trend-label {
             display: block;
             font-size: 12px;
-            color: #888;
-            margin-bottom: 4px;
+            color: var(--color-text-tertiary);
+            margin-bottom: var(--space-1);
         }
 
         .trend-value {
             font-size: 16px;
             font-weight: 600;
+            color: var(--color-text);
         }
 
         .trend-periods {
-            border-top: 1px solid #e8e8e8;
-            padding-top: 12px;
+            border-top: 1px solid var(--color-border);
+            padding-top: var(--space-3);
         }
 
         .trend-periods h5 {
             font-size: 13px;
-            color: #666;
-            margin-bottom: 10px;
+            color: var(--color-text-secondary);
+            margin-bottom: var(--space-2);
         }
 
         .trend-period-item {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 8px 12px;
-            background: white;
-            border-radius: 6px;
-            margin-bottom: 6px;
+            gap: var(--space-3);
+            padding: var(--space-2) var(--space-3);
+            background: var(--color-bg-elevated);
+            border-radius: var(--radius-sm);
+            margin-bottom: var(--space-1);
             font-size: 13px;
         }
 
         .period-date {
-            color: #666;
+            color: var(--color-text-secondary);
             min-width: 180px;
         }
 
         .period-trend {
-            padding: 2px 8px;
-            border-radius: 4px;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-sm);
             font-size: 12px;
             font-weight: 500;
         }
 
         .trend-up {
-            background: #f6ffed;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
         }
-        
+
         .trend-stats {
             display: flex;
-            gap: 15px;
-            margin: 10px 0;
-            padding: 10px;
-            background: white;
-            border-radius: 6px;
+            gap: var(--space-3);
+            margin: var(--space-2) 0;
+            padding: var(--space-2);
+            background: var(--color-bg-elevated);
+            border-radius: var(--radius-sm);
         }
-        
+
         .stat-item {
             font-size: 13px;
-            padding: 4px 10px;
-            border-radius: 4px;
+            padding: var(--space-1) var(--space-2);
+            border-radius: var(--radius-sm);
         }
-        
+
         .stat-item.up {
-            background: #f6ffed;
-            color: #52c41a;
+            background: var(--color-success-light);
+            color: var(--color-success);
         }
-        
+
         .stat-item.down {
-            background: #fff2f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
         }
-        
+
         .stat-item.flat {
-            background: #f5f5f5;
-            color: #666;
+            background: var(--color-bg-muted);
+            color: var(--color-text-secondary);
         }
-        
+
         .daily-trends {
-            margin-top: 15px;
+            margin-top: var(--space-3);
         }
-        
+
         .daily-trend-grid {
             display: flex;
             flex-wrap: wrap;
-            gap: 6px;
+            gap: var(--space-1);
         }
-        
+
         .daily-trend-item {
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 6px 8px;
-            border-radius: 6px;
+            padding: var(--space-1) var(--space-2);
+            border-radius: var(--radius-sm);
             font-size: 11px;
             min-width: 50px;
         }
-        
+
         .daily-trend-item.trend-up {
-            background: #f6ffed;
+            background: var(--color-success-light);
         }
-        
+
         .daily-trend-item.trend-down {
-            background: #fff2f0;
+            background: var(--color-danger-light);
         }
-        
+
         .daily-trend-item.trend-flat {
-            background: #f5f5f5;
+            background: var(--color-bg-muted);
         }
-        
+
         .daily-date {
-            color: #666;
+            color: var(--color-text-secondary);
             font-size: 10px;
         }
-        
+
         .daily-icon {
             font-size: 14px;
             margin: 2px 0;
         }
-        
+
         .daily-change {
             font-weight: 500;
         }
 
         .trend-down {
-            background: #fff2f0;
-            color: #ff4d4f;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
         }
 
         .trend-flat {
-            background: #fffbe6;
-            color: #faad14;
+            background: var(--color-warning-light);
+            color: var(--color-warning);
         }
 
         .period-change {
@@ -1147,22 +1439,22 @@
         }
 
         .period-duration {
-            color: #999;
+            color: var(--color-text-tertiary);
             margin-left: auto;
         }
 
         .pending-summary-box {
-            background: #fff7e6;
-            border: 1px solid #ffd591;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
+            background: var(--color-warning-light);
+            border: 1px solid var(--color-warning-border);
+            border-radius: var(--radius-md);
+            padding: var(--space-3) var(--space-4);
+            margin-bottom: var(--space-4);
         }
 
         .pending-summary-box h4 {
-            margin: 0 0 8px 0;
+            margin: 0 0 var(--space-2) 0;
             font-size: 14px;
-            color: #d46b08;
+            color: var(--color-warning);
         }
 
         .pending-dates {
@@ -1173,27 +1465,27 @@
         .pending-date-item {
             display: flex;
             justify-content: space-between;
-            padding: 4px 0;
+            padding: var(--space-1) 0;
             font-size: 13px;
         }
 
         .pending-summary {
-            margin-top: 8px;
+            margin-top: var(--space-2);
             font-size: 13px;
-            color: #666;
+            color: var(--color-text-secondary);
         }
 
         .summary-row {
-            background: #f0f5ff !important;
+            background: var(--color-primary-light) !important;
         }
 
         .summary-badge {
-            background: #1890ff;
-            color: white;
-            padding: 2px 6px;
-            border-radius: 4px;
+            background: var(--color-primary);
+            color: var(--color-text-inverse);
+            padding: 2px var(--space-1);
+            border-radius: var(--radius-sm);
             font-size: 11px;
-            margin-right: 6px;
+            margin-right: var(--space-1);
         }
     </style>
 </head>
@@ -1201,9 +1493,12 @@
 <body>
     <div id="app">
         <div class="header">
-            <h1>📊 Fund Insight - 基金观点追踪系统</h1>
+            <h1><i class="ri-line-chart-line"></i> Fund Insight - 基金观点追踪系统</h1>
             <div class="header-actions">
-                <button class="header-btn" @click="showConfig = true">⚙️ 配置</button>
+                <button class="header-btn" @click="toggleTheme" :title="theme === 'light' ? '切换到深色模式' : '切换到浅色模式'">
+                    <i :class="theme === 'light' ? 'ri-moon-line' : 'ri-sun-line'"></i>
+                </button>
+                <button class="header-btn" @click="showConfig = true"><i class="ri-settings-3-line"></i> 配置</button>
             </div>
         </div>
         <div class="container">
@@ -1240,17 +1535,17 @@
                     </div>
                 </div>
                 <div class="action-bar">
-                    <button class="action-btn primary" @click="showAddBlogger = true">👥 管理博主</button>
-                    <button class="action-btn primary" @click="showAddPost = true">📝 管理帖子</button>
-                    <button class="action-btn primary" @click="loadView('predictions')">🎯 管理预测</button>
-                    <button class="action-btn primary" @click="loadView('viewpoints')">💡 管理观点</button>
-                    <button class="action-btn success" @click="loadView('advice')">💰 投资建议</button>
-                    <button class="action-btn danger" @click="cleanupData">🗑️ 一键清理</button>
+                    <button class="action-btn primary" @click="showAddBlogger = true"><i class="ri-user-line"></i> 管理博主</button>
+                    <button class="action-btn primary" @click="showAddPost = true"><i class="ri-file-text-line"></i> 管理帖子</button>
+                    <button class="action-btn primary" @click="loadView('predictions')"><i class="ri-target-line"></i> 管理预测</button>
+                    <button class="action-btn primary" @click="loadView('viewpoints')"><i class="ri-lightbulb-line"></i> 管理观点</button>
+                    <button class="action-btn success" @click="loadView('advice')"><i class="ri-line-chart-line"></i> 投资建议</button>
+                    <button class="action-btn danger" @click="cleanupData"><i class="ri-delete-bin-line"></i> 一键清理</button>
                 </div>
                 <!-- 博主视图 -->
                 <div v-if="currentView === 'bloggers'">
                     <div class="section-title">管理博主</div>
-                    <div class="sub-actions"><button class="action-btn warning small" @click="showTopBloggers">🏆
+                    <div class="sub-actions"><button class="action-btn warning small" @click="showTopBloggers"><i class="ri-trophy-line"></i>
                             TOP博主排行</button></div>
                     <div class="data-table" v-if="bloggers.length > 0">
                         <table>
@@ -1399,7 +1694,7 @@
                         <button class="action-btn warning small" @click="batchAnalyzeViewpoints"
                             :disabled="analyzing">{{ analyzing ? '分析中...' : '🚀 一键AI分析' }}</button>
                         <button class="action-btn primary small" @click="showSummaryModal" :disabled="summarizing">{{
-                            summarizing ? '汇总中...' : '📊 一键汇总观点' }}</button>
+                            summarizing ? '汇总中...' : '<i class="ri-bar-chart-line"></i> 一键汇总观点' }}</button>
                     </div>
 
                     <div v-if="summaryStats && summaryStats.pending_dates && summaryStats.pending_dates.length > 0"
@@ -1432,7 +1727,7 @@
                             <tbody>
                                 <tr v-for="v in viewpoints" :key="v.id" :class="{'summary-row': v.is_summary}">
                                     <td>
-                                        <span v-if="v.is_summary" class="summary-badge">📊 汇总</span>
+                                        <span v-if="v.is_summary" class="summary-badge"><i class="ri-bar-chart-line"></i> 汇总</span>
                                         {{ v.content ? v.content.substring(0, 40) + '...' : '-' }}
                                     </td>
                                     <td>{{ v.author }}</td>
@@ -1501,12 +1796,12 @@
                 <!-- 待清理视图 -->
                 <div v-if="currentView === 'cleanup'">
                     <div class="section-title">待清理数据</div>
-                    <div class="sub-actions"><button class="action-btn danger small" @click="cleanupData">🗑️
+                    <div class="sub-actions"><button class="action-btn danger small" @click="cleanupData"><i class="ri-delete-bin-line"></i>
                             一键清理过期数据</button></div>
                     
                     <!-- 基金历史数据统计 -->
                     <div style="margin-bottom: 20px; padding: 15px; background: #fffbe6; border-radius: 8px; border: 1px solid #ffe58f;">
-                        <h4 style="color: #d48806; margin-bottom: 10px;">📊 基金历史净值数据</h4>
+                        <h4 style="color: #d48806; margin-bottom: 10px;"><i class="ri-funds-line"></i> 基金历史净值数据</h4>
                         <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
                             清理规则：最近30天完整保留，30-90天每周保留1条，超过90天删除
                         </p>
@@ -1612,7 +1907,7 @@
                         </div>
                     </div>
                     <div v-if="cleanupPreview && cleanupPreview.funds && cleanupPreview.funds.length > 0" style="margin-bottom: 20px;">
-                        <h4 style="color: #722ed1; margin-bottom: 10px;">💰 无用基金 ({{ cleanupPreview.funds.length }})</h4>
+                        <h4 style="color: #722ed1; margin-bottom: 10px;"><i class="ri-funds-line"></i> 无用基金 ({{ cleanupPreview.funds.length }})</h4>
                         <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：基金没有预测关联</p>
                         <div class="data-table">
                             <table>
@@ -1661,7 +1956,7 @@
                         <h4 style="color: #ff9800; margin-bottom: 10px;">🧪 测试数据 ({{ testData.summary.total }})</h4>
                         <div class="sub-actions" style="margin-bottom: 15px;">
                             <button class="action-btn warning small" @click="previewTestData">👁️ 预览测试数据</button>
-                            <button class="action-btn danger small" @click="cleanupTestData">🗑️ 一键清理测试数据</button>
+                            <button class="action-btn danger small" @click="cleanupTestData"><i class="ri-delete-bin-line"></i> 一键清理测试数据</button>
                         </div>
                         <div class="test-data-summary"
                             style="background: #fff3e0; padding: 15px; border-radius: 6px; margin-bottom: 15px;">
@@ -1695,7 +1990,7 @@
                     <div v-else-if="advice" class="advice-view">
                         <div class="advice-header">
                             <h2>
-                                💰 投资建议
+                                <i class="ri-line-chart-line"></i> 投资建议
                                 <span v-if="adviceIsNew" class="new-badge">新生成</span>
                             </h2>
                             <span class="advice-type-badge" :class="'advice-type-' + advice.advice_type">
@@ -1710,7 +2005,7 @@
                                 <span class="value">{{ advice.advice_date }}</span>
                             </div>
                             <div class="advice-meta-item">
-                                <span class="label">🎯 置信度：</span>
+                                <span class="label"><i class="ri-target-line"></i> 置信度：</span>
                                 <span class="value">{{ advice.confidence }}%</span>
                                 <div class="advice-confidence-bar">
                                     <div class="advice-confidence-fill" :style="{ width: advice.confidence + '%' }">
@@ -1839,7 +2134,7 @@
                     </div>
                     <div v-else class="advice-view">
                         <div class="advice-empty">
-                            <div class="advice-empty-icon">📊</div>
+                            <div class="advice-empty-icon"><i class="ri-line-chart-line"></i></div>
                             <h3>暂无投资建议</h3>
                             <p>点击下方按钮生成 AI 投资建议</p>
                             <div class="advice-actions" style="margin-top: 20px;">
@@ -1931,7 +2226,7 @@
                     <div v-if="postDetail.predictions && postDetail.predictions.length > 0"
                         class="detail-section"
                         style="margin-top: 16px; background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%); padding: 16px; border-radius: 8px;">
-                        <h4 style="color: #1890ff;">📊 分析结果</h4>
+                        <h4 style="color: #1890ff;"><i class="ri-bar-chart-line"></i> 分析结果</h4>
                         <div v-for="(pred, idx) in postDetail.predictions" :key="pred.id || idx"
                             style="background: #fff; padding: 12px; border-radius: 6px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                             <div style="margin-bottom: 6px;"><strong>板块：</strong>{{ pred.sector || '-' }} <span
@@ -1950,7 +2245,7 @@
                         </div>
                     </div>
                     <div class="detail-section" style="margin-top: 16px;">
-                        <h4>📝 帖子内容</h4>
+                        <h4><i class="ri-file-text-line"></i> 帖子内容</h4>
                         <p style="white-space: pre-wrap; line-height: 1.6; max-height: 400px; overflow-y: auto;">{{
                             postDetail.content }}</p>
                     </div>
@@ -1989,7 +2284,7 @@
                             viewpointDetail.summary }}</p>
                     </div>
                     <div v-if="viewpointDetail.is_summary" class="detail-section" style="margin-top: 16px; background: #e6f7ff; padding: 10px; border-radius: 6px;">
-                        <h4 style="color: #1890ff;">📊 汇总观点</h4>
+                        <h4 style="color: #1890ff;"><i class="ri-bar-chart-line"></i> 汇总观点</h4>
                         <p style="font-size: 13px; color: #666;">此观点由系统自动汇总 {{ viewpointDetail.original_count || 0 }} 条原始观点生成</p>
                     </div>
                     <div class="detail-section" style="margin-top: 16px;">
@@ -2048,7 +2343,7 @@
                     <div v-if="predictionDetail.is_expired && predictionDetail.verify_score !== null"
                         class="detail-section"
                         style="background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%); padding: 16px; border-radius: 8px; margin-top: 16px;">
-                        <h4 style="color: #1890ff;">📊 验证分数详情</h4>
+                        <h4 style="color: #1890ff;"><i class="ri-bar-chart-line"></i> 验证分数详情</h4>
                         <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 16px;">
                             <div style="font-size: 48px; font-weight: 700;"
                                 :style="{ color: (predictionDetail.verify_score || 0) >= 60 ? '#52c41a' : '#ff4d4f' }">
@@ -2264,7 +2559,7 @@
         </div>
         <div v-if="showTopBloggersModal" class="modal-overlay" @click.self="showTopBloggersModal = false">
             <div class="modal">
-                <div class="modal-header">🏆 TOP博主排行<button class="modal-close"
+                <div class="modal-header"><i class="ri-trophy-line"></i> TOP博主排行<button class="modal-close"
                         @click="showTopBloggersModal = false">×</button></div>
                 <div class="data-table" v-if="topBloggers.length > 0" style="box-shadow: none;">
                     <table>
@@ -2338,7 +2633,7 @@
         </div>
         <div v-if="showConfig" class="modal-overlay" @click.self="showConfig = false">
             <div class="modal wide">
-                <div class="modal-header">⚙️ 系统配置<button class="modal-close" @click="showConfig = false">×</button>
+                <div class="modal-header"><i class="ri-settings-3-line"></i> 系统配置<button class="modal-close" @click="showConfig = false">×</button>
                 </div>
                 <div v-if="configData">
                     <div class="config-item">
@@ -2417,7 +2712,7 @@
                         <input type="date" v-model="wechatPostDate">
                     </div>
                     <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
-                        💡 提示：从微信App中分享文章复制链接后粘贴到此处，支持一次粘贴多个链接
+                        <i class="ri-lightbulb-line"></i> 提示：从微信App中分享文章复制链接后粘贴到此处，支持一次粘贴多个链接
                     </p>
                 </div>
                 <div v-else class="loading" style="padding: 20px;">
@@ -2442,7 +2737,7 @@
                     </div>
                 </div>
                 <div v-if="wechatBatchSummary" style="background: #e6f7ff; padding: 10px; border-radius: 8px; margin-bottom: 12px; font-size: 13px;">
-                    📊 {{ wechatBatchSummary }}
+                    <i class="ri-bar-chart-line"></i> {{ wechatBatchSummary }}
                 </div>
                 <div class="modal-footer">
                     <button class="modal-btn default" @click="showWeChatFetch = false">关闭</button>
@@ -2455,7 +2750,7 @@
         </div>
         <div v-if="showSummaryConfirmModal" class="modal-overlay" @click.self="showSummaryConfirmModal = false">
             <div class="modal" style="max-width: 450px;">
-                <div class="modal-header">📊 确认汇总观点<button class="modal-close"
+                <div class="modal-header"><i class="ri-bar-chart-line"></i> 确认汇总观点<button class="modal-close"
                         @click="showSummaryConfirmModal = false">×</button></div>
                 <div style="padding: 16px;">
                     <p style="margin-bottom: 12px;">将汇总以下日期的观点：</p>
@@ -2534,6 +2829,13 @@
         const { createApp, ref, reactive, onMounted, computed } = Vue;
         createApp({
             setup() {
+                // 主题切换
+                const theme = ref(localStorage.getItem('theme') || 'light');
+                const toggleTheme = () => {
+                    theme.value = theme.value === 'light' ? 'dark' : 'light';
+                    document.documentElement.setAttribute('data-theme', theme.value);
+                    localStorage.setItem('theme', theme.value);
+                };
                 const loading = ref(true), currentView = ref('bloggers'), stats = ref({}), bloggers = ref([]), posts = ref([]), predictions = ref([]), viewpoints = ref([]), funds = ref([]);
                 // 密码认证相关
                 const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false), passwordError = ref(''), authReady = ref(false);
@@ -2577,7 +2879,14 @@
                     }
                     passwordVerifying.value = false;
                 };
-                onMounted(() => { checkAuth(); window.addEventListener('auth-required', () => { showPasswordModal.value = true; passwordError.value = '密码已失效，请重新输入'; authReady.value = false; }); });
+                onMounted(() => {
+                    // 初始化主题
+                    const savedTheme = localStorage.getItem('theme') || 'light';
+                    theme.value = savedTheme;
+                    document.documentElement.setAttribute('data-theme', savedTheme);
+                    checkAuth();
+                    window.addEventListener('auth-required', () => { showPasswordModal.value = true; passwordError.value = '密码已失效，请重新输入'; authReady.value = false; });
+                });
                 const predictionFilter = ref('all');
                 const fundFilter = ref('has_prediction');
                 const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false), summarizing = ref(false), summaryStats = ref(null), showSummaryConfirmModal = ref(false);
@@ -2749,7 +3058,7 @@ const fetchWeChatBatch = async () => {
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
             }
         }).mount('#app');
     </script>
