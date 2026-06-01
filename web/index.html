@@ -2106,12 +2106,12 @@
                                     <td>{{ p.fund_name || p.fund_code || p.sector || '-' }}</td>
                                     <td>{{ p.blogger_name }}</td>
                                     <td>{{ p.prediction_type === 'up' ? '看涨' : p.prediction_type === 'down' ? '看跌' :
-                                        '中性' }}</td>
+                                        '观望' }}</td>
                                     <td>{{ p.confidence }}%</td>
                                     <td>{{ p.target_date }}</td>
                                     <td><span class="status-badge"
-                                            :class="'status-' + (p.is_expired ? (p.is_correct ? 'success' : 'failed') : 'pending')">{{
-                                            p.is_expired ? (p.is_correct ? '正确' : '错误') : '待验证' }}</span></td>
+                                            :class="p.prediction_type === 'flat' ? 'status-pending' : 'status-' + (p.is_expired ? (p.is_correct ? 'success' : 'failed') : 'pending')">{{
+                                            p.prediction_type === 'flat' ? '不计准确率' : (p.is_expired ? (p.is_correct ? '正确' : '错误') : '待验证') }}</span></td>
                                     <td>
                                         <div class="row-actions"><button v-if="p.is_expired" class="row-btn primary"
                                                 @click="viewPredictionDetail(p.id)">详情</button><button
@@ -2679,8 +2679,8 @@
                                     v-if="pred.sector_type" style="color: #666;">({{ pred.sector_type }})</span></div>
                             <div style="margin-bottom: 6px;"><strong>方向：</strong><span
                                     :style="{ color: pred.prediction_type === 'up' ? '#52c41a' : pred.prediction_type === 'down' ? '#ff4d4f' : '#666' }">{{
-                                    pred.prediction_type === 'up' ? '看涨' : pred.prediction_type === 'down' ? '看跌' : '中性'
-                                    }}</span></div>
+                                    pred.prediction_type === 'up' ? '看涨' : pred.prediction_type === 'down' ? '看跌' : '观望'
+                                    }}</span><span v-if="pred.prediction_type === 'flat'" style="color: #999; font-size: 12px; margin-left: 6px;">(不计准确率)</span></div>
                             <div style="margin-bottom: 6px;"><strong>预测：</strong>{{ pred.prediction_content || '-' }}
                             </div>
                             <div style="margin-bottom: 6px;"><strong>周期：</strong>{{ pred.prediction_period || '-' }} |
@@ -2761,7 +2761,7 @@
                         <div class="detail-item"><label>预测方向：</label><span class="status-badge"
                                 :class="'status-' + (predictionDetail.prediction_type === 'up' ? 'success' : predictionDetail.prediction_type === 'down' ? 'failed' : 'pending')">{{
                                 predictionDetail.prediction_type === 'up' ? '看涨' : predictionDetail.prediction_type ===
-                                'down' ? '看跌' : '中性' }}</span></div>
+                                'down' ? '看跌' : '观望' }}</span><span v-if="predictionDetail.prediction_type === 'flat'" style="color: #999; font-size: 12px; margin-left: 8px;">观望类预测不参与准确率计算</span></div>
                         <div class="detail-item"><label>置信度：</label><span>{{ predictionDetail.confidence }}%</span>
                         </div>
                         <div class="detail-item"><label>预测日期：</label><span>{{ predictionDetail.prediction_date }}</span>

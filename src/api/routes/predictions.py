@@ -175,6 +175,7 @@ async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session 
     pending_count = db.query(Prediction).filter(
         Prediction.status == 'pending',
         Prediction.is_deleted == False,
+        Prediction.prediction_type != 'flat',
         Prediction.target_date <= today + timedelta(days=7)
     ).count()
     

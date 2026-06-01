@@ -72,7 +72,8 @@ def recalculate_blogger_stats(db: Session, blogger_id: int) -> Dict:
     ).filter(
         Prediction.blogger_id == blogger_id,
         Prediction.is_deleted == False,
-        Prediction.verify_count > 0
+        Prediction.verify_count > 0,
+        Prediction.prediction_type != 'flat'
     ).first()
     
     verified_count = stats.verified or 0

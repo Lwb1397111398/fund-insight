@@ -457,7 +457,16 @@ class PredictionVerifyService:
         
         if not prediction:
             return {"success": False, "message": "预测不存在"}
-        
+
+        # 中性预测（flat/震荡）不参与验证和准确率计算
+        if prediction.prediction_type == 'flat':
+            return {
+                "success": True,
+                "message": "中性预测（观望）不参与验证",
+                "skipped": True,
+                "skip_reason": "neutral"
+            }
+
         logger.info(f"[Verify] 开始验证预测 {prediction_id}: fund_code={prediction.fund_code}, fund_name={prediction.fund_name}, sector={prediction.sector}, target_date={prediction.target_date}")
         
         fund_code, fund_name = self.match_fund_for_prediction(prediction)
@@ -744,6 +753,7 @@ class PredictionVerifyService:
         all_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
+            Prediction.prediction_type != 'flat',
             Prediction.target_date <= today + timedelta(days=7)
         ).all()
 
@@ -854,6 +864,7 @@ class PredictionVerifyService:
         expired_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
+            Prediction.prediction_type != 'flat',
             Prediction.target_date < today,
             Prediction.target_date >= grace_cutoff
         ).all()
@@ -1032,7 +1043,8 @@ class PredictionVerifyService:
         predictions = self.db.query(Prediction).filter(
             Prediction.status.in_(['success', 'failed']),
             Prediction.verify_count > 0,
-            Prediction.is_deleted == False
+            Prediction.is_deleted == False,
+            Prediction.prediction_type != 'flat'
         ).all()
         
         total_checked = len(predictions)
