@@ -854,6 +854,91 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
 async def startup_event():
     init_db()
     config.load_persisted_config()
+
+    # 自动创建缺失的索引
+    try:
+        from src.models.database import engine
+        from sqlalchemy import text
+        import sqlite3
+
+        db_url = str(engine.url)
+        if db_url.startswith('sqlite'):
+            # SQLite: 直接使用 sqlite3 创建索引
+            db_path = db_url.replace('sqlite:///', '')
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            indexes = [
+                ("ix_posts_blogger_id", "posts", ["blogger_id"]),
+                ("ix_posts_post_date", "posts", ["post_date"]),
+                ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
+                ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
+                ("ix_predictions_status", "predictions", ["status"]),
+                ("ix_predictions_fund_code", "predictions", ["fund_code"]),
+                ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
+                ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
+                ("ix_predictions_target_date", "predictions", ["target_date"]),
+                ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
+                ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
+                ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
+                ("ix_viewpoints_source", "viewpoints", ["source"]),
+                ("ix_bloggers_platform", "bloggers", ["platform"]),
+                ("ix_bloggers_is_active", "bloggers", ["is_active"]),
+            ]
+
+            created_count = 0
+            for idx_name, table, columns in indexes:
+                try:
+                    cols = ", ".join(columns)
+                    cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})")
+                    if cursor.rowcount == 0:
+                        # 索引已存在
+                        pass
+                    else:
+                        created_count += 1
+                except Exception:
+                    pass
+
+            conn.commit()
+            conn.close()
+            if created_count > 0:
+                print(f"[Startup] 自动创建了 {created_count} 个索引")
+        else:
+            # PostgreSQL: 使用 SQLAlchemy 创建索引
+            with engine.connect() as conn:
+                indexes = [
+                    ("ix_posts_blogger_id", "posts", ["blogger_id"]),
+                    ("ix_posts_post_date", "posts", ["post_date"]),
+                    ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
+                    ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
+                    ("ix_predictions_status", "predictions", ["status"]),
+                    ("ix_predictions_fund_code", "predictions", ["fund_code"]),
+                    ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
+                    ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
+                    ("ix_predictions_target_date", "predictions", ["target_date"]),
+                    ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
+                    ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
+                    ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
+                    ("ix_viewpoints_source", "viewpoints", ["source"]),
+                    ("ix_bloggers_platform", "bloggers", ["platform"]),
+                    ("ix_bloggers_is_active", "bloggers", ["is_active"]),
+                ]
+
+                created_count = 0
+                for idx_name, table, columns in indexes:
+                    try:
+                        cols = ", ".join(columns)
+                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})"))
+                        created_count += 1
+                    except Exception:
+                        pass
+
+                conn.commit()
+                if created_count > 0:
+                    print(f"[Startup] 自动创建了 {created_count} 个索引")
+    except Exception as e:
+        print(f"[Startup] 索引创建检查失败: {e}")
+
     print(f"[Startup] Fund Insight API v2.0.0 已启动")
     print(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
     print(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")

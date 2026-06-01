@@ -141,13 +141,14 @@ async def delete_blogger(
 ):
     """删除博主"""
     service = BloggerService(db)
-    
-    if not service.delete(blogger_id):
-        raise HTTPException(status_code=404, detail="博主不存在")
-    
+
+    success, message = service.safe_delete(blogger_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+
     return {
         "success": True,
-        "message": "博主已删除"
+        "message": message
     }
 
 

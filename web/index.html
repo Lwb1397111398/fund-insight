@@ -1487,6 +1487,224 @@
             font-size: 11px;
             margin-right: var(--space-1);
         }
+
+        /* ===== 响应式设计 ===== */
+
+        /* 平板设备 (768px 以下) */
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: var(--space-3);
+            }
+
+            .header-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            .stats-mini-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+
+            .action-bar {
+                flex-direction: column;
+            }
+
+            .action-btn {
+                min-width: 100%;
+            }
+
+            .detail-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .modal-content {
+                width: 95%;
+                max-height: 90vh;
+                margin: var(--space-2);
+            }
+
+            .table-responsive {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .table-responsive table {
+                min-width: 600px;
+            }
+
+            .card-header {
+                flex-direction: column;
+                gap: var(--space-2);
+            }
+
+            .card-header .actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+
+            .blogger-stats {
+                flex-wrap: wrap;
+                gap: var(--space-2);
+            }
+
+            .blogger-stats .stat {
+                flex: 1;
+                min-width: 80px;
+            }
+
+            .tabs {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                flex-wrap: nowrap;
+            }
+
+            .tab {
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
+        }
+
+        /* 手机设备 (480px 以下) */
+        @media (max-width: 480px) {
+            .container {
+                padding: var(--space-2);
+            }
+
+            .stats-mini-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: var(--space-2);
+            }
+
+            .stat-mini .value {
+                font-size: 20px;
+            }
+
+            .stat-mini .label {
+                font-size: 11px;
+            }
+
+            .header {
+                padding: var(--space-3);
+            }
+
+            .header h1 {
+                font-size: 18px;
+            }
+
+            .header p {
+                font-size: 12px;
+            }
+
+            .card {
+                margin-bottom: var(--space-2);
+            }
+
+            .card-body {
+                padding: var(--space-3);
+            }
+
+            .btn {
+                padding: var(--space-2) var(--space-3);
+                font-size: 13px;
+            }
+
+            .modal-header {
+                padding: var(--space-3);
+            }
+
+            .modal-body {
+                padding: var(--space-3);
+            }
+
+            .modal-footer {
+                padding: var(--space-3);
+                flex-direction: column;
+            }
+
+            .modal-footer .btn {
+                width: 100%;
+            }
+
+            .form-group {
+                margin-bottom: var(--space-3);
+            }
+
+            .form-group label {
+                font-size: 13px;
+            }
+
+            .form-group input,
+            .form-group select,
+            .form-group textarea {
+                font-size: 16px; /* 防止 iOS 缩放 */
+            }
+
+            .blogger-card {
+                padding: var(--space-3);
+            }
+
+            .blogger-info {
+                flex-direction: column;
+                gap: var(--space-2);
+            }
+
+            .blogger-stats {
+                flex-direction: column;
+            }
+
+            .blogger-stats .stat {
+                flex: none;
+                width: 100%;
+                text-align: left;
+                display: flex;
+                justify-content: space-between;
+                padding: var(--space-1) 0;
+                border-bottom: 1px solid var(--color-border);
+            }
+
+            .blogger-stats .stat:last-child {
+                border-bottom: none;
+            }
+
+            .post-card {
+                padding: var(--space-3);
+            }
+
+            .post-meta {
+                flex-direction: column;
+                gap: var(--space-1);
+            }
+
+            .prediction-card {
+                padding: var(--space-3);
+            }
+
+            .prediction-header {
+                flex-direction: column;
+                gap: var(--space-2);
+            }
+
+            .prediction-metrics {
+                flex-direction: column;
+                gap: var(--space-2);
+            }
+
+            .nav-tabs {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                flex-wrap: nowrap;
+                padding-bottom: var(--space-2);
+            }
+
+            .nav-tab {
+                white-space: nowrap;
+                flex-shrink: 0;
+                font-size: 13px;
+                padding: var(--space-2) var(--space-3);
+            }
+        }
     </style>
 </head>
 
