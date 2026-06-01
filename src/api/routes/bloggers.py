@@ -41,14 +41,24 @@ async def get_bloggers(
         bloggers = service.get_all(skip=skip, limit=limit)
     
     cutoff_date = date.today() - timedelta(days=7)
-    
+
+    # 批量查询活跃帖子数，避免 N+1 问题
+    blogger_ids = [b.id for b in bloggers]
+    active_count_map = {}
+    if blogger_ids:
+        active_counts = db.query(
+            Prediction.blogger_id,
+            func.count(distinct(Prediction.post_id))
+        ).filter(
+            Prediction.blogger_id.in_(blogger_ids),
+            Prediction.target_date >= cutoff_date
+        ).group_by(Prediction.blogger_id).all()
+        active_count_map = {bid: cnt for bid, cnt in active_counts}
+
     result = []
     for b in bloggers:
-        active_posts_count = db.query(func.count(distinct(Prediction.post_id))).filter(
-            Prediction.blogger_id == b.id,
-            Prediction.target_date >= cutoff_date
-        ).scalar() or 0
-        
+        active_posts_count = active_count_map.get(b.id, 0)
+
         result.append({
             "id": b.id,
             "name": b.name,

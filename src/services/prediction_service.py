@@ -424,18 +424,20 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             失败预测列表
         """
-        failed = self.db.query(Prediction).filter(
+        failed = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.fund_code.isnot(None),
             Prediction.is_expired == True,
             Prediction.is_correct == False
         ).all()
-        
+
         result = []
         for p in failed:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
             result.append({
                 "id": p.id,
-                "blogger_name": blogger.name if blogger else "未知",
+                "blogger_name": blogger_name,
                 "fund_code": p.fund_code,
                 "fund_name": p.fund_name,
                 "sector": p.sector,
@@ -461,21 +463,23 @@ class PredictionService(BaseService[Prediction]):
         today = date.today()
         target_date_limit = today + timedelta(days=days)
         
-        expiring = self.db.query(Prediction).filter(
+        expiring = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.fund_code.isnot(None),
             Prediction.is_expired == False,
             Prediction.target_date <= target_date_limit,
             Prediction.target_date >= today
         ).all()
-        
+
         result = []
         for p in expiring:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
             days_remaining = (p.target_date - today).days if p.target_date else 0
             
             result.append({
                 "id": p.id,
-                "blogger_name": blogger.name if blogger else "未知",
+                "blogger_name": blogger_name,
                 "fund_code": p.fund_code,
                 "fund_name": p.fund_name,
                 "sector": p.sector,
@@ -503,19 +507,21 @@ class PredictionService(BaseService[Prediction]):
         anomalies = []
         
         # 高信心但失败的预测
-        high_confidence_failed = self.db.query(Prediction).filter(
+        high_confidence_failed = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.is_expired == True,
             Prediction.is_correct == False,
             Prediction.confidence >= 80
         ).all()
-        
+
         for p in high_confidence_failed:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
             anomalies.append({
                 "id": p.id,
                 "type": "high_confidence_failed",
                 "severity": "high",
-                "blogger_name": blogger.name if blogger else "未知",
+                "blogger_name": blogger_name,
                 "fund_code": p.fund_code,
                 "fund_name": p.fund_name,
                 "prediction_type": p.prediction_type,
@@ -525,25 +531,29 @@ class PredictionService(BaseService[Prediction]):
             })
         
         # 方向严重偏离的预测
-        large_deviation = self.db.query(Prediction).filter(
+        large_deviation = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.is_expired == True,
             Prediction.prediction_type == 'up',
             Prediction.actual_change < -5
         ).all()
-        
-        large_deviation += self.db.query(Prediction).filter(
+
+        large_deviation += self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.is_expired == True,
             Prediction.prediction_type == 'down',
             Prediction.actual_change > 5
         ).all()
-        
+
         for p in large_deviation:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
             anomalies.append({
                 "id": p.id,
                 "type": "large_deviation",
                 "severity": "medium",
-                "blogger_name": blogger.name if blogger else "未知",
+                "blogger_name": blogger_name,
                 "fund_code": p.fund_code,
                 "fund_name": p.fund_name,
                 "prediction_type": p.prediction_type,
@@ -552,23 +562,25 @@ class PredictionService(BaseService[Prediction]):
             })
         
         # 长期未验证的预测
-        long_unverified = self.db.query(Prediction).filter(
+        long_unverified = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.is_expired == False,
             Prediction.fund_code.isnot(None),
             Prediction.verify_count == 0
         ).all()
-        
+
         today = date.today()
         for p in long_unverified:
             if p.prediction_date:
                 days_since = (today - p.prediction_date).days
                 if days_since > 14:
-                    blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+                    blogger_name = p.blogger.name if p.blogger else "未知"
                     anomalies.append({
                         "id": p.id,
                         "type": "long_unverified",
                         "severity": "low",
-                        "blogger_name": blogger.name if blogger else "未知",
+                        "blogger_name": blogger_name,
                         "fund_code": p.fund_code,
                         "fund_name": p.fund_name,
                         "prediction_date": p.prediction_date.isoformat(),
@@ -601,8 +613,10 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             预测数据列表
         """
-        query = self.db.query(Prediction).filter(Prediction.fund_code.isnot(None))
-        
+        query = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(Prediction.fund_code.isnot(None))
+
         if blogger_id:
             query = query.filter(Prediction.blogger_id == blogger_id)
         
@@ -624,11 +638,12 @@ class PredictionService(BaseService[Prediction]):
         
         result = []
         for p in predictions:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
+            blogger_grade = p.blogger.grade if p.blogger else "C"
             result.append({
                 "id": p.id,
-                "blogger_name": blogger.name if blogger else "未知",
-                "blogger_grade": blogger.grade if blogger else "C",
+                "blogger_name": blogger_name,
+                "blogger_grade": blogger_grade,
                 "fund_code": p.fund_code,
                 "fund_name": p.fund_name,
                 "sector": p.sector,
@@ -668,7 +683,9 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             历史预测数据
         """
-        query = self.db.query(Prediction).filter(
+        query = self.db.query(Prediction).options(
+            joinedload(Prediction.blogger)
+        ).filter(
             Prediction.is_expired == True,
             Prediction.fund_code.isnot(None)
         )
@@ -688,16 +705,17 @@ class PredictionService(BaseService[Prediction]):
         total_change = 0
         
         for p in predictions:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
+            blogger_grade = p.blogger.grade if p.blogger else "C"
             if p.is_correct:
                 correct_count += 1
             if p.actual_change:
                 total_change += p.actual_change
-            
+
             result.append({
                 "id": p.id,
-                "blogger_name": blogger.name if blogger else "未知",
-                "blogger_grade": blogger.grade if blogger else "C",
+                "blogger_name": blogger_name,
+                "blogger_grade": blogger_grade,
                 "fund_code": p.fund_code,
                 "fund_name": p.fund_name,
                 "sector": p.sector,

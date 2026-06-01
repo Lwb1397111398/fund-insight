@@ -4,7 +4,7 @@
 """
 from typing import List, Optional, Dict, Tuple, Any
 from datetime import date, datetime
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from .base import BaseService
@@ -173,22 +173,22 @@ class PostService(BaseService[Post]):
         Returns:
             帖子列表（包含博主名称）
         """
-        query = self.db.query(Post)
-        
+        query = self.db.query(Post).options(joinedload(Post.blogger))
+
         if blogger_id:
             query = query.filter(Post.blogger_id == blogger_id)
         if analyzed is not None:
             query = query.filter(Post.analyzed == analyzed)
-        
+
         posts = query.order_by(Post.post_date.desc()).offset(skip).limit(limit).all()
-        
+
         result = []
         for p in posts:
-            blogger = self.db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger_name = p.blogger.name if p.blogger else "未知"
             result.append({
                 "id": p.id,
                 "blogger_id": p.blogger_id,
-                "blogger_name": blogger.name if blogger else "未知",
+                "blogger_name": blogger_name,
                 "title": p.title,
                 "content": p.content[:200] + "..." if len(p.content) > 200 else p.content,
                 "post_date": p.post_date.isoformat() if p.post_date else None,

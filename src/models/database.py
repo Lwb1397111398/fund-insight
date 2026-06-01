@@ -83,6 +83,11 @@ class Blogger(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+    __table_args__ = (
+        Index('ix_bloggers_platform', 'platform'),
+        Index('ix_bloggers_is_active', 'is_active'),
+    )
+
 
 class Post(Base):
     """帖子表 - 支持自动分析"""
@@ -98,8 +103,16 @@ class Post(Base):
     analyzed = Column(Boolean, default=False)
     analysis_result = Column(JSON)
     auto_titled = Column(Boolean, default=False)
-    
+
     created_at = Column(DateTime, default=datetime.now)
+
+    blogger = relationship("Blogger", foreign_keys="Post.blogger_id", primaryjoin="Post.blogger_id == Blogger.id", lazy="select")
+
+    __table_args__ = (
+        Index('ix_posts_blogger_id', 'blogger_id'),
+        Index('ix_posts_post_date', 'post_date'),
+        Index('ix_posts_blogger_date', 'blogger_id', 'post_date'),
+    )
 
 
 class Prediction(Base):
@@ -158,6 +171,15 @@ class Prediction(Base):
     
     blogger = relationship("Blogger", foreign_keys=[blogger_id], lazy="select")
     post = relationship("Post", foreign_keys=[post_id], lazy="select")
+
+    __table_args__ = (
+        Index('ix_predictions_blogger_id', 'blogger_id'),
+        Index('ix_predictions_status', 'status'),
+        Index('ix_predictions_fund_code', 'fund_code'),
+        Index('ix_predictions_is_deleted', 'is_deleted'),
+        Index('ix_predictions_blogger_status', 'blogger_id', 'status', 'is_deleted'),
+        Index('ix_predictions_target_date', 'target_date'),
+    )
 
 
 class Viewpoint(Base):
@@ -275,6 +297,13 @@ class Viewpoint(Base):
             'action_suggestion': self.action_suggestion,
             'risk_level': self.risk_level
         }
+
+    __table_args__ = (
+        Index('ix_viewpoints_is_deleted', 'is_deleted'),
+        Index('ix_viewpoints_viewpoint_date', 'viewpoint_date'),
+        Index('ix_viewpoints_blogger_id', 'blogger_id'),
+        Index('ix_viewpoints_source', 'source'),
+    )
 
 
 class CrawlerArticleRecord(Base):
