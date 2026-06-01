@@ -146,13 +146,14 @@
     <script>
         async function loadStatus() {
             try {
-                const res = await axios.get('/api/cleanup/status');
+                const res = await axios.get('/api/config/cleanup/preview');
                 if (res.data.success) {
                     const data = res.data.data;
-                    document.getElementById('expired-predictions').textContent = data.expired_predictions || 0;
-                    document.getElementById('expired-viewpoints').textContent = data.expired_viewpoints || 0;
-                    document.getElementById('affected-posts').textContent = data.affected_posts || 0;
-                    document.getElementById('cutoff-date').textContent = data.cutoff_date || '-';
+                    const summary = data.summary || {};
+                    document.getElementById('expired-predictions').textContent = summary.predictions_count || 0;
+                    document.getElementById('expired-viewpoints').textContent = summary.viewpoints_count || 0;
+                    document.getElementById('affected-posts').textContent = summary.posts_count || 0;
+                    document.getElementById('cutoff-date').textContent = new Date().toISOString().substring(0, 10);
                 } else {
                     showMessage('获取状态失败: ' + res.data.message, 'error');
                 }
@@ -175,18 +176,19 @@
             resultBox.style.display = 'none';
 
             try {
-                const res = await axios.post('/api/cleanup/run');
+                const res = await axios.post('/api/config/cleanup');
                 
                 if (res.data.success) {
                     const data = res.data.data;
                     const predictions = data.predictions || {};
                     const viewpoints = data.viewpoints || {};
-                    
+
                     resultBox.className = 'result-box success';
                     resultBox.innerHTML = `
                         <h3><i class="ri-check-line"></i> 清理完成</h3>
-                        <p><strong>预测清理：</strong>删除 ${predictions.deleted_predictions || 0} 个预测，清理 ${predictions.cleaned_posts || 0} 个空帖子</p>
-                        <p><strong>观点清理：</strong>删除 ${viewpoints.deleted_viewpoints || 0} 个观点</p>
+                        <p><strong>预测清理：</strong>删除 ${predictions.deleted || 0} 个预测</p>
+                        <p><strong>观点清理：</strong>删除 ${viewpoints.deleted || 0} 个观点</p>
+                        <p><strong>总计：</strong>删除 ${data.total_deleted || 0} 项</p>
                     `;
                     resultBox.style.display = 'block';
                     showMessage('清理任务执行成功！', 'success');

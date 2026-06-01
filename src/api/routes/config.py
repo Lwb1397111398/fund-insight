@@ -158,6 +158,62 @@ async def run_cleanup():
         }
 
 
+@router.post("/cleanup/oldest")
+async def cleanup_oldest_batch(days: int = 7, limit: int = 100):
+    """
+    温和清理：只清理最老的一批过期数据
+
+    与 /cleanup 的区别：
+    - /cleanup 清理所有过期数据
+    - /cleanup/oldest 只清理过期最久的那一批，每批限制数量，避免一次性清理过多影响博主统计
+
+    Args:
+        days: 额外回溯天数，默认7天。即清理过期超过(7+days)天的数据
+        limit: 每类数据最多清理条数，默认100
+    """
+    try:
+        from src.tasks.cleanup_tasks import get_cleanup_manager
+
+        manager = get_cleanup_manager()
+        result = manager.cleanup_oldest_batch(batch_days=days, limit=limit)
+
+        if result.get("success"):
+            predictions = result.get("predictions", {})
+            viewpoints = result.get("viewpoints", {})
+            total = result.get("total_deleted", 0)
+
+            parts = []
+            pred_count = predictions.get("deleted_predictions", 0)
+            vp_count = viewpoints.get("deleted_viewpoints", 0)
+            if pred_count > 0:
+                parts.append(f"{pred_count} 个过期预测")
+            if vp_count > 0:
+                parts.append(f"{vp_count} 个过期观点")
+
+            if parts:
+                message = f"温和清理完成，共删除 {total} 项：{', '.join(parts)}"
+            else:
+                message = "温和清理完成，没有需要清理的最老数据"
+
+            return {
+                "success": True,
+                "message": message,
+                "data": result
+            }
+        else:
+            return {
+                "success": False,
+                "message": "温和清理失败",
+                "data": result
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"温和清理失败: {str(e)}",
+            "data": None
+        }
+
+
 @router.get("/cleanup/preview")
 async def get_cleanup_preview(db: Session = Depends(get_db)):
     """

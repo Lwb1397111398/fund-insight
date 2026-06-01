@@ -355,6 +355,130 @@ class CleanupManager:
         finally:
             db.close()
     
+    def cleanup_oldest_batch(self, batch_days: int = 7, limit: int = 100) -> dict:
+        """
+        温和清理：只清理最老的一批过期数据，避免一次性清理过多影响博主统计
+
+        与 run_full_cleanup 的区别：
+        - run_full_cleanup 清理所有过期数据（target_date < 今天-7天）
+        - cleanup_oldest_batch 只清理过期最久的数据（target_date < 今天-7-batch_days天），且限制数量
+
+        Args:
+            batch_days: 额外回溯天数，默认7天。即清理 target_date < 今天-14天 的数据
+            limit: 每类数据最多清理条数，默认100
+        """
+        logger.info(f"开始温和清理: batch_days={batch_days}, limit={limit}")
+
+        # 清理最老的过期预测
+        prediction_result = self._cleanup_oldest_predictions(batch_days, limit)
+
+        # 清理最老的过期观点
+        viewpoint_result = self._cleanup_oldest_viewpoints(batch_days, limit)
+
+        total_deleted = (
+            prediction_result.get("deleted_predictions", 0) +
+            viewpoint_result.get("deleted_viewpoints", 0)
+        )
+
+        result = {
+            "success": prediction_result.get("success", False) and viewpoint_result.get("success", False),
+            "predictions": prediction_result,
+            "viewpoints": viewpoint_result,
+            "total_deleted": total_deleted,
+            "batch_days": batch_days,
+            "limit": limit,
+            "timestamp": date.today().isoformat()
+        }
+
+        logger.info(f"温和清理完成: 共删除 {total_deleted} 项")
+        return result
+
+    def _cleanup_oldest_predictions(self, batch_days: int, limit: int) -> dict:
+        """清理最老的一批过期预测"""
+        db = self._get_db()
+        try:
+            # 清理条件：target_date < 今天 - 7(保留) - batch_days(回溯)
+            cutoff_date = date.today() - timedelta(days=7 + batch_days)
+
+            expired_predictions = db.query(Prediction).filter(
+                Prediction.target_date < cutoff_date,
+                Prediction.is_deleted == False
+            ).order_by(Prediction.target_date.asc()).limit(limit).all()
+
+            if not expired_predictions:
+                return {"success": True, "deleted_predictions": 0, "cleaned_posts": 0}
+
+            prediction_data = []
+            for p in expired_predictions:
+                prediction_data.append({
+                    'id': p.id,
+                    'post_id': p.post_id,
+                    'blogger_id': p.blogger_id,
+                    'verify_count': p.verify_count,
+                    'verify_score': p.verify_score,
+                    'is_correct': p.is_correct
+                })
+
+            affected_posts = set(p['post_id'] for p in prediction_data)
+            deleted_count = 0
+
+            verify_service = PredictionVerifyService(db)
+
+            for data in prediction_data:
+                if data['verify_count'] and data['verify_count'] > 0:
+                    verify_service.update_blogger_on_prediction_delete(
+                        blogger_id=data['blogger_id'],
+                        verify_score=data['verify_score'],
+                        is_correct=data['is_correct']
+                    )
+
+                db.query(Prediction).filter(Prediction.id == data['id']).delete()
+                deleted_count += 1
+
+            db.commit()
+
+            cleaned_posts = self._cleanup_empty_posts(db, affected_posts)
+
+            logger.info(f"温和清理预测完成: 删除 {deleted_count} 个, 清理 {cleaned_posts} 个空帖子")
+            return {
+                "success": True,
+                "deleted_predictions": deleted_count,
+                "cleaned_posts": cleaned_posts
+            }
+        except Exception as e:
+            db.rollback()
+            logger.error(f"温和清理预测失败: {e}")
+            return {"success": False, "error": str(e), "deleted_predictions": 0, "cleaned_posts": 0}
+        finally:
+            db.close()
+
+    def _cleanup_oldest_viewpoints(self, batch_days: int, limit: int) -> dict:
+        """清理最老的一批过期观点"""
+        db = self._get_db()
+        try:
+            cutoff_date = date.today() - timedelta(days=7 + batch_days)
+
+            old_viewpoints = db.query(Viewpoint).filter(
+                Viewpoint.viewpoint_date < cutoff_date
+            ).order_by(Viewpoint.viewpoint_date.asc()).limit(limit).all()
+
+            deleted_count = 0
+            for viewpoint in old_viewpoints:
+                db.delete(viewpoint)
+                deleted_count += 1
+
+            if deleted_count > 0:
+                db.commit()
+
+            logger.info(f"温和清理观点完成: 删除 {deleted_count} 个")
+            return {"success": True, "deleted_viewpoints": deleted_count}
+        except Exception as e:
+            db.rollback()
+            logger.error(f"温和清理观点失败: {e}")
+            return {"success": False, "error": str(e), "deleted_viewpoints": 0}
+        finally:
+            db.close()
+
     def run_full_cleanup(self) -> dict:
         """运行完整清理"""
         logger.info("开始自动清理任务...")
