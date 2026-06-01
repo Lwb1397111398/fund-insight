@@ -54,11 +54,12 @@ async def generate_advice(request: GenerateAdviceRequest = None, db: Session = D
         
         # 准备引用的预测数据摘要
         referenced_predictions = []
-        for p in data["predictions"][:20]:  # 最多保存20条预测
+        for p in data["predictions"][:20]:
             referenced_predictions.append({
                 "blogger_name": p.get("blogger_name", ""),
                 "sector": p.get("sector", ""),
                 "prediction_type": p.get("prediction_type", ""),
+                "prediction_content": p.get("prediction_content", ""),
                 "confidence": p.get("confidence", 50),
                 "days_to_target": p.get("days_to_target", 0)
             })

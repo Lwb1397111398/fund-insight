@@ -1449,14 +1449,16 @@ class LLMAnalyzer:
         
         near_count = sum(1 for p in predictions if p.get('term') == 'near')
         mid_count = len(predictions) - near_count
-        
+        flat_count = sum(1 for p in predictions if p.get('prediction_type') == 'flat')
+
         prediction_data = []
         for p in predictions[:30]:
             blogger_name = p.get('blogger_name', '')
             blogger_info = blogger_info_map.get(blogger_name, {})
             grade = blogger_info.get('grade', 'C')
             pred_type = p.get('prediction_type', '')
-            prediction_data.append({
+            content = p.get('prediction_content', '')
+            entry = {
                 "b": blogger_name[:8],
                 "g": grade,
                 "s": p.get('sector', ''),
@@ -1464,10 +1466,13 @@ class LLMAnalyzer:
                 "c": p.get('confidence', 50),
                 "d": p.get('days_to_target', 0),
                 "tm": p.get('term', 'mid')[0]
-            })
-        
+            }
+            if content:
+                entry["txt"] = content[:80]
+            prediction_data.append(entry)
+
         prompt = f"""分析预测数据(共{len(prediction_data)}条):
-近期(7天内):{near_count}条,中期:{mid_count}条
+近期(7天内):{near_count}条,中期:{mid_count}条,观望:{flat_count}条
 
 【观点摘要】
 {json.dumps(viewpoint_summary, ensure_ascii=False)}
@@ -1475,11 +1480,24 @@ class LLMAnalyzer:
 【预测数据】
 {json.dumps(prediction_data, ensure_ascii=False)}
 
-字段:b=博主,g=等级(A-D),s=板块,t=方向(U涨/D跌/N震荡),c=信心,d=剩余天数,tm=周期(n近/m中)
-规则:A级权重最高,D级权重最低
+字段说明:
+- b=博主, g=等级(A-D), s=板块, c=信心, d=剩余天数, tm=周期(n近/m中)
+- t=方向: U=看涨(博主明确看好), D=看跌(博主明确看空), N=观望(博主未下判断)
+- txt=博主原话摘要
+
+【重要】N(观望/中性)的含义:
+- N代表博主认为"现在不是下手的好时机"，需要再观望
+- N不是方向判断，不构成看涨或看跌信号
+- 统计板块趋势时，N不应计入bullish或bearish
+- N仅代表市场存在犹豫情绪，可作为风险参考
+
+规则:
+- A级博主权重最高,D级权重最低
+- 高置信度预测(high_confidence_predictions)只包含U和D，不包含N
+- 板块预测统计时，N不计入方向计数
 
 返回JSON:
-{{"summary":"预测摘要(80字)","near_term_trend":"bullish/bearish/neutral","mid_term_trend":"bullish/bearish/neutral","high_confidence_predictions":[{{"b":"博主","s":"板块","t":"U/D","c":80}}],"sector_predictions":{{"板块":{{"bullish":3,"bearish":1}}}},"key_insights":["洞察1","洞察2"]}}"""
+{{"summary":"预测摘要(80字)","near_term_trend":"bullish/bearish/neutral","mid_term_trend":"bullish/bearish/neutral","high_confidence_predictions":[{{"b":"博主","s":"板块","t":"U/D","c":80}}],"sector_predictions":{{"板块":{{"bullish":3,"bearish":1,"neutral":2}}}},"key_insights":["洞察1","洞察2"]}}"""
         
         try:
             result_text = self._call_llm(prompt, task_type='analysis', max_tokens=1000, temperature=0.3)

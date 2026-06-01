@@ -178,18 +178,26 @@ class AdviceService(BaseService[InvestmentAdvice]):
         ).order_by(Prediction.target_date.asc()).limit(20).all()
         
         predictions = near_term_predictions + mid_term_predictions
-        
+
+        # 批量查询博主，避免 N+1
+        blogger_ids = list(set(p.blogger_id for p in predictions if p.blogger_id))
+        bloggers_map = {}
+        if blogger_ids:
+            bloggers = self.db.query(Blogger).filter(Blogger.id.in_(blogger_ids)).all()
+            bloggers_map = {b.id: b for b in bloggers}
+
         prediction_list = []
         for p in predictions:
-            blogger = self.db.query(Blogger).filter(
-                Blogger.id == p.blogger_id
-            ).first()
+            blogger = bloggers_map.get(p.blogger_id)
             days_to_target = (p.target_date - date.today()).days if p.target_date else 0
             prediction_list.append({
                 "blogger_name": blogger.name if blogger else "未知",
                 "blogger_id": p.blogger_id,
+                "blogger_grade": blogger.grade if blogger else "C",
+                "blogger_accuracy": blogger.accuracy_rate if blogger else 0,
                 "sector": p.sector,
                 "prediction_type": p.prediction_type,
+                "prediction_content": p.prediction_content or "",
                 "confidence": p.confidence,
                 "status": p.status,
                 "prediction_date": p.prediction_date.isoformat() if p.prediction_date else None,
