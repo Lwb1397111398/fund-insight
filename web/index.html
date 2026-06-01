@@ -225,6 +225,11 @@
             margin-top: var(--space-1);
         }
 
+        .stat-extra {
+            font-size: 10px;
+            opacity: 0.8;
+        }
+
         .action-bar {
             display: flex;
             gap: var(--space-2);
@@ -1953,9 +1958,8 @@
                         <div class="label">帖子</div>
                     </div>
                     <div class="stat-mini" @click="loadView('predictions')">
-                        <div class="value">{{ stats.overall?.total_predictions || 0 }} ({{
-                            stats.overall?.pending_predictions || 0 }}待验证)</div>
-                        <div class="label">预测</div>
+                        <div class="value">{{ stats.overall?.total_predictions || 0 }}</div>
+                        <div class="label">预测 <span class="stat-extra">({{ stats.overall?.pending_predictions || 0 }}待验)</span></div>
                     </div>
                     <div class="stat-mini" @click="loadView('viewpoints')">
                         <div class="value">{{ stats.overall?.total_viewpoints || 0 }}</div>
@@ -2130,7 +2134,7 @@
                         <button class="action-btn warning small" @click="batchAnalyzeViewpoints"
                             :disabled="analyzing">{{ analyzing ? '分析中...' : '🚀 一键AI分析' }}</button>
                         <button class="action-btn primary small" @click="showSummaryModal" :disabled="summarizing">{{
-                            summarizing ? '汇总中...' : '<i class="ri-bar-chart-line"></i> 一键汇总观点' }}</button>
+                            summarizing ? '汇总中...' : '📊 一键汇总观点' }}</button>
                     </div>
 
                     <div v-if="summaryStats && summaryStats.pending_dates && summaryStats.pending_dates.length > 0"
