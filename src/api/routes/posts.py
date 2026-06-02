@@ -192,6 +192,17 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
     }
 
 
+@router.get("/batch-analyze/status")
+async def get_batch_analyze_status():
+    """获取批量分析状态"""
+    return {
+        "success": True,
+        "data": {
+            "in_progress": _batch_analyzing
+        }
+    }
+
+
 @router.post("/batch-analyze")
 async def batch_analyze_posts(
     background_tasks: BackgroundTasks,
