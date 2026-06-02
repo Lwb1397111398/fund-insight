@@ -1099,15 +1099,16 @@ class LLMAnalyzer:
             # 如果 LLM 已经填了 fund_code，检查是否匹配，不匹配则覆盖
             current_code = pred.get('fund_code', '')
 
-            # 第1层：查 SECTOR_FUND_MAP（硬编码，107个）
-            fund = get_fund_for_sector(standard_sector)
+            # 第1层：查数据库 SectorFundMapping（用户编辑优先，覆盖硬编码）
+            fund = self._find_fund_in_db_mapping(standard_sector)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
+                logger.info(f"[基金匹配] 数据库映射命中: {standard_sector} → {fund.get('name', '')}")
                 continue
 
-            # 第2层：查数据库 SectorFundMapping（用户添加的）
-            fund = self._find_fund_in_db_mapping(standard_sector)
+            # 第2层：查 SECTOR_FUND_MAP（硬编码，107个）
+            fund = get_fund_for_sector(standard_sector)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
