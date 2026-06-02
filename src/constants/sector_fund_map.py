@@ -253,6 +253,33 @@ SECTOR_CATEGORIES = {
 
 
 _SECTOR_TO_CATEGORY = None
+_DB_ALIASES_CACHE = None
+
+
+def _load_db_aliases() -> Dict[str, str]:
+    """从数据库加载用户自定义别名（带缓存）"""
+    global _DB_ALIASES_CACHE
+    if _DB_ALIASES_CACHE is not None:
+        return _DB_ALIASES_CACHE
+
+    try:
+        from src.models.database import SessionLocal, SectorAlias
+        db = SessionLocal()
+        try:
+            rows = db.query(SectorAlias).all()
+            _DB_ALIASES_CACHE = {row.alias_name: row.sector_name for row in rows}
+        finally:
+            db.close()
+    except Exception:
+        _DB_ALIASES_CACHE = {}
+    return _DB_ALIASES_CACHE
+
+
+def refresh_db_aliases_cache():
+    """刷新数据库别名缓存（添加/删除别名后调用）"""
+    global _DB_ALIASES_CACHE
+    _DB_ALIASES_CACHE = None
+    return _load_db_aliases()
 
 
 def _build_sector_to_category_map() -> Dict[str, str]:
@@ -282,19 +309,32 @@ def get_fund_for_sector(sector: str) -> Optional[Dict]:
     if sector in SECTOR_FUND_MAP:
         return SECTOR_FUND_MAP[sector]
 
-    # 2. 别名匹配（黑话 → 标准板块名称）
+    # 2. 硬编码别名匹配
     if sector in SECTOR_ALIASES:
         standard_sector = SECTOR_ALIASES[sector]
         if standard_sector in SECTOR_FUND_MAP:
             return SECTOR_FUND_MAP[standard_sector]
 
-    # 3. 模糊匹配（包含关系）
+    # 3. 数据库自定义别名匹配
+    db_aliases = _load_db_aliases()
+    if sector in db_aliases:
+        standard_sector = db_aliases[sector]
+        if standard_sector in SECTOR_FUND_MAP:
+            return SECTOR_FUND_MAP[standard_sector]
+
+    # 4. 模糊匹配（包含关系）
     for key, fund_info in SECTOR_FUND_MAP.items():
         if key in sector or sector in key:
             return fund_info
 
-    # 4. 别名模糊匹配
+    # 5. 硬编码别名模糊匹配
     for alias, standard_sector in SECTOR_ALIASES.items():
+        if alias in sector or sector in alias:
+            if standard_sector in SECTOR_FUND_MAP:
+                return SECTOR_FUND_MAP[standard_sector]
+
+    # 6. 数据库别名模糊匹配
+    for alias, standard_sector in db_aliases.items():
         if alias in sector or sector in alias:
             if standard_sector in SECTOR_FUND_MAP:
                 return SECTOR_FUND_MAP[standard_sector]
@@ -319,19 +359,32 @@ def get_category_for_sector(sector: str) -> str:
     if sector in category_map:
         return category_map[sector]
 
-    # 2. 别名匹配
+    # 2. 硬编码别名匹配
     if sector in SECTOR_ALIASES:
         standard_sector = SECTOR_ALIASES[sector]
         if standard_sector in category_map:
             return category_map[standard_sector]
 
-    # 3. 模糊匹配
+    # 3. 数据库自定义别名匹配
+    db_aliases = _load_db_aliases()
+    if sector in db_aliases:
+        standard_sector = db_aliases[sector]
+        if standard_sector in category_map:
+            return category_map[standard_sector]
+
+    # 4. 模糊匹配
     for key, category in category_map.items():
         if key in sector or sector in key:
             return category
 
-    # 4. 别名模糊匹配
+    # 5. 硬编码别名模糊匹配
     for alias, standard_sector in SECTOR_ALIASES.items():
+        if alias in sector or sector in alias:
+            if standard_sector in category_map:
+                return category_map[standard_sector]
+
+    # 6. 数据库别名模糊匹配
+    for alias, standard_sector in db_aliases.items():
         if alias in sector or sector in alias:
             if standard_sector in category_map:
                 return category_map[standard_sector]
@@ -368,21 +421,31 @@ def normalize_sector_name(sector: str) -> str:
     if sector in SECTOR_FUND_MAP:
         return sector
 
-    # 2. 别名匹配
+    # 2. 硬编码别名匹配
     if sector in SECTOR_ALIASES:
         return SECTOR_ALIASES[sector]
 
-    # 3. 模糊匹配（检查是否包含标准板块名称）
+    # 3. 数据库自定义别名匹配
+    db_aliases = _load_db_aliases()
+    if sector in db_aliases:
+        return db_aliases[sector]
+
+    # 4. 模糊匹配（检查是否包含标准板块名称）
     for key in SECTOR_FUND_MAP.keys():
         if key in sector:
             return key
 
-    # 4. 别名模糊匹配
+    # 5. 硬编码别名模糊匹配
     for alias, standard_sector in SECTOR_ALIASES.items():
         if alias in sector:
             return standard_sector
 
-    # 5. 无法识别，返回原值
+    # 6. 数据库别名模糊匹配
+    for alias, standard_sector in db_aliases.items():
+        if alias in sector:
+            return standard_sector
+
+    # 7. 无法识别，返回原值
     return sector
 
 

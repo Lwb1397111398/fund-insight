@@ -2006,7 +2006,7 @@
                 <button class="header-btn" @click="toggleTheme" :title="theme === 'light' ? '切换到深色模式' : '切换到浅色模式'">
                     <i :class="theme === 'light' ? 'ri-moon-line' : 'ri-sun-line'"></i>
                 </button>
-                <button class="header-btn" @click="showConfig = true"><i class="ri-settings-3-line"></i> 配置</button>
+                <button class="header-btn" @click="showConfig = true; configTab = 'llm'"><i class="ri-settings-3-line"></i> 配置</button>
             </div>
         </div>
         <div class="container">
@@ -3204,7 +3204,49 @@
             <div class="modal wide">
                 <div class="modal-header"><i class="ri-settings-3-line"></i> 系统配置<button class="modal-close" @click="showConfig = false">×</button>
                 </div>
-                <div v-if="configData">
+                <div style="display: flex; gap: 0; border-bottom: 2px solid #f0f0f0; margin-bottom: 15px;">
+                    <button @click="configTab = 'llm'" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'llm' ? '#1890ff' : 'transparent', color: configTab === 'llm' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'llm' ? '600' : '400' }">LLM 配置</button>
+                    <button @click="configTab = 'aliases'; loadAliases()" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'aliases' ? '#1890ff' : 'transparent', color: configTab === 'aliases' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'aliases' ? '600' : '400' }">板块别名</button>
+                </div>
+                <div v-if="configTab === 'aliases'">
+                    <div style="margin-bottom: 15px; padding: 12px; background: #f6ffed; border-radius: 8px; border: 1px solid #b7eb8f;">
+                        <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 150px;">
+                                <label style="font-size: 12px; color: #666;">别名（黑话/简称）</label>
+                                <input v-model="newAlias.alias_name" placeholder="如：白酒股" style="width: 100%; padding: 6px 8px; border: 1px solid #d9d9d9; border-radius: 4px; margin-top: 4px;">
+                            </div>
+                            <div style="flex: 1; min-width: 150px;">
+                                <label style="font-size: 12px; color: #666;">标准板块名称</label>
+                                <select v-model="newAlias.sector_name" style="width: 100%; padding: 6px 8px; border: 1px solid #d9d9d9; border-radius: 4px; margin-top: 4px;">
+                                    <option value="">选择板块</option>
+                                    <option v-for="s in aliases.standard_sectors" :key="s" :value="s">{{ s }}</option>
+                                </select>
+                            </div>
+                            <button class="action-btn small" @click="addAlias" style="margin-bottom: 1px;">添加别名</button>
+                        </div>
+                    </div>
+                    <div v-if="aliases.custom && aliases.custom.length > 0" style="margin-bottom: 15px;">
+                        <h4 style="margin-bottom: 8px; color: #333;">自定义别名 ({{ aliases.custom.length }})</h4>
+                        <div style="max-height: 200px; overflow-y: auto;">
+                            <div v-for="a in aliases.custom" :key="a.id" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #f0f0f0;">
+                                <span><b>{{ a.alias_name }}</b> → {{ a.sector_name }}</span>
+                                <button @click="deleteAlias(a.id, a.alias_name)" style="background: none; border: none; color: #ff4d4f; cursor: pointer; font-size: 14px;">删除</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="aliases.custom && aliases.custom.length === 0" style="text-align: center; color: #999; padding: 15px 0; margin-bottom: 15px;">
+                        暂无自定义别名
+                    </div>
+                    <details>
+                        <summary style="cursor: pointer; color: #666; font-size: 13px;">查看系统内置别名 ({{ aliases.builtin ? aliases.builtin.length : 0 }})</summary>
+                        <div style="max-height: 250px; overflow-y: auto; margin-top: 8px;">
+                            <div v-for="a in aliases.builtin" :key="a.alias_name" style="display: inline-block; margin: 2px 4px; padding: 3px 8px; background: #f5f5f5; border-radius: 4px; font-size: 12px;">
+                                {{ a.alias_name }} → {{ a.sector_name }}
+                            </div>
+                        </div>
+                    </details>
+                </div>
+                <div v-if="configTab === 'llm' && configData">
                     <div class="config-item">
                         <label>LLM 提供商</label>
                         <select v-model="configData.llm_provider">
@@ -3257,6 +3299,7 @@
                             </div>
                         </div>
                     </div>
+                </div>
                 </div>
                 <div class="modal-footer">
                     <button class="modal-btn default" @click="showConfig = false">取消</button>
@@ -3749,8 +3792,15 @@ const fetchWeChatBatch = async () => {
                 const loadTestData = async () => { try { const res = await axios.get('/api/test-data/find'); if (res.data.success) testData.value = res.data.data; } catch (e) { console.error('加载测试数据失败:', e); } };
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
+                // ===== 板块别名管理 =====
+                const configTab = ref('llm');
+                const aliases = ref({ builtin: [], custom: [], standard_sectors: [] });
+                const newAlias = ref({ alias_name: '', sector_name: '' });
+                const loadAliases = async () => { try { const res = await axios.get('/api/config/aliases'); if (res.data.success) aliases.value = res.data.data; } catch (e) { console.error('加载别名失败:', e); } };
+                const addAlias = async () => { const a = newAlias.value; if (!a.alias_name || !a.sector_name) { alert('请填写别名和目标板块'); return; } try { const res = await axios.post('/api/config/aliases', a); if (res.data.success) { alert(res.data.message); newAlias.value = { alias_name: '', sector_name: '' }; await loadAliases(); } else { alert(res.data.message); } } catch (e) { alert('添加失败: ' + (e.response?.data?.detail || e.message)); } };
+                const deleteAlias = async (id, name) => { if (!confirm(`确定删除别名"${name}"？`)) return; try { const res = await axios.delete(`/api/config/aliases/${id}`); if (res.data.success) { alert(res.data.message); await loadAliases(); } else { alert(res.data.message); } } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias };
             }
         }).mount('#app');
     </script>

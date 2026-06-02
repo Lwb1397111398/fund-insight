@@ -434,6 +434,16 @@ class SectorFundMapping(Base):
     is_active = Column(Boolean, default=True)
 
 
+class SectorAlias(Base):
+    """板块别名表 - 用户自定义黑话映射"""
+    __tablename__ = 'sector_alias'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    alias_name = Column(String(50), unique=True, nullable=False)
+    sector_name = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class InvestmentAdvice(Base):
     """投资建议表"""
     __tablename__ = 'investment_advice'

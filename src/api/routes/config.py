@@ -11,7 +11,7 @@ from sqlalchemy import func
 
 from src.core.config import config
 from src.api.deps import get_db
-from src.models.database import Prediction, Viewpoint, Post, FundInfo, Blogger
+from src.models.database import Prediction, Viewpoint, Post, FundInfo, Blogger, SectorAlias
 
 router = APIRouter(prefix="/config", tags=["配置"])
 
@@ -422,3 +422,110 @@ async def test_volcengine_light():
                 "error": str(e)
             }
         }
+
+
+# ===== 板块别名管理 =====
+
+class AliasCreate(BaseModel):
+    """创建别名请求"""
+    alias_name: str
+    sector_name: str
+
+
+@router.get("/aliases")
+async def get_aliases(db: Session = Depends(get_db)):
+    """获取所有别名（硬编码+自定义）"""
+    from src.constants.sector_fund_map import SECTOR_ALIASES, SECTOR_FUND_MAP
+
+    # 硬编码别名
+    builtin = [
+        {"alias_name": k, "sector_name": v, "source": "builtin"}
+        for k, v in sorted(SECTOR_ALIASES.items())
+    ]
+
+    # 数据库自定义别名
+    custom_rows = db.query(SectorAlias).order_by(SectorAlias.created_at.desc()).all()
+    custom = [
+        {
+            "id": a.id,
+            "alias_name": a.alias_name,
+            "sector_name": a.sector_name,
+            "source": "custom",
+            "created_at": a.created_at.isoformat() if a.created_at else None
+        }
+        for a in custom_rows
+    ]
+
+    return {
+        "success": True,
+        "data": {
+            "builtin": builtin,
+            "custom": custom,
+            "total": len(builtin) + len(custom),
+            "standard_sectors": sorted(SECTOR_FUND_MAP.keys())
+        }
+    }
+
+
+@router.post("/aliases")
+async def create_alias(alias: AliasCreate, db: Session = Depends(get_db)):
+    """添加自定义别名"""
+    # 检查是否与已有别名冲突
+    existing = db.query(SectorAlias).filter(SectorAlias.alias_name == alias.alias_name).first()
+    if existing:
+        return {
+            "success": False,
+            "message": f"别名 '{alias.alias_name}' 已存在（映射到 {existing.sector_name}）"
+        }
+
+    # 检查是否与硬编码别名冲突
+    from src.constants.sector_fund_map import SECTOR_ALIASES, SECTOR_FUND_MAP
+    if alias.alias_name in SECTOR_ALIASES:
+        return {
+            "success": False,
+            "message": f"'{alias.alias_name}' 是系统内置别名（映射到 {SECTOR_ALIASES[alias.alias_name]}），无需重复添加"
+        }
+    if alias.alias_name in SECTOR_FUND_MAP:
+        return {
+            "success": False,
+            "message": f"'{alias.alias_name}' 是系统内置板块名，无需添加为别名"
+        }
+
+    new_alias = SectorAlias(alias_name=alias.alias_name, sector_name=alias.sector_name)
+    db.add(new_alias)
+    db.commit()
+    db.refresh(new_alias)
+
+    # 刷新别名缓存
+    from src.constants.sector_fund_map import refresh_db_aliases_cache
+    refresh_db_aliases_cache()
+
+    return {
+        "success": True,
+        "message": f"已添加别名: {alias.alias_name} → {alias.sector_name}",
+        "data": {
+            "id": new_alias.id,
+            "alias_name": new_alias.alias_name,
+            "sector_name": new_alias.sector_name
+        }
+    }
+
+
+@router.delete("/aliases/{alias_id}")
+async def delete_alias(alias_id: int, db: Session = Depends(get_db)):
+    """删除自定义别名"""
+    alias = db.query(SectorAlias).filter(SectorAlias.id == alias_id).first()
+    if not alias:
+        return {"success": False, "message": "别名不存在"}
+
+    db.delete(alias)
+    db.commit()
+
+    # 刷新别名缓存
+    from src.constants.sector_fund_map import refresh_db_aliases_cache
+    refresh_db_aliases_cache()
+
+    return {
+        "success": True,
+        "message": f"已删除别名: {alias.alias_name} → {alias.sector_name}"
+    }
