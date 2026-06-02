@@ -11,6 +11,8 @@ services:
         value: "true"
       - key: ACCESS_PASSWORD
         sync: false
+      - key: CORS_ORIGINS
+        value: "https://fund-insight.onrender.com"
       - key: DATABASE_URL
         sync: false
       - key: LLM_PROVIDER
