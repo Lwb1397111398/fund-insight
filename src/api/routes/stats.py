@@ -14,8 +14,12 @@ router = APIRouter(prefix="/stats", tags=["统计"])
 @router.get("")
 async def get_stats(db: Session = Depends(get_db)):
     """获取统计数据"""
-    service = StatsService(db)
-    return service.get_all_stats()
+    try:
+        service = StatsService(db)
+        return service.get_all_stats()
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
 @router.get("/overall")
