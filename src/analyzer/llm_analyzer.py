@@ -135,7 +135,13 @@ class LLMAnalyzer:
 - 客观中立，不添加个人判断
 - 严格遵循JSON格式要求
 - 对模糊表述给予较低信心度
-- 板块名称必须填写，不能为空"""
+- 板块名称必须填写，不能为空
+
+输出规则（必须严格遵守）：
+- 只输出一个JSON对象，不要输出任何其他文字
+- 不要用```json```代码块包裹
+- 不要输出解释、分析过程、备注
+- JSON必须是合法的、可被json.loads()解析的格式"""
     
     BLOGGER_JARGON_GUIDE = """
 【基金博主黑话速查表】
@@ -874,39 +880,91 @@ class LLMAnalyzer:
     def _parse_json_with_fallback(self, text: str) -> Optional[Dict]:
         """
         容错解析 JSON（多级降级策略）
-        
+
         Args:
             text: LLM 返回的文本
-        
+
         Returns:
             解析后的字典，失败返回 None
         """
-        json_match = re.search(r'\{[\s\S]+?\}', text)
-        if not json_match:
-            logger.warning("[JSON Parse] 响应中未找到JSON")
-            return None
-        
-        json_str = json_match.group()
-        
+        # 0. 先清理 markdown 代码块包裹
+        cleaned = text.strip()
+        if cleaned.startswith('```'):
+            # 去掉 ```json ... ``` 包裹
+            cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
+            cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+            cleaned = cleaned.strip()
+
+        # 1. 尝试直接解析整个文本
         try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.debug(f"[JSON Parse] 标准JSON解析失败: {e}")
-        
-        if JSON5_AVAILABLE:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # 2. 用大括号计数提取完整的顶层 JSON 对象（解决嵌套问题）
+        json_str = self._extract_top_level_json(cleaned)
+        if json_str:
             try:
-                return json5.loads(json_str)
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.debug(f"[JSON Parse] 标准JSON解析失败: {e}")
+
+            if JSON5_AVAILABLE:
+                try:
+                    return json5.loads(json_str)
+                except Exception as e:
+                    logger.debug(f"[JSON Parse] JSON5解析失败: {e}")
+
+            try:
+                fixed_json = self._fix_json_errors(json_str)
+                return json.loads(fixed_json)
             except Exception as e:
-                logger.debug(f"[JSON Parse] JSON5解析失败: {e}")
-        
-        try:
-            fixed_json = self._fix_json_errors(json_str)
-            return json.loads(fixed_json)
-        except Exception as e:
-            logger.debug(f"[JSON Parse] 修复后JSON解析失败: {e}")
-        
+                logger.debug(f"[JSON Parse] 修复后JSON解析失败: {e}")
+
+        # 3. 兜底：手动提取关键字段
         logger.info("[JSON Parse] 尝试手动提取字段")
         return self._extract_basic_fields(text)
+
+    def _extract_top_level_json(self, text: str) -> Optional[str]:
+        """
+        用大括号计数提取第一个完整的顶层 JSON 对象。
+        解决正则非贪婪匹配嵌套 JSON 时截断的问题。
+        """
+        start = text.find('{')
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape_next = False
+
+        for i in range(start, len(text)):
+            ch = text[i]
+
+            if escape_next:
+                escape_next = False
+                continue
+
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+
+        # 大括号没闭合，返回从 start 到末尾，让后续修复逻辑处理
+        return text[start:]
     
     def _fix_json_errors(self, json_str: str) -> str:
         """
