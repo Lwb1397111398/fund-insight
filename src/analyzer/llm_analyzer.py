@@ -1082,7 +1082,7 @@ class LLMAnalyzer:
         return None
 
     def _fill_fund_from_sector(self, result: Dict):
-        """根据 sector 自动匹配基金代码和名称（LLM 不再负责填写）"""
+        """根据 sector 自动匹配基金代码和名称（多层匹配 + 自动学习）"""
         from src.constants.sector_fund_map import get_fund_for_sector, normalize_sector_name
 
         for pred in result.get('predictions', []):
@@ -1098,16 +1098,121 @@ class LLMAnalyzer:
 
             # 如果 LLM 已经填了 fund_code，检查是否匹配，不匹配则覆盖
             current_code = pred.get('fund_code', '')
+
+            # 第1层：查 SECTOR_FUND_MAP（硬编码，107个）
             fund = get_fund_for_sector(standard_sector)
             if fund:
-                correct_code = fund.get('code', '')
-                correct_name = fund.get('name', '')
-                if current_code and current_code != correct_code:
-                    logger.info(f"[基金匹配] 修正基金: {current_code} → {correct_code} ({correct_name})")
-                pred['fund_code'] = correct_code
-                pred['fund_name'] = correct_name
-            elif not current_code:
-                logger.warning(f"[基金匹配] 板块 '{standard_sector}' 无对应基金，留空")
+                pred['fund_code'] = fund.get('code', '')
+                pred['fund_name'] = fund.get('name', '')
+                continue
+
+            # 第2层：查数据库 SectorFundMapping（用户添加的）
+            fund = self._find_fund_in_db_mapping(standard_sector)
+            if fund:
+                pred['fund_code'] = fund.get('code', '')
+                pred['fund_name'] = fund.get('name', '')
+                logger.info(f"[基金匹配] 数据库映射命中: {standard_sector} → {fund.get('name', '')}")
+                continue
+
+            # 第3层：查数据库 FundInfo 表（按 sector_type 搜索）
+            fund = self._find_fund_in_fundinfo(standard_sector)
+            if fund:
+                pred['fund_code'] = fund.get('code', '')
+                pred['fund_name'] = fund.get('name', '')
+                self._save_fund_mapping(standard_sector, fund.get('code', ''), fund.get('name', ''))
+                logger.info(f"[基金匹配] FundInfo命中: {standard_sector} → {fund.get('name', '')}")
+                continue
+
+            # 第4层：调天天基金 API 搜索
+            fund = self._search_fund_via_api(standard_sector)
+            if fund:
+                pred['fund_code'] = fund.get('code', '')
+                pred['fund_name'] = fund.get('name', '')
+                self._save_fund_mapping(standard_sector, fund.get('code', ''), fund.get('name', ''))
+                logger.info(f"[基金匹配] API搜索命中: {standard_sector} → {fund.get('name', '')}，已自动保存映射")
+                continue
+
+            # 第5层：都没找到，留空
+            logger.warning(f"[基金匹配] 板块 '{standard_sector}' 无对应基金，留空")
+
+    def _find_fund_in_db_mapping(self, sector: str) -> Optional[Dict]:
+        """第2层：查数据库 SectorFundMapping"""
+        try:
+            from src.services.sector_fund_service import get_sector_fund_service
+            service = get_sector_fund_service()
+            return service.get_fund_by_sector(sector)
+        except Exception:
+            return None
+
+    def _find_fund_in_fundinfo(self, sector: str) -> Optional[Dict]:
+        """第3层：查 FundInfo 表，按 sector_type 模糊匹配"""
+        try:
+            from src.models.database import SessionLocal, FundInfo
+            db = SessionLocal()
+            try:
+                # 精确匹配
+                fund = db.query(FundInfo).filter(
+                    FundInfo.sector_type == sector
+                ).first()
+                if fund:
+                    return {'code': fund.fund_code, 'name': fund.fund_name}
+
+                # 模糊匹配
+                fund = db.query(FundInfo).filter(
+                    FundInfo.sector_type.contains(sector)
+                ).first()
+                if fund:
+                    return {'code': fund.fund_code, 'name': fund.fund_name}
+
+                # 反向匹配（sector 包含 sector_type）
+                funds = db.query(FundInfo).filter(
+                    FundInfo.sector_type != None
+                ).all()
+                for f in funds:
+                    if f.sector_type and (f.sector_type in sector or sector in f.sector_type):
+                        return {'code': f.fund_code, 'name': f.fund_name}
+            finally:
+                db.close()
+        except Exception:
+            pass
+        return None
+
+    def _search_fund_via_api(self, sector: str) -> Optional[Dict]:
+        """第4层：调天天基金 API 搜索"""
+        try:
+            from src.fund.fund_api import FundAPI
+            api = FundAPI()
+            results = api.search_fund(sector)
+            if results:
+                # 取第一个结果
+                r = results[0]
+                return {'code': r.get('fund_code', ''), 'name': r.get('fund_name', '')}
+        except Exception as e:
+            logger.warning(f"[基金匹配] API搜索失败: {e}")
+        return None
+
+    def _save_fund_mapping(self, sector: str, fund_code: str, fund_name: str):
+        """自动保存映射到数据库（下次直接命中第2层）"""
+        try:
+            from src.models.database import SessionLocal, SectorFundMapping
+            db = SessionLocal()
+            try:
+                existing = db.query(SectorFundMapping).filter(
+                    SectorFundMapping.sector_name == sector
+                ).first()
+                if not existing:
+                    mapping = SectorFundMapping(
+                        sector_name=sector,
+                        fund_code=fund_code,
+                        fund_name=fund_name
+                    )
+                    db.add(mapping)
+                    db.commit()
+                    logger.info(f"[基金匹配] 自动保存映射: {sector} → {fund_name} ({fund_code})")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"[基金匹配] 保存映射失败: {e}")
     
     def calculate_target_date(self, prediction_date: date, period: str) -> date:
         """根据预测周期计算目标验证日期"""
