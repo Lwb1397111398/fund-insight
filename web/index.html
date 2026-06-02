@@ -2133,19 +2133,19 @@
                     <div class="section-title">管理预测</div>
                     <div class="sub-actions">
                         <button class="action-btn small" :class="predictionFilter === 'all' ? 'primary' : 'default'"
-                            @click="predictionFilter = 'all'">全部 ({{ predictions.length }})</button>
+                            @click="predictionFilter = 'all'">全部 ({{ predictions.filter(p => p.prediction_type !== 'flat').length }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
-                            @click="predictionFilter = 'pending'">待验证 ({{ predictions.filter(p => !p.is_expired).length
+                            @click="predictionFilter = 'pending'">待验证 ({{ predictions.filter(p => p.prediction_type !== 'flat' && !p.is_expired).length
                             }})</button>
                         <button class="action-btn small"
                             :class="predictionFilter === 'verified' ? 'success' : 'default'"
-                            @click="predictionFilter = 'verified'">已验证 ({{ predictions.filter(p => p.is_expired).length
+                            @click="predictionFilter = 'verified'">已验证 ({{ predictions.filter(p => p.prediction_type !== 'flat' && p.is_expired).length
                             }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'correct' ? 'success' : 'default'"
-                            @click="predictionFilter = 'correct'">正确 ({{ predictions.filter(p => p.is_expired &&
+                            @click="predictionFilter = 'correct'">正确 ({{ predictions.filter(p => p.prediction_type !== 'flat' && p.is_expired &&
                             p.is_correct).length }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'wrong' ? 'danger' : 'default'"
-                            @click="predictionFilter = 'wrong'">错误 ({{ predictions.filter(p => p.is_expired &&
+                            @click="predictionFilter = 'wrong'">错误 ({{ predictions.filter(p => p.prediction_type !== 'flat' && p.is_expired &&
                             !p.is_correct).length }})</button>
                     </div>
                     <div class="sub-actions">
@@ -3602,15 +3602,15 @@ const fetchWeChatBatch = async () => {
                 });
                 
                 const filteredPredictions = computed(() => {
-                    let filtered = predictions.value;
+                    let filtered = predictions.value.filter(p => p.prediction_type !== 'flat');
                     if (predictionFilter.value === 'pending') {
-                        filtered = predictions.value.filter(p => !p.is_expired);
+                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && !p.is_expired);
                     } else if (predictionFilter.value === 'verified') {
-                        filtered = predictions.value.filter(p => p.is_expired);
+                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && p.is_expired);
                     } else if (predictionFilter.value === 'correct') {
-                        filtered = predictions.value.filter(p => p.is_expired && p.is_correct);
+                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && p.is_expired && p.is_correct);
                     } else if (predictionFilter.value === 'wrong') {
-                        filtered = predictions.value.filter(p => p.is_expired && !p.is_correct);
+                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && p.is_expired && !p.is_correct);
                     }
                     return filtered.sort((a, b) => {
                         if (a.is_expired !== b.is_expired) {
