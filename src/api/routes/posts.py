@@ -156,16 +156,20 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
     _api_cache = {}
 
     def find_correct_fund(standard_sector: str):
-        """5层匹配，与 llm_analyzer._fill_fund_from_sector 逻辑一致"""
-        # 第1层：数据库映射（用户编辑优先）
-        fund = service.get_fund_by_sector(standard_sector)
-        if fund:
-            return fund, "数据库映射"
-
-        # 第2层：硬编码表
+        """6层匹配：硬编码表(无需审查) > 已审查DB > 未审查DB > FundInfo > API"""
+        # 第1层：硬编码表（ETF，无需审查，最可靠）
         fund = get_fund_for_sector(standard_sector)
         if fund:
             return fund, "硬编码表"
+
+        # 第2层：已审查的数据库映射（用户编辑/审查过的）
+        fund = service.get_fund_by_sector(standard_sector)
+        if fund and fund.get('reviewed'):
+            return fund, "已审查DB"
+
+        # 第3层：未审查的数据库映射（自动学习的）
+        if fund:
+            return fund, "未审查DB"
 
         # 第3层：FundInfo 表（按 sector_type 搜索）
         fund_info = db.query(FundInfo).filter(FundInfo.sector_type == standard_sector).first()
