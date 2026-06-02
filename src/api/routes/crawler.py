@@ -143,7 +143,7 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
         article = await wechat_fetcher.fetch(data.url)
         
         if not article:
-            return {"success": False, "message": "抓取文章失败，请检查URL是否正确"}
+            return {"success": False, "message": "抓取失败：微信反爬拦截或URL无效。建议在浏览器打开文章后复制内容，通过「添加帖子」手动粘贴。"}
         
         author_name = article.get('author', '未知博主')
         
