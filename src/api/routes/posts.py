@@ -108,7 +108,7 @@ async def reset_failed_analyses(db: Session = Depends(get_db)):
         else:
             try:
                 result = json.loads(post.analysis_result) if isinstance(post.analysis_result, str) else post.analysis_result
-                if not result.get("predictions") and result.get("summary") == "分析失败":
+                if not result.get("predictions"):
                     should_reset = True
             except Exception:
                 should_reset = True

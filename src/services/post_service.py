@@ -330,8 +330,7 @@ class PostService(BaseService[Post]):
                 post_date=post_date.isoformat() if post_date else None
             )
 
-            is_empty = (not result.get("predictions") and
-                       result.get("summary") == "分析失败")
+            is_empty = not result.get("predictions")
             if is_empty:
                 db_post.analysis_result = result
                 return {
@@ -451,8 +450,7 @@ class PostService(BaseService[Post]):
                 post_date=db_post.post_date.isoformat() if db_post.post_date else None
             )
 
-            is_empty = (not result.get("predictions") and
-                       result.get("summary") == "分析失败")
+            is_empty = not result.get("predictions")
             if is_empty:
                 db_post.analysis_result = result
                 return {
@@ -575,8 +573,7 @@ class PostService(BaseService[Post]):
                 )
 
                 # 检查是否为有效分析结果（空结果不标记为已分析）
-                is_empty = (not result.get("predictions") and
-                           result.get("summary") == "分析失败")
+                is_empty = not result.get("predictions")
 
                 db2 = SessionLocal()
                 try:
