@@ -137,11 +137,15 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
         dry_run: True=试运行（只检查不修改），False=正式执行修复
     """
     from src.models.database import Prediction
-    from src.constants.sector_fund_map import get_fund_for_sector
+    from src.constants.sector_fund_map import get_fund_for_sector, normalize_sector_name
+    from src.services.sector_fund_service import get_sector_fund_service
 
     predictions = db.query(Prediction).filter(
         Prediction.is_deleted == False
     ).all()
+
+    # 多层匹配：数据库映射 > 硬编码表
+    service = get_sector_fund_service(db)
 
     fixed_count = 0
     mismatch_details = []
@@ -153,8 +157,14 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
         if not sector:
             continue
 
-        # 获取板块对应的正确基金
-        correct_fund = get_fund_for_sector(sector)
+        # 标准化板块名
+        standard_sector = normalize_sector_name(sector)
+
+        # 第1层：数据库映射（用户编辑优先）
+        correct_fund = service.get_fund_by_sector(standard_sector)
+        if not correct_fund:
+            # 第2层：硬编码表
+            correct_fund = get_fund_for_sector(standard_sector)
         if not correct_fund:
             continue
 
