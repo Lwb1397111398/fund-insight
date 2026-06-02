@@ -580,19 +580,67 @@ class PostService(BaseService[Post]):
                 "predictions_created": 0
             }
     
+    def _is_low_quality_post(self, title: str, content: str) -> tuple:
+        """
+        检测低质量帖子（太短、广告、闲聊）
+
+        Returns:
+            (is_low_quality, reason)
+        """
+        if not content:
+            return True, "内容为空"
+
+        content = content.strip()
+        title = (title or "").strip()
+
+        # 1. 内容太短（少于30个字符）
+        if len(content) < 30:
+            return True, f"内容过短（{len(content)}字符）"
+
+        # 2. 广告/推广关键词
+        ad_keywords = [
+            '开户', '佣金', '手续费', '返现', '红包', '优惠',
+            '加微信', '加群', '私聊', '联系方式', '二维码',
+            '推广', '广告', '合作', '商务', '代理',
+            '免费领取', '限时优惠', '点击链接'
+        ]
+        content_lower = content.lower()
+        for kw in ad_keywords:
+            if kw in content_lower:
+                return True, f"疑似广告（包含'{kw}'）"
+
+        # 3. 纯闲聊/无投资内容
+        chat_keywords = ['早上好', '晚安', '吃饭', '天气', '周末愉快', '节日快乐']
+        investment_keywords = ['涨', '跌', '买', '卖', '加仓', '减仓', '看涨', '看跌',
+                              '板块', '基金', '股票', 'ETF', '行情', '走势', '预测',
+                              '看好', '看空', '震荡', '突破', '回调', '反弹']
+
+        has_chat = any(kw in content for kw in chat_keywords)
+        has_investment = any(kw in content for kw in investment_keywords)
+
+        if has_chat and not has_investment:
+            return True, "纯闲聊内容"
+
+        # 4. 纯表情包/符号
+        text_only = re.sub(r'[^一-龥a-zA-Z0-9]', '', content)
+        if len(text_only) < 10:
+            return True, "内容过少（多为表情/符号）"
+
+        return False, ""
+
     def batch_analyze_posts(self) -> Dict:
         """
         批量分析未分析的帖子
         每个帖子使用独立会话，LLM调用期间不持有数据库连接
-        
+
         Returns:
             分析结果统计
         """
         from src.fund.fund_auto_manager import fund_auto_manager
         from src.models.database import SessionLocal
-        
+
         llm_analyzer = get_analyzer()
-        
+
         db_query = SessionLocal()
         try:
             post_ids = [p.id for p in db_query.query(Post).filter(
@@ -600,24 +648,26 @@ class PostService(BaseService[Post]):
             ).order_by(Post.created_at.desc()).limit(100).all()]
         finally:
             db_query.close()
-        
+
         if not post_ids:
             return {
                 "analyzed": 0,
                 "failed": 0,
+                "deleted": 0,
                 "message": "没有需要分析的帖子"
             }
-        
+
         analyzed_count = 0
         failed_count = 0
-        
+        deleted_count = 0
+
         for post_id in post_ids:
             db = SessionLocal()
             try:
                 post = db.query(Post).filter(Post.id == post_id).first()
                 if not post or post.analyzed:
                     continue
-                
+
                 title = post.title or ""
                 content = post.content
                 post_date_str = post.post_date.isoformat() if post.post_date else None
@@ -625,7 +675,24 @@ class PostService(BaseService[Post]):
                 blogger_id = post.blogger_id
             finally:
                 db.close()
-            
+
+            # 检查是否为低质量帖子
+            is_low, reason = self._is_low_quality_post(title, content)
+            if is_low:
+                db_del = SessionLocal()
+                try:
+                    post_to_del = db_del.query(Post).filter(Post.id == post_id).first()
+                    if post_to_del:
+                        db_del.delete(post_to_del)
+                        db_del.commit()
+                        deleted_count += 1
+                        logger.info(f"[批量分析] 删除低质量帖子 {post_id}: {reason}")
+                except Exception as e:
+                    logger.warning(f"[批量分析] 删除帖子 {post_id} 失败: {e}")
+                finally:
+                    db_del.close()
+                continue
+
             try:
                 result = llm_analyzer.analyze_post(
                     title=title,
@@ -704,11 +771,16 @@ class PostService(BaseService[Post]):
                 import traceback
                 traceback.print_exc()
                 failed_count += 1
-        
+
+        message = f"批量分析完成: 成功 {analyzed_count} 个, 失败 {failed_count} 个"
+        if deleted_count > 0:
+            message += f", 删除低质量帖子 {deleted_count} 个"
+
         return {
             "analyzed": analyzed_count,
             "failed": failed_count,
-            "message": f"批量分析完成: 成功 {analyzed_count} 个, 失败 {failed_count} 个"
+            "deleted": deleted_count,
+            "message": message
         }
     
     def delete_post(self, post_id: int) -> bool:

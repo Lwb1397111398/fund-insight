@@ -203,6 +203,49 @@ async def get_batch_analyze_status():
     }
 
 
+@router.post("/cleanup-low-quality")
+async def cleanup_low_quality_posts(dry_run: bool = True, db: Session = Depends(get_db)):
+    """
+    清理低质量帖子（太短、广告、闲聊）
+
+    Args:
+        dry_run: True=试运行（只检查不删除），False=正式执行删除
+    """
+    from src.models.database import Post
+
+    service = PostService(db)
+    posts = db.query(Post).filter(Post.analyzed == False).all()
+
+    to_delete = []
+    for post in posts:
+        is_low, reason = service._is_low_quality_post(post.title or "", post.content or "")
+        if is_low:
+            to_delete.append({
+                "id": post.id,
+                "title": (post.title or "")[:50],
+                "content_preview": (post.content or "")[:50],
+                "reason": reason
+            })
+
+    if not dry_run:
+        for item in to_delete:
+            post = db.query(Post).filter(Post.id == item["id"]).first()
+            if post:
+                db.delete(post)
+        db.commit()
+
+    return {
+        "success": True,
+        "message": f"{'试运行' if dry_run else '已清理'}: 发现 {len(to_delete)} 个低质量帖子",
+        "data": {
+            "dry_run": dry_run,
+            "count": len(to_delete),
+            "deleted": len(to_delete) if not dry_run else 0,
+            "details": to_delete[:50]
+        }
+    }
+
+
 @router.post("/batch-analyze")
 async def batch_analyze_posts(
     background_tasks: BackgroundTasks,

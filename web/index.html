@@ -2031,6 +2031,8 @@
                         <button class="action-btn default small" @click="resetFailedAnalyses" :disabled="analyzing">🔧 重置失败分析</button>
                         <button class="action-btn default small" @click="fixSectorMismatch(true)" :disabled="analyzing">🔍 检查板块匹配</button>
                         <button class="action-btn warning small" @click="fixSectorMismatch(false)" :disabled="analyzing">🔧 修复板块匹配</button>
+                        <button class="action-btn default small" @click="cleanupLowQuality(true)" :disabled="analyzing">🔍 检查低质量帖子</button>
+                        <button class="action-btn danger small" @click="cleanupLowQuality(false)" :disabled="analyzing">🗑️ 清理低质量帖子</button>
                     </div>
                     <div class="data-table" v-if="posts.length > 0">
                         <table>
@@ -3524,6 +3526,33 @@ const fetchWeChatBatch = async () => {
                     }
                     analyzing.value = false;
                 };
+                const cleanupLowQuality = async (dryRun) => {
+                    analyzing.value = true;
+                    try {
+                        const res = await axios.post(`/api/posts/cleanup-low-quality?dry_run=${dryRun}`);
+                        const data = res.data.data;
+                        if (dryRun) {
+                            if (data.count === 0) {
+                                alert('检查完成：没有发现低质量帖子！');
+                            } else {
+                                let msg = `发现 ${data.count} 个低质量帖子：\n\n`;
+                                data.details.slice(0, 10).forEach(d => {
+                                    msg += `• 帖子#${d.id}: "${d.title}" - ${d.reason}\n`;
+                                });
+                                if (data.count > 10) msg += `\n...还有 ${data.count - 10} 个`;
+                                msg += '\n\n点击"清理低质量帖子"按钮进行删除。';
+                                alert(msg);
+                            }
+                        } else {
+                            alert(res.data.message);
+                            await fetchPosts();
+                            await fetchStats();
+                        }
+                    } catch (e) {
+                        alert('操作失败: ' + (e.response?.data?.detail || e.message));
+                    }
+                    analyzing.value = false;
+                };
                 const batchAnalyzePredictions = async () => { analyzing.value = true; try { const res = await axios.post('/api/predictions/verify-all'); alert(res.data.message); if (res.data.data?.in_progress) { setTimeout(() => { analyzing.value = false; fetchPredictions(); fetchStats(); }, 60000); } else { analyzing.value = false; await fetchPredictions(); await fetchStats(); } } catch (e) { alert('验证失败'); analyzing.value = false; } };
                 const mergeSimilarPredictions = async () => { if (!confirm('确定要合并同类预测吗？\n\n合并规则：相同博主、相同基金、相同判断、相同目标日期的预测将被合并，置信度取平均值。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/merge-similar'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '合并失败'); } } catch (e) { alert('合并失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
                 const rollbackInvalidVerifications = async () => { if (!confirm('确定要回溯无效验证吗？\n\n将检查所有已验证的预测，如果基金数据不足（少于2个数据点），则重置验证状态，等数据充足后重新验证。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/rollback-invalid'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '回溯失败'); } } catch (e) { alert('回溯失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
@@ -3567,7 +3596,7 @@ const fetchWeChatBatch = async () => {
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, cleanupLowQuality, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
             }
         }).mount('#app');
     </script>
