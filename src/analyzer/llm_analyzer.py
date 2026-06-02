@@ -573,20 +573,6 @@ class LLMAnalyzer:
 
 {self._get_jargon_guide()}
 
-【基金板块对应关系参考】（用于匹配基金代码）
-- 白酒板块：161725（招商中证白酒指数）、512690（酒ETF）
-- 新能源板块：516790（国泰中证新能源汽车ETF）、159850（新能源ETF）
-- 医药板块：512010（医药ETF）、161726（医药卫生ETF）
-- 半导体板块：512480（国泰CES半导体芯片ETF）、159813（半导体ETF）
-- 军工板块：512660（军工ETF）、512810（军工行业ETF）
-- 消费板块：159928（消费ETF）、510150（消费80ETF）
-- 科技板块：515000（科技ETF）、159806（科技龙头ETF）
-- 互联网板块：513050（港股科技ETF）、159607（中概互联网ETF）
-- 银行板块：512800（银行ETF）、159931（金融ETF）
-- 券商板块：512880（证券ETF）、159840（券商ETF）
-- 房地产板块：512200（房地产ETF）、159940（地产ETF）
-- 黄金板块：518880（黄金ETF）、159934（黄金基金）
-
 【重要：区分"描述"与"预测"】
 只提取真正的"预测"，不要提取"描述"！
 
@@ -607,12 +593,11 @@ class LLMAnalyzer:
 
 1. predictions（预测列表）：博主对未来市场或基金的预测（必须是预测，不能是描述）
    每个预测包含：
-   - sector: 板块名称（必须填写，不能为空）- 先确定板块，再匹配基金
+   - sector: 板块名称（必须填写，不能为空）- 识别博主在说哪个板块
    - sector_type: 板块类型（如：消费、医药、科技、新能源等）
-   - fund_code: 基金代码（【重要】必须与sector板块对应！参照下方板块映射表）
-   - fund_name: 基金名称（【重要】必须与fund_code对应！）
    - prediction_type: 预测方向（up/down/flat）
    - prediction_content: 预测的具体内容描述（必须是预测，不能是描述）
+   （注意：不需要填写fund_code和fund_name，系统会根据sector自动匹配基金）
    - prediction_period: 预测周期，根据该预测的具体时间表述和上下文独立判断。
      【重要】每个预测的时间周期必须独立判断，不同预测可以有不同周期！
      【默认规则】无明确时间表述时，默认1周（不是3个月）
@@ -654,31 +639,24 @@ class LLMAnalyzer:
    - 时间明确（明天/短期）→ 高置信度（80-95）
    - 时间较明确（中期/定投）→ 中置信度（70-80）
    - 时间模糊（无明确表述）→ 低置信度（60-70）
-5. **【关键校验】fund_code是否与sector板块对应？**
-   - 白酒→161725，医药→512010，半导体→512480，新能源→516790
-   - 如果不确定板块，不要随意填写fund_code！
-6. **prediction_content是否是"预测"而非"描述"？**
+5. **prediction_content是否是"预测"而非"描述"？**
 
 【⚠️ 最终检查】
 - 如果帖子中有3个预测，它们的时间周期是否完全相同？如果是，请重新独立判断！
 - 是否只是简单使用了参考周期？如果是，请根据实际表述重新判断！
 
-返回格式示例：
+返回格式示例（注意：不需要填写fund_code和fund_name，系统自动匹配）：
 {{
     "predictions": [
         {{
-            "fund_code": "161725",
-            "fund_name": "招商中证白酒指数",
             "sector": "白酒",
-            "sector_type": "白酒",
+            "sector_type": "消费",
             "prediction_type": "up",
             "prediction_content": "茅茅调整到位，中线看反弹",
             "prediction_period": "1个月",
             "confidence": 75
         }},
         {{
-            "fund_code": "512010",
-            "fund_name": "医药ETF",
             "sector": "医药",
             "sector_type": "医药",
             "prediction_type": "up",
@@ -687,8 +665,6 @@ class LLMAnalyzer:
             "confidence": 80
         }},
         {{
-            "fund_code": "561170",
-            "fund_name": "电力ETF",
             "sector": "绿电",
             "sector_type": "新能源",
             "prediction_type": "up",
@@ -715,6 +691,8 @@ class LLMAnalyzer:
                 result = self._parse_json_with_fallback(result_text)
                 if result:
                     result = self._normalize_prediction_periods(result)
+                    # 后处理：根据 sector 自动匹配基金（LLM 不再负责填 fund_code）
+                    self._fill_fund_from_sector(result)
                     result['_period_analysis'] = {
                         'rule_period': rule_period,
                         'rule_confidence': rule_confidence
@@ -1095,13 +1073,41 @@ class LLMAnalyzer:
     def get_fund_for_sector(self, sector: str) -> Optional[Dict]:
         """根据板块名称获取对应基金"""
         sector = sector.strip()
-        
+
         sector_fund_map = self._get_sector_fund_map()
         for key, fund_info in sector_fund_map.items():
             if key in sector or sector in key:
                 return fund_info
-        
+
         return None
+
+    def _fill_fund_from_sector(self, result: Dict):
+        """根据 sector 自动匹配基金代码和名称（LLM 不再负责填写）"""
+        from src.constants.sector_fund_map import get_fund_for_sector, normalize_sector_name
+
+        for pred in result.get('predictions', []):
+            sector = pred.get('sector', '')
+            if not sector:
+                continue
+
+            # 标准化板块名
+            standard_sector = normalize_sector_name(sector)
+            if standard_sector != sector:
+                pred['sector'] = standard_sector
+                logger.info(f"[基金匹配] 板块标准化: '{sector}' → '{standard_sector}'")
+
+            # 如果 LLM 已经填了 fund_code，检查是否匹配，不匹配则覆盖
+            current_code = pred.get('fund_code', '')
+            fund = get_fund_for_sector(standard_sector)
+            if fund:
+                correct_code = fund.get('code', '')
+                correct_name = fund.get('name', '')
+                if current_code and current_code != correct_code:
+                    logger.info(f"[基金匹配] 修正基金: {current_code} → {correct_code} ({correct_name})")
+                pred['fund_code'] = correct_code
+                pred['fund_name'] = correct_name
+            elif not current_code:
+                logger.warning(f"[基金匹配] 板块 '{standard_sector}' 无对应基金，留空")
     
     def calculate_target_date(self, prediction_date: date, period: str) -> date:
         """根据预测周期计算目标验证日期"""
