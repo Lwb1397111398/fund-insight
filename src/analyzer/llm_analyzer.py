@@ -187,7 +187,15 @@ class LLMAnalyzer:
 - 满仓/重仓/梭哈 → 信心度 80-100
 - 半仓/五成仓 → 信心度 50-70
 - 轻仓/试仓/观察仓 → 信心度 30-50
-- 空仓/持币 → 看跌或观望"""
+- 空仓/持币 → 看跌或观望
+
+五、市场情绪
+- 诱多/假突破 → 看跌(陷阱)
+- 诱空/假摔 → 看涨(反向)
+- 洗盘 → 中性
+- 拉升/突破/起飞 → 看涨
+- 砸盘/跳水/崩盘 → 看跌
+"""
 
     def _get_jargon_guide(self) -> str:
         """获取黑话指南（硬编码 + 用户自定义别名）"""
@@ -200,7 +208,7 @@ class LLMAnalyzer:
             try:
                 aliases = db.query(SectorAlias).all()
                 if aliases:
-                    guide += "\n\n五、用户自定义别名\n"
+                    guide += "\n\n六、用户自定义别名\n"
                     for a in aliases:
                         guide += f"- {a.alias_name} → {a.sector_name}板块\n"
             finally:
@@ -210,14 +218,6 @@ class LLMAnalyzer:
 
         return guide
 
-五、市场情绪
-- 诱多/假突破 → 看跌(陷阱)
-- 诱空/假摔 → 看涨(反向)
-- 洗盘 → 中性
-- 拉升/突破/起飞 → 看涨
-- 砸盘/跳水/崩盘 → 看跌
-"""
-    
     def _get_sector_fund_map(self) -> Dict:
         """获取板块-基金映射（优先数据库，后备硬编码）"""
         from src.constants import SECTOR_FUND_MAP
