@@ -1812,6 +1812,73 @@
             background: currentColor;
         }
 
+        /* 板块标签 */
+        .sector-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            background: var(--color-primary-light);
+            color: var(--color-primary);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        /* 编辑弹窗 */
+        .edit-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .edit-modal-content {
+            background: var(--color-bg);
+            padding: 24px;
+            border-radius: var(--radius-lg);
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .edit-modal-content h3 {
+            margin: 0 0 16px 0;
+            font-size: 18px;
+        }
+
+        .edit-modal-content .form-group {
+            margin-bottom: 16px;
+        }
+
+        .edit-modal-content label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .edit-modal-content input,
+        .edit-modal-content select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            font-size: 14px;
+        }
+
+        .edit-modal-content .btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
         /* 滚动条美化 */
         ::-webkit-scrollbar {
             width: 6px;
@@ -2029,10 +2096,7 @@
                         <button class="action-btn warning small" @click="batchAnalyzePosts" :disabled="analyzing">{{
                             analyzing ? '分析中...' : '🔄 批量分析未分析帖子' }}</button>
                         <button class="action-btn default small" @click="resetFailedAnalyses" :disabled="analyzing">🔧 重置失败分析</button>
-                        <button class="action-btn default small" @click="fixSectorMismatch(true)" :disabled="analyzing">🔍 检查板块匹配</button>
-                        <button class="action-btn warning small" @click="fixSectorMismatch(false)" :disabled="analyzing">🔧 修复板块匹配</button>
-                        <button class="action-btn default small" @click="cleanupLowQuality(true)" :disabled="analyzing">🔍 检查低质量帖子</button>
-                        <button class="action-btn danger small" @click="cleanupLowQuality(false)" :disabled="analyzing">🗑️ 清理低质量帖子</button>
+                        <button class="action-btn default small" @click="fixSectorMismatch(false)" :disabled="analyzing">🔧 修复板块匹配</button>
                     </div>
                     <div class="data-table" v-if="posts.length > 0">
                         <table>
@@ -2097,6 +2161,7 @@
                         <table>
                             <thead>
                                 <tr>
+                                    <th>板块</th>
                                     <th>基金</th>
                                     <th>博主</th>
                                     <th>类型</th>
@@ -2108,7 +2173,8 @@
                             </thead>
                             <tbody>
                                 <tr v-for="p in filteredPredictions" :key="p.id">
-                                    <td>{{ p.fund_name || p.fund_code || p.sector || '-' }}</td>
+                                    <td><span class="sector-tag">{{ p.sector || '-' }}</span></td>
+                                    <td>{{ p.fund_name || p.fund_code || '-' }}</td>
                                     <td>{{ p.blogger_name }}</td>
                                     <td>{{ p.prediction_type === 'up' ? '看涨' : p.prediction_type === 'down' ? '看跌' :
                                         '观望' }}</td>
@@ -2118,8 +2184,9 @@
                                             :class="p.prediction_type === 'flat' ? 'status-pending' : 'status-' + (p.is_expired ? (p.is_correct ? 'success' : 'failed') : 'pending')">{{
                                             p.prediction_type === 'flat' ? '不计准确率' : (p.is_expired ? (p.is_correct ? '正确' : '错误') : '待验证') }}</span></td>
                                     <td>
-                                        <div class="row-actions"><button v-if="p.is_expired" class="row-btn primary"
-                                                @click="viewPredictionDetail(p.id)">详情</button><button
+                                        <div class="row-actions"><button class="row-btn primary"
+                                                @click="editPrediction(p)">编辑</button><button v-if="p.is_expired"
+                                                class="row-btn primary" @click="viewPredictionDetail(p.id)">详情</button><button
                                                 class="row-btn danger" @click="deletePrediction(p.id)">删除</button></div>
                                     </td>
                                 </tr>
@@ -2952,6 +3019,57 @@
                 </div>
             </div>
         </div>
+        <!-- 编辑预测弹窗 -->
+        <div v-if="showEditPrediction" class="modal-overlay" @click.self="showEditPrediction = false">
+            <div class="modal" style="max-width: 500px;">
+                <div class="modal-header">编辑预测<button class="modal-close"
+                        @click="showEditPrediction = false">×</button></div>
+                <div v-if="editingPrediction">
+                    <div class="form-group">
+                        <label>板块名称</label>
+                        <input v-model="editingPrediction.sector" placeholder="如：白酒、医药、半导体">
+                    </div>
+                    <div class="form-group">
+                        <label>基金代码</label>
+                        <input v-model="editingPrediction.fund_code" placeholder="如：161725">
+                    </div>
+                    <div class="form-group">
+                        <label>基金名称</label>
+                        <input v-model="editingPrediction.fund_name" placeholder="如：招商中证白酒指数">
+                    </div>
+                    <div class="form-group">
+                        <label>预测方向</label>
+                        <select v-model="editingPrediction.prediction_type">
+                            <option value="up">看涨</option>
+                            <option value="down">看跌</option>
+                            <option value="flat">观望</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>置信度 (0-100)</label>
+                        <input type="number" v-model.number="editingPrediction.confidence" min="0" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>预测周期</label>
+                        <select v-model="editingPrediction.prediction_period">
+                            <option value="1天">1天</option>
+                            <option value="3天">3天</option>
+                            <option value="1周">1周</option>
+                            <option value="1个月">1个月</option>
+                            <option value="3个月">3个月</option>
+                            <option value="6个月">6个月</option>
+                        </select>
+                    </div>
+                    <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                        <i class="ri-lightbulb-line"></i> 修改板块后，基金代码和名称会自动匹配（如果留空）
+                    </p>
+                    <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                        <button class="modal-btn" @click="showEditPrediction = false">取消</button>
+                        <button class="modal-btn primary" @click="savePrediction">保存</button>
+                    </div>
+                </div>
+            </div>
+        </div>
         <div v-if="showFundDetail" class="modal-overlay" @click.self="showFundDetail = false">
             <div class="modal wide">
                 <div class="modal-header">基金详情<button class="modal-close" @click="showFundDetail = false">×</button>
@@ -3365,6 +3483,7 @@
                 const fundFilter = ref('has_prediction');
                 const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false), summarizing = ref(false), summaryStats = ref(null), showSummaryConfirmModal = ref(false);
                 const showAddBlogger = ref(false), showAddPost = ref(false), showAddFund = ref(false), showPostDetail = ref(false), showViewpointDetail = ref(false), showFundDetail = ref(false), showPredictionDetail = ref(false);
+                const showEditPrediction = ref(false), editingPrediction = ref(null);
                 const showTopBloggersModal = ref(false), showAdviceHistory = ref(false), showConfig = ref(false), showCrawlerResult = ref(false), crawlerLoading = ref(false);
                 const showWeChatFetch = ref(false), wechatFetching = ref(false), wechatUrls = ref(''), wechatBatchResults = ref([]), wechatBatchSummary = ref(''), wechatBatchProgress = ref(''), wechatBatchPercent = ref(0), wechatPostDate = ref('');
                 const wechatUrlCount = computed(() => { const lines = wechatUrls.value.split('\n').map(l => l.trim()).filter(l => l && l.includes('mp.weixin.qq.com')); return lines.length; });
@@ -3496,6 +3615,41 @@ const fetchWeChatBatch = async () => {
                 const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
                 const viewPredictionDetail = async (id) => { try { const res = await axios.get(`/api/predictions/${id}`); if (res.data.success) { predictionDetail.value = res.data.data; showPredictionDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const editPrediction = (pred) => {
+                    editingPrediction.value = {
+                        id: pred.id,
+                        sector: pred.sector || '',
+                        fund_code: pred.fund_code || '',
+                        fund_name: pred.fund_name || '',
+                        prediction_type: pred.prediction_type || 'up',
+                        confidence: pred.confidence || 50,
+                        prediction_period: pred.prediction_period || '1周'
+                    };
+                    showEditPrediction.value = true;
+                };
+                const savePrediction = async () => {
+                    if (!editingPrediction.value) return;
+                    const pred = editingPrediction.value;
+                    try {
+                        const res = await axios.put(`/api/predictions/${pred.id}`, {
+                            sector: pred.sector,
+                            fund_code: pred.fund_code,
+                            fund_name: pred.fund_name,
+                            prediction_type: pred.prediction_type,
+                            confidence: pred.confidence,
+                            prediction_period: pred.prediction_period
+                        });
+                        if (res.data.success) {
+                            alert('保存成功！');
+                            showEditPrediction.value = false;
+                            await fetchPredictions();
+                        } else {
+                            alert('保存失败：' + res.data.message);
+                        }
+                    } catch (e) {
+                        alert('保存失败: ' + (e.response?.data?.detail || e.message));
+                    }
+                };
                 const showTopBloggers = async () => { try { const res = await axios.get('/api/bloggers/top?limit=10'); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('获取失败'); } };
                 const batchAnalyzePosts = async () => { analyzing.value = true; try { const res = await axios.post('/api/posts/batch-analyze'); alert(res.data.message); if (res.data.data?.in_progress) { let checkCount = 0; const maxChecks = 40; const checkInterval = setInterval(async () => { checkCount++; try { const statusRes = await axios.get('/api/posts/batch-analyze/status'); const isRunning = statusRes.data.data?.in_progress; if (!isRunning || checkCount >= maxChecks) { clearInterval(checkInterval); analyzing.value = false; await fetchPosts(); await fetchPredictions(); await fetchStats(); if (!isRunning) alert('批量分析已完成！'); else alert('批量分析超时，请刷新页面查看结果'); } } catch(e) { if (checkCount >= maxChecks) { clearInterval(checkInterval); analyzing.value = false; } } }, 15000); } else { analyzing.value = false; await fetchPosts(); await fetchPredictions(); } } catch (e) { alert('分析失败'); analyzing.value = false; } };
                 const resetFailedAnalyses = async () => { if (!confirm('确定要重置分析失败的帖子吗？\n\n将把标记为"已分析"但没有有效预测结果的帖子恢复为未分析状态，然后可以重新分析。')) return; analyzing.value = true; try { const res = await axios.post('/api/posts/reset-failed'); alert(res.data.message); await fetchPosts(); await fetchStats(); } catch (e) { alert('重置失败: ' + (e.response?.data?.detail || e.message)); } analyzing.value = false; };
@@ -3596,7 +3750,7 @@ const fetchWeChatBatch = async () => {
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup'); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, cleanupLowQuality, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight };
             }
         }).mount('#app');
     </script>

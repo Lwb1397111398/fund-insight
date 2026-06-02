@@ -57,10 +57,74 @@ async def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db
     
     if not prediction:
         raise HTTPException(status_code=404, detail="预测不存在")
-    
+
     return {
         "success": True,
         "data": prediction
+    }
+
+
+class PredictionUpdate(BaseModel):
+    sector: Optional[str] = None
+    fund_code: Optional[str] = None
+    fund_name: Optional[str] = None
+    prediction_type: Optional[str] = None
+    confidence: Optional[int] = None
+    prediction_period: Optional[str] = None
+
+
+@router.put("/{prediction_id}")
+async def update_prediction(
+    prediction_id: int,
+    update_data: PredictionUpdate,
+    db: Session = Depends(get_db)
+):
+    """更新预测（人工干预板块和基金）"""
+    from src.models.database import Prediction as PredictionModel
+    from src.constants.sector_fund_map import get_fund_for_sector, get_category_for_sector
+
+    prediction = db.query(PredictionModel).filter(PredictionModel.id == prediction_id).first()
+    if not prediction:
+        raise HTTPException(status_code=404, detail="预测不存在")
+
+    # 更新板块
+    if update_data.sector is not None:
+        prediction.sector = update_data.sector
+        # 自动更新板块类型
+        prediction.sector_type = get_category_for_sector(update_data.sector)
+
+    # 更新基金
+    if update_data.fund_code is not None:
+        prediction.fund_code = update_data.fund_code
+    if update_data.fund_name is not None:
+        prediction.fund_name = update_data.fund_name
+
+    # 如果只修改了板块，自动匹配基金
+    if update_data.sector and not update_data.fund_code:
+        correct_fund = get_fund_for_sector(update_data.sector)
+        if correct_fund:
+            prediction.fund_code = correct_fund.get("code", "")
+            prediction.fund_name = correct_fund.get("name", "")
+
+    # 更新其他字段
+    if update_data.prediction_type is not None:
+        prediction.prediction_type = update_data.prediction_type
+    if update_data.confidence is not None:
+        prediction.confidence = max(0, min(100, update_data.confidence))
+    if update_data.prediction_period is not None:
+        prediction.prediction_period = update_data.prediction_period
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "预测更新成功",
+        "data": {
+            "id": prediction.id,
+            "sector": prediction.sector,
+            "fund_code": prediction.fund_code,
+            "fund_name": prediction.fund_name
+        }
     }
 
 
@@ -69,10 +133,10 @@ async def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
     """删除预测"""
     service = PredictionService(db)
     success = service.delete_prediction(prediction_id)
-    
+
     if not success:
         raise HTTPException(status_code=404, detail="预测不存在")
-    
+
     return {"success": True, "message": "预测删除成功"}
 
 
