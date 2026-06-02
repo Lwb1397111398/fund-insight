@@ -116,8 +116,8 @@ async def update_prediction(
             prediction.fund_name = correct_fund.get("name", "")
             fund_changed = True
 
-    # 【关键】如果板块和基金都修改了，保存到映射表（供下次 LLM 分析使用）
-    if sector_changed and fund_changed and prediction.sector and prediction.fund_code:
+    # 【关键】如果基金修改了（且板块有值），保存到映射表（供下次 LLM 分析使用）
+    if fund_changed and prediction.sector and prediction.fund_code:
         try:
             service = get_sector_fund_service(db)
             service.add_mapping(
