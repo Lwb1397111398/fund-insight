@@ -3328,7 +3328,15 @@
                             fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats();
                         }
                     } catch (e) {
-                        passwordError.value = '密码错误，请重新输入';
+                        if (e.response && e.response.status === 401) {
+                            passwordError.value = '密码错误，请重新输入';
+                        } else if (e.response) {
+                            passwordError.value = `服务器错误 (${e.response.status})，请稍后重试`;
+                        } else if (e.request) {
+                            passwordError.value = '网络错误，无法连接服务器（可能是 CORS 配置问题）';
+                        } else {
+                            passwordError.value = '请求异常: ' + e.message;
+                        }
                         delete axios.defaults.headers.common['X-Access-Password'];
                         localStorage.removeItem('access_password');
                     }
