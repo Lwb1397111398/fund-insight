@@ -1124,11 +1124,23 @@ class AdviceFeedback(Base):
 
 
 def init_db():
-    """初始化数据库 - 创建所有表"""
-    Base.metadata.create_all(engine)
-    if DB_TYPE == "postgresql":
-        logger.info(f"[数据库] 已初始化: PostgreSQL")
-    else:
-        logger.info(f"[数据库] 已初始化: SQLite: {DB_PATH}")
+    """初始化数据库 - 创建所有表（带重试，处理 Supabase SSL 断开）"""
+    import time
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            Base.metadata.create_all(engine)
+            if DB_TYPE == "postgresql":
+                logger.info(f"[数据库] 已初始化: PostgreSQL")
+            else:
+                logger.info(f"[数据库] 已初始化: SQLite: {DB_PATH}")
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"[数据库] 初始化失败，重试 {attempt + 1}/{max_retries}: {e}")
+                time.sleep(2)
+            else:
+                logger.error(f"[数据库] 初始化失败: {e}")
+                raise
 
 
