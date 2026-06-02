@@ -131,12 +131,12 @@ async def reset_failed_analyses(db: Session = Depends(get_db)):
 @router.post("/fix-sector-mismatch")
 async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db)):
     """
-    修复板块和基金不匹配的预测数据
+    修复板块和基金不匹配的预测数据（5层匹配，与分析时逻辑一致）
 
     Args:
         dry_run: True=试运行（只检查不修改），False=正式执行修复
     """
-    from src.models.database import Prediction
+    from src.models.database import Prediction, FundInfo, SectorFundMapping
     from src.constants.sector_fund_map import get_fund_for_sector, normalize_sector_name
     from src.services.sector_fund_service import get_sector_fund_service
 
@@ -150,11 +150,75 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
         Prediction.is_deleted == False
     ).all()
 
-    # 多层匹配：数据库映射 > 硬编码表
     service = get_sector_fund_service(db)
+
+    # 缓存 API 搜索结果，避免重复调用
+    _api_cache = {}
+
+    def find_correct_fund(standard_sector: str):
+        """5层匹配，与 llm_analyzer._fill_fund_from_sector 逻辑一致"""
+        # 第1层：数据库映射（用户编辑优先）
+        fund = service.get_fund_by_sector(standard_sector)
+        if fund:
+            return fund, "数据库映射"
+
+        # 第2层：硬编码表
+        fund = get_fund_for_sector(standard_sector)
+        if fund:
+            return fund, "硬编码表"
+
+        # 第3层：FundInfo 表（按 sector_type 搜索）
+        fund_info = db.query(FundInfo).filter(FundInfo.sector_type == standard_sector).first()
+        if fund_info:
+            return {'code': fund_info.fund_code, 'name': fund_info.fund_name}, "FundInfo精确"
+
+        fund_info = db.query(FundInfo).filter(FundInfo.sector_type.contains(standard_sector)).first()
+        if fund_info:
+            return {'code': fund_info.fund_code, 'name': fund_info.fund_name}, "FundInfo模糊"
+
+        funds = db.query(FundInfo).filter(FundInfo.sector_type != None).all()
+        for f in funds:
+            if f.sector_type and (f.sector_type in standard_sector or standard_sector in f.sector_type):
+                return {'code': f.fund_code, 'name': f.fund_name}, "FundInfo反向"
+
+        # 第4层：天天基金 API 搜索
+        if standard_sector in _api_cache:
+            return _api_cache[standard_sector], "API缓存"
+
+        try:
+            from src.fund.fund_api import FundAPI
+            api = FundAPI()
+            results = api.search_fund(standard_sector)
+            if results:
+                r = results[0]
+                api_fund = {'code': r.get('fund_code', ''), 'name': r.get('fund_name', '')}
+                _api_cache[standard_sector] = api_fund
+
+                # 自动学习：保存到数据库
+                if not dry_run:
+                    try:
+                        existing = db.query(SectorFundMapping).filter(
+                            SectorFundMapping.sector_name == standard_sector
+                        ).first()
+                        if not existing:
+                            mapping = SectorFundMapping(
+                                sector_name=standard_sector,
+                                fund_code=api_fund['code'],
+                                fund_name=api_fund['name']
+                            )
+                            db.add(mapping)
+                    except Exception:
+                        db.rollback()
+
+                return api_fund, "API搜索"
+        except Exception as e:
+            pass
+
+        return None, None
 
     fixed_count = 0
     mismatch_details = []
+    no_match_details = []
 
     for pred in predictions:
         sector = pred.sector or ''
@@ -166,12 +230,17 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
         # 标准化板块名
         standard_sector = normalize_sector_name(sector)
 
-        # 第1层：数据库映射（用户编辑优先）
-        correct_fund = service.get_fund_by_sector(standard_sector)
+        # 5层匹配
+        correct_fund, match_source = find_correct_fund(standard_sector)
+
         if not correct_fund:
-            # 第2层：硬编码表
-            correct_fund = get_fund_for_sector(standard_sector)
-        if not correct_fund:
+            if current_fund_code:
+                no_match_details.append({
+                    "id": pred.id,
+                    "sector": sector,
+                    "current_fund_code": current_fund_code,
+                    "current_fund_name": pred.fund_name or ""
+                })
             continue
 
         correct_code = correct_fund.get("code", "")
@@ -185,7 +254,8 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
                 "current_fund_code": current_fund_code,
                 "current_fund_name": pred.fund_name or "",
                 "correct_fund_code": correct_code,
-                "correct_fund_name": correct_name
+                "correct_fund_name": correct_name,
+                "match_source": match_source
             })
 
             if not dry_run:
@@ -196,14 +266,29 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
     if not dry_run:
         db.commit()
 
+    total_issues = len(mismatch_details) + len(no_match_details)
+    msg_parts = []
+    if mismatch_details:
+        msg_parts.append(f"{len(mismatch_details)} 个基金不匹配")
+    if no_match_details:
+        msg_parts.append(f"{len(no_match_details)} 个无法匹配基金")
+
+    if not msg_parts:
+        message = f"{'检查' if dry_run else '修复'}完成：所有预测的板块和基金匹配正确"
+    else:
+        action = '将' if dry_run else '已'
+        message = f"{'试运行' if dry_run else '已修复'}: 发现 {'、'.join(msg_parts)}，{action}修复 {len(mismatch_details) if not dry_run else fixed_count} 个"
+
     return {
         "success": True,
-        "message": f"{'试运行' if dry_run else '已修复'}: 发现 {len(mismatch_details)} 个不匹配，{'将' if dry_run else '已'}修复 {fixed_count if not dry_run else len(mismatch_details)} 个",
+        "message": message,
         "data": {
             "dry_run": dry_run,
             "total_mismatch": len(mismatch_details),
+            "total_no_match": len(no_match_details),
             "fixed_count": fixed_count if not dry_run else 0,
-            "details": mismatch_details[:50]  # 最多返回50条详情
+            "details": mismatch_details[:50],
+            "no_match_details": no_match_details[:20]
         }
     }
 
