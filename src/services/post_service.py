@@ -343,10 +343,24 @@ class PostService(BaseService[Post]):
             db_post.analyzed = True
             db_post.analysis_result = result
             analysis_result = result
-            
+
             for pred in result.get("predictions", []):
                 sector = pred.get("sector", "")
-                
+                llm_fund_code = pred.get("fund_code", "")
+                llm_fund_name = pred.get("fund_name", "")
+
+                # 校验 LLM 返回的 fund_code 是否与 sector 一致
+                # 如果不一致，以 sector 为准重新匹配基金
+                validated_fund_code, validated_fund_name = self._validate_sector_fund_consistency(
+                    sector=sector,
+                    llm_fund_code=llm_fund_code,
+                    llm_fund_name=llm_fund_name,
+                    pred_content=pred.get("prediction_content", ""),
+                    fund_auto_manager=fund_auto_manager,
+                    llm_analyzer=llm_analyzer
+                )
+
+                # 使用 match_fund_with_fallback 作为最终保障
                 fund_code, fund_name = match_fund_with_fallback(
                     pred=pred,
                     sector=sector,
@@ -354,7 +368,12 @@ class PostService(BaseService[Post]):
                     llm_analyzer=llm_analyzer,
                     db=self.db
                 )
-                
+
+                # 优先使用验证后的基金，如果验证失败则使用 match_fund_with_fallback 的结果
+                if validated_fund_code:
+                    fund_code = validated_fund_code
+                    fund_name = validated_fund_name
+
                 prediction = Prediction(
                     post_id=db_post.id,
                     blogger_id=db_post.blogger_id,
@@ -398,7 +417,7 @@ class PostService(BaseService[Post]):
             except Exception:
                 pass
             print(f"[PostService] 帖子已保存（分析失败）: ID={db_post.id}")
-        
+
         return {
             "id": db_post.id,
             "title": db_post.title,
@@ -406,7 +425,61 @@ class PostService(BaseService[Post]):
             "analyzed": db_post.analyzed,
             "predictions_created": predictions_created
         }
-    
+
+    def _validate_sector_fund_consistency(
+        self,
+        sector: str,
+        llm_fund_code: str,
+        llm_fund_name: str,
+        pred_content: str,
+        fund_auto_manager,
+        llm_analyzer
+    ) -> tuple:
+        """
+        校验板块和基金的一致性
+
+        如果 LLM 返回的 fund_code 与 sector 不匹配，以 sector 为准重新匹配基金。
+
+        Args:
+            sector: 板块名称
+            llm_fund_code: LLM 返回的基金代码
+            llm_fund_name: LLM 返回的基金名称
+            pred_content: 预测内容
+            fund_auto_manager: 基金自动管理器
+            llm_analyzer: LLM 分析器
+
+        Returns:
+            (fund_code, fund_name) 或 (None, None) 如果验证通过无需修改
+        """
+        if not sector:
+            return None, None
+
+        # 获取板块对应的正确基金
+        from src.constants.sector_fund_map import get_fund_for_sector
+        correct_fund = get_fund_for_sector(sector)
+
+        if not correct_fund:
+            return None, None
+
+        correct_code = correct_fund.get("code", "")
+        correct_name = correct_fund.get("name", "")
+
+        # 如果 LLM 没有返回 fund_code，使用正确的基金
+        if not llm_fund_code or not str(llm_fund_code).strip():
+            print(f"[Sector Validation] LLM 未返回 fund_code，使用板块对应基金: {correct_name} ({correct_code})")
+            return correct_code, correct_name
+
+        # 检查 LLM 返回的 fund_code 是否与板块匹配
+        llm_fund_code_str = str(llm_fund_code).strip()
+
+        # 如果 fund_code 不匹配，以板块为准
+        if llm_fund_code_str != correct_code:
+            print(f"[Sector Validation] fund_code 不匹配: LLM返回={llm_fund_code_str}，板块{sector}对应={correct_code}，使用板块对应基金")
+            return correct_code, correct_name
+
+        # fund_code 匹配，无需修改
+        return None, None
+
     def analyze_post_async(self, post_id: int) -> Dict:
         """
         异步分析帖子（用于后台任务）

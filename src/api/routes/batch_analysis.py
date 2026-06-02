@@ -310,6 +310,20 @@ def _execute_batch_analysis_task(task_id: int, db: Session):
                 # 创建预测记录
                 for pred in result.get("predictions", []):
                     sector = pred.get("sector", "")
+                    llm_fund_code = pred.get("fund_code", "")
+                    llm_fund_name = pred.get("fund_name", "")
+
+                    # 校验板块和基金的一致性
+                    from src.constants.sector_fund_map import get_fund_for_sector
+                    correct_fund = get_fund_for_sector(sector) if sector else None
+                    if correct_fund:
+                        correct_code = correct_fund.get("code", "")
+                        correct_name = correct_fund.get("name", "")
+                        # 如果 LLM 返回的 fund_code 与板块不匹配，以板块为准
+                        if llm_fund_code and str(llm_fund_code).strip() != correct_code:
+                            print(f"[Sector Validation] fund_code 不匹配: LLM返回={llm_fund_code}，板块{sector}对应={correct_code}，使用板块对应基金")
+                            pred["fund_code"] = correct_code
+                            pred["fund_name"] = correct_name
 
                     # 三级降级基金匹配
                     fund_code, fund_name = match_fund_with_fallback(
@@ -319,7 +333,7 @@ def _execute_batch_analysis_task(task_id: int, db: Session):
                         llm_analyzer=llm_analyzer,
                         db=db
                     )
-                    
+
                     prediction = Prediction(
                         post_id=post.id,
                         blogger_id=post.blogger_id,
