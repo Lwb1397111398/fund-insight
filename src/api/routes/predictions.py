@@ -116,7 +116,7 @@ async def update_prediction(
             prediction.fund_name = correct_fund.get("name", "")
             fund_changed = True
 
-    # 【关键】如果基金修改了（且板块有值），保存到映射表（供下次 LLM 分析使用）
+    # 【关键】如果基金修改了（且板块有值），保存到映射表并级联清理冲突
     if fund_changed and prediction.sector and prediction.fund_code:
         try:
             service = get_sector_fund_service(db)
@@ -125,6 +125,14 @@ async def update_prediction(
                 fund_code=prediction.fund_code,
                 fund_name=prediction.fund_name
             )
+            # 级联清理：删除低优先级层中同板块不同基金的冲突数据
+            cleanup = service.cascade_cleanup_conflicts(
+                sector_name=prediction.sector,
+                fund_code=prediction.fund_code,
+                fund_name=prediction.fund_name
+            )
+            if any(v > 0 for v in cleanup.values()):
+                logger.info(f"[人工干预] 已清理冲突数据: {cleanup}")
             logger.info(f"[人工干预] 已保存板块映射: {prediction.sector} → {prediction.fund_name} ({prediction.fund_code})")
         except Exception as e:
             logger.warning(f"[人工干预] 保存板块映射失败: {e}")

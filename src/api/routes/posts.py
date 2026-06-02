@@ -262,6 +262,8 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
                 pred.fund_code = correct_code
                 pred.fund_name = correct_name
                 fixed_count += 1
+                # 级联清理：删除低优先级层中同板块不同基金的冲突数据
+                service.cascade_cleanup_conflicts(standard_sector, correct_code, correct_name)
 
     if not dry_run:
         db.commit()
