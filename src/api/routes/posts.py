@@ -128,6 +128,70 @@ async def reset_failed_analyses(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/fix-sector-mismatch")
+async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db)):
+    """
+    修复板块和基金不匹配的预测数据
+
+    Args:
+        dry_run: True=试运行（只检查不修改），False=正式执行修复
+    """
+    from src.models.database import Prediction
+    from src.constants.sector_fund_map import get_fund_for_sector
+
+    predictions = db.query(Prediction).filter(
+        Prediction.is_deleted == False
+    ).all()
+
+    fixed_count = 0
+    mismatch_details = []
+
+    for pred in predictions:
+        sector = pred.sector or ''
+        current_fund_code = pred.fund_code or ''
+
+        if not sector:
+            continue
+
+        # 获取板块对应的正确基金
+        correct_fund = get_fund_for_sector(sector)
+        if not correct_fund:
+            continue
+
+        correct_code = correct_fund.get("code", "")
+        correct_name = correct_fund.get("name", "")
+
+        # 检查是否匹配
+        if current_fund_code and current_fund_code != correct_code:
+            mismatch_details.append({
+                "id": pred.id,
+                "sector": sector,
+                "current_fund_code": current_fund_code,
+                "current_fund_name": pred.fund_name or "",
+                "correct_fund_code": correct_code,
+                "correct_fund_name": correct_name
+            })
+
+            if not dry_run:
+                pred.fund_code = correct_code
+                pred.fund_name = correct_name
+                fixed_count += 1
+
+    if not dry_run:
+        db.commit()
+
+    return {
+        "success": True,
+        "message": f"{'试运行' if dry_run else '已修复'}: 发现 {len(mismatch_details)} 个不匹配，{'将' if dry_run else '已'}修复 {fixed_count if not dry_run else len(mismatch_details)} 个",
+        "data": {
+            "dry_run": dry_run,
+            "total_mismatch": len(mismatch_details),
+            "fixed_count": fixed_count if not dry_run else 0,
+            "details": mismatch_details[:50]  # 最多返回50条详情
+        }
+    }
+
+
 @router.post("/batch-analyze")
 async def batch_analyze_posts(
     background_tasks: BackgroundTasks,
