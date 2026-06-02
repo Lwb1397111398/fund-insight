@@ -421,6 +421,16 @@ def create_progress(total: int = 0) -> CleanupProgress:
     task_id = str(uuid.uuid4())[:8]
     progress = CleanupProgress(task_id, total)
     _cleanup_progress_store[task_id] = progress
+
+    # 防止内存泄漏：超过 100 条时删除最旧的条目
+    if len(_cleanup_progress_store) > 100:
+        sorted_items = sorted(
+            _cleanup_progress_store.items(),
+            key=lambda x: x[1].end_time or x[1].start_time or datetime.min
+        )
+        for old_task_id, _ in sorted_items[:len(_cleanup_progress_store) - 100]:
+            del _cleanup_progress_store[old_task_id]
+
     return progress
 
 

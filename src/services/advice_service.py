@@ -240,7 +240,16 @@ class AdviceService(BaseService[InvestmentAdvice]):
                 "sector_type": f.sector_type,
                 "day_growth": f.day_growth,
                 "week_growth": f.week_growth,
-                "month_growth": f.month_growth
+                "month_growth": f.month_growth,
+                "ma5": f.ma5,
+                "ma10": f.ma10,
+                "ma20": f.ma20,
+                "sharpe_ratio": f.sharpe_ratio,
+                "max_drawdown": f.max_drawdown,
+                "support_level": f.support_level,
+                "resistance_level": f.resistance_level,
+                "vs_sector": f.vs_sector,
+                "vs_market": f.vs_market
             }
             for f in funds
         ]

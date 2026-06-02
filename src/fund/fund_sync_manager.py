@@ -154,7 +154,6 @@ class FundSyncManager:
                 if pred.fund_code != fund.fund_code:
                     pred.fund_code = fund.fund_code
                     pred.fund_name = fund.fund_name
-                    db.commit()
                     result["linked"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
@@ -173,7 +172,6 @@ class FundSyncManager:
                     # 基金已存在，更新sector_type
                     if not existing.sector_type:
                         existing.sector_type = sector
-                        db.commit()
                     result["linked"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
@@ -206,8 +204,7 @@ class FundSyncManager:
                             can_delete=True
                         )
                         db.add(new_fund)
-                        db.commit()
-                        
+
                         # 获取历史数据（用于AI分析）
                         try:
                             from src.fund.fund_api import fund_data_manager
@@ -252,12 +249,11 @@ class FundSyncManager:
                     
                     # 更新查找表
                     existing_sectors[sector] = fund
-                    
+
                     # 关联预测
                     pred.fund_code = fund.fund_code
                     pred.fund_name = fund.fund_name
-                    db.commit()
-                    
+
                     result["added"] += 1
                     result["linked"] += 1
                     result["details"].append({
@@ -283,7 +279,9 @@ class FundSyncManager:
                     "sector": sector,
                     "reason": f"自动抓取失败: {str(e)}"
                 })
-        
+
+        # 循环结束后统一提交
+        db.commit()
         return result
     
     def update_all_funds_info(self, db: Session) -> Dict:
@@ -318,28 +316,26 @@ class FundSyncManager:
                     fund.latest_nav = fund_info.get('nav', fund.latest_nav)
                     fund.nav_date = date.today()
                     fund.updated_at = datetime.now()
-                    
+
                     history = fund_api.get_fund_history(fund.fund_code, days=1)
                     actual_day_growth = None
                     if history:
                         actual_day_growth = history[0].get('growth')
-                    
+
                     if actual_day_growth is not None:
                         fund.day_growth = actual_day_growth
                     else:
                         fund.day_growth = fund_info.get('day_growth', fund.day_growth)
-                    
+
                     fund.week_growth = fund_info.get('week_growth', fund.week_growth)
                     fund.month_growth = fund_info.get('month_growth', fund.month_growth)
-                    
-                    db.commit()
-                    
+
                     try:
                         history_count = fund_data_manager.update_fund_history(fund.fund_code, days=30, db=db)
                     except Exception as e:
                         print(f"[FundSync] 更新基金 {fund.fund_code} 历史净值失败: {e}")
                         history_count = 0
-                    
+
                     result["updated"] += 1
                     result["details"].append({
                         "fund_code": fund.fund_code,
@@ -366,7 +362,9 @@ class FundSyncManager:
                     "action": "失败",
                     "reason": str(e)
                 })
-        
+
+        # 循环结束后统一提交
+        db.commit()
         return result
     
     def full_sync(self, db: Session = None) -> Dict:

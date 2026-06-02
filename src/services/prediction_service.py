@@ -159,7 +159,7 @@ class PredictionService(BaseService[Prediction]):
             query = query.filter(Prediction.blogger_id == blogger_id)
         
         total = query.count()
-        verified = query.filter(Prediction.status == 'verified').count()
+        verified = query.filter(Prediction.status == 'success').count()
         correct = query.filter(Prediction.is_correct == True).count()
         pending = query.filter(Prediction.status == 'pending').count()
         

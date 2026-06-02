@@ -8,9 +8,12 @@ from sqlalchemy.orm import Session
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import time
+import logging
 
 from src.models.database import Viewpoint
 from src.core.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class CrawlerService:
@@ -21,45 +24,61 @@ class CrawlerService:
     
     def _is_duplicate_title(self, title: str, similarity_threshold: float = 0.8) -> bool:
         """
-        检查标题是否重复（基于相似度）
-        
+        检查标题是否重复（基于相似度，优化内存使用）
+
+        优化策略：
+        1. 先做精确的 content_hash 匹配（O(1) 查找）
+        2. 对于模糊匹配，只加载 content 的前 100 个字符，限制最大 500 条
+        3. 避免全量加载整个 Viewpoint 对象
+
         Args:
             title: 待检查的标题
             similarity_threshold: 相似度阈值
-            
+
         Returns:
             是否重复
         """
+        import hashlib
         from datetime import date, timedelta
-        
+
         recent_date = date.today() - timedelta(days=7)
-        
-        recent_viewpoints = self.db.query(Viewpoint).filter(
+        title_lower = title.lower().strip()
+
+        # 1. 精确匹配：通过 content_hash 快速判断
+        title_hash = hashlib.md5(title_lower.encode('utf-8')).hexdigest()
+        hash_exists = self.db.query(Viewpoint.id).filter(
+            Viewpoint.viewpoint_date >= recent_date,
+            Viewpoint.is_deleted == False,
+            Viewpoint.content_hash == title_hash
+        ).first()
+        if hash_exists:
+            return True
+
+        # 2. 模糊匹配：只加载必要的字段，限制条数
+        recent_contents = self.db.query(Viewpoint.content).filter(
             Viewpoint.viewpoint_date >= recent_date,
             Viewpoint.is_deleted == False
-        ).all()
-        
-        title_lower = title.lower().strip()
+        ).limit(500).all()
+
         title_words = set(title_lower)
-        
-        for vp in recent_viewpoints:
-            if not vp.content:
+        for (content,) in recent_contents:
+            if not content:
                 continue
-            
-            vp_title = vp.content[:100].lower().strip() if len(vp.content) > 50 else vp.content.lower().strip()
-            
+
+            vp_title = content[:100].lower().strip()
+
             if title_lower == vp_title:
                 return True
-            
+
             vp_words = set(vp_title)
             if title_words and vp_words:
                 intersection = len(title_words & vp_words)
                 union = len(title_words | vp_words)
                 similarity = intersection / union if union > 0 else 0
-                
+
                 if similarity >= similarity_threshold:
                     return True
-        
+
         return False
     
     def is_crawler_enabled(self) -> bool:
@@ -170,18 +189,37 @@ class CrawlerService:
             try:
                 db = SessionLocal()
                 try:
+                    import hashlib as _hashlib
                     recent_date = date.today() - timedelta(days=7)
-                    recent_viewpoints = db.query(Viewpoint).filter(
+                    title_lower = article['title'].lower().strip()
+
+                    # 1. 精确匹配：通过 content_hash 快速判断
+                    title_hash = _hashlib.md5(title_lower.encode('utf-8')).hexdigest()
+                    hash_exists = db.query(Viewpoint.id).filter(
+                        Viewpoint.viewpoint_date >= recent_date,
+                        Viewpoint.is_deleted == False,
+                        Viewpoint.content_hash == title_hash
+                    ).first()
+                    if hash_exists:
+                        return article, False, {
+                            'score': 0,
+                            'reason': '标题与已有观点重复',
+                            'should_capture': False,
+                            'threshold': 0
+                        }
+
+                    # 2. 模糊匹配：只加载 content 字段，限制条数
+                    recent_contents = db.query(Viewpoint.content).filter(
                         Viewpoint.viewpoint_date >= recent_date,
                         Viewpoint.is_deleted == False
-                    ).all()
-                    title_lower = article['title'].lower().strip()
+                    ).limit(500).all()
+
                     title_words = set(title_lower)
                     is_dup = False
-                    for vp in recent_viewpoints:
-                        if not vp.content:
+                    for (content,) in recent_contents:
+                        if not content:
                             continue
-                        vp_title = vp.content[:100].lower().strip() if len(vp.content) > 50 else vp.content.lower().strip()
+                        vp_title = content[:100].lower().strip()
                         if title_lower == vp_title:
                             is_dup = True
                             break
@@ -191,7 +229,7 @@ class CrawlerService:
                             if similarity >= 0.8:
                                 is_dup = True
                                 break
-                    
+
                     if is_dup:
                         return article, False, {
                             'score': 0,
@@ -232,10 +270,10 @@ class CrawlerService:
                 finally:
                     db.close()
             except Exception as e:
-                print(f"[并发分析] 分析文章失败: {article.get('title', '')[:30]}... 错误: {e}")
+                logger.error(f"[并发分析] 分析文章失败: {article.get('title', '')[:30]}... 错误: {e}")
                 return article, False, {'score': 0, 'reason': f'分析失败: {e}', 'should_capture': False}
 
-        print(f"[并发分析] 开始并发分析 {len(articles)} 篇文章，并发数: {max_workers}")
+        logger.info(f"[并发分析] 开始并发分析 {len(articles)} 篇文章，并发数: {max_workers}")
         start_time = time.time()
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -251,10 +289,10 @@ class CrawlerService:
                     results.append((article, should_capture, analysis))
                     completed += 1
                     if completed % 5 == 0 or completed == len(articles):
-                        print(f"[并发分析] 进度: {completed}/{len(articles)}")
+                        logger.info(f"[并发分析] 进度: {completed}/{len(articles)}")
 
         elapsed = time.time() - start_time
-        print(f"[并发分析] 完成，耗时: {elapsed:.1f}秒")
+        logger.info(f"[并发分析] 完成，耗时: {elapsed:.1f}秒")
 
         return results
 
@@ -295,515 +333,197 @@ class CrawlerService:
         )
         
         return viewpoint
-    
-    def crawl_eastmoney_blog(self, max_articles: int = 15, concurrent: bool = True, max_workers: int = 3) -> Dict:
+
+    def _crawl_source(self, source_name: str, articles: list, default_author: str,
+                      concurrent: bool = True, max_workers: int = 3) -> Dict:
         """
-        抓取东方财富博客
+        通用的爬取-分析-存储流水线
 
         Args:
-            max_articles: 最大文章数
+            source_name: 来源标识（如 'eastmoney_blog', 'sina_finance'）
+            articles: 文章列表
+            default_author: 默认作者名
             concurrent: 是否使用并发分析
             max_workers: 并发数
 
         Returns:
             抓取结果
         """
+        logger.info(f"抓取到 {len(articles)} 篇文章，开始分析...")
+
+        adopted_count = 0
+        skipped_count = 0
+        adopted_articles = []
+        skipped_articles = []
+
+        if concurrent and len(articles) > 1:
+            results = self._analyze_articles_concurrent(articles, source_name, max_workers)
+
+            for article, should_capture, analysis in results:
+                score = analysis.get('score', 0)
+
+                if should_capture:
+                    viewpoint = self._create_viewpoint(
+                        content=article.get('content', ''),
+                        title=article['title'],
+                        author=article.get('author', default_author),
+                        source=source_name,
+                        analysis=analysis
+                    )
+
+                    self.db.add(viewpoint)
+                    adopted_count += 1
+                    adopted_articles.append({
+                        'title': article['title'],
+                        'author': article.get('author'),
+                        'score': score,
+                        'sentiment': analysis.get('sentiment')
+                    })
+                else:
+                    skipped_count += 1
+                    skipped_articles.append({
+                        'title': article['title'],
+                        'score': score,
+                        'reason': analysis.get('reason', '')[:30]
+                    })
+        else:
+            from src.crawler.enhanced_ai_analyzer import EnhancedAIAnalyzer
+            ai_analyzer = EnhancedAIAnalyzer()
+
+            for i, article in enumerate(articles, 1):
+                should_capture, analysis = self._analyze_article(
+                    ai_analyzer,
+                    article['title'],
+                    article.get('content', ''),
+                    source=source_name
+                )
+
+                score = analysis.get('score', 0)
+                threshold = self._get_threshold(source_name)
+
+                logger.info(f"[{i}/{len(articles)}] {'采纳' if should_capture else '跳过'} | 分数: {score:.1f}/{threshold} | {article['title'][:40]}...")
+
+                if should_capture:
+                    viewpoint = self._create_viewpoint(
+                        content=article.get('content', ''),
+                        title=article['title'],
+                        author=article.get('author', default_author),
+                        source=source_name,
+                        analysis=analysis
+                    )
+
+                    self.db.add(viewpoint)
+                    adopted_count += 1
+                    adopted_articles.append({
+                        'title': article['title'],
+                        'author': article.get('author'),
+                        'score': score,
+                        'sentiment': analysis.get('sentiment')
+                    })
+                else:
+                    skipped_count += 1
+                    skipped_articles.append({
+                        'title': article['title'],
+                        'score': score,
+                        'reason': analysis.get('reason', '')[:30]
+                    })
+
+        self.db.commit()
+
+        return {
+            "success": True,
+            "message": f"自动采纳完成：采纳 {adopted_count} 篇，跳过 {skipped_count} 篇",
+            "data": {
+                "adopted_count": adopted_count,
+                "skipped_count": skipped_count,
+                "articles": adopted_articles,
+                "skipped": skipped_articles
+            }
+        }
+
+    def crawl_eastmoney_blog(self, max_articles: int = 15, concurrent: bool = True, max_workers: int = 3) -> Dict:
+        """抓取东方财富博客"""
         if not self.is_crawler_enabled():
             return {"success": False, "message": "爬虫模块未启用"}
 
-        print(f"\n{'='*60}")
-        print(f"开始抓取东方财富博客 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-        print(f"{'='*60}")
+        logger.info(f"开始抓取东方财富博客 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
 
         try:
             from src.crawler.eastmoney_blog_crawler import crawler as eastmoney_crawler
-
             articles = eastmoney_crawler.fetch_hot_articles(max_articles=max_articles)
-            print(f"抓取到 {len(articles)} 篇文章，开始分析...\n")
+            result = self._crawl_source('eastmoney_blog', articles, '东财博客', concurrent, max_workers)
 
-            adopted_count = 0
-            skipped_count = 0
-            adopted_articles = []
-            skipped_articles = []
+            adopted_count = result['data']['adopted_count']
+            skipped_count = result['data']['skipped_count']
+            logger.info(f"东方财富博客抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
 
-            if concurrent and len(articles) > 1:
-                # 使用并发分析
-                results = self._analyze_articles_concurrent(articles, 'eastmoney_blog', max_workers)
-
-                for article, should_capture, analysis in results:
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('eastmoney_blog')
-                    reason = analysis.get('reason', '')[:30]
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article['content'],
-                            title=article['title'],
-                            author=article['author'],
-                            source='eastmoney_blog',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article['author'],
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': reason
-                        })
-            else:
-                # 串行分析
-                from src.crawler.enhanced_ai_analyzer import EnhancedAIAnalyzer
-                ai_analyzer = EnhancedAIAnalyzer()
-
-                for i, article in enumerate(articles, 1):
-                    should_capture, analysis = self._analyze_article(
-                        ai_analyzer,
-                        article['title'],
-                        article['content'],
-                        source='eastmoney_blog'
-                    )
-
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('eastmoney_blog')
-                    reason = analysis.get('reason', '')[:30]
-
-                    print(f"[{i}/{len(articles)}] {'✅ 采纳' if should_capture else '❌ 跳过'} | 分数: {score:.1f}/{threshold} | {article['title'][:40]}...")
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article['content'],
-                            title=article['title'],
-                            author=article['author'],
-                            source='eastmoney_blog',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article['author'],
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': reason
-                        })
-
-            self.db.commit()
-
-            print(f"\n{'='*60}")
-            print(f"东方财富博客抓取完成")
-            print(f"✅ 采纳: {adopted_count} 篇")
-            print(f"❌ 跳过: {skipped_count} 篇")
-            print(f"{'='*60}\n")
-
-            return {
-                "success": True,
-                "message": f"自动采纳完成：采纳 {adopted_count} 篇，跳过 {skipped_count} 篇",
-                "data": {
-                    "adopted_count": adopted_count,
-                    "skipped_count": skipped_count,
-                    "articles": adopted_articles,
-                    "skipped": skipped_articles
-                }
-            }
-
+            return result
         except Exception as e:
             self.db.rollback()
             raise e
     
     def crawl_eastmoney_guide(self, max_articles: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
-        """
-        抓取东财博客导读
-
-        Args:
-            max_articles: 最大文章数
-            concurrent: 是否使用并发分析
-            max_workers: 并发数
-
-        Returns:
-            抓取结果
-        """
+        """抓取东财博客导读"""
         if not self.is_crawler_enabled():
             return {"success": False, "message": "爬虫模块未启用"}
 
-        print(f"\n{'='*60}")
-        print(f"开始抓取东方财富指南 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-        print(f"{'='*60}")
+        logger.info(f"开始抓取东方财富指南 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
 
         try:
             from src.crawler.eastmoney_guide_crawler import get_guide_crawler
-
             crawler = get_guide_crawler()
             articles = crawler.fetch_guide_articles(max_articles=max_articles)
-            print(f"抓取到 {len(articles)} 篇文章，开始分析...\n")
+            result = self._crawl_source('eastmoney_guide', articles, '东财博客', concurrent, max_workers)
 
-            adopted_count = 0
-            skipped_count = 0
-            adopted_articles = []
-            skipped_articles = []
+            adopted_count = result['data']['adopted_count']
+            skipped_count = result['data']['skipped_count']
+            logger.info(f"东方财富指南抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
 
-            if concurrent and len(articles) > 1:
-                results = self._analyze_articles_concurrent(articles, 'eastmoney_guide', max_workers)
-
-                for article, should_capture, analysis in results:
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('eastmoney_guide')
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article.get('content', ''),
-                            title=article['title'],
-                            author=article.get('author', '东财博客'),
-                            source='eastmoney_guide',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article.get('author'),
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': analysis.get('reason', '')[:30]
-                        })
-            else:
-                from src.crawler.enhanced_ai_analyzer import EnhancedAIAnalyzer
-                ai_analyzer = EnhancedAIAnalyzer()
-
-                for i, article in enumerate(articles, 1):
-                    should_capture, analysis = self._analyze_article(
-                        ai_analyzer,
-                        article['title'],
-                        article.get('content', ''),
-                        source='eastmoney_guide'
-                    )
-
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('eastmoney_guide')
-
-                    print(f"[{i}/{len(articles)}] {'✅ 采纳' if should_capture else '❌ 跳过'} | 分数: {score:.1f}/{threshold} | {article['title'][:40]}...")
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article.get('content', ''),
-                            title=article['title'],
-                            author=article.get('author', '东财博客'),
-                            source='eastmoney_guide',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article.get('author'),
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': analysis.get('reason', '')[:30]
-                        })
-
-            self.db.commit()
-
-            print(f"\n{'='*60}")
-            print(f"东方财富指南抓取完成")
-            print(f"✅ 采纳: {adopted_count} 篇")
-            print(f"❌ 跳过: {skipped_count} 篇")
-            print(f"{'='*60}\n")
-
-            return {
-                "success": True,
-                "message": f"自动采纳完成：采纳 {adopted_count} 篇，跳过 {skipped_count} 篇",
-                "data": {
-                    "adopted_count": adopted_count,
-                    "skipped_count": skipped_count,
-                    "articles": adopted_articles,
-                    "skipped": skipped_articles
-                }
-            }
-
+            return result
         except Exception as e:
             self.db.rollback()
             raise e
     
     def crawl_sina_finance(self, category: str = 'finance', max_articles: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
-        """
-        抓取新浪财经
-
-        Args:
-            category: 分类
-            max_articles: 最大文章数
-            concurrent: 是否使用并发分析
-            max_workers: 并发数
-
-        Returns:
-            抓取结果
-        """
+        """抓取新浪财经"""
         if not self.is_crawler_enabled():
             return {"success": False, "message": "爬虫模块未启用"}
 
-        print(f"\n{'='*60}")
-        print(f"开始抓取新浪财经 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-        print(f"{'='*60}")
+        logger.info(f"开始抓取新浪财经 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
 
         try:
             from src.crawler.sina_finance_crawler import get_sina_crawler
-
             crawler = get_sina_crawler()
             articles = crawler.fetch_articles(category=category, num=max_articles)
-            print(f"抓取到 {len(articles)} 篇文章，开始分析...\n")
+            result = self._crawl_source('sina_finance', articles, '新浪财经', concurrent, max_workers)
 
-            adopted_count = 0
-            skipped_count = 0
-            adopted_articles = []
-            skipped_articles = []
+            adopted_count = result['data']['adopted_count']
+            skipped_count = result['data']['skipped_count']
+            logger.info(f"新浪财经抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
 
-            if concurrent and len(articles) > 1:
-                results = self._analyze_articles_concurrent(articles, 'sina_finance', max_workers)
-
-                for article, should_capture, analysis in results:
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('sina_finance')
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article.get('content', ''),
-                            title=article['title'],
-                            author=article.get('author', '新浪财经'),
-                            source='sina_finance',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article.get('author'),
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': analysis.get('reason', '')[:30]
-                        })
-            else:
-                from src.crawler.enhanced_ai_analyzer import EnhancedAIAnalyzer
-                ai_analyzer = EnhancedAIAnalyzer()
-
-                for i, article in enumerate(articles, 1):
-                    should_capture, analysis = self._analyze_article(
-                        ai_analyzer,
-                        article['title'],
-                        article.get('content', ''),
-                        source='sina_finance'
-                    )
-
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('sina_finance')
-
-                    print(f"[{i}/{len(articles)}] {'✅ 采纳' if should_capture else '❌ 跳过'} | 分数: {score:.1f}/{threshold} | {article['title'][:40]}...")
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article.get('content', ''),
-                            title=article['title'],
-                            author=article.get('author', '新浪财经'),
-                            source='sina_finance',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article.get('author'),
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': analysis.get('reason', '')[:30]
-                        })
-
-            self.db.commit()
-
-            print(f"\n{'='*60}")
-            print(f"新浪财经抓取完成")
-            print(f"✅ 采纳: {adopted_count} 篇")
-            print(f"❌ 跳过: {skipped_count} 篇")
-            print(f"{'='*60}\n")
-
-            return {
-                "success": True,
-                "message": f"自动采纳完成：采纳 {adopted_count} 篇，跳过 {skipped_count} 篇",
-                "data": {
-                    "adopted_count": adopted_count,
-                    "skipped_count": skipped_count,
-                    "articles": adopted_articles,
-                    "skipped": skipped_articles
-                }
-            }
-
+            return result
         except Exception as e:
             self.db.rollback()
             raise e
     
     def crawl_sina_blog(self, max_posts: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
-        """
-        抓取新浪博客
-
-        Args:
-            max_posts: 最大文章数
-            concurrent: 是否使用并发分析
-            max_workers: 并发数
-
-        Returns:
-            抓取结果
-        """
+        """抓取新浪博客"""
         if not self.is_crawler_enabled():
             return {"success": False, "message": "爬虫模块未启用"}
 
-        print(f"\n{'='*60}")
-        print(f"开始抓取新浪博客 (最多 {max_posts} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-        print(f"{'='*60}")
+        logger.info(f"开始抓取新浪博客 (最多 {max_posts} 篇, 并发: {concurrent}, 并发数: {max_workers})")
 
         try:
             from src.crawler.sina_blog_crawler import get_blog_crawler
-
             crawler = get_blog_crawler()
             articles = crawler.fetch_blog_posts(max_posts=max_posts)
-            print(f"抓取到 {len(articles)} 篇文章，开始分析...\n")
+            result = self._crawl_source('sina_blog', articles, '新浪博客', concurrent, max_workers)
 
-            adopted_count = 0
-            skipped_count = 0
-            adopted_articles = []
-            skipped_articles = []
+            adopted_count = result['data']['adopted_count']
+            skipped_count = result['data']['skipped_count']
+            logger.info(f"新浪博客抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
 
-            if concurrent and len(articles) > 1:
-                results = self._analyze_articles_concurrent(articles, 'sina_blog', max_workers)
-
-                for article, should_capture, analysis in results:
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('sina_blog')
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article.get('content', ''),
-                            title=article['title'],
-                            author=article.get('author', '新浪博客'),
-                            source='sina_blog',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article.get('author'),
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': analysis.get('reason', '')[:30]
-                        })
-            else:
-                from src.crawler.enhanced_ai_analyzer import EnhancedAIAnalyzer
-                ai_analyzer = EnhancedAIAnalyzer()
-
-                for i, article in enumerate(articles, 1):
-                    should_capture, analysis = self._analyze_article(
-                        ai_analyzer,
-                        article['title'],
-                        article.get('content', ''),
-                        source='sina_blog'
-                    )
-
-                    score = analysis.get('score', 0)
-                    threshold = self._get_threshold('sina_blog')
-
-                    print(f"[{i}/{len(articles)}] {'✅ 采纳' if should_capture else '❌ 跳过'} | 分数: {score:.1f}/{threshold} | {article['title'][:40]}...")
-
-                    if should_capture:
-                        viewpoint = self._create_viewpoint(
-                            content=article.get('content', ''),
-                            title=article['title'],
-                            author=article.get('author', '新浪博客'),
-                            source='sina_blog',
-                            analysis=analysis
-                        )
-
-                        self.db.add(viewpoint)
-                        adopted_count += 1
-                        adopted_articles.append({
-                            'title': article['title'],
-                            'author': article.get('author'),
-                            'score': score,
-                            'sentiment': analysis.get('sentiment')
-                        })
-                    else:
-                        skipped_count += 1
-                        skipped_articles.append({
-                            'title': article['title'],
-                            'score': score,
-                            'reason': analysis.get('reason', '')[:30]
-                        })
-
-            self.db.commit()
-
-            print(f"\n{'='*60}")
-            print(f"新浪博客抓取完成")
-            print(f"✅ 采纳: {adopted_count} 篇")
-            print(f"❌ 跳过: {skipped_count} 篇")
-            print(f"{'='*60}\n")
-
-            return {
-                "success": True,
-                "message": f"自动采纳完成：采纳 {adopted_count} 篇，跳过 {skipped_count} 篇",
-                "data": {
-                    "adopted_count": adopted_count,
-                    "skipped_count": skipped_count,
-                    "articles": adopted_articles,
-                    "skipped": skipped_articles
-                }
-            }
-
+            return result
         except Exception as e:
             self.db.rollback()
             raise e

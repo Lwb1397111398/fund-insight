@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据导入工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 2.5rem;
+        }
+        h1 {
+            color: #1a202c;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #718096;
+            margin-bottom: 2rem;
+        }
+        .upload-area {
+            border: 3px dashed #cbd5e0;
+            border-radius: 12px;
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #667eea;
+            background: #f7fafc;
+        }
+        .upload-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+        .upload-text {
+            color: #4a5568;
+            font-size: 1.1rem;
+        }
+        .upload-hint {
+            color: #a0aec0;
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .progress-area {
+            margin-top: 2rem;
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e2e8f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .status-text {
+            margin-top: 1rem;
+            color: #4a5568;
+        }
+        .result-area {
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: #f7fafc;
+            border-radius: 8px;
+            display: none;
+        }
+        .result-success {
+            color: #2f855a;
+            font-weight: 600;
+        }
+        .result-error {
+            color: #c53030;
+            font-weight: 600;
+        }
+        .result-details {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: #4a5568;
+        }
+        .password-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            transition: border-color 0.3s ease;
+        }
+        .password-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .label {
+            display: block;
+            color: #4a5568;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 数据导入工具</h1>
+        <p class="subtitle">将本地 SQLite 数据库导入到云端 PostgreSQL</p>
+
+        <div class="label">访问密码</div>
+        <input type="password" id="password" class="password-input" placeholder="请输入访问密码">
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">点击或拖拽上传数据库文件</div>
+            <div class="upload-hint">支持 .db 和 .sqlite 文件</div>
+        </div>
+        <input type="file" id="fileInput" accept=".db,.sqlite">
+
+        <button class="btn" id="uploadBtn" disabled>开始导入</button>
+
+        <div class="progress-area" id="progressArea">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="status-text" id="statusText">准备中...</div>
+        </div>
+
+        <div class="result-area" id="resultArea">
+            <div id="resultText"></div>
+            <div class="result-details" id="resultDetails"></div>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const progressArea = document.getElementById('progressArea');
+        const progressFill = document.getElementById('progressFill');
+        const statusText = document.getElementById('statusText');
+        const resultArea = document.getElementById('resultArea');
+        const resultText = document.getElementById('resultText');
+        const resultDetails = document.getElementById('resultDetails');
+        const passwordInput = document.getElementById('password');
+
+        let selectedFile = null;
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            if (file.name.endsWith('.db') || file.name.endsWith('.sqlite')) {
+                selectedFile = file;
+                uploadArea.innerHTML = `
+                    <div class="upload-icon">✅</div>
+                    <div class="upload-text">已选择: ${file.name}</div>
+                    <div class="upload-hint">文件大小: ${(file.size / 1024).toFixed(2)} KB</div>
+                `;
+                uploadBtn.disabled = false;
+            } else {
+                alert('请选择 .db 或 .sqlite 格式的数据库文件');
+            }
+        }
+
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            const password = passwordInput.value;
+            if (!password) {
+                alert('请输入访问密码');
+                return;
+            }
+
+            // 先验证密码是否正确
+            try {
+                const testRes = await fetch('/api/health');
+                const testRes2 = await fetch('/api/stats', {
+                    headers: { 'X-Access-Password': password }
+                });
+                if (testRes2.status === 401) {
+                    alert('密码错误，请重新输入');
+                    return;
+                }
+            } catch (e) {
+                alert('无法连接到服务器，请检查网络');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            progressArea.style.display = 'block';
+            uploadBtn.disabled = true;
+
+            try {
+                progressFill.style.width = '10%';
+                statusText.textContent = '正在上传文件（大文件可能需要较长时间，请耐心等待）...';
+
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5分钟超时
+
+                const response = await fetch('/api/import-database', {
+                    method: 'POST',
+                    headers: {
+                        'X-Access-Password': password
+                    },
+                    body: formData,
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
+                }
+
+                const result = await response.json();
+
+                progressFill.style.width = '100%';
+
+                resultArea.style.display = 'block';
+
+                if (result.success) {
+                    resultText.className = 'result-success';
+                    resultText.textContent = '✅ 导入成功！';
+                    resultDetails.innerHTML = `
+                        <p>📊 导入详情：</p>
+                        <ul>
+                            ${Object.entries(result.imported || {}).map(([table, count]) =>
+                                `<li>${table}: ${count} 条记录</li>`
+                            ).join('')}
+                        </ul>
+                    `;
+                    statusText.textContent = '导入完成！';
+                } else {
+                    resultText.className = 'result-error';
+                    resultText.textContent = '❌ 导入失败';
+                    resultDetails.textContent = result.error || '未知错误';
+                    statusText.textContent = '导入失败';
+                }
+            } catch (error) {
+                resultArea.style.display = 'block';
+                resultText.className = 'result-error';
+                resultText.textContent = '❌ 导入失败';
+                if (error.name === 'AbortError') {
+                    resultDetails.textContent = '请求超时（5分钟），文件可能过大，请尝试使用更小的数据库文件';
+                } else {
+                    resultDetails.textContent = error.message || '网络错误，请检查服务器是否正常运行';
+                }
+                statusText.textContent = '导入失败';
+            }
+        });
+    </script>
+</body>
+</html>

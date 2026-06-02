@@ -37,6 +37,9 @@ from src.utils.prediction_utils import PERIOD_MAP, ULTRA_SHORT_PERIODS, parse_pe
 
 logger = logging.getLogger(__name__)
 
+# 可重试的 HTTP 状态码
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
 
 @dataclass
 class CircuitBreakerState:
@@ -443,11 +446,17 @@ class LLMAnalyzer:
                 last_error = e
                 self._call_stats['failed_calls'] += 1
                 self.circuit_breaker.record_failure()
-                
+
                 # 记录失败用于智能降级
                 self._downgrade_state['failure_count'] += 1
                 self._downgrade_state['last_failure_time'] = time.time()
-                
+
+                # 检查是否为可重试错误
+                status_code = getattr(e, 'status_code', None)
+                if status_code is not None and status_code not in RETRYABLE_STATUS_CODES:
+                    logger.error(f"[LLM] 不可重试错误 (模型: {model}, status_code={status_code}): {e}")
+                    raise e
+
                 if attempt < retry_count - 1:
                     backoff_time = (2 ** attempt) + (0.5 * attempt)
                     logger.warning(f"[LLM] 调用失败 (模型: {model}, 尝试: {attempt + 1}/{retry_count}): {e}, {backoff_time:.1f}秒后重试")
@@ -872,7 +881,7 @@ class LLMAnalyzer:
         Returns:
             解析后的字典，失败返回 None
         """
-        json_match = re.search(r'\{[\s\S]+\}', text)
+        json_match = re.search(r'\{[\s\S]+?\}', text)
         if not json_match:
             logger.warning("[JSON Parse] 响应中未找到JSON")
             return None
@@ -927,8 +936,8 @@ class LLMAnalyzer:
         json_str = re.sub(r'```json\s*', '', json_str)
         json_str = re.sub(r'```\s*', '', json_str)
         
-        # 修复未引用的键名
-        json_str = re.sub(r'(\w+):', r'"\1":', json_str)
+        # 修复未引用的键名（只匹配行首或逗号后面的未引用键名，避免破坏字符串值中的冒号）
+        json_str = re.sub(r'(?<=[\{,\n])\s*(\w+)\s*:', r' "\1":', json_str)
         
         return json_str
     

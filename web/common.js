@@ -4,6 +4,18 @@
  */
 
 /**
+ * HTML 转义函数 - 防止 XSS 注入
+ * @param {string} str - 要转义的字符串
+ * @returns {string} 转义后的安全字符串
+ */
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+}
+
+/**
  * 显示消息提示
  * @param {string} text - 消息文本
  * @param {string} type - 消息类型：'success' | 'error' | 'warning'

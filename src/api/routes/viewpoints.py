@@ -4,23 +4,45 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
 from sqlalchemy.orm import Session
-from typing import Optional
-from datetime import date, timedelta
+from typing import Optional, List
+from datetime import date, datetime, timedelta
 import traceback
 import time
+import logging
+from pydantic import BaseModel
 
 from src.api.deps import get_db
 from src.services.viewpoint_service import ViewpointService
-from src.models.database import Viewpoint
+from src.models.database import Viewpoint, BatchAnalysisTask
 
-_viewpoint_batch_analyzing = False
+logger = logging.getLogger(__name__)
 
 
-def _viewpoint_batch_analyze_background(limit: int, source: str):
+class ViewpointBatchRequest(BaseModel):
+    """批量分析请求模型"""
+    limit: Optional[int] = 10
+    source: Optional[str] = "all"
+
+
+class ViewpointCleanupRequest(BaseModel):
+    """清理过期观点请求模型"""
+    days: Optional[int] = 10
+
+
+class SummaryPreviewRequest(BaseModel):
+    """汇总预览请求模型"""
+    date: str
+
+
+class SummaryExecuteRequest(BaseModel):
+    """执行汇总请求模型"""
+    dates: Optional[List[str]] = None
+
+
+def _viewpoint_batch_analyze_background(task_id: int, limit: int, source: str):
     """后台批量分析观点任务 - 每个观点独立会话，LLM调用期间不持有连接"""
-    global _viewpoint_batch_analyzing
     from src.models.database import SessionLocal
-    
+
     try:
         db = SessionLocal()
         try:
@@ -30,22 +52,23 @@ def _viewpoint_batch_analyze_background(limit: int, source: str):
             )]
         finally:
             db.close()
-        
+
         if not viewpoint_ids:
-            print("[Viewpoint Batch Analyze] 没有需要分析的观点")
+            logger.info("[Viewpoint Batch Analyze] 没有需要分析的观点")
+            _update_task_status(task_id, 'completed')
             return
-        
-        print(f"[Viewpoint Batch Analyze] 后台开始分析 {len(viewpoint_ids)} 个观点")
-        
+
+        logger.info(f"[Viewpoint Batch Analyze] 后台开始分析 {len(viewpoint_ids)} 个观点")
+
         from src.analyzer.viewpoint_analyzer import get_viewpoint_analyzer
         from src.analyzer.llm_analyzer import get_analyzer as get_llm_analyzer
-        
+
         analyzer = get_viewpoint_analyzer()
         llm_analyzer = get_llm_analyzer()
-        
+
         analyzed_count = 0
         failed_count = 0
-        
+
         for vp_id in viewpoint_ids:
             db_read = SessionLocal()
             try:
@@ -95,7 +118,7 @@ def _viewpoint_batch_analyze_background(limit: int, source: str):
                     )
                     analyzed_count += 1
                 except Exception as e:
-                    print(f"[Viewpoint Batch Analyze] 写入观点 {vp_id} 失败: {e}")
+                    logger.error(f"[Viewpoint Batch Analyze] 写入观点 {vp_id} 失败: {e}")
                     failed_count += 1
                 finally:
                     db_write.close()
@@ -103,16 +126,37 @@ def _viewpoint_batch_analyze_background(limit: int, source: str):
                 time.sleep(0.5)
                 
             except Exception as e:
-                print(f"[Viewpoint Batch Analyze] 分析观点 {vp_id} 失败: {e}")
+                logger.error(f"[Viewpoint Batch Analyze] 分析观点 {vp_id} 失败: {e}")
                 failed_count += 1
                 continue
-        
-        print(f"[Viewpoint Batch Analyze] 后台分析完成: 成功={analyzed_count}, 失败={failed_count}")
-        
+
+        logger.info(f"[Viewpoint Batch Analyze] 后台分析完成: 成功={analyzed_count}, 失败={failed_count}")
+        _update_task_status(task_id, 'completed')
+
     except Exception as e:
-        print(f"[Viewpoint Batch Analyze] 后台分析失败: {e}")
+        logger.error(f"[Viewpoint Batch Analyze] 后台分析失败: {e}")
+        _update_task_status(task_id, 'failed', str(e))
+
+
+def _update_task_status(task_id: int, status: str, error_message: str = None):
+    """更新批量分析任务状态"""
+    from src.models.database import SessionLocal
+    db = SessionLocal()
+    try:
+        task = db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
+        if task:
+            task.status = status
+            if status == 'completed':
+                task.completed_at = datetime.now()
+            if error_message:
+                task.error_message = error_message
+            db.commit()
+    except Exception as e:
+        logger.error(f"[Viewpoint Batch Analyze] 更新任务状态失败: {e}")
+        db.rollback()
     finally:
-        _viewpoint_batch_analyzing = False
+        db.close()
+
 
 router = APIRouter(prefix="/viewpoints", tags=["观点"])
 
@@ -216,7 +260,7 @@ async def delete_viewpoint(viewpoint_id: int, db: Session = Depends(get_db)):
 @router.post("/batch-analyze")
 async def batch_analyze_viewpoints(
     background_tasks: BackgroundTasks,
-    data: dict = Body(...),
+    data: ViewpointBatchRequest = Body(...),
     db: Session = Depends(get_db)
 ):
     """
@@ -229,18 +273,21 @@ async def batch_analyze_viewpoints(
         "source": "all"
     }
     """
-    global _viewpoint_batch_analyzing
-    
-    if _viewpoint_batch_analyzing:
+    # 检查是否已有运行中的任务
+    existing_task = db.query(BatchAnalysisTask).filter(
+        BatchAnalysisTask.task_type == 'viewpoint_batch',
+        BatchAnalysisTask.status == 'running'
+    ).first()
+    if existing_task:
         return {
             "success": True,
             "message": "观点批量分析正在进行中，请稍候...",
             "data": {"analyzed_count": 0, "total": 0, "in_progress": True}
         }
-    
+
     try:
-        limit = data.get('limit', 10)
-        source = data.get('source', 'all')
+        limit = data.limit
+        source = data.source
         
         service = ViewpointService(db)
         viewpoints_to_analyze = service.get_viewpoints_for_batch_analyze(
@@ -257,9 +304,19 @@ async def batch_analyze_viewpoints(
                 "message": "没有需要分析的观点",
                 "data": {"analyzed_count": 0, "total": 0}
             }
-        
-        _viewpoint_batch_analyzing = True
-        background_tasks.add_task(_viewpoint_batch_analyze_background, limit, source)
+
+        # 创建任务记录
+        task = BatchAnalysisTask(
+            task_type='viewpoint_batch',
+            status='running',
+            total_count=total,
+            task_params={'limit': limit, 'source': source}
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+
+        background_tasks.add_task(_viewpoint_batch_analyze_background, task.id, limit, source)
         
         return {
             "success": True,
@@ -268,7 +325,7 @@ async def batch_analyze_viewpoints(
         }
         
     except Exception as e:
-        print(f"[Viewpoint Batch Analyze API] 批量分析失败: {e}")
+        logger.error(f"[Viewpoint Batch Analyze API] 批量分析失败: {e}")
         traceback.print_exc()
         return {
             "success": False,
@@ -287,7 +344,7 @@ async def update_viewpoint_summaries(db: Session = Depends(get_db)):
             Viewpoint.is_deleted == False
         ).all()
         
-        print(f"[Update Summaries] 找到 {len(viewpoints)} 个观点需要更新")
+        logger.info(f"[Update Summaries] 找到 {len(viewpoints)} 个观点需要更新")
         
         if not viewpoints:
             return {
@@ -325,19 +382,19 @@ async def update_viewpoint_summaries(db: Session = Depends(get_db)):
                 updated_count += 1
                 
                 if updated_count % 10 == 0:
-                    print(f"[Update Summaries] 已更新 {updated_count} 个观点")
+                    logger.info(f"[Update Summaries] 已更新 {updated_count} 个观点")
                     db.commit()
                 
                 time.sleep(0.3)
                 
             except Exception as e:
-                print(f"[Update Summaries] 更新观点 {viewpoint.id} 失败: {e}")
+                logger.error(f"[Update Summaries] 更新观点 {viewpoint.id} 失败: {e}")
                 failed_count += 1
                 continue
         
         db.commit()
         
-        print(f"[Update Summaries] 批量更新完成: 成功={updated_count}, 失败={failed_count}")
+        logger.info(f"[Update Summaries] 批量更新完成: 成功={updated_count}, 失败={failed_count}")
         
         return {
             "success": True,
@@ -350,7 +407,7 @@ async def update_viewpoint_summaries(db: Session = Depends(get_db)):
         }
         
     except Exception as e:
-        print(f"[Update Summaries] 批量更新失败: {e}")
+        logger.error(f"[Update Summaries] 批量更新失败: {e}")
         traceback.print_exc()
         return {
             "success": False,
@@ -361,24 +418,24 @@ async def update_viewpoint_summaries(db: Session = Depends(get_db)):
 
 @router.post("/cleanup")
 async def cleanup_old_viewpoints(
-    data: dict = Body(...),
+    data: ViewpointCleanupRequest = Body(...),
     db: Session = Depends(get_db)
 ):
     """
     手动清理过期观点
-    
+
     请求体:
     {
         "days": 10  // 保留天数，默认10天。超过此天数的观点将被删除
     }
-    
+
     说明:
     - 观点只有近7天才会被投资建议采纳
     - 建议保留10天，给用户一定的缓冲时间
     - 删除后无法恢复，请谨慎操作
     """
     try:
-        days = data.get('days', 10)
+        days = data.days
         
         if days < 7:
             return {
@@ -407,7 +464,7 @@ async def cleanup_old_viewpoints(
             }
         
     except Exception as e:
-        print(f"[Cleanup Viewpoints] 清理失败: {e}")
+        logger.error(f"[Cleanup Viewpoints] 清理失败: {e}")
         traceback.print_exc()
         return {
             "success": False,
@@ -461,7 +518,7 @@ async def preview_cleanup(
         }
         
     except Exception as e:
-        print(f"[Preview Cleanup] 预览失败: {e}")
+        logger.error(f"[Preview Cleanup] 预览失败: {e}")
         traceback.print_exc()
         return {
             "success": False,
@@ -483,19 +540,19 @@ async def get_summary_stats(db: Session = Depends(get_db)):
 
 @router.post("/summary/preview")
 async def preview_summary(
-    data: dict = Body(...),
+    data: SummaryPreviewRequest = Body(...),
     db: Session = Depends(get_db)
 ):
     """
     预览汇总结果（不保存）
-    
+
     请求体:
     {
         "date": "2026-03-07"  // 要预览的日期
     }
     """
     try:
-        target_date_str = data.get('date')
+        target_date_str = data.date
         if not target_date_str:
             return {
                 "success": False,
@@ -534,7 +591,7 @@ async def preview_summary(
         }
         
     except Exception as e:
-        print(f"[Preview Summary] 预览失败: {e}")
+        logger.error(f"[Preview Summary] 预览失败: {e}")
         traceback.print_exc()
         return {
             "success": False,
@@ -544,12 +601,12 @@ async def preview_summary(
 
 @router.post("/summary/execute")
 async def execute_summary(
-    data: dict = Body(...),
+    data: SummaryExecuteRequest = Body(...),
     db: Session = Depends(get_db)
 ):
     """
     执行汇总（一键汇总所有待汇总日期的观点）
-    
+
     请求体:
     {
         "dates": ["2026-03-07", "2026-03-06"]  // 可选，不传则汇总所有待汇总日期
@@ -557,14 +614,14 @@ async def execute_summary(
     """
     try:
         from src.analyzer.llm_analyzer import summarize_viewpoints_by_date
-        
+
         service = ViewpointService(db)
-        
-        if data.get('dates'):
+
+        if data.dates:
             from datetime import datetime
             dates_to_summarize = [
                 datetime.strptime(d, '%Y-%m-%d').date()
-                for d in data['dates']
+                for d in data.dates
             ]
         else:
             pending_dates = service.get_pending_summary_dates()
@@ -637,12 +694,12 @@ async def execute_summary(
                 summarized_count += 1
                 total_viewpoints += len(viewpoints)
                 
-                print(f"[Execute Summary] 已汇总 {target_date}: {len(viewpoints)} 条观点")
+                logger.info(f"[Execute Summary] 已汇总 {target_date}: {len(viewpoints)} 条观点")
                 
                 time.sleep(1)
                 
             except Exception as e:
-                print(f"[Execute Summary] 汇总 {target_date} 失败: {e}")
+                logger.error(f"[Execute Summary] 汇总 {target_date} 失败: {e}")
                 failed_dates.append({
                     "date": target_date.isoformat(),
                     "error": str(e)
@@ -664,7 +721,7 @@ async def execute_summary(
         }
         
     except Exception as e:
-        print(f"[Execute Summary] 执行失败: {e}")
+        logger.error(f"[Execute Summary] 执行失败: {e}")
         traceback.print_exc()
         return {
             "success": False,

@@ -6,14 +6,18 @@ from fastapi import FastAPI, Response, Request, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 import os
 import sys
 import shutil
 import tempfile
+import logging
 from sqlalchemy import create_engine, text, insert as sa_insert
 from sqlalchemy.orm import sessionmaker
+
+logger = logging.getLogger(__name__)
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if project_root not in sys.path:
@@ -40,10 +44,115 @@ from src.api.routes import (
 
 from src.api.routes.test_data import router as test_data_router
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理：启动和关闭逻辑"""
+    # ========== Startup ==========
+    init_db()
+    config.load_persisted_config()
+
+    # 自动创建缺失的索引
+    try:
+        from src.models.database import engine
+        from sqlalchemy import text
+        import sqlite3
+
+        db_url = str(engine.url)
+        if db_url.startswith('sqlite'):
+            # SQLite: 直接使用 sqlite3 创建索引
+            db_path = db_url.replace('sqlite:///', '')
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            indexes = [
+                ("ix_posts_blogger_id", "posts", ["blogger_id"]),
+                ("ix_posts_post_date", "posts", ["post_date"]),
+                ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
+                ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
+                ("ix_predictions_status", "predictions", ["status"]),
+                ("ix_predictions_fund_code", "predictions", ["fund_code"]),
+                ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
+                ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
+                ("ix_predictions_target_date", "predictions", ["target_date"]),
+                ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
+                ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
+                ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
+                ("ix_viewpoints_source", "viewpoints", ["source"]),
+                ("ix_bloggers_platform", "bloggers", ["platform"]),
+                ("ix_bloggers_is_active", "bloggers", ["is_active"]),
+            ]
+
+            created_count = 0
+            for idx_name, table, columns in indexes:
+                try:
+                    cols = ", ".join(columns)
+                    cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})")
+                    if cursor.rowcount == 0:
+                        # 索引已存在
+                        pass
+                    else:
+                        created_count += 1
+                except Exception:
+                    pass
+
+            conn.commit()
+            conn.close()
+            if created_count > 0:
+                logger.info(f"[Startup] 自动创建了 {created_count} 个索引")
+        else:
+            # PostgreSQL: 使用 SQLAlchemy 创建索引
+            with engine.connect() as conn:
+                indexes = [
+                    ("ix_posts_blogger_id", "posts", ["blogger_id"]),
+                    ("ix_posts_post_date", "posts", ["post_date"]),
+                    ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
+                    ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
+                    ("ix_predictions_status", "predictions", ["status"]),
+                    ("ix_predictions_fund_code", "predictions", ["fund_code"]),
+                    ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
+                    ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
+                    ("ix_predictions_target_date", "predictions", ["target_date"]),
+                    ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
+                    ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
+                    ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
+                    ("ix_viewpoints_source", "viewpoints", ["source"]),
+                    ("ix_bloggers_platform", "bloggers", ["platform"]),
+                    ("ix_bloggers_is_active", "bloggers", ["is_active"]),
+                ]
+
+                created_count = 0
+                for idx_name, table, columns in indexes:
+                    try:
+                        cols = ", ".join(columns)
+                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})"))
+                        created_count += 1
+                    except Exception:
+                        pass
+
+                conn.commit()
+                if created_count > 0:
+                    logger.info(f"[Startup] 自动创建了 {created_count} 个索引")
+    except Exception as e:
+        logger.error(f"[Startup] 索引创建检查失败: {e}")
+
+    logger.info(f"[Startup] Fund Insight API v2.0.0 已启动")
+    logger.info(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
+    logger.info(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
+
+    yield
+
+    # ========== Shutdown ==========
+    from src.fund.fund_api import fund_api
+    fund_api.close()
+    logger.info("[Shutdown] 资源已释放")
+
+
 app = FastAPI(
     title="Fund Insight API",
     description="基金观点追踪与分析系统",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # 密码验证中间件
@@ -62,7 +171,11 @@ async def password_auth_middleware(request: Request, call_next):
         return await call_next(request)
     
     # 从环境变量获取密码
-    expected_password = os.getenv("ACCESS_PASSWORD", "Lwb1397111398")
+    expected_password = os.getenv("ACCESS_PASSWORD")
+    if not expected_password:
+        import secrets
+        expected_password = secrets.token_urlsafe(16)
+        logger.warning(f"[Security] ACCESS_PASSWORD 未设置，已生成临时密码: {expected_password}")
     
     # 从请求头获取密码
     provided_password = request.headers.get("X-Access-Password")
@@ -77,9 +190,12 @@ async def password_auth_middleware(request: Request, call_next):
     # 密码正确，继续处理请求
     return await call_next(request)
 
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:8002")
+allowed_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -308,325 +424,10 @@ async def serve_vue_test():
 @app.get("/import-data.html")
 async def serve_import_page():
     """服务数据导入页面"""
-    html_content = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>数据导入工具</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 2rem;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            padding: 2.5rem;
-        }
-        h1 {
-            color: #1a202c;
-            font-size: 2rem;
-            margin-bottom: 0.5rem;
-        }
-        .subtitle {
-            color: #718096;
-            margin-bottom: 2rem;
-        }
-        .upload-area {
-            border: 3px dashed #cbd5e0;
-            border-radius: 12px;
-            padding: 3rem 2rem;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-bottom: 1.5rem;
-        }
-        .upload-area:hover, .upload-area.dragover {
-            border-color: #667eea;
-            background: #f7fafc;
-        }
-        .upload-icon {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-        }
-        .upload-text {
-            color: #4a5568;
-            font-size: 1.1rem;
-        }
-        .upload-hint {
-            color: #a0aec0;
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
-        }
-        input[type="file"] {
-            display: none;
-        }
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 1rem 2rem;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            width: 100%;
-        }
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
-        }
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .progress-area {
-            margin-top: 2rem;
-            display: none;
-        }
-        .progress-bar {
-            width: 100%;
-            height: 20px;
-            background: #e2e8f0;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #667eea, #764ba2);
-            width: 0%;
-            transition: width 0.3s ease;
-        }
-        .status-text {
-            margin-top: 1rem;
-            color: #4a5568;
-        }
-        .result-area {
-            margin-top: 2rem;
-            padding: 1.5rem;
-            background: #f7fafc;
-            border-radius: 8px;
-            display: none;
-        }
-        .result-success {
-            color: #2f855a;
-            font-weight: 600;
-        }
-        .result-error {
-            color: #c53030;
-            font-weight: 600;
-        }
-        .result-details {
-            margin-top: 1rem;
-            font-size: 0.9rem;
-            color: #4a5568;
-        }
-        .password-input {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 1rem;
-            margin-bottom: 1rem;
-            transition: border-color 0.3s ease;
-        }
-        .password-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .label {
-            display: block;
-            color: #4a5568;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📊 数据导入工具</h1>
-        <p class="subtitle">将本地 SQLite 数据库导入到云端 PostgreSQL</p>
-        
-        <div class="label">访问密码</div>
-        <input type="password" id="password" class="password-input" placeholder="请输入访问密码">
-        
-        <div class="upload-area" id="uploadArea">
-            <div class="upload-icon">📁</div>
-            <div class="upload-text">点击或拖拽上传数据库文件</div>
-            <div class="upload-hint">支持 .db 和 .sqlite 文件</div>
-        </div>
-        <input type="file" id="fileInput" accept=".db,.sqlite">
-        
-        <button class="btn" id="uploadBtn" disabled>开始导入</button>
-        
-        <div class="progress-area" id="progressArea">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-            <div class="status-text" id="statusText">准备中...</div>
-        </div>
-        
-        <div class="result-area" id="resultArea">
-            <div id="resultText"></div>
-            <div class="result-details" id="resultDetails"></div>
-        </div>
-    </div>
-    
-    <script>
-        const uploadArea = document.getElementById('uploadArea');
-        const fileInput = document.getElementById('fileInput');
-        const uploadBtn = document.getElementById('uploadBtn');
-        const progressArea = document.getElementById('progressArea');
-        const progressFill = document.getElementById('progressFill');
-        const statusText = document.getElementById('statusText');
-        const resultArea = document.getElementById('resultArea');
-        const resultText = document.getElementById('resultText');
-        const resultDetails = document.getElementById('resultDetails');
-        const passwordInput = document.getElementById('password');
-        
-        let selectedFile = null;
-        
-        uploadArea.addEventListener('click', () => fileInput.click());
-        
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-        
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
-        
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            if (e.dataTransfer.files.length > 0) {
-                handleFile(e.dataTransfer.files[0]);
-            }
-        });
-        
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                handleFile(e.target.files[0]);
-            }
-        });
-        
-        function handleFile(file) {
-            if (file.name.endsWith('.db') || file.name.endsWith('.sqlite')) {
-                selectedFile = file;
-                uploadArea.innerHTML = `
-                    <div class="upload-icon">✅</div>
-                    <div class="upload-text">已选择: ${file.name}</div>
-                    <div class="upload-hint">文件大小: ${(file.size / 1024).toFixed(2)} KB</div>
-                `;
-                uploadBtn.disabled = false;
-            } else {
-                alert('请选择 .db 或 .sqlite 格式的数据库文件');
-            }
-        }
-        
-        uploadBtn.addEventListener('click', async () => {
-            if (!selectedFile) return;
-            
-            const password = passwordInput.value;
-            if (!password) {
-                alert('请输入访问密码');
-                return;
-            }
-            
-            // 先验证密码是否正确
-            try {
-                const testRes = await fetch('/api/health');
-                const testRes2 = await fetch('/api/stats', {
-                    headers: { 'X-Access-Password': password }
-                });
-                if (testRes2.status === 401) {
-                    alert('密码错误，请重新输入');
-                    return;
-                }
-            } catch (e) {
-                alert('无法连接到服务器，请检查网络');
-                return;
-            }
-            
-            const formData = new FormData();
-            formData.append('file', selectedFile);
-            
-            progressArea.style.display = 'block';
-            uploadBtn.disabled = true;
-            
-            try {
-                progressFill.style.width = '10%';
-                statusText.textContent = '正在上传文件（大文件可能需要较长时间，请耐心等待）...';
-                
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5分钟超时
-                
-                const response = await fetch('/api/import-database', {
-                    method: 'POST',
-                    headers: {
-                        'X-Access-Password': password
-                    },
-                    body: formData,
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
-                
-                if (!response.ok) {
-                    throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
-                }
-                
-                const result = await response.json();
-                
-                progressFill.style.width = '100%';
-                
-                resultArea.style.display = 'block';
-                
-                if (result.success) {
-                    resultText.className = 'result-success';
-                    resultText.textContent = '✅ 导入成功！';
-                    resultDetails.innerHTML = `
-                        <p>📊 导入详情：</p>
-                        <ul>
-                            ${Object.entries(result.imported || {}).map(([table, count]) => 
-                                `<li>${table}: ${count} 条记录</li>`
-                            ).join('')}
-                        </ul>
-                    `;
-                    statusText.textContent = '导入完成！';
-                } else {
-                    resultText.className = 'result-error';
-                    resultText.textContent = '❌ 导入失败';
-                    resultDetails.textContent = result.error || '未知错误';
-                    statusText.textContent = '导入失败';
-                }
-            } catch (error) {
-                resultArea.style.display = 'block';
-                resultText.className = 'result-error';
-                resultText.textContent = '❌ 导入失败';
-                if (error.name === 'AbortError') {
-                    resultDetails.textContent = '请求超时（5分钟），文件可能过大，请尝试使用更小的数据库文件';
-                } else {
-                    resultDetails.textContent = error.message || '网络错误，请检查服务器是否正常运行';
-                }
-                statusText.textContent = '导入失败';
-            }
-        });
-    </script>
-</body>
-</html>
-    """
-    return Response(content=html_content, media_type="text/html")
+    html_file = web_dir / "import-data.html"
+    if html_file.exists():
+        return FileResponse(str(html_file), media_type="text/html")
+    return {"error": "import-data.html not found"}
 
 
 @app.post("/api/import-database")
@@ -693,12 +494,12 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                     target_db.execute(text("SET session_replication_role = 'replica'"))
                     target_db.commit()
                     fk_disabled = True
-                    print("[导入] 已禁用 PostgreSQL 外键约束检查")
+                    logger.info("[导入] 已禁用 PostgreSQL 外键约束检查")
                 except Exception as e:
-                    print(f"[导入] 禁用外键约束失败: {e}")
+                    logger.error(f"[导入] 禁用外键约束失败: {e}")
                     target_db.rollback()
-            
-            print("[导入] 开始清空目标表...")
+
+            logger.info("[导入] 开始清空目标表...")
             for table_name in tables_to_delete:
                 try:
                     target_db.execute(text(f"DELETE FROM {table_name}"))
@@ -712,7 +513,7 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                         except:
                             target_db.rollback()
             
-            print("[导入] 开始导入数据（ORM 模式）...")
+            logger.info("[导入] 开始导入数据（ORM 模式）...")
             for table_name, ModelClass in orm_map:
                 try:
                     result = source_db.execute(text(f"SELECT * FROM {table_name}"))
@@ -726,18 +527,19 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                     model_columns = {c.name: c for c in ModelClass.__table__.columns}
                     
                     row_skipped = 0
+                    batch_count = 0
                     for row in rows:
                         try:
                             row_dict = dict(zip(columns, row))
                             cleaned = {}
-                            
+
                             for key, val in row_dict.items():
                                 if key not in model_columns:
                                     continue
-                                
+
                                 col = model_columns[key]
                                 col_type = str(col.type)
-                                
+
                                 if val is None:
                                     cleaned[key] = None
                                 elif 'DATE' in col_type.upper() and 'TIME' not in col_type.upper():
@@ -778,23 +580,28 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                                         cleaned[key] = val
                                 else:
                                     cleaned[key] = val
-                            
+
                             target_db.execute(sa_insert(ModelClass.__table__).values(**cleaned))
-                            target_db.commit()
+                            batch_count += 1
+                            # 每 500 行提交一次
+                            if batch_count % 500 == 0:
+                                target_db.commit()
                         except Exception as e:
                             target_db.rollback()
                             row_skipped += 1
                             if row_skipped <= 5:
-                                print(f"[导入] 跳过 {table_name} 一行: {str(e)[:200]}")
+                                logger.warning(f"[导入] 跳过 {table_name} 一行: {str(e)[:200]}")
                             continue
+                    # 提交剩余的记录
+                    target_db.commit()
                     
                     imported_counts[table_name] = len(rows) - row_skipped
                     if row_skipped > 0:
                         skipped_counts[table_name] = row_skipped
-                    print(f"[导入] 表 {table_name}: 导入 {len(rows) - row_skipped}/{len(rows)} 行")
-                    
+                    logger.info(f"[导入] 表 {table_name}: 导入 {len(rows) - row_skipped}/{len(rows)} 行")
+
                 except Exception as e:
-                    print(f"[导入] 表 {table_name} 完全失败: {e}")
+                    logger.error(f"[导入] 表 {table_name} 完全失败: {e}")
                     imported_counts[table_name] = 0
                     errors.append(f"表 {table_name} 失败: {str(e)[:200]}")
                     target_db.rollback()
@@ -812,7 +619,7 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                         pass
                 try:
                     target_db.commit()
-                    print("[导入] PostgreSQL 序列重置完成")
+                    logger.info("[导入] PostgreSQL 序列重置完成")
                 except:
                     target_db.rollback()
                 
@@ -848,107 +655,6 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
             "success": False,
             "error": str(e)
         }
-
-
-@app.on_event("startup")
-async def startup_event():
-    init_db()
-    config.load_persisted_config()
-
-    # 自动创建缺失的索引
-    try:
-        from src.models.database import engine
-        from sqlalchemy import text
-        import sqlite3
-
-        db_url = str(engine.url)
-        if db_url.startswith('sqlite'):
-            # SQLite: 直接使用 sqlite3 创建索引
-            db_path = db_url.replace('sqlite:///', '')
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            indexes = [
-                ("ix_posts_blogger_id", "posts", ["blogger_id"]),
-                ("ix_posts_post_date", "posts", ["post_date"]),
-                ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
-                ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
-                ("ix_predictions_status", "predictions", ["status"]),
-                ("ix_predictions_fund_code", "predictions", ["fund_code"]),
-                ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
-                ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
-                ("ix_predictions_target_date", "predictions", ["target_date"]),
-                ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
-                ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
-                ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
-                ("ix_viewpoints_source", "viewpoints", ["source"]),
-                ("ix_bloggers_platform", "bloggers", ["platform"]),
-                ("ix_bloggers_is_active", "bloggers", ["is_active"]),
-            ]
-
-            created_count = 0
-            for idx_name, table, columns in indexes:
-                try:
-                    cols = ", ".join(columns)
-                    cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})")
-                    if cursor.rowcount == 0:
-                        # 索引已存在
-                        pass
-                    else:
-                        created_count += 1
-                except Exception:
-                    pass
-
-            conn.commit()
-            conn.close()
-            if created_count > 0:
-                print(f"[Startup] 自动创建了 {created_count} 个索引")
-        else:
-            # PostgreSQL: 使用 SQLAlchemy 创建索引
-            with engine.connect() as conn:
-                indexes = [
-                    ("ix_posts_blogger_id", "posts", ["blogger_id"]),
-                    ("ix_posts_post_date", "posts", ["post_date"]),
-                    ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
-                    ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
-                    ("ix_predictions_status", "predictions", ["status"]),
-                    ("ix_predictions_fund_code", "predictions", ["fund_code"]),
-                    ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
-                    ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
-                    ("ix_predictions_target_date", "predictions", ["target_date"]),
-                    ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
-                    ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
-                    ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
-                    ("ix_viewpoints_source", "viewpoints", ["source"]),
-                    ("ix_bloggers_platform", "bloggers", ["platform"]),
-                    ("ix_bloggers_is_active", "bloggers", ["is_active"]),
-                ]
-
-                created_count = 0
-                for idx_name, table, columns in indexes:
-                    try:
-                        cols = ", ".join(columns)
-                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})"))
-                        created_count += 1
-                    except Exception:
-                        pass
-
-                conn.commit()
-                if created_count > 0:
-                    print(f"[Startup] 自动创建了 {created_count} 个索引")
-    except Exception as e:
-        print(f"[Startup] 索引创建检查失败: {e}")
-
-    print(f"[Startup] Fund Insight API v2.0.0 已启动")
-    print(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
-    print(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    from src.fund.fund_api import fund_api
-    fund_api.close()
-    print("[Shutdown] 资源已释放")
 
 
 if __name__ == "__main__":

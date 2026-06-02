@@ -4,15 +4,31 @@ Pytest 配置文件
 import sys
 import os
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from src.models.database import Base
+
+
+@pytest.fixture
+def test_db():
+    """内存 SQLite 测试数据库，每次测试自动隔离"""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine)
+    db = TestSession()
+    yield db
+    db.close()
+    Base.metadata.drop_all(engine)
+
 
 @pytest.fixture
 def db_session():
-    """数据库会话 fixture，每次测试前清理测试数据"""
+    """数据库会话 fixture（使用真实数据库，仅用于集成测试）"""
     from src.models.database import SessionLocal
     db = SessionLocal()
     try:

@@ -278,19 +278,20 @@ class ViewpointService(BaseService[Viewpoint]):
     
     def delete_viewpoint(self, viewpoint_id: int) -> bool:
         """
-        删除观点
-        
+        删除观点（软删除）
+
         Args:
             viewpoint_id: 观点 ID
-            
+
         Returns:
             是否删除成功
         """
         viewpoint = self.get_viewpoint_by_id(viewpoint_id)
         if not viewpoint:
             return False
-        
-        self.db.delete(viewpoint)
+
+        viewpoint.is_deleted = True
+        viewpoint.deleted_at = datetime.now()
         self.db.commit()
         return True
     
@@ -516,21 +517,25 @@ class ViewpointService(BaseService[Viewpoint]):
     
     def delete_viewpoints_by_ids(self, viewpoint_ids: List[int]) -> int:
         """
-        批量删除观点（硬删除）
-        
+        批量删除观点（软删除）
+
         Args:
             viewpoint_ids: 观点ID列表
-            
+
         Returns:
             删除的数量
         """
         if not viewpoint_ids:
             return 0
-        
+
         deleted_count = self.db.query(Viewpoint).filter(
-            Viewpoint.id.in_(viewpoint_ids)
-        ).delete(synchronize_session=False)
-        
+            Viewpoint.id.in_(viewpoint_ids),
+            Viewpoint.is_deleted == False
+        ).update({
+            Viewpoint.is_deleted: True,
+            Viewpoint.deleted_at: datetime.now()
+        }, synchronize_session=False)
+
         self.db.commit()
         return deleted_count
     

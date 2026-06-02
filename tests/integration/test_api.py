@@ -5,8 +5,12 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+# 确保测试环境有固定的密码，避免服务器生成随机密码导致认证失败
+if not os.getenv("ACCESS_PASSWORD"):
+    os.environ["ACCESS_PASSWORD"] = "test_password_123"
+
 # 测试用的认证头
-AUTH_HEADERS = {"X-Access-Password": os.getenv("ACCESS_PASSWORD", "Lwb1397111398")}
+AUTH_HEADERS = {"X-Access-Password": os.environ["ACCESS_PASSWORD"]}
 
 
 class TestBloggersAPI:

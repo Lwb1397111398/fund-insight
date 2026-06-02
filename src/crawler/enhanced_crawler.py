@@ -443,6 +443,16 @@ class EnhancedCrawlerSession:
             )
         }
 
+    def close(self):
+        """关闭底层 requests.Session，释放连接资源"""
+        self.session.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
 
 enhanced_session: Optional[EnhancedCrawlerSession] = None
 

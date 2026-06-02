@@ -7,9 +7,12 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Optional
+import logging
 
 import sys
 import os
+
+logger = logging.getLogger(__name__)
 
 # Fix: 只在直接运行此文件时添加路径
 if __name__ == "__main__":
@@ -37,9 +40,9 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
             pool_timeout=30
         )
         DB_TYPE = "postgresql"
-        print(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+5）")
+        logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+5）")
     except ImportError:
-        print(f"[数据库] psycopg2 未安装，回退到 SQLite")
+        logger.warning(f"[数据库] psycopg2 未安装，回退到 SQLite")
         DB_PATH = Path(config.DB_PATH)
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
@@ -94,7 +97,7 @@ class Post(Base):
     __tablename__ = 'posts'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    blogger_id = Column(Integer, nullable=False)
+    blogger_id = Column(Integer, ForeignKey('bloggers.id'), nullable=False)
     title = Column(String(500))
     content = Column(Text, nullable=False)
     post_date = Column(Date, nullable=False)
@@ -106,7 +109,7 @@ class Post(Base):
 
     created_at = Column(DateTime, default=datetime.now)
 
-    blogger = relationship("Blogger", foreign_keys="Post.blogger_id", primaryjoin="Post.blogger_id == Blogger.id", lazy="select")
+    blogger = relationship("Blogger", lazy="select")
 
     __table_args__ = (
         Index('ix_posts_blogger_id', 'blogger_id'),
@@ -122,7 +125,7 @@ class Prediction(Base):
     __tablename__ = 'predictions'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey('posts.id'), nullable=False)
+    post_id = Column(Integer, ForeignKey('posts.id', ondelete='RESTRICT'), nullable=False)
     blogger_id = Column(Integer, ForeignKey('bloggers.id'), nullable=False)
     
     fund_code = Column(String(20))
@@ -187,8 +190,8 @@ class Viewpoint(Base):
     __tablename__ = 'viewpoints'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    blogger_id = Column(Integer, nullable=True)
-    post_id = Column(Integer)
+    blogger_id = Column(Integer, ForeignKey('bloggers.id'), nullable=True)
+    post_id = Column(Integer, ForeignKey('posts.id', ondelete='SET NULL'), nullable=True)
     
     fund_code = Column(String(20))
     fund_name = Column(String(100))
@@ -327,6 +330,10 @@ class CrawlerArticleRecord(Base):
     fetched_at = Column(DateTime, default=datetime.now)
     created_at = Column(DateTime, default=datetime.now)
 
+    __table_args__ = (
+        Index('ix_crawler_records_source', 'source'),
+    )
+
 
 class FundHistory(Base):
     """基金历史净值表"""
@@ -338,9 +345,10 @@ class FundHistory(Base):
     nav_date = Column(Date, nullable=False, index=True)
     nav = Column(Float, nullable=False)
     day_growth = Column(Float)
-    
+    data_quality = Column(String(20), default='normal')
+    quality_note = Column(String(200))
     created_at = Column(DateTime, default=datetime.now)
-    
+
     __table_args__ = (
         UniqueConstraint('fund_code', 'nav_date', name='uix_fund_history_code_date'),
         Index('ix_fund_history_code_date', 'fund_code', 'nav_date'),
@@ -453,11 +461,15 @@ class VerificationTask(Base):
     __tablename__ = 'verification_tasks'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    prediction_id = Column(Integer, nullable=False)
+    prediction_id = Column(Integer, ForeignKey('predictions.id'), nullable=False)
     task_date = Column(Date, nullable=False)
     status = Column(String(20), default='pending')
     result = Column(JSON)
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_verification_task_prediction', 'prediction_id'),
+    )
 
 
 class PredictionGroup(Base):
@@ -478,7 +490,7 @@ class PredictionGroup(Base):
     __tablename__ = 'prediction_groups'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    blogger_id = Column(Integer, nullable=False, index=True)
+    blogger_id = Column(Integer, ForeignKey('bloggers.id'), nullable=False, index=True)
     fund_code = Column(String(20), nullable=False, index=True)
     fund_name = Column(String(100))
     
@@ -741,7 +753,7 @@ class CleanupItemLog(Base):
     __tablename__ = 'cleanup_item_logs'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    log_id = Column(Integer)
+    log_id = Column(Integer, ForeignKey('cleanup_logs.id'))
     
     data_type = Column(String(20))
     data_id = Column(Integer)
@@ -859,8 +871,12 @@ class MarketData(Base):
     
     data_source = Column(String(50))
     is_valid = Column(Boolean, default=True)
-    
+
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_market_data_type_date', 'data_type', 'data_date'),
+    )
 
 
 class PolicyData(Base):
@@ -893,6 +909,10 @@ class PolicyData(Base):
     
     is_processed = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_policy_data_date', 'policy_date'),
+    )
 
 
 class SentimentData(Base):
@@ -928,6 +948,10 @@ class SentimentData(Base):
     
     data_source = Column(String(50))
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_sentiment_data_date', 'sentiment_date'),
+    )
 
 
 class SectorFundFlow(Base):
@@ -965,6 +989,10 @@ class SectorFundFlow(Base):
     data_source = Column(String(50))
     created_at = Column(DateTime, default=datetime.now)
 
+    __table_args__ = (
+        Index('ix_sector_fund_flow_date', 'flow_date'),
+    )
+
 
 class UserProfile(Base):
     """用户画像表"""
@@ -1000,8 +1028,8 @@ class AdviceReasoning(Base):
     __tablename__ = 'advice_reasoning'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    advice_id = Column(Integer)
-    
+    advice_id = Column(Integer, ForeignKey('investment_advice.id'))
+
     # 核心支撑数据
     supporting_data = Column(JSON)
     
@@ -1025,8 +1053,8 @@ class AdvicePerformance(Base):
     __tablename__ = 'advice_performance'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    advice_id = Column(Integer)
-    
+    advice_id = Column(Integer, ForeignKey('investment_advice.id'))
+
     # 建议信息
     advice_type = Column(String(20))
     suggested_sectors = Column(JSON)
@@ -1067,7 +1095,7 @@ class AdviceFeedback(Base):
     __tablename__ = 'advice_feedback'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    advice_id = Column(Integer)
+    advice_id = Column(Integer, ForeignKey('investment_advice.id'))
     user_id = Column(String(50))
     
     feedback_type = Column(String(20))
@@ -1085,10 +1113,8 @@ def init_db():
     """初始化数据库 - 创建所有表"""
     Base.metadata.create_all(engine)
     if DB_TYPE == "postgresql":
-        print(f"[数据库] 已初始化: PostgreSQL")
+        logger.info(f"[数据库] 已初始化: PostgreSQL")
     else:
-        print(f"[数据库] 已初始化: SQLite: {DB_PATH}")
+        logger.info(f"[数据库] 已初始化: SQLite: {DB_PATH}")
 
 
-# 自动创建表（向后兼容）
-Base.metadata.create_all(engine)

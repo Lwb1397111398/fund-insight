@@ -42,6 +42,17 @@ class TaskScheduler:
         if self.thread:
             self.thread.join(timeout=5)
         logger.info("定时任务调度器已停止")
+
+    def _seconds_until_next_window(self):
+        """计算到下一个调度窗口的秒数"""
+        now = datetime.now()
+        current_minute = now.hour * 60 + now.minute
+        # 调度窗口: 2:00(120), 10:00(600), 15:30(930)
+        windows = [120, 600, 930]
+        for w in windows:
+            if current_minute < w:
+                return (w - current_minute) * 60 - now.second
+        return (24 * 60 - current_minute + windows[0]) * 60 - now.second
     
     def _run_scheduler(self):
         """运行调度循环"""
@@ -80,8 +91,9 @@ class TaskScheduler:
                         self._run_fund_update()
                         last_fund_update_date = current_date
 
-                # 每30秒检查一次，避免错过时间窗口
-                time.sleep(30)
+                # 计算到下一个调度窗口的秒数，上限300秒
+                sleep_seconds = min(self._seconds_until_next_window(), 300)
+                time.sleep(sleep_seconds)
 
             except Exception as e:
                 logger.error(f"调度器异常: {e}")

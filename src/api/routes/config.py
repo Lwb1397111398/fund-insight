@@ -235,9 +235,13 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
             Prediction.is_deleted == False
         ).all()
         
+        # 批量加载所有需要的 blogger，避免 N+1 查询
+        blogger_ids = list(set(p.blogger_id for p in expired_predictions if p.blogger_id))
+        bloggers_map = {b.id: b for b in db.query(Blogger).filter(Blogger.id.in_(blogger_ids)).all()} if blogger_ids else {}
+
         predictions_list = []
         for p in expired_predictions:
-            blogger = db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger = bloggers_map.get(p.blogger_id)
             predictions_list.append({
                 "id": p.id,
                 "blogger_id": p.blogger_id,
@@ -271,9 +275,13 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
             ~Post.id.in_(posts_with_predictions)
         ).all()
         
+        # 批量加载所有需要的 blogger，避免 N+1 查询
+        post_blogger_ids = list(set(p.blogger_id for p in empty_posts if p.blogger_id))
+        post_bloggers_map = {b.id: b for b in db.query(Blogger).filter(Blogger.id.in_(post_blogger_ids)).all()} if post_blogger_ids else {}
+
         posts_list = []
         for p in empty_posts:
-            blogger = db.query(Blogger).filter(Blogger.id == p.blogger_id).first()
+            blogger = post_bloggers_map.get(p.blogger_id)
             posts_list.append({
                 "id": p.id,
                 "title": p.title or "(无标题)",

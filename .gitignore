@@ -53,3 +53,11 @@ htmlcov/
 # JSON runtime data
 predictions_current.json
 predictions_check.json
+
+# Claude Code / AI tools
+.claude/
+.codegraph/
+.codeartsdoer/
+
+# SQLite
+*.sqlite

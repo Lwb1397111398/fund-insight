@@ -673,9 +673,10 @@ class PredictionVerifyService:
             
             if llm_result and isinstance(llm_result, dict):
                 llm_score = llm_result.get("score", score)
-                llm_score = min(100, max(0, int(llm_score)))
+                llm_score = max(0, min(100, int(llm_score)))
                 if llm_score > score:
-                    is_correct = llm_result.get("is_correct", is_correct)
+                    # 使用明确阈值判定 is_correct，不完全依赖 LLM 的 is_correct 字段
+                    is_correct = llm_score >= 60
                     verify_type = "llm_verify"
                     score = llm_score
                     analysis = llm_result.get("analysis", analysis)
@@ -690,10 +691,14 @@ class PredictionVerifyService:
         if not prediction.start_nav:
             prediction.start_nav = start_nav
             prediction.start_nav_date = nav_start_date
-        
+
+        # 确保 score 始终在 [0, 100] 范围内
+        score = max(0, min(100, score))
         prediction.verify_score = score
         
-        prediction.verify_history = [{
+        if not prediction.verify_history:
+            prediction.verify_history = []
+        prediction.verify_history.append({
             "date": today.isoformat(),
             "verify_start_date": nav_start_date.isoformat(),
             "verify_end_date": window_end.isoformat(),
@@ -706,7 +711,7 @@ class PredictionVerifyService:
             "score": score,
             "analysis": analysis,
             "process_metrics": process_metrics
-        }]
+        })
         attributes.flag_modified(prediction, 'verify_history')
         
         is_newly_completed = False

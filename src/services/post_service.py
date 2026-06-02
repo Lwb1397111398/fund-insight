@@ -10,6 +10,7 @@ from sqlalchemy import func
 from .base import BaseService
 from src.models.database import Post, Prediction, Blogger
 from src.analyzer.llm_analyzer import get_analyzer
+from src.utils.fund_matching import match_fund_with_fallback
 
 
 class PostService(BaseService[Post]):
@@ -333,11 +334,12 @@ class PostService(BaseService[Post]):
             for pred in result.get("predictions", []):
                 sector = pred.get("sector", "")
                 
-                fund_code, fund_name = self._match_fund_for_prediction(
+                fund_code, fund_name = match_fund_with_fallback(
                     pred=pred,
                     sector=sector,
                     fund_auto_manager=fund_auto_manager,
-                    llm_analyzer=llm_analyzer
+                    llm_analyzer=llm_analyzer,
+                    db=self.db
                 )
                 
                 prediction = Prediction(
@@ -442,11 +444,12 @@ class PostService(BaseService[Post]):
             for pred in result.get("predictions", []):
                 sector = pred.get("sector", "")
                 
-                fund_code, fund_name = self._match_fund_for_prediction(
+                fund_code, fund_name = match_fund_with_fallback(
                     pred=pred,
                     sector=sector,
                     fund_auto_manager=fund_auto_manager,
-                    llm_analyzer=llm_analyzer
+                    llm_analyzer=llm_analyzer,
+                    db=self.db
                 )
                 
                 prediction = Prediction(
@@ -618,113 +621,28 @@ class PostService(BaseService[Post]):
     def delete_post(self, post_id: int) -> bool:
         """
         删除帖子
-        
+
         Args:
             post_id: 帖子ID
-            
+
         Returns:
             是否删除成功
+
+        Raises:
+            ValueError: 如果帖子有关联的未删除预测
         """
         post = self.get(post_id)
         if not post:
             return False
-        
+
+        # 检查是否有关联的未删除预测
+        active_predictions = self.db.query(Prediction).filter(
+            Prediction.post_id == post_id,
+            Prediction.is_deleted == False
+        ).count()
+        if active_predictions > 0:
+            raise ValueError(f"该帖子有 {active_predictions} 条关联预测，请先删除预测")
+
         self.db.delete(post)
         self.db.commit()
         return True
-    
-    def _match_fund_for_prediction(
-        self,
-        pred: dict,
-        sector: str,
-        fund_auto_manager,
-        llm_analyzer
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        三级降级基金匹配机制
-        
-        优先级（按可靠性排序）：
-        1. 使用 fund_auto_manager 自动匹配（优先查本地映射表）
-        2. 使用 LLM 分析器的板块映射表（经过验证的映射）
-        3. 使用本地默认映射表
-        4. 使用LLM返回的fund_code（作为最后补充，需验证）
-        
-        Args:
-            pred: 预测字典
-            sector: 板块名称
-            fund_auto_manager: 基金自动管理器
-            llm_analyzer: LLM分析器
-            
-        Returns:
-            (fund_code, fund_name)
-        """
-        fund_code = None
-        fund_name = None
-        
-        # 第一级：使用 fund_auto_manager 自动匹配（优先查本地映射表）
-        try:
-            success, message, fund = fund_auto_manager.auto_add_fund_for_prediction(sector, self.db)
-            if success and fund:
-                print(f"[Fund Match] Level 1 (Auto Manager): {message}")
-                return fund.fund_code, fund.fund_name
-        except Exception as e:
-            print(f"[Fund Match] Level 1 failed: {e}")
-        
-        # 第二级：使用 LLM 分析器的板块映射表（经过验证的映射）
-        try:
-            fund_info = llm_analyzer.get_fund_for_sector(sector)
-            if fund_info:
-                fund_code = fund_info.get("code")
-                fund_name = fund_info.get("name")
-                print(f"[Fund Match] Level 2 (LLM Mapper): {fund_name} ({fund_code})")
-                return fund_code, fund_name
-        except Exception as e:
-            print(f"[Fund Match] Level 2 failed: {e}")
-        
-        # 第三级：使用本地默认映射表
-        try:
-            default_fund = self._get_default_fund_for_sector(sector)
-            if default_fund:
-                fund_code = default_fund["code"]
-                fund_name = default_fund["name"]
-                print(f"[Fund Match] Level 3 (Default Mapper): {fund_name} ({fund_code})")
-                return fund_code, fund_name
-        except Exception as e:
-            print(f"[Fund Match] Level 3 failed: {e}")
-        
-        # 第四级：使用LLM返回的fund_code（作为最后补充，需严格验证）
-        llm_fund_code = pred.get("fund_code")
-        llm_fund_name = pred.get("fund_name")
-        
-        if llm_fund_code and str(llm_fund_code).strip():
-            # 严格验证：必须是6位数字
-            if len(str(llm_fund_code)) == 6 and str(llm_fund_code).isdigit():
-                # 检查基金是否已存在于数据库（更可靠）
-                from src.models.database import FundInfo
-                existing_fund = self.db.query(FundInfo).filter(
-                    FundInfo.fund_code == str(llm_fund_code)
-                ).first()
-                
-                if existing_fund:
-                    print(f"[Fund Match] Level 4 (LLM Result - Verified): {existing_fund.fund_name} ({llm_fund_code})")
-                    return existing_fund.fund_code, existing_fund.fund_name
-                else:
-                    # 基金不存在于数据库，LLM返回的代码可能不可靠
-                    print(f"[Fund Match] Level 4 (LLM Result - Unverified): {llm_fund_name} ({llm_fund_code}) - 基金不存在，跳过")
-        
-        # 最终降级：返回None
-        print(f"[Fund Match] All levels failed, using sector name: {sector}")
-        return None, None
-    
-    def _get_default_fund_for_sector(self, sector: str) -> Optional[dict]:
-        """
-        本地默认基金映射表（第三级降级）
-        
-        Args:
-            sector: 板块名称
-            
-        Returns:
-            基金信息字典或 None
-        """
-        from src.constants import get_fund_for_sector
-        return get_fund_for_sector(sector)

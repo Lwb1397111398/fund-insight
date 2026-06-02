@@ -79,20 +79,20 @@ class StatsService:
     def get_blogger_stats(self) -> Dict:
         """
         获取博主统计
-        
+
         Returns:
             博主统计数据
         """
         total = self.db.query(Blogger).count()
-        
-        grade_distribution = {}
-        for grade in ['S', 'A', 'B', 'C', 'D']:
-            count = self.db.query(Blogger).filter(Blogger.grade == grade).count()
-            if count > 0:
-                grade_distribution[grade] = count
-        
+
+        # 使用 GROUP BY 批量获取等级分布，避免 N+1 查询
+        grade_rows = self.db.query(Blogger.grade, func.count(Blogger.id)).filter(
+            Blogger.is_active == True
+        ).group_by(Blogger.grade).all()
+        grade_distribution = {grade: count for grade, count in grade_rows if grade}
+
         avg_accuracy = self.db.query(func.avg(Blogger.accuracy_rate)).scalar() or 0
-        
+
         top_bloggers = self.db.query(Blogger).order_by(
             Blogger.accuracy_rate.desc()
         ).limit(5).all()
@@ -130,7 +130,7 @@ class StatsService:
                 Prediction.is_deleted == False
             ).count(),
             "verified": self.db.query(Prediction).filter(
-                Prediction.status == 'verified',
+                Prediction.status == 'success',
                 Prediction.is_deleted == False
             ).count(),
             "expired": self.db.query(Prediction).filter(
@@ -170,23 +170,19 @@ class StatsService:
     def get_content_stats(self) -> Dict:
         """
         获取内容统计
-        
+
         Returns:
             内容统计数据
         """
         total_posts = self.db.query(Post).count()
         total_viewpoints = self.db.query(Viewpoint).filter(Viewpoint.is_deleted == False).count()
-        
-        # 来源分布
-        source_distribution = {}
-        sources = self.db.query(Viewpoint.source).distinct().all()
-        for source in sources:
-            if source[0]:
-                count = self.db.query(Viewpoint).filter(
-                    Viewpoint.source == source[0],
-                    Viewpoint.is_deleted == False
-                ).count()
-                source_distribution[source[0]] = count
+
+        # 使用 GROUP BY 批量获取来源分布，避免 N+1 查询
+        source_rows = self.db.query(Viewpoint.source, func.count(Viewpoint.id)).filter(
+            Viewpoint.is_deleted == False,
+            Viewpoint.source.isnot(None)
+        ).group_by(Viewpoint.source).all()
+        source_distribution = {source: count for source, count in source_rows if source}
         
         # 市场情绪分布
         sentiment_distribution = {
@@ -215,21 +211,17 @@ class StatsService:
     def get_fund_stats(self) -> Dict:
         """
         获取基金统计
-        
+
         Returns:
             基金统计数据
         """
         total = self.db.query(FundInfo).count()
-        
-        # 板块分布
-        sector_distribution = {}
-        sectors = self.db.query(FundInfo.sector_type).distinct().all()
-        for sector in sectors:
-            if sector[0]:
-                count = self.db.query(FundInfo).filter(
-                    FundInfo.sector_type == sector[0]
-                ).count()
-                sector_distribution[sector[0]] = count
+
+        # 使用 GROUP BY 批量获取板块分布，避免 N+1 查询
+        sector_rows = self.db.query(FundInfo.sector_type, func.count(FundInfo.id)).filter(
+            FundInfo.sector_type.isnot(None)
+        ).group_by(FundInfo.sector_type).all()
+        sector_distribution = {sector: count for sector, count in sector_rows if sector}
         
         # 有活跃预测的基金
         active_funds = self.db.query(FundInfo).filter(

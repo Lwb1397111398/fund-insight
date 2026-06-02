@@ -148,9 +148,12 @@ async def get_post(post_id: int, db: Session = Depends(get_db)):
 async def delete_post(post_id: int, db: Session = Depends(get_db)):
     """删除帖子"""
     service = PostService(db)
-    success = service.delete_post(post_id)
-    
+    try:
+        success = service.delete_post(post_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     if not success:
         raise HTTPException(status_code=404, detail="帖子不存在")
-    
+
     return {"success": True, "message": "帖子删除成功"}

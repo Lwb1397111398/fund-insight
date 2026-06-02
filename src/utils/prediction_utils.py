@@ -263,10 +263,14 @@ def suggest_period_from_text(
             days = days_map.get(pattern, 1)
             return days, days_to_standard_period(days), f"匹配到: {pattern}"
     
-    short_patterns = ['短线', '短期', '近期', '这几天', '接下来几天']
+    short_patterns = ['短线', '近期', '这几天', '接下来几天']
     for pattern in short_patterns:
         if pattern in text:
             return 3, "3天", f"匹配到: {pattern}"
+
+    # '短期' 映射为 7 天（1周），更符合 PERIOD_MAP 中短期的定义（14天以内）
+    if '短期' in text:
+        return 7, "1周", "匹配到: 短期"
     
     week_patterns = ['下周', '一周', '这周']
     for pattern in week_patterns:

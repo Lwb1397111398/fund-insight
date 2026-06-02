@@ -10,10 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 
 - **后端**: Python 3.12 + FastAPI + SQLAlchemy 2.0 + Pydantic 2.0
 - **前端**: 原生 HTML/JS SPA（web/ 目录），使用 Vue.js 3（CDN）和 axios
-- **数据库**: SQLite（本地开发）/ PostgreSQL（Render 云端部署，通过 psycopg2）
+- **数据库**: PostgreSQL (Supabase，生产环境) / SQLite（本地开发和测试）
 - **LLM**: OpenAI 兼容 SDK，支持 DeepSeek、硅基流动、火山引擎
 - **基金数据**: 天天基金 API
-- **部署**: Render.com（云端）/ PyInstaller（Windows 独立 EXE）/ PythonAnywhere（WSGI）
+- **部署**: Render.com（云端）+ Supabase（数据库）/ PyInstaller（Windows 独立 EXE）/ PythonAnywhere（WSGI）
 - **测试**: pytest
 
 ## 常用命令
@@ -71,7 +71,7 @@ web/index.html  ←──HTTP──→  src/api/main.py (FastAPI)
                                │
                           src/models/database.py — 30+ SQLAlchemy ORM 模型
                                │
-                     SQLite (本地) / PostgreSQL (云端)
+                     PostgreSQL (Supabase) / SQLite (本地开发)
 ```
 
 ### 核心数据流
@@ -112,14 +112,15 @@ web/index.html  ←──HTTP──→  src/api/main.py (FastAPI)
 
 ### 数据存储
 
-- **本地**: `data/fund_insight.db`（SQLite）
+- **生产环境**: PostgreSQL (Supabase)，通过 `DATABASE_URL` 环境变量连接
+- **本地开发**: `data/fund_insight.db`（SQLite，自动回退）
+- **测试**: 内存 SQLite（`tests/conftest.py` 中的 `test_db` fixture）
 - **配置持久化**: `data/llm_config.json`（LLM 配置，重启保留）
-- **数据库迁移**: 根目录有 7 个 `migrate_*.py` 脚本
 - **维护脚本**: `scripts/` 目录下有 22 个工具脚本（数据修复、重分析、检查等）
 
 ## 注意事项
 
-- 数据库模型变更后需要编写迁移脚本（参考根目录 `migrate_*.py`）
+- 数据库模型变更后需同步更新 Supabase 的表结构
 - LLM 分析模块 (`llm_analyzer.py`) 是核心复杂模块，修改需谨慎
 - 爬虫模块默认禁用，修改爬虫代码时注意 `CRAWLER_ENABLED` 配置
 - 前端是纯 HTML/JS，不经过构建工具，直接修改 `web/` 目录下的文件即可

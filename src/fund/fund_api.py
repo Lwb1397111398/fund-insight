@@ -252,41 +252,53 @@ class FundDataManager:
         history = self.api.get_fund_history(fund_code, days)
         if not history:
             return 0
-        
+
         close_db = False
         if db is None:
             db = SessionLocal()
             close_db = True
-        
+
         try:
+            # 批量查询已存在的日期，避免逐条查询
+            existing_dates = set(
+                r[0] for r in db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code
+                ).all()
+            )
+
+            # 获取基金信息（只查询一次）
+            fund_info = db.query(FundInfo).filter(FundInfo.fund_code == fund_code).first()
+            fund_name = fund_info.fund_name if fund_info else ''
+
             count = 0
             for item in history:
-                existing = db.query(FundHistory).filter(
-                    FundHistory.fund_code == fund_code,
-                    FundHistory.nav_date == item['date']
-                ).first()
-                
-                if existing:
-                    existing.nav = item['nav']
-                    existing.day_growth = item['growth']
+                if item['date'] in existing_dates:
+                    # 更新已存在的记录
+                    existing = db.query(FundHistory).filter(
+                        FundHistory.fund_code == fund_code,
+                        FundHistory.nav_date == item['date']
+                    ).first()
+                    if existing:
+                        existing.nav = item['nav']
+                        existing.day_growth = item['growth']
                 else:
-                    fund_info = db.query(FundInfo).filter(FundInfo.fund_code == fund_code).first()
+                    # 插入新记录
                     record = FundHistory(
                         fund_code=fund_code,
-                        fund_name=fund_info.fund_name if fund_info else '',
+                        fund_name=fund_name,
                         nav_date=item['date'],
                         nav=item['nav'],
                         day_growth=item['growth']
                     )
                     db.add(record)
                     count += 1
-            
+
             # 计算周涨跌幅和月涨跌幅
             self._calculate_growth_rates(fund_code, db)
-            
+
             db.commit()
             return count
-            
+
         except Exception as e:
             logger.error(f"更新历史净值失败: {e}")
             db.rollback()
