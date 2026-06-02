@@ -599,11 +599,12 @@ class PostService(BaseService[Post]):
                     for pred in result.get("predictions", []):
                         sector = pred.get("sector", "")
                         
-                        fund_code, fund_name = self._match_fund_for_prediction(
+                        fund_code, fund_name = match_fund_with_fallback(
                             pred=pred,
                             sector=sector,
                             fund_auto_manager=fund_auto_manager,
-                            llm_analyzer=llm_analyzer
+                            llm_analyzer=llm_analyzer,
+                            db=db2
                         )
                         
                         prediction = Prediction(
