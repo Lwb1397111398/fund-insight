@@ -100,7 +100,8 @@ class SectorFundService:
             if reviewed_filter is not None:
                 query = query.filter(SectorFundMapping.reviewed == reviewed_filter)
 
-            mappings = query.order_by(SectorFundMapping.sector_name).all()
+            # 待审查排在前面，同状态内按板块名排序
+            mappings = query.order_by(SectorFundMapping.reviewed.asc(), SectorFundMapping.sector_name).all()
             return [
                 {
                     'id': m.id,

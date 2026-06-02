@@ -548,14 +548,19 @@ class BatchReviewRequest(BaseModel):
 
 @router.get("/sector-mappings")
 async def get_sector_mappings(
-    reviewed: Optional[bool] = None,
+    reviewed: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """获取所有板块映射（含 reviewed 状态）"""
     from src.services.sector_fund_service import get_sector_fund_service
 
+    # 手动解析布尔值（FastAPI 对 query string 的 bool 解析不可靠）
+    reviewed_filter = None
+    if reviewed is not None:
+        reviewed_filter = reviewed.lower() in ('true', '1', 'yes')
+
     service = get_sector_fund_service(db)
-    mappings = service.get_all_mappings_with_status(reviewed_filter=reviewed)
+    mappings = service.get_all_mappings_with_status(reviewed_filter=reviewed_filter)
 
     reviewed_count = sum(1 for m in mappings if m['reviewed'])
     unreviewed_count = len(mappings) - reviewed_count
@@ -576,27 +581,33 @@ async def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Sess
     """更新映射（自动标记为已审查）"""
     from src.services.sector_fund_service import get_sector_fund_service
 
-    service = get_sector_fund_service(db)
-    result = service.update_mapping(
-        mapping_id=mapping_id,
-        fund_code=update.fund_code,
-        fund_name=update.fund_name
-    )
-
-    if not result:
-        return {"success": False, "message": "映射不存在"}
-
-    # 级联清理冲突
-    if result.get('sector_name') and result.get('fund_code'):
-        service.cascade_cleanup_conflicts(
-            result['sector_name'], result['fund_code'], result.get('fund_name', '')
+    try:
+        service = get_sector_fund_service(db)
+        result = service.update_mapping(
+            mapping_id=mapping_id,
+            fund_code=update.fund_code,
+            fund_name=update.fund_name
         )
 
-    return {
-        "success": True,
-        "message": f"已更新映射: {result['sector_name']} → {result['fund_name']}（自动标记为已审查）",
-        "data": result
-    }
+        if not result:
+            return {"success": False, "message": "映射不存在"}
+
+        # 级联清理冲突
+        if result.get('sector_name') and result.get('fund_code'):
+            try:
+                service.cascade_cleanup_conflicts(
+                    result['sector_name'], result['fund_code'], result.get('fund_name', '')
+                )
+            except Exception as e:
+                print(f"[板块匹配] 级联清理失败（不影响保存）: {e}")
+
+        return {
+            "success": True,
+            "message": f"已更新映射: {result['sector_name']} → {result['fund_name']}（自动标记为已审查）",
+            "data": result
+        }
+    except Exception as e:
+        return {"success": False, "message": f"保存失败: {str(e)}"}
 
 
 @router.post("/sector-mappings/{mapping_id}/review")
