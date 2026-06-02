@@ -91,6 +91,43 @@ async def create_post(post: PostCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/reset-failed")
+async def reset_failed_analyses(db: Session = Depends(get_db)):
+    """重置分析失败的帖子（标记为已分析但无有效预测的帖子）"""
+    import json
+    from src.models.database import Post, Prediction
+
+    # 查找标记为已分析但分析结果为空的帖子
+    analyzed_posts = db.query(Post).filter(Post.analyzed == True).all()
+    reset_count = 0
+
+    for post in analyzed_posts:
+        should_reset = False
+        if not post.analysis_result:
+            should_reset = True
+        else:
+            try:
+                result = json.loads(post.analysis_result) if isinstance(post.analysis_result, str) else post.analysis_result
+                if not result.get("predictions") and result.get("summary") == "分析失败":
+                    should_reset = True
+            except Exception:
+                should_reset = True
+
+        if should_reset:
+            # 检查是否有关联的预测记录
+            pred_count = db.query(Prediction).filter(Prediction.post_id == post.id).count()
+            if pred_count == 0:
+                post.analyzed = False
+                reset_count += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"已重置 {reset_count} 个分析失败的帖子为未分析状态",
+        "data": {"reset_count": reset_count}
+    }
+
+
 @router.post("/batch-analyze")
 async def batch_analyze_posts(
     background_tasks: BackgroundTasks,

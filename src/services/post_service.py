@@ -6,6 +6,9 @@ from typing import List, Optional, Dict, Tuple, Any
 from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .base import BaseService
 from src.models.database import Post, Prediction, Blogger
@@ -326,7 +329,17 @@ class PostService(BaseService[Post]):
                 content=content,
                 post_date=post_date.isoformat() if post_date else None
             )
-            
+
+            is_empty = (not result.get("predictions") and
+                       result.get("summary") == "分析失败")
+            if is_empty:
+                db_post.analysis_result = result
+                return {
+                    "success": False,
+                    "message": "分析失败：LLM未能提取有效预测（可能内容过短或无关）",
+                    "predictions_created": 0
+                }
+
             db_post.analyzed = True
             db_post.analysis_result = result
             analysis_result = result
@@ -437,7 +450,17 @@ class PostService(BaseService[Post]):
                 content=db_post.content,
                 post_date=db_post.post_date.isoformat() if db_post.post_date else None
             )
-            
+
+            is_empty = (not result.get("predictions") and
+                       result.get("summary") == "分析失败")
+            if is_empty:
+                db_post.analysis_result = result
+                return {
+                    "success": False,
+                    "message": "分析失败：LLM未能提取有效预测",
+                    "predictions_created": 0
+                }
+
             db_post.analyzed = True
             db_post.analysis_result = result
             
@@ -550,13 +573,25 @@ class PostService(BaseService[Post]):
                     content=content,
                     post_date=post_date_str
                 )
-                
+
+                # 检查是否为有效分析结果（空结果不标记为已分析）
+                is_empty = (not result.get("predictions") and
+                           result.get("summary") == "分析失败")
+
                 db2 = SessionLocal()
                 try:
                     post = db2.query(Post).filter(Post.id == post_id).first()
                     if not post:
                         continue
-                    
+
+                    if is_empty:
+                        # 分析失败，不标记为已分析，记录失败原因
+                        post.analysis_result = result
+                        db2.commit()
+                        failed_count += 1
+                        logger.warning(f"[批量分析] 帖子 {post_id} 分析失败（LLM返回空结果），保留未分析状态")
+                        continue
+
                     post.analyzed = True
                     post.analysis_result = result
                     db2.commit()
