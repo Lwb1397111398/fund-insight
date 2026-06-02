@@ -1082,7 +1082,10 @@ class LLMAnalyzer:
         return None
 
     def _fill_fund_from_sector(self, result: Dict):
-        """根据 sector 自动匹配基金代码和名称（多层匹配 + 自动学习）"""
+        """根据 sector 自动匹配基金代码和名称（多层匹配 + 自动学习）
+
+        优先级：已审查DB > 硬编码表 > 未审查DB > FundInfo > API搜索
+        """
         from src.constants.sector_fund_map import get_fund_for_sector, normalize_sector_name
 
         for pred in result.get('predictions', []):
@@ -1096,57 +1099,64 @@ class LLMAnalyzer:
                 pred['sector'] = standard_sector
                 logger.info(f"[基金匹配] 板块标准化: '{sector}' → '{standard_sector}'")
 
-            # 如果 LLM 已经填了 fund_code，检查是否匹配，不匹配则覆盖
-            current_code = pred.get('fund_code', '')
-
-            # 第1层：查数据库 SectorFundMapping（用户编辑优先，覆盖硬编码）
-            fund = self._find_fund_in_db_mapping(standard_sector)
+            # 第1层：已审查的数据库映射（用户编辑/审查过的，最高优先级）
+            fund = self._find_fund_in_db_mapping(standard_sector, reviewed_only=True)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
-                logger.info(f"[基金匹配] 数据库映射命中: {standard_sector} → {fund.get('name', '')}")
+                logger.info(f"[基金匹配] 已审查DB命中: {standard_sector} → {fund.get('name', '')}")
                 continue
 
-            # 第2层：查 SECTOR_FUND_MAP（硬编码，107个）
+            # 第2层：硬编码表（136个验证过的板块）
             fund = get_fund_for_sector(standard_sector)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
-                logger.info(f"[基金匹配] 数据库映射命中: {standard_sector} → {fund.get('name', '')}")
+                logger.info(f"[基金匹配] 硬编码表命中: {standard_sector} → {fund.get('name', '')}")
                 continue
 
-            # 第3层：查数据库 FundInfo 表（按 sector_type 搜索）
+            # 第3层：未审查的数据库映射（自动学习的，待用户确认）
+            fund = self._find_fund_in_db_mapping(standard_sector, reviewed_only=False)
+            if fund:
+                pred['fund_code'] = fund.get('code', '')
+                pred['fund_name'] = fund.get('name', '')
+                logger.info(f"[基金匹配] 未审查DB命中: {standard_sector} → {fund.get('name', '')}")
+                continue
+
+            # 第4层：FundInfo 表（命中后自动保存到待审查队列）
             fund = self._find_fund_in_fundinfo(standard_sector)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
-                self._save_fund_mapping(standard_sector, fund.get('code', ''), fund.get('name', ''))
                 logger.info(f"[基金匹配] FundInfo命中: {standard_sector} → {fund.get('name', '')}")
                 continue
 
-            # 第4层：调天天基金 API 搜索
+            # 第5层：天天基金 API 搜索（命中后自动保存到待审查队列）
             fund = self._search_fund_via_api(standard_sector)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
-                self._save_fund_mapping(standard_sector, fund.get('code', ''), fund.get('name', ''))
-                logger.info(f"[基金匹配] API搜索命中: {standard_sector} → {fund.get('name', '')}，已自动保存映射")
+                self._save_fund_mapping(standard_sector, fund.get('code', ''), fund.get('name', ''), reviewed=False)
+                logger.info(f"[基金匹配] API搜索命中: {standard_sector} → {fund.get('name', '')}，已自动保存到待审查")
                 continue
 
-            # 第5层：都没找到，留空
+            # 第6层：都没找到，留空
             logger.warning(f"[基金匹配] 板块 '{standard_sector}' 无对应基金，留空")
 
-    def _find_fund_in_db_mapping(self, sector: str) -> Optional[Dict]:
-        """第2层：查数据库 SectorFundMapping"""
+    def _find_fund_in_db_mapping(self, sector: str, reviewed_only: bool = False) -> Optional[Dict]:
+        """查数据库 SectorFundMapping（reviewed_only=True 只返回已审查的映射）"""
         try:
             from src.services.sector_fund_service import get_sector_fund_service
             service = get_sector_fund_service()
-            return service.get_fund_by_sector(sector)
+            fund = service.get_fund_by_sector(sector)
+            if fund and reviewed_only and not fund.get('reviewed'):
+                return None
+            return fund
         except Exception:
             return None
 
     def _find_fund_in_fundinfo(self, sector: str) -> Optional[Dict]:
-        """第3层：查 FundInfo 表，按 sector_type 模糊匹配"""
+        """第4层：查 FundInfo 表，按 sector_type 模糊匹配（命中后自动保存到待审查队列）"""
         try:
             from src.models.database import SessionLocal, FundInfo
             db = SessionLocal()
@@ -1156,14 +1166,18 @@ class LLMAnalyzer:
                     FundInfo.sector_type == sector
                 ).first()
                 if fund:
-                    return {'code': fund.fund_code, 'name': fund.fund_name}
+                    result = {'code': fund.fund_code, 'name': fund.fund_name}
+                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False)
+                    return result
 
                 # 模糊匹配
                 fund = db.query(FundInfo).filter(
                     FundInfo.sector_type.contains(sector)
                 ).first()
                 if fund:
-                    return {'code': fund.fund_code, 'name': fund.fund_name}
+                    result = {'code': fund.fund_code, 'name': fund.fund_name}
+                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False)
+                    return result
 
                 # 反向匹配（sector 包含 sector_type）
                 funds = db.query(FundInfo).filter(
@@ -1171,7 +1185,9 @@ class LLMAnalyzer:
                 ).all()
                 for f in funds:
                     if f.sector_type and (f.sector_type in sector or sector in f.sector_type):
-                        return {'code': f.fund_code, 'name': f.fund_name}
+                        result = {'code': f.fund_code, 'name': f.fund_name}
+                        self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False)
+                        return result
             finally:
                 db.close()
         except Exception:
@@ -1192,8 +1208,8 @@ class LLMAnalyzer:
             logger.warning(f"[基金匹配] API搜索失败: {e}")
         return None
 
-    def _save_fund_mapping(self, sector: str, fund_code: str, fund_name: str):
-        """自动保存映射到数据库（下次直接命中第2层）"""
+    def _save_fund_mapping(self, sector: str, fund_code: str, fund_name: str, reviewed: bool = False):
+        """自动保存映射到数据库（reviewed=False 表示待审查）"""
         try:
             from src.models.database import SessionLocal, SectorFundMapping
             db = SessionLocal()
@@ -1201,11 +1217,12 @@ class LLMAnalyzer:
                 mapping = SectorFundMapping(
                     sector_name=sector,
                     fund_code=fund_code,
-                    fund_name=fund_name
+                    fund_name=fund_name,
+                    reviewed=reviewed
                 )
                 db.merge(mapping)
                 db.commit()
-                logger.info(f"[基金匹配] 自动保存映射: {sector} → {fund_name} ({fund_code})")
+                logger.info(f"[基金匹配] 自动保存映射: {sector} → {fund_name} ({fund_code}) [reviewed={reviewed}]")
             except Exception as e:
                 db.rollback()
                 raise

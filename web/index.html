@@ -3207,6 +3207,7 @@
                 <div style="display: flex; gap: 0; border-bottom: 2px solid #f0f0f0; margin-bottom: 15px;">
                     <button @click="configTab = 'llm'" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'llm' ? '#1890ff' : 'transparent', color: configTab === 'llm' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'llm' ? '600' : '400' }">LLM 配置</button>
                     <button @click="configTab = 'aliases'; loadAliases()" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'aliases' ? '#1890ff' : 'transparent', color: configTab === 'aliases' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'aliases' ? '600' : '400' }">板块别名</button>
+                    <button @click="configTab = 'mappings'; loadSectorMappings()" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'mappings' ? '#1890ff' : 'transparent', color: configTab === 'mappings' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'mappings' ? '600' : '400' }">板块匹配</button>
                 </div>
                 <div v-if="configTab === 'aliases'">
                     <div style="margin-bottom: 15px; padding: 12px; background: #f6ffed; border-radius: 8px; border: 1px solid #b7eb8f;">
@@ -3245,6 +3246,61 @@
                             </div>
                         </div>
                     </details>
+                </div>
+                <div v-if="configTab === 'mappings'">
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
+                        <span style="font-size: 13px; color: #666;">共 {{ sectorMappings.total }} 条</span>
+                        <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}</span>
+                        <span style="font-size: 13px; color: #faad14;">待审查 {{ sectorMappings.unreviewed_count }}</span>
+                        <span style="flex: 1;"></span>
+                        <button class="action-btn small" @click="loadSectorMappings(null)" :style="{ background: mappingFilter === null ? '#1890ff' : '#f5f5f5', color: mappingFilter === null ? '#fff' : '#666' }">全部</button>
+                        <button class="action-btn small" @click="loadSectorMappings(false)" :style="{ background: mappingFilter === false ? '#faad14' : '#f5f5f5', color: mappingFilter === false ? '#fff' : '#666' }">待审查</button>
+                        <button class="action-btn small" @click="loadSectorMappings(true)" :style="{ background: mappingFilter === true ? '#52c41a' : '#f5f5f5', color: mappingFilter === true ? '#fff' : '#666' }">已审查</button>
+                        <button v-if="sectorMappings.unreviewed_count > 0" class="action-btn small" @click="batchReviewAll" style="background: #52c41a; color: #fff;">全部标记已审查</button>
+                    </div>
+                    <div style="max-height: 450px; overflow-y: auto; border: 1px solid #f0f0f0; border-radius: 6px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <thead>
+                                <tr style="background: #fafafa; position: sticky; top: 0; z-index: 1;">
+                                    <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0; width: 120px;">板块名</th>
+                                    <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0;">基金名称</th>
+                                    <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0; width: 80px;">基金代码</th>
+                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 70px;">状态</th>
+                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 130px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="m in sectorMappings.mappings" :key="m.id" :style="{ background: m.reviewed ? '#fff' : '#fffbe6' }">
+                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-weight: 600;">{{ m.sector_name }}</td>
+                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
+                                        <input v-if="editingMappingId === m.id" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
+                                        <span v-else>{{ m.fund_name }}</span>
+                                    </td>
+                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
+                                        <input v-if="editingMappingId === m.id" v-model="editingMapping.fund_code" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
+                                        <span v-else>{{ m.fund_code }}</span>
+                                    </td>
+                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                                        <span :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? '已审查' : '待审查' }}</span>
+                                    </td>
+                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                                        <template v-if="editingMappingId === m.id">
+                                            <button @click="saveMappingEdit(m.id)" style="background: #52c41a; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 4px;">保存</button>
+                                            <button @click="editingMappingId = null" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
+                                        </template>
+                                        <template v-else>
+                                            <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
+                                            <button v-if="!m.reviewed" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
+                                            <button @click="deleteMapping(m.id, m.sector_name)" style="color: #ff4d4f; background: none; border: none; cursor: pointer; font-size: 12px;">删除</button>
+                                        </template>
+                                    </td>
+                                </tr>
+                                <tr v-if="sectorMappings.mappings && sectorMappings.mappings.length === 0">
+                                    <td colspan="5" style="padding: 20px; text-align: center; color: #999;">暂无数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
                 <div v-if="configTab === 'llm' && configData">
                     <div class="config-item">
@@ -3798,8 +3854,19 @@ const fetchWeChatBatch = async () => {
                 const loadAliases = async () => { try { const res = await axios.get('/api/config/aliases'); if (res.data.success) aliases.value = res.data.data; } catch (e) { console.error('加载别名失败:', e); } };
                 const addAlias = async () => { const a = newAlias.value; if (!a.alias_name || !a.sector_name) { alert('请填写别名和目标板块'); return; } try { const res = await axios.post('/api/config/aliases', a); if (res.data.success) { alert(res.data.message); newAlias.value = { alias_name: '', sector_name: '' }; await loadAliases(); } else { alert(res.data.message); } } catch (e) { alert('添加失败: ' + (e.response?.data?.detail || e.message)); } };
                 const deleteAlias = async (id, name) => { if (!confirm(`确定删除别名"${name}"？`)) return; try { const res = await axios.delete(`/api/config/aliases/${id}`); if (res.data.success) { alert(res.data.message); await loadAliases(); } else { alert(res.data.message); } } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
+                // ===== 板块匹配管理 =====
+                const sectorMappings = ref({ mappings: [], total: 0, reviewed_count: 0, unreviewed_count: 0 });
+                const mappingFilter = ref(null);
+                const editingMappingId = ref(null);
+                const editingMapping = ref({ fund_name: '', fund_code: '' });
+                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const params = reviewed !== null ? `?reviewed=${reviewed}` : ''; const res = await axios.get(`/api/config/sector-mappings${params}`); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
+                const startEditMapping = (m) => { editingMappingId.value = m.id; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code }; };
+                const saveMappingEdit = async (id) => { try { const res = await axios.put(`/api/config/sector-mappings/${id}`, editingMapping.value); if (res.data.success) { editingMappingId.value = null; await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('保存失败: ' + (e.response?.data?.detail || e.message)); } };
+                const reviewMapping = async (id) => { try { const res = await axios.post(`/api/config/sector-mappings/${id}/review`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
+                const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
+                const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
             }
         }).mount('#app');
     </script>

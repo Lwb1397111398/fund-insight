@@ -425,13 +425,16 @@ class FundInfo(Base):
 class SectorFundMapping(Base):
     """板块-基金映射表 - 自动匹配"""
     __tablename__ = 'sector_fund_mapping'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     sector_name = Column(String(50), unique=True, nullable=False)
     fund_code = Column(String(20), nullable=False)
     fund_name = Column(String(100))
     keywords = Column(JSON)
     is_active = Column(Boolean, default=True)
+    reviewed = Column(Boolean, default=False)  # 是否经过人工审查
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class SectorAlias(Base):

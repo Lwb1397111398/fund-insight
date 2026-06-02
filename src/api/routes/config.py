@@ -2,6 +2,7 @@
 配置路由
 处理配置相关的 API 请求
 """
+import os
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -529,3 +530,151 @@ async def delete_alias(alias_id: int, db: Session = Depends(get_db)):
         "success": True,
         "message": f"已删除别名: {alias.alias_name} → {alias.sector_name}"
     }
+
+
+# ===== 板块匹配管理 =====
+
+class MappingUpdate(BaseModel):
+    """更新映射请求"""
+    fund_code: Optional[str] = None
+    fund_name: Optional[str] = None
+
+
+class BatchReviewRequest(BaseModel):
+    """批量审查请求"""
+    ids: list[int]
+    reviewed: bool = True
+
+
+@router.get("/sector-mappings")
+async def get_sector_mappings(
+    reviewed: Optional[bool] = None,
+    db: Session = Depends(get_db)
+):
+    """获取所有板块映射（含 reviewed 状态）"""
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    service = get_sector_fund_service(db)
+    mappings = service.get_all_mappings_with_status(reviewed_filter=reviewed)
+
+    reviewed_count = sum(1 for m in mappings if m['reviewed'])
+    unreviewed_count = len(mappings) - reviewed_count
+
+    return {
+        "success": True,
+        "data": {
+            "mappings": mappings,
+            "total": len(mappings),
+            "reviewed_count": reviewed_count,
+            "unreviewed_count": unreviewed_count
+        }
+    }
+
+
+@router.put("/sector-mappings/{mapping_id}")
+async def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = Depends(get_db)):
+    """更新映射（自动标记为已审查）"""
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    service = get_sector_fund_service(db)
+    result = service.update_mapping(
+        mapping_id=mapping_id,
+        fund_code=update.fund_code,
+        fund_name=update.fund_name
+    )
+
+    if not result:
+        return {"success": False, "message": "映射不存在"}
+
+    # 级联清理冲突
+    if result.get('sector_name') and result.get('fund_code'):
+        service.cascade_cleanup_conflicts(
+            result['sector_name'], result['fund_code'], result.get('fund_name', '')
+        )
+
+    return {
+        "success": True,
+        "message": f"已更新映射: {result['sector_name']} → {result['fund_name']}（自动标记为已审查）",
+        "data": result
+    }
+
+
+@router.post("/sector-mappings/{mapping_id}/review")
+async def review_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
+    """标记映射为已审查"""
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    service = get_sector_fund_service(db)
+    success = service.mark_reviewed_by_id(mapping_id, reviewed=True)
+
+    if not success:
+        return {"success": False, "message": "映射不存在"}
+
+    return {
+        "success": True,
+        "message": "已标记为已审查"
+    }
+
+
+@router.post("/sector-mappings/batch-review")
+async def batch_review_sector_mappings(req: BatchReviewRequest, db: Session = Depends(get_db)):
+    """批量标记映射为已审查/未审查"""
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    service = get_sector_fund_service(db)
+    count = service.batch_mark_reviewed(req.ids, reviewed=req.reviewed)
+
+    action = "已审查" if req.reviewed else "未审查"
+    return {
+        "success": True,
+        "message": f"已将 {count} 个映射标记为{action}",
+        "data": {"count": count}
+    }
+
+
+@router.delete("/sector-mappings/{mapping_id}")
+async def delete_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
+    """删除映射"""
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    service = get_sector_fund_service(db)
+    success = service.delete_mapping(mapping_id)
+
+    if not success:
+        return {"success": False, "message": "映射不存在"}
+
+    return {
+        "success": True,
+        "message": "已删除映射"
+    }
+
+
+@router.post("/sector-mappings/seed")
+async def seed_sector_mappings(db: Session = Depends(get_db)):
+    """导入预置板块映射数据"""
+    try:
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "scripts/seed_sector_mappings.py"],
+            capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        )
+
+        # 刷新服务缓存
+        from src.services.sector_fund_service import get_sector_fund_service
+        service = get_sector_fund_service(db)
+        service.refresh_cache()
+
+        return {
+            "success": True,
+            "message": "预置数据导入完成",
+            "data": {
+                "stdout": result.stdout[-500:] if result.stdout else "",
+                "stderr": result.stderr[-500:] if result.stderr else ""
+            }
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"导入失败: {str(e)}"
+        }

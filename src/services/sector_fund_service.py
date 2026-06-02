@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class SectorFundService:
     """板块-基金映射服务 - 使用缓存，按需创建会话"""
 
-    _cache: Dict[str, Dict] = {}
+    _cache: Dict[str, Dict] = {}       # {sector_name: {'code': ..., 'name': ..., 'reviewed': bool}}
     _cache_loaded: bool = False
 
     def __init__(self, db: Session = None):
@@ -42,7 +42,8 @@ class SectorFundService:
             for m in mappings:
                 self._cache[m.sector_name] = {
                     'code': m.fund_code,
-                    'name': m.fund_name
+                    'name': m.fund_name,
+                    'reviewed': m.reviewed or False
                 }
 
             self._cache_loaded = True
@@ -51,22 +52,36 @@ class SectorFundService:
                 db.close()
 
     def get_fund_by_sector(self, sector_name: str) -> Optional[Dict]:
+        """获取板块对应的基金（优先返回 reviewed=True 的映射）"""
         if sector_name in self._cache:
-            return self._cache[sector_name]
+            cached = self._cache[sector_name]
+            if cached.get('reviewed'):
+                return cached
 
         db = self._get_db()
         try:
+            # 优先查 reviewed=True
             mapping = db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == sector_name,
-                SectorFundMapping.is_active == True
+                SectorFundMapping.is_active == True,
+                SectorFundMapping.reviewed == True
             ).first()
 
+            if not mapping:
+                # 降级查 reviewed=False
+                mapping = db.query(SectorFundMapping).filter(
+                    SectorFundMapping.sector_name == sector_name,
+                    SectorFundMapping.is_active == True
+                ).first()
+
             if mapping:
-                self._cache[sector_name] = {
+                result = {
                     'code': mapping.fund_code,
-                    'name': mapping.fund_name
+                    'name': mapping.fund_name,
+                    'reviewed': mapping.reviewed or False
                 }
-                return self._cache[sector_name]
+                self._cache[sector_name] = result
+                return result
 
             return None
         finally:
@@ -77,7 +92,33 @@ class SectorFundService:
         self._load_cache()
         return self._cache.copy()
 
-    def add_mapping(self, sector_name: str, fund_code: str, fund_name: str, keywords: List[str] = None) -> SectorFundMapping:
+    def get_all_mappings_with_status(self, reviewed_filter: Optional[bool] = None) -> List[Dict]:
+        """获取所有映射（含 reviewed 状态），供 API 使用"""
+        db = self._get_db()
+        try:
+            query = db.query(SectorFundMapping).filter(SectorFundMapping.is_active == True)
+            if reviewed_filter is not None:
+                query = query.filter(SectorFundMapping.reviewed == reviewed_filter)
+
+            mappings = query.order_by(SectorFundMapping.sector_name).all()
+            return [
+                {
+                    'id': m.id,
+                    'sector_name': m.sector_name,
+                    'fund_code': m.fund_code,
+                    'fund_name': m.fund_name,
+                    'reviewed': m.reviewed or False,
+                    'created_at': m.created_at.isoformat() if m.created_at else None,
+                    'updated_at': m.updated_at.isoformat() if m.updated_at else None
+                }
+                for m in mappings
+            ]
+        finally:
+            if self._should_close(db):
+                db.close()
+
+    def add_mapping(self, sector_name: str, fund_code: str, fund_name: str,
+                    keywords: List[str] = None, reviewed: bool = False) -> SectorFundMapping:
         """添加或更新映射（upsert），并级联清理低优先级层的冲突数据"""
         db = self._get_db()
         try:
@@ -91,22 +132,138 @@ class SectorFundService:
                 if keywords is not None:
                     existing.keywords = keywords
                 existing.is_active = True
+                if reviewed:
+                    existing.reviewed = True
                 db.commit()
                 db.refresh(existing)
-                self._cache[sector_name] = {'code': fund_code, 'name': fund_name}
+                self._cache[sector_name] = {
+                    'code': fund_code, 'name': fund_name, 'reviewed': existing.reviewed or False
+                }
                 return existing
             else:
                 mapping = SectorFundMapping(
                     sector_name=sector_name,
                     fund_code=fund_code,
                     fund_name=fund_name,
-                    keywords=keywords
+                    keywords=keywords,
+                    reviewed=reviewed
                 )
                 db.add(mapping)
                 db.commit()
                 db.refresh(mapping)
-                self._cache[sector_name] = {'code': fund_code, 'name': fund_name}
+                self._cache[sector_name] = {
+                    'code': fund_code, 'name': fund_name, 'reviewed': reviewed
+                }
                 return mapping
+        finally:
+            if self._should_close(db):
+                db.close()
+
+    def mark_reviewed(self, sector_name: str, reviewed: bool = True) -> bool:
+        """标记映射为已审查/未审查"""
+        db = self._get_db()
+        try:
+            mapping = db.query(SectorFundMapping).filter(
+                SectorFundMapping.sector_name == sector_name
+            ).first()
+            if not mapping:
+                return False
+
+            mapping.reviewed = reviewed
+            db.commit()
+            if sector_name in self._cache:
+                self._cache[sector_name]['reviewed'] = reviewed
+            return True
+        finally:
+            if self._should_close(db):
+                db.close()
+
+    def mark_reviewed_by_id(self, mapping_id: int, reviewed: bool = True) -> bool:
+        """按 ID 标记映射为已审查/未审查"""
+        db = self._get_db()
+        try:
+            mapping = db.query(SectorFundMapping).filter(
+                SectorFundMapping.id == mapping_id
+            ).first()
+            if not mapping:
+                return False
+
+            mapping.reviewed = reviewed
+            db.commit()
+            if mapping.sector_name in self._cache:
+                self._cache[mapping.sector_name]['reviewed'] = reviewed
+            return True
+        finally:
+            if self._should_close(db):
+                db.close()
+
+    def batch_mark_reviewed(self, mapping_ids: List[int], reviewed: bool = True) -> int:
+        """批量标记映射为已审查/未审查"""
+        db = self._get_db()
+        try:
+            count = db.query(SectorFundMapping).filter(
+                SectorFundMapping.id.in_(mapping_ids)
+            ).update({'reviewed': reviewed}, synchronize_session='fetch')
+            db.commit()
+            self.refresh_cache()
+            return count
+        finally:
+            if self._should_close(db):
+                db.close()
+
+    def update_mapping(self, mapping_id: int, fund_code: str = None,
+                       fund_name: str = None) -> Optional[Dict]:
+        """更新映射（基金代码/名称），自动标记为已审查"""
+        db = self._get_db()
+        try:
+            mapping = db.query(SectorFundMapping).filter(
+                SectorFundMapping.id == mapping_id
+            ).first()
+            if not mapping:
+                return None
+
+            if fund_code is not None:
+                mapping.fund_code = fund_code
+            if fund_name is not None:
+                mapping.fund_name = fund_name
+            mapping.reviewed = True  # 编辑自动标记为已审查
+            db.commit()
+            db.refresh(mapping)
+
+            self._cache[mapping.sector_name] = {
+                'code': mapping.fund_code,
+                'name': mapping.fund_name,
+                'reviewed': True
+            }
+
+            return {
+                'id': mapping.id,
+                'sector_name': mapping.sector_name,
+                'fund_code': mapping.fund_code,
+                'fund_name': mapping.fund_name,
+                'reviewed': True
+            }
+        finally:
+            if self._should_close(db):
+                db.close()
+
+    def delete_mapping(self, mapping_id: int) -> bool:
+        """删除映射"""
+        db = self._get_db()
+        try:
+            mapping = db.query(SectorFundMapping).filter(
+                SectorFundMapping.id == mapping_id
+            ).first()
+            if not mapping:
+                return False
+
+            sector_name = mapping.sector_name
+            db.delete(mapping)
+            db.commit()
+
+            if sector_name in self._cache:
+                del self._cache[sector_name]
+            return True
         finally:
             if self._should_close(db):
                 db.close()
