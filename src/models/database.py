@@ -33,11 +33,12 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
         engine = create_engine(
             DATABASE_URL,
             echo=False,
-            pool_size=5,
-            max_overflow=5,
+            pool_size=10,
+            max_overflow=10,
             pool_recycle=300,
             pool_pre_ping=True,
-            pool_timeout=30
+            pool_timeout=30,
+            pool_use_lifo=True,
         )
         DB_TYPE = "postgresql"
         logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+5）")
@@ -109,7 +110,7 @@ class Post(Base):
 
     created_at = Column(DateTime, default=datetime.now)
 
-    blogger = relationship("Blogger", lazy="select")
+    blogger = relationship("Blogger", lazy="selectin")
 
     __table_args__ = (
         Index('ix_posts_blogger_id', 'blogger_id'),
@@ -172,8 +173,8 @@ class Prediction(Base):
     
     created_at = Column(DateTime, default=datetime.now)
     
-    blogger = relationship("Blogger", foreign_keys=[blogger_id], lazy="select")
-    post = relationship("Post", foreign_keys=[post_id], lazy="select")
+    blogger = relationship("Blogger", foreign_keys=[blogger_id], lazy="selectin")
+    post = relationship("Post", foreign_keys=[post_id], lazy="selectin")
 
     __table_args__ = (
         Index('ix_predictions_blogger_id', 'blogger_id'),

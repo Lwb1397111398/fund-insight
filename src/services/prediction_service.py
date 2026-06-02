@@ -5,7 +5,7 @@
 from typing import List, Optional, Dict, Any
 from datetime import date, timedelta, datetime
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, case
 import re
 
 from .base import BaseService
@@ -146,25 +146,34 @@ class PredictionService(BaseService[Prediction]):
     
     def get_stats(self, blogger_id: int = None) -> Dict:
         """
-        获取预测统计
-        
+        获取预测统计（1条SQL替代原来4条）
+
         Args:
             blogger_id: 博主 ID（可选，不传则统计全部）
-            
+
         Returns:
             统计数据
         """
-        query = self.db.query(Prediction).filter(Prediction.is_deleted == False)
+        from sqlalchemy import and_, case
+
+        base_filter = Prediction.is_deleted == False
         if blogger_id:
-            query = query.filter(Prediction.blogger_id == blogger_id)
-        
-        total = query.count()
-        verified = query.filter(Prediction.status == 'success').count()
-        correct = query.filter(Prediction.is_correct == True).count()
-        pending = query.filter(Prediction.status == 'pending').count()
-        
+            base_filter = and_(base_filter, Prediction.blogger_id == blogger_id)
+
+        row = self.db.query(
+            func.count(case((base_filter, 1))).label('total'),
+            func.count(case((and_(base_filter, Prediction.status == 'success'), 1))).label('verified'),
+            func.count(case((and_(base_filter, Prediction.is_correct == True), 1))).label('correct'),
+            func.count(case((and_(base_filter, Prediction.status == 'pending'), 1))).label('pending'),
+        ).first()
+
+        total = row.total or 0
+        verified = row.verified or 0
+        correct = row.correct or 0
+        pending = row.pending or 0
+
         accuracy = round(correct / verified, 4) if verified > 0 else 0
-        
+
         return {
             "total": total,
             "verified": verified,
@@ -366,55 +375,40 @@ class PredictionService(BaseService[Prediction]):
     
     def get_verify_progress(self) -> Dict:
         """
-        获取验证进度统计
-        
+        获取验证进度统计（1条SQL替代原来7条）
+
         Returns:
             验证进度统计
         """
-        total_predictions = self.db.query(Prediction).filter(
-            Prediction.fund_code.isnot(None)
-        ).count()
-        
-        verified_predictions = self.db.query(Prediction).filter(
-            Prediction.fund_code.isnot(None),
-            Prediction.verify_count > 0
-        ).count()
-        
-        expired_predictions = self.db.query(Prediction).filter(
-            Prediction.fund_code.isnot(None),
-            Prediction.is_expired == True
-        ).count()
-        
-        pending_predictions = self.db.query(Prediction).filter(
-            Prediction.fund_code.isnot(None),
-            Prediction.is_expired == False
-        ).count()
-        
-        failed_nav_fetch = self.db.query(Prediction).filter(
-            Prediction.fund_code.isnot(None),
-            Prediction.start_nav == None
-        ).count()
-        
-        correct_predictions = self.db.query(Prediction).filter(
-            Prediction.is_expired == True,
-            Prediction.is_correct == True
-        ).count()
-        
-        incorrect_predictions = self.db.query(Prediction).filter(
-            Prediction.is_expired == True,
-            Prediction.is_correct == False
-        ).count()
-        
+        from sqlalchemy import and_, case
+
+        has_fund = Prediction.fund_code.isnot(None)
+
+        row = self.db.query(
+            func.count(case((has_fund, 1))).label('total'),
+            func.count(case((and_(has_fund, Prediction.verify_count > 0), 1))).label('verified'),
+            func.count(case((and_(has_fund, Prediction.is_expired == True), 1))).label('expired'),
+            func.count(case((and_(has_fund, Prediction.is_expired == False), 1))).label('pending'),
+            func.count(case((and_(has_fund, Prediction.start_nav == None), 1))).label('failed_nav_fetch'),
+            func.count(case((and_(Prediction.is_expired == True, Prediction.is_correct == True), 1))).label('correct'),
+            func.count(case((and_(Prediction.is_expired == True, Prediction.is_correct == False), 1))).label('incorrect'),
+        ).first()
+
+        total = row.total or 0
+        verified = row.verified or 0
+        expired = row.expired or 0
+        correct = row.correct or 0
+
         return {
-            "total": total_predictions,
-            "verified": verified_predictions,
-            "expired": expired_predictions,
-            "pending": pending_predictions,
-            "failed_nav_fetch": failed_nav_fetch,
-            "correct": correct_predictions,
-            "incorrect": incorrect_predictions,
-            "progress_percent": round(verified_predictions / total_predictions * 100, 1) if total_predictions > 0 else 0,
-            "accuracy_percent": round(correct_predictions / expired_predictions * 100, 1) if expired_predictions > 0 else 0
+            "total": total,
+            "verified": verified,
+            "expired": expired,
+            "pending": row.pending or 0,
+            "failed_nav_fetch": row.failed_nav_fetch or 0,
+            "correct": correct,
+            "incorrect": row.incorrect or 0,
+            "progress_percent": round(verified / total * 100, 1) if total > 0 else 0,
+            "accuracy_percent": round(correct / expired * 100, 1) if expired > 0 else 0
         }
     
     def get_failed_predictions(self) -> List[Dict]:
