@@ -81,19 +81,23 @@ async def update_prediction(
 ):
     """更新预测（人工干预板块和基金）"""
     from src.models.database import Prediction as PredictionModel
-    from src.constants.sector_fund_map import get_fund_for_sector, get_category_for_sector
+    from src.constants.sector_fund_map import get_fund_for_sector, get_category_for_sector, normalize_sector_name
     from src.services.sector_fund_service import get_sector_fund_service
 
     prediction = db.query(PredictionModel).filter(PredictionModel.id == prediction_id).first()
     if not prediction:
         raise HTTPException(status_code=404, detail="预测不存在")
 
-    # 更新板块
+    # 更新板块（自动标准化：黑话/别名 → 标准名称）
     sector_changed = False
     if update_data.sector is not None and update_data.sector != prediction.sector:
-        prediction.sector = update_data.sector
-        prediction.sector_type = get_category_for_sector(update_data.sector)
+        # 标准化板块名称（如 "酒" → "白酒"，"药" → "创新药"）
+        standard_sector = normalize_sector_name(update_data.sector)
+        prediction.sector = standard_sector
+        prediction.sector_type = get_category_for_sector(standard_sector)
         sector_changed = True
+        if standard_sector != update_data.sector:
+            logger.info(f"[人工干预] 板块标准化: '{update_data.sector}' → '{standard_sector}'")
 
     # 更新基金
     fund_changed = False
@@ -106,7 +110,7 @@ async def update_prediction(
 
     # 如果只修改了板块，自动匹配基金
     if sector_changed and not fund_changed:
-        correct_fund = get_fund_for_sector(update_data.sector)
+        correct_fund = get_fund_for_sector(prediction.sector)
         if correct_fund:
             prediction.fund_code = correct_fund.get("code", "")
             prediction.fund_name = correct_fund.get("name", "")

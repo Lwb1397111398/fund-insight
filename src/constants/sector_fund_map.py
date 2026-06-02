@@ -5,6 +5,94 @@
 from typing import Dict, Optional
 
 
+# 板块别名映射（黑话/简称 → 标准板块名称）
+SECTOR_ALIASES = {
+    # 白酒
+    '酒': '白酒',
+    '白酒哥': '白酒',
+    '酒鬼': '白酒',
+    '茅': '白酒',
+
+    # 医药
+    '药': '创新药',
+    '毒药': '创新药',
+    '垃圾药': '创新药',
+    '药罐子': '创新药',
+    '生物医药': '医药',
+
+    # 半导体
+    '芯': '半导体',
+    '沙子': '半导体',
+    '泥巴': '半导体',
+    '芯片': '半导体',
+
+    # 光伏
+    '光': '光伏',
+    '光伏狗': '光伏',
+    '太阳能': '光伏',
+
+    # 新能源
+    '锂': '锂电池',
+    '锂王': '锂电池',
+    '电池': '锂电池',
+    '车': '新能源车',
+    '新能源车': '新能源',
+    '电车': '新能源车',
+
+    # 军工
+    '军': '军工',
+    '军工狗': '军工',
+    '飞机大炮': '军工',
+    '国防': '军工',
+
+    # 银行
+    '银': '银行',
+    '银行狗': '银行',
+    '四大行': '银行',
+
+    # 券商
+    '券': '券商',
+    '券商狗': '券商',
+    '牛市旗手': '券商',
+    '证券': '券商',
+
+    # 房地产
+    '房': '房地产',
+    '地产狗': '房地产',
+    '房子': '房地产',
+    '地产': '房地产',
+
+    # 煤炭
+    '煤': '煤炭',
+    '黑金': '煤炭',
+    '煤炭狗': '煤炭',
+
+    # 石油
+    '油': '石油',
+    '黑油': '石油',
+    '石油狗': '石油',
+    '油气': '石油',
+
+    # 黄金
+    '金': '黄金',
+    '黄金大妈': '黄金',
+
+    # 港股
+    '港': '恒生科技',
+    '港仔': '恒生科技',
+    '恒仔': '恒生科技',
+    '港股': '恒生科技',
+
+    # 人工智能
+    'AI': '人工智能',
+    '人工智能': '人工智能',
+    '机器人': '机器人',
+    '算力': '科技',
+    '数据中心': '科技',
+    '云计算': '云计算',
+}
+
+
 SECTOR_FUND_MAP = {
     # 消费类
     '白酒': {'code': '161725', 'name': '招商中证白酒指数 (LOF)A'},
@@ -181,45 +269,73 @@ def _build_sector_to_category_map() -> Dict[str, str]:
 def get_fund_for_sector(sector: str) -> Optional[Dict]:
     """
     获取板块对应的基金信息
-    
+
     Args:
-        sector: 板块名称
-        
+        sector: 板块名称（支持黑话/别名）
+
     Returns:
         {'code': 基金代码, 'name': 基金名称} 或 None
     """
     sector = sector.strip()
-    
+
+    # 1. 直接匹配
     if sector in SECTOR_FUND_MAP:
         return SECTOR_FUND_MAP[sector]
-    
+
+    # 2. 别名匹配（黑话 → 标准板块名称）
+    if sector in SECTOR_ALIASES:
+        standard_sector = SECTOR_ALIASES[sector]
+        if standard_sector in SECTOR_FUND_MAP:
+            return SECTOR_FUND_MAP[standard_sector]
+
+    # 3. 模糊匹配（包含关系）
     for key, fund_info in SECTOR_FUND_MAP.items():
         if key in sector or sector in key:
             return fund_info
-    
+
+    # 4. 别名模糊匹配
+    for alias, standard_sector in SECTOR_ALIASES.items():
+        if alias in sector or sector in alias:
+            if standard_sector in SECTOR_FUND_MAP:
+                return SECTOR_FUND_MAP[standard_sector]
+
     return None
 
 
 def get_category_for_sector(sector: str) -> str:
     """
     获取板块所属的标准分类
-    
+
     Args:
-        sector: 板块名称
-        
+        sector: 板块名称（支持黑话/别名）
+
     Returns:
         分类名称
     """
     sector = sector.strip()
     category_map = _build_sector_to_category_map()
-    
+
+    # 1. 直接匹配
     if sector in category_map:
         return category_map[sector]
-    
+
+    # 2. 别名匹配
+    if sector in SECTOR_ALIASES:
+        standard_sector = SECTOR_ALIASES[sector]
+        if standard_sector in category_map:
+            return category_map[standard_sector]
+
+    # 3. 模糊匹配
     for key, category in category_map.items():
         if key in sector or sector in key:
             return category
-    
+
+    # 4. 别名模糊匹配
+    for alias, standard_sector in SECTOR_ALIASES.items():
+        if alias in sector or sector in alias:
+            if standard_sector in category_map:
+                return category_map[standard_sector]
+
     return "其他"
 
 
@@ -231,3 +347,45 @@ def get_all_sector_fund_mappings() -> Dict:
 def get_all_sector_categories() -> Dict:
     """获取所有板块分类"""
     return SECTOR_CATEGORIES.copy()
+
+
+def normalize_sector_name(sector: str) -> str:
+    """
+    标准化板块名称（将别名/黑话转换为标准名称）
+
+    Args:
+        sector: 板块名称（可能是别名）
+
+    Returns:
+        标准板块名称
+    """
+    if not sector:
+        return sector
+
+    sector = sector.strip()
+
+    # 1. 直接是标准名称
+    if sector in SECTOR_FUND_MAP:
+        return sector
+
+    # 2. 别名匹配
+    if sector in SECTOR_ALIASES:
+        return SECTOR_ALIASES[sector]
+
+    # 3. 模糊匹配（检查是否包含标准板块名称）
+    for key in SECTOR_FUND_MAP.keys():
+        if key in sector:
+            return key
+
+    # 4. 别名模糊匹配
+    for alias, standard_sector in SECTOR_ALIASES.items():
+        if alias in sector:
+            return standard_sector
+
+    # 5. 无法识别，返回原值
+    return sector
+
+
+def get_all_aliases() -> Dict[str, str]:
+    """获取所有别名映射"""
+    return SECTOR_ALIASES.copy()
