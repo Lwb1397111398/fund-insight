@@ -90,7 +90,7 @@ class StatsService:
         return {
             "total": total,
             "grade_distribution": grade_distribution,
-            "avg_accuracy": round(avg_accuracy, 2),
+            "avg_accuracy": round(float(avg_accuracy), 2),
             "top_bloggers": [
                 {
                     "id": b.id,
@@ -194,9 +194,9 @@ class StatsService:
             "fund_count": row.total or 0,
             "active_funds": row.active_funds or 0,
             "sector_distribution": sector_distribution,
-            "avg_day_growth": round(row.avg_day_growth or 0, 2),
-            "avg_week_growth": round(row.avg_week_growth or 0, 2),
-            "avg_month_growth": round(row.avg_month_growth or 0, 2),
+            "avg_day_growth": round(float(row.avg_day_growth or 0), 2),
+            "avg_week_growth": round(float(row.avg_week_growth or 0), 2),
+            "avg_month_growth": round(float(row.avg_month_growth or 0), 2),
             "fund_history_count": fund_history_count
         }
 

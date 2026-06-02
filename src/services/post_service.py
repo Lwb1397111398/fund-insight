@@ -2,7 +2,7 @@
 帖子服务
 处理帖子相关的业务逻辑
 """
-from typing import List, Optional, Dict, Tuple, Any
+from typing import List, Optional, Dict
 from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -89,8 +89,8 @@ class PostService(BaseService[Post]):
         ).all()
         
         return {
-            **post.__dict__,
-            "predictions": [p.__dict__ for p in predictions]
+            **{k: v for k, v in post.__dict__.items() if not k.startswith('_')},
+            "predictions": [{k: v for k, v in p.__dict__.items() if not k.startswith('_')} for p in predictions]
         }
     
     def mark_analyzed(self, post_id: int, analysis_result: Dict) -> Optional[Post]:
@@ -333,6 +333,7 @@ class PostService(BaseService[Post]):
             is_empty = not result.get("predictions")
             if is_empty:
                 db_post.analysis_result = result
+                self.db.commit()
                 return {
                     "success": False,
                     "message": "分析失败：LLM未能提取有效预测（可能内容过短或无关）",
@@ -361,7 +362,7 @@ class PostService(BaseService[Post]):
                     fund_name=fund_name,
                     sector=sector,
                     sector_type=pred.get("sector_type", fund_auto_manager.get_category_for_sector(sector) if sector else "其他"),
-                    prediction_type=pred.get("prediction_type"),
+                    prediction_type=pred.get("prediction_type", "up"),
                     prediction_content=pred.get("prediction_content"),
                     confidence=pred.get("confidence", 50),
                     prediction_date=db_post.post_date,
@@ -387,30 +388,16 @@ class PostService(BaseService[Post]):
             print(f"[PostService] 分析帖子失败: {e}")
             import traceback
             traceback.print_exc()
-            self.db.rollback()
+            # 帖子已在前面 commit，此处不需要 rollback 或重新创建
+            # 仅需将 analysis_result 标记为失败状态
             try:
-                db_post = Post(
-                    blogger_id=blogger_id,
-                    title=title,
-                    content=content,
-                    post_date=post_date,
-                    source_url=source_url,
-                    auto_titled=auto_titled,
-                    analyzed=False
-                )
-                self.db.add(db_post)
+                db_post.analysis_result = json.dumps({"predictions": [], "summary": f"分析失败: {str(e)[:100]}"})
+                db_post.analyzed = False
                 self.db.commit()
                 self.db.refresh(db_post)
-                print(f"[PostService] 帖子已保存（未分析）: ID={db_post.id}")
-            except Exception as e2:
-                print(f"[PostService] 保存帖子失败: {e2}")
-                return {
-                    "id": None,
-                    "title": title,
-                    "auto_titled": auto_titled,
-                    "analyzed": False,
-                    "predictions_created": 0
-                }
+            except Exception:
+                pass
+            print(f"[PostService] 帖子已保存（分析失败）: ID={db_post.id}")
         
         return {
             "id": db_post.id,
@@ -453,6 +440,7 @@ class PostService(BaseService[Post]):
             is_empty = not result.get("predictions")
             if is_empty:
                 db_post.analysis_result = result
+                self.db.commit()
                 return {
                     "success": False,
                     "message": "分析失败：LLM未能提取有效预测",
@@ -480,7 +468,7 @@ class PostService(BaseService[Post]):
                     fund_name=fund_name,
                     sector=sector,
                     sector_type=pred.get("sector_type", fund_auto_manager.get_category_for_sector(sector) if sector else "其他"),
-                    prediction_type=pred.get("prediction_type"),
+                    prediction_type=pred.get("prediction_type", "up"),
                     prediction_content=pred.get("prediction_content"),
                     confidence=pred.get("confidence", 50),
                     prediction_date=db_post.post_date,
@@ -591,11 +579,10 @@ class PostService(BaseService[Post]):
 
                     post.analyzed = True
                     post.analysis_result = result
-                    db2.commit()
-                    
+
                     for pred in result.get("predictions", []):
                         sector = pred.get("sector", "")
-                        
+
                         fund_code, fund_name = match_fund_with_fallback(
                             pred=pred,
                             sector=sector,
@@ -603,7 +590,7 @@ class PostService(BaseService[Post]):
                             llm_analyzer=llm_analyzer,
                             db=db2
                         )
-                        
+
                         prediction = Prediction(
                             post_id=post.id,
                             blogger_id=blogger_id,
@@ -611,7 +598,7 @@ class PostService(BaseService[Post]):
                             fund_name=fund_name,
                             sector=sector,
                             sector_type=pred.get("sector_type", fund_auto_manager.get_category_for_sector(sector) if sector else "其他"),
-                            prediction_type=pred.get("prediction_type"),
+                            prediction_type=pred.get("prediction_type", "up"),
                             prediction_content=pred.get("prediction_content"),
                             confidence=pred.get("confidence", 50),
                             prediction_date=post_date_val,
@@ -629,7 +616,7 @@ class PostService(BaseService[Post]):
                             )
                         )
                         db2.add(prediction)
-                    
+
                     db2.commit()
                     analyzed_count += 1
                 except Exception as e:

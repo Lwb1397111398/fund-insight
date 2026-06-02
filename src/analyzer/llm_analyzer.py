@@ -984,18 +984,12 @@ class LLMAnalyzer:
         json_str = re.sub(r',\s*}', '}', json_str)
         json_str = re.sub(r',\s*]', ']', json_str)
         
-        # 修复单引号
-        json_str = json_str.replace("'", '"')
-        
         # 修复百分号（如 -4.21% -> -4.21）
         json_str = re.sub(r'(-?\d+\.?\d*)%', r'\1', json_str)
-        
+
         # 去除 markdown 代码块标记
         json_str = re.sub(r'```json\s*', '', json_str)
         json_str = re.sub(r'```\s*', '', json_str)
-        
-        # 修复未引用的键名（只匹配行首或逗号后面的未引用键名，避免破坏字符串值中的冒号）
-        json_str = re.sub(r'(?<=[\{,\n])\s*(\w+)\s*:', r' "\1":', json_str)
         
         return json_str
     
@@ -1207,9 +1201,8 @@ class LLMAnalyzer:
         try:
             result_text = self._call_llm(prompt, task_type='simple', max_tokens=150, temperature=0.3)
 
-            json_match = re.search(r'\{[\s\S]+\}', result_text)
-            if json_match:
-                result = json.loads(json_match.group())
+            result = self._parse_json_with_fallback(result_text)
+            if result:
                 if 'score' in result:
                     result['score'] = min(100, max(0, int(result['score'])))
                 return result
@@ -1278,9 +1271,9 @@ class LLMAnalyzer:
         
         try:
             result_text = self._call_llm(prompt, task_type='simple', max_tokens=500, temperature=0.3)
-            json_match = re.search(r'\{[\s\S]+\}', result_text)
-            if json_match:
-                return json.loads(json_match.group())
+            result = self._parse_json_with_fallback(result_text)
+            if result:
+                return result
         except Exception as e:
             logger.warning(f"[LLM] 预测评价失败: {e}")
         
@@ -1409,9 +1402,9 @@ class LLMAnalyzer:
             )
             
             result_text = response.choices[0].message.content.strip()
-            json_match = re.search(r'\{[\s\S]+\}', result_text)
-            if json_match:
-                return json.loads(json_match.group())
+            result = self._parse_json_with_fallback(result_text)
+            if result:
+                return result
         except Exception as e:
             logger.warning(f"[LLM] 生成投资建议失败: {e}")
         
@@ -1477,9 +1470,9 @@ class LLMAnalyzer:
         
         try:
             result_text = self._call_llm(prompt, task_type='analysis', max_tokens=800, temperature=0.3)
-            json_match = re.search(r'\{[\s\S]+\}', result_text)
-            if json_match:
-                return json.loads(json_match.group())
+            result = self._parse_json_with_fallback(result_text)
+            if result:
+                return result
         except Exception as e:
             logger.warning(f"[LLM] 观点分析失败: {e}")
         
@@ -1568,9 +1561,9 @@ class LLMAnalyzer:
         
         try:
             result_text = self._call_llm(prompt, task_type='analysis', max_tokens=1000, temperature=0.3)
-            json_match = re.search(r'\{[\s\S]+\}', result_text)
-            if json_match:
-                return json.loads(json_match.group())
+            result = self._parse_json_with_fallback(result_text)
+            if result:
+                return result
         except Exception as e:
             logger.warning(f"[LLM] 预测分析失败: {e}")
         
@@ -1657,9 +1650,9 @@ class LLMAnalyzer:
         
         try:
             result_text = self._call_llm(prompt, task_type='advice', max_tokens=1000, temperature=0.5)
-            json_match = re.search(r'\{[\s\S]+\}', result_text)
-            if json_match:
-                return json.loads(json_match.group())
+            result = self._parse_json_with_fallback(result_text)
+            if result:
+                return result
         except Exception as e:
             logger.warning(f"[LLM] 投资建议生成失败: {e}")
         
@@ -1742,10 +1735,9 @@ class LLMAnalyzer:
         
         try:
             response = self._call_llm(prompt, task_type='analysis', max_tokens=500)
-            
-            json_match = re.search(r'\{[\s\S]+\}', response)
-            if json_match:
-                return json.loads(json_match.group())
+            result = self._parse_json_with_fallback(response)
+            if result:
+                return result
         except Exception as e:
             logger.warning(f"[LLM] 分析基金趋势失败: {e}")
         
@@ -1821,14 +1813,8 @@ class LLMAnalyzer:
         
         try:
             response = self._call_llm(prompt, task_type='extraction', max_tokens=600)
-            
-            json_match = re.search(r'\{[\s\S]+\}', response)
-            if json_match:
-                json_str = json_match.group()
-                
-                json_str = self._clean_json_string(json_str)
-                
-                result = json.loads(json_str)
+            result = self._parse_json_with_fallback(response)
+            if result:
                 result = self._validate_trend_result(result, fund_code, fund_name)
                 return result
         except Exception as e:
@@ -1951,20 +1937,8 @@ class LLMAnalyzer:
         
         try:
             response = self._call_llm(prompt, task_type='analysis', max_tokens=800)
-            
-            json_match = re.search(r'\{[\s\S]+\}', response)
-            if json_match:
-                json_str = json_match.group()
-                
-                json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)
-                json_str = re.sub(r',\s*}', '}', json_str)
-                json_str = re.sub(r',\s*]', ']', json_str)
-                json_str = json_str.replace("'", '"')
-                json_str = re.sub(r'(-?\d+\.?\d*)%', r'\1', json_str)
-                json_str = re.sub(r'```json\s*', '', json_str)
-                json_str = re.sub(r'```\s*', '', json_str)
-                
-                result = json.loads(json_str)
+            result = self._parse_json_with_fallback(response)
+            if result:
                 result["analysis_date"] = date.today().isoformat()
                 result["funds_analyzed"] = len(funds_data)
                 return result
@@ -2205,20 +2179,8 @@ def merge_predictions_analysis(
     
     try:
         response = analyzer._call_llm(prompt, task_type='core', max_tokens=1500, temperature=0.5)
-        
-        json_match = re.search(r'\{[\s\S]+\}', response)
-        if json_match:
-            json_str = json_match.group()
-            
-            json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)
-            json_str = re.sub(r',\s*}', '}', json_str)
-            json_str = re.sub(r',\s*]', ']', json_str)
-            json_str = json_str.replace("'", '"')
-            json_str = re.sub(r'(-?\d+\.?\d*)%', r'\1', json_str)
-            json_str = re.sub(r'```json\s*', '', json_str)
-            json_str = re.sub(r'```\s*', '', json_str)
-            
-            result = json.loads(json_str)
+        result = analyzer._parse_json_with_fallback(response)
+        if result:
             result["success"] = True
             result["prediction_count"] = len(predictions)
             return result
@@ -2315,20 +2277,8 @@ def summarize_viewpoints_by_date(viewpoints: List[Dict], target_date: str) -> Di
 
     try:
         response = analyzer._call_llm(prompt, task_type='core', max_tokens=10000, temperature=0.3)
-        
-        json_match = re.search(r'\{[\s\S]+\}', response)
-        if json_match:
-            json_str = json_match.group()
-            
-            json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)
-            json_str = re.sub(r',\s*}', '}', json_str)
-            json_str = re.sub(r',\s*]', ']', json_str)
-            json_str = json_str.replace("'", '"')
-            json_str = re.sub(r'(-?\d+\.?\d*)%', r'\1', json_str)
-            json_str = re.sub(r'```json\s*', '', json_str)
-            json_str = re.sub(r'```\s*', '', json_str)
-            
-            result = json.loads(json_str)
+        result = analyzer._parse_json_with_fallback(response)
+        if result:
             result["success"] = True
             result["original_count"] = len(viewpoints)
             return result

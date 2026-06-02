@@ -53,7 +53,7 @@ class AdviceService(BaseService[InvestmentAdvice]):
         ).filter(Viewpoint.viewpoint_date >= date.today() - timedelta(days=7)).first()
         
         data_str = "|".join([
-            f"bloggers:{blogger_stats.total}:{blogger_stats.avg_accuracy or 0:.2f}:{blogger_stats.max_accuracy or 0:.2f}:{blogger_stats.last_update or ''}",
+            f"bloggers:{blogger_stats.total}:{float(blogger_stats.avg_accuracy or 0):.2f}:{float(blogger_stats.max_accuracy or 0):.2f}:{blogger_stats.last_update or ''}",
             f"predictions:{prediction_stats.total}:{prediction_stats.expired or 0}:{prediction_stats.last_update or ''}",
             f"viewpoints:{viewpoint_stats.total}:{viewpoint_stats.last_update or ''}"
         ])
