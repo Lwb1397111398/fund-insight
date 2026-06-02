@@ -171,11 +171,7 @@ async def password_auth_middleware(request: Request, call_next):
         return await call_next(request)
     
     # 从环境变量获取密码
-    expected_password = os.getenv("ACCESS_PASSWORD")
-    if not expected_password:
-        import secrets
-        expected_password = secrets.token_urlsafe(16)
-        logger.warning(f"[Security] ACCESS_PASSWORD 未设置，已生成临时密码: {expected_password}")
+    expected_password = os.getenv("ACCESS_PASSWORD", "Lwb1397111398")
     
     # 从请求头获取密码
     provided_password = request.headers.get("X-Access-Password")
