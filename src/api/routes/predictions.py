@@ -82,29 +82,48 @@ async def update_prediction(
     """更新预测（人工干预板块和基金）"""
     from src.models.database import Prediction as PredictionModel
     from src.constants.sector_fund_map import get_fund_for_sector, get_category_for_sector
+    from src.services.sector_fund_service import get_sector_fund_service
 
     prediction = db.query(PredictionModel).filter(PredictionModel.id == prediction_id).first()
     if not prediction:
         raise HTTPException(status_code=404, detail="预测不存在")
 
     # 更新板块
-    if update_data.sector is not None:
+    sector_changed = False
+    if update_data.sector is not None and update_data.sector != prediction.sector:
         prediction.sector = update_data.sector
-        # 自动更新板块类型
         prediction.sector_type = get_category_for_sector(update_data.sector)
+        sector_changed = True
 
     # 更新基金
-    if update_data.fund_code is not None:
+    fund_changed = False
+    if update_data.fund_code is not None and update_data.fund_code != prediction.fund_code:
         prediction.fund_code = update_data.fund_code
-    if update_data.fund_name is not None:
+        fund_changed = True
+    if update_data.fund_name is not None and update_data.fund_name != prediction.fund_name:
         prediction.fund_name = update_data.fund_name
+        fund_changed = True
 
     # 如果只修改了板块，自动匹配基金
-    if update_data.sector and not update_data.fund_code:
+    if sector_changed and not fund_changed:
         correct_fund = get_fund_for_sector(update_data.sector)
         if correct_fund:
             prediction.fund_code = correct_fund.get("code", "")
             prediction.fund_name = correct_fund.get("name", "")
+            fund_changed = True
+
+    # 【关键】如果板块和基金都修改了，保存到映射表（供下次 LLM 分析使用）
+    if sector_changed and fund_changed and prediction.sector and prediction.fund_code:
+        try:
+            service = get_sector_fund_service(db)
+            service.add_mapping(
+                sector_name=prediction.sector,
+                fund_code=prediction.fund_code,
+                fund_name=prediction.fund_name
+            )
+            logger.info(f"[人工干预] 已保存板块映射: {prediction.sector} → {prediction.fund_name} ({prediction.fund_code})")
+        except Exception as e:
+            logger.warning(f"[人工干预] 保存板块映射失败: {e}")
 
     # 更新其他字段
     if update_data.prediction_type is not None:
