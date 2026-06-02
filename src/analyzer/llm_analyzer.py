@@ -187,7 +187,28 @@ class LLMAnalyzer:
 - 满仓/重仓/梭哈 → 信心度 80-100
 - 半仓/五成仓 → 信心度 50-70
 - 轻仓/试仓/观察仓 → 信心度 30-50
-- 空仓/持币 → 看跌或观望
+- 空仓/持币 → 看跌或观望"""
+
+    def _get_jargon_guide(self) -> str:
+        """获取黑话指南（硬编码 + 用户自定义别名）"""
+        guide = self.BLOGGER_JARGON_GUIDE
+
+        # 追加用户自定义别名
+        try:
+            from src.models.database import SessionLocal, SectorAlias
+            db = SessionLocal()
+            try:
+                aliases = db.query(SectorAlias).all()
+                if aliases:
+                    guide += "\n\n五、用户自定义别名\n"
+                    for a in aliases:
+                        guide += f"- {a.alias_name} → {a.sector_name}板块\n"
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+        return guide
 
 五、市场情绪
 - 诱多/假突破 → 看跌(陷阱)
@@ -563,7 +584,7 @@ class LLMAnalyzer:
 
 {time_context}
 
-{self.BLOGGER_JARGON_GUIDE}
+{self._get_jargon_guide()}
 
 【基金板块对应关系参考】（用于匹配基金代码）
 - 白酒板块：161725（招商中证白酒指数）、512690（酒ETF）
