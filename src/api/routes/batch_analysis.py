@@ -294,7 +294,7 @@ def _execute_batch_analysis_task(task_id: int, db: Session):
                 return
             
             start_time = time.time()
-            
+
             try:
                 # 分析帖子
                 result = llm_analyzer.analyze_post(
@@ -302,13 +302,29 @@ def _execute_batch_analysis_task(task_id: int, db: Session):
                     content=post.content,
                     post_date=post.post_date.isoformat() if post.post_date else None
                 )
-                
-                # 标记帖子已分析
+
+                # 检查是否有有效预测
+                predictions = result.get("predictions", [])
+                if not predictions:
+                    # LLM 返回空结果，标记为失败但不标记为已分析
+                    print(f"[Batch Analysis] 帖子 {post.id} 分析失败（LLM返回空结果），保留未分析状态")
+                    post.analysis_result = result
+                    db.commit()
+
+                    task.failed_ids.append({
+                        "id": post.id,
+                        "error": "LLM返回空结果"
+                    })
+                    task.failed_count += 1
+                    task.processed_count += 1
+                    continue
+
+                # 有预测结果，标记帖子已分析
                 post.analyzed = True
                 post.analysis_result = result
-                
+
                 # 创建预测记录
-                for pred in result.get("predictions", []):
+                for pred in predictions:
                     sector = pred.get("sector", "")
                     llm_fund_code = pred.get("fund_code", "")
                     llm_fund_name = pred.get("fund_name", "")
