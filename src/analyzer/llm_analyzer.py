@@ -1198,18 +1198,17 @@ class LLMAnalyzer:
             from src.models.database import SessionLocal, SectorFundMapping
             db = SessionLocal()
             try:
-                existing = db.query(SectorFundMapping).filter(
-                    SectorFundMapping.sector_name == sector
-                ).first()
-                if not existing:
-                    mapping = SectorFundMapping(
-                        sector_name=sector,
-                        fund_code=fund_code,
-                        fund_name=fund_name
-                    )
-                    db.add(mapping)
-                    db.commit()
-                    logger.info(f"[基金匹配] 自动保存映射: {sector} → {fund_name} ({fund_code})")
+                mapping = SectorFundMapping(
+                    sector_name=sector,
+                    fund_code=fund_code,
+                    fund_name=fund_name
+                )
+                db.merge(mapping)
+                db.commit()
+                logger.info(f"[基金匹配] 自动保存映射: {sector} → {fund_name} ({fund_code})")
+            except Exception as e:
+                db.rollback()
+                raise
             finally:
                 db.close()
         except Exception as e:

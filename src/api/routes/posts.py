@@ -140,6 +140,12 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
     from src.constants.sector_fund_map import get_fund_for_sector, normalize_sector_name
     from src.services.sector_fund_service import get_sector_fund_service
 
+    # 确保 session 干净（连接池可能返回脏 session）
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
     predictions = db.query(Prediction).filter(
         Prediction.is_deleted == False
     ).all()

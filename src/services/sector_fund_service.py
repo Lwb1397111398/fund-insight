@@ -108,4 +108,8 @@ def get_sector_fund_service(db: Session = None) -> SectorFundService:
     global _sector_fund_service
     if _sector_fund_service is None:
         _sector_fund_service = SectorFundService(db)
+    elif db is not None:
+        # 更新 db 引用，确保使用当前请求的 session
+        _sector_fund_service.db = db
+        _sector_fund_service._external_db = True
     return _sector_fund_service
