@@ -50,6 +50,40 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理：启动和关闭逻辑"""
     # ========== Startup ==========
     init_db()
+
+    # 自动补全缺失的数据库列（ORM 新增字段时，已有表不会自动加列）
+    try:
+        from src.models.database import engine
+        from sqlalchemy import text
+
+        missing_columns = [
+            ("fund_history", "data_quality", "VARCHAR(20) DEFAULT 'normal'"),
+            ("fund_history", "quality_note", "VARCHAR(200)"),
+        ]
+
+        with engine.connect() as conn:
+            db_type = str(engine.url).split("://")[0]
+            for table, column, col_def in missing_columns:
+                try:
+                    if db_type.startswith("postgresql"):
+                        conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"
+                        ))
+                    else:
+                        # SQLite 不支持 IF NOT EXISTS for ADD COLUMN
+                        try:
+                            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"))
+                        except Exception:
+                            pass  # 列已存在
+                    conn.commit()
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        pass
+                    else:
+                        logger.warning(f"[Startup] 添加列 {table}.{column} 失败: {e}")
+    except Exception as e:
+        logger.error(f"[Startup] 列补全检查失败: {e}")
+
     config.load_persisted_config()
 
     # 自动创建缺失的索引
