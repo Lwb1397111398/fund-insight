@@ -287,20 +287,19 @@ class FundSyncManager:
     
     def update_all_funds_info(self, db: Session) -> Dict:
         """
-        更新所有基金信息（净值、涨跌幅等）
+        更新所有基金信息（净值、涨跌幅）
 
-        注意：日涨幅(day_growth)优先使用历史净值中的实际涨跌幅，而不是估值涨跌幅
+        优化：只更新基本信息，不更新历史净值，大幅提升速度
 
         Returns:
             {
                 "total": 总基金数,
                 "updated": 更新成功数,
                 "failed": 更新失败数,
+                "failed_funds": [失败的基金列表],
                 "details": [详细记录]
             }
         """
-        from src.fund.fund_api import fund_data_manager
-
         funds = db.query(FundInfo).all()
         total = len(funds)
 
@@ -308,6 +307,7 @@ class FundSyncManager:
             "total": total,
             "updated": 0,
             "failed": 0,
+            "failed_funds": [],
             "details": []
         }
 
@@ -321,25 +321,7 @@ class FundSyncManager:
                     fund.latest_nav = fund_info.get('nav', fund.latest_nav)
                     fund.nav_date = date.today()
                     fund.updated_at = datetime.now()
-
-                    history = fund_api.get_fund_history(fund.fund_code, days=1)
-                    actual_day_growth = None
-                    if history:
-                        actual_day_growth = history[0].get('growth')
-
-                    if actual_day_growth is not None:
-                        fund.day_growth = actual_day_growth
-                    else:
-                        fund.day_growth = fund_info.get('day_growth', fund.day_growth)
-
-                    fund.week_growth = fund_info.get('week_growth', fund.week_growth)
-                    fund.month_growth = fund_info.get('month_growth', fund.month_growth)
-
-                    try:
-                        history_count = fund_data_manager.update_fund_history(fund.fund_code, days=30, db=db)
-                    except Exception as e:
-                        print(f"[FundSync] 更新基金 {fund.fund_code} 历史净值失败: {e}")
-                        history_count = 0
+                    fund.day_growth = fund_info.get('day_growth', fund.day_growth)
 
                     result["updated"] += 1
                     result["details"].append({
@@ -347,26 +329,22 @@ class FundSyncManager:
                         "fund_name": fund.fund_name,
                         "action": "更新",
                         "nav": fund.latest_nav,
-                        "day_growth": fund.day_growth,
-                        "day_growth_source": "实际涨跌幅" if actual_day_growth is not None else "估值涨跌幅",
-                        "history_count": history_count
+                        "day_growth": fund.day_growth
                     })
                     print(f"[FundSync] 基金 {fund.fund_code} 更新成功")
                 else:
                     result["failed"] += 1
-                    result["details"].append({
+                    result["failed_funds"].append({
                         "fund_code": fund.fund_code,
                         "fund_name": fund.fund_name,
-                        "action": "失败",
-                        "reason": "无法获取基金信息"
+                        "reason": "无法获取基金信息（可能是测试基金或代码无效）"
                     })
                     print(f"[FundSync] 基金 {fund.fund_code} 获取信息失败")
             except Exception as e:
                 result["failed"] += 1
-                result["details"].append({
+                result["failed_funds"].append({
                     "fund_code": fund.fund_code,
                     "fund_name": fund.fund_name,
-                    "action": "失败",
                     "reason": str(e)
                 })
                 print(f"[FundSync] 基金 {fund.fund_code} 更新异常: {e}")
@@ -604,15 +582,12 @@ class FundSyncManager:
             print(f"[FundSync] 更新完成: 成功 {update_report['updated']}, "
                   f"失败 {update_report['failed']}")
 
-            # 收集失败详情
-            failed_details = []
-            if update_report['failed'] > 0:
+            # 获取失败基金列表
+            failed_funds = update_report.get('failed_funds', [])
+            if failed_funds:
                 print("[FundSync] 失败详情:")
-                for detail in update_report['details']:
-                    if detail.get('action') == '失败':
-                        reason = detail.get('reason', '未知原因')
-                        print(f"  - {detail['fund_code']} ({detail['fund_name']}): {reason}")
-                        failed_details.append(f"{detail['fund_code']}({detail['fund_name']}): {reason}")
+                for fund in failed_funds:
+                    print(f"  - {fund['fund_code']} ({fund['fund_name']}): {fund['reason']}")
 
             # 构建成功消息
             success_msg = f"同步完成：检测 {match_report['total_predictions']} 个预测，"
@@ -620,10 +595,12 @@ class FundSyncManager:
             success_msg += f"关联 {sync_report['linked']} 个预测，"
             success_msg += f"更新 {update_report['updated']} 个基金"
 
-            if failed_details:
-                success_msg += f"\n\n失败 {len(failed_details)} 个:\n" + "\n".join(failed_details[:5])
-                if len(failed_details) > 5:
-                    success_msg += f"\n...等共 {len(failed_details)} 个"
+            if failed_funds:
+                success_msg += f"\n\n失败 {len(failed_funds)} 个:"
+                for fund in failed_funds[:5]:
+                    success_msg += f"\n- {fund['fund_code']}({fund['fund_name']}): {fund['reason']}"
+                if len(failed_funds) > 5:
+                    success_msg += f"\n...等共 {len(failed_funds)} 个"
 
             return {
                 "success": True,
@@ -637,7 +614,7 @@ class FundSyncManager:
                     "predictions_linked": sync_report['linked'],
                     "funds_updated": update_report['updated'],
                     "funds_failed": update_report['failed'],
-                    "failed_details": failed_details
+                    "failed_funds": failed_funds
                 },
                 "message": success_msg
             }

@@ -3824,24 +3824,13 @@ const fetchWeChatBatch = async () => {
             alert(res.data.message || '更新完成');
             await fetchFunds();
         } else {
-            // 显示详细的失败信息
-            const errorMsg = res.data.message || '更新失败';
-            const data = res.data.data;
-            let detailMsg = errorMsg;
-
-            // 如果有失败详情，追加显示
-            if (data?.summary?.failed_details?.length > 0) {
-                detailMsg += '\n\n失败基金详情:\n' + data.summary.failed_details.join('\n');
-            }
-
-            alert(detailMsg);
+            alert(res.data.message || '更新失败');
         }
     } catch (e) {
         if (e.code === 'ECONNABORTED') {
-            alert('更新超时（5分钟），请稍后再试');
+            alert('更新超时，请稍后再试');
         } else {
-            const serverMsg = e.response?.data?.message;
-            alert('更新失败: ' + (serverMsg || e.message));
+            alert('更新失败: ' + (e.response?.data?.message || e.message));
         }
     }
     analyzing.value = false;
