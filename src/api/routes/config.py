@@ -108,21 +108,22 @@ async def update_config(config_update: ConfigUpdate):
 
 @router.post("/cleanup")
 async def run_cleanup():
-    """运行数据清理"""
+    """运行数据清理（包括过期预测、观点、空帖子、孤儿基金等）"""
     try:
         from src.tasks.cleanup_tasks import get_cleanup_manager
-        
+
         manager = get_cleanup_manager()
         result = manager.run_full_cleanup()
-        
+
         if result.get("success"):
             predictions = result.get("predictions", {})
             viewpoints = result.get("viewpoints", {})
             fund_history = result.get("fund_history", {})
             empty_posts = result.get("empty_posts", {})
             advice = result.get("advice", {})
+            orphan_funds = result.get("orphan_funds", {})
             total = result.get("total_deleted", 0)
-            
+
             parts = []
             if predictions.get('deleted', 0) > 0:
                 parts.append(f"{predictions.get('deleted', 0)} 个过期预测")
@@ -134,12 +135,14 @@ async def run_cleanup():
                 parts.append(f"{empty_posts.get('deleted', 0)} 个空帖子")
             if advice.get('deleted', 0) > 0:
                 parts.append(f"{advice.get('deleted', 0)} 条过期投资建议")
-            
+            if orphan_funds.get('deleted', 0) > 0:
+                parts.append(f"{orphan_funds.get('deleted', 0)} 个孤儿基金")
+
             if parts:
                 message = f"清理完成，共删除 {total} 项：{', '.join(parts)}"
             else:
                 message = "清理完成，没有需要清理的数据"
-            
+
             return {
                 "success": True,
                 "message": message,

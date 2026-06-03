@@ -282,32 +282,54 @@ class CleanupManager:
     
     def cleanup_empty_posts(self) -> dict:
         """
-        清理没有预测的空帖子（无论时间）
+        清理没有活跃预测的空帖子
+
+        逻辑：
+        1. 找出没有任何活跃预测（is_deleted=False）的帖子
+        2. 先删除该帖子的所有已删除预测（清理外键引用）
+        3. 再删除帖子本身
         """
         db = self._get_db()
         try:
-            posts_with_predictions = db.query(Prediction.post_id).filter(
-                Prediction.is_deleted == False
+            # 找出有活跃预测的帖子 ID
+            posts_with_active_predictions = db.query(Prediction.post_id).filter(
+                Prediction.is_deleted == False,
+                Prediction.post_id.isnot(None)
             ).distinct().subquery()
-            
+
+            # 找出没有活跃预测的帖子
             empty_posts = db.query(Post).filter(
-                ~Post.id.in_(posts_with_predictions)
+                ~Post.id.in_(posts_with_active_predictions)
             ).all()
-            
+
             deleted_count = 0
+            deleted_predictions = 0
+
             for post in empty_posts:
+                # 先删除该帖子的所有已删除预测（清理外键引用）
+                old_predictions = db.query(Prediction).filter(
+                    Prediction.post_id == post.id,
+                    Prediction.is_deleted == True
+                ).all()
+                for pred in old_predictions:
+                    db.delete(pred)
+                    deleted_predictions += 1
+
+                # 再删除帖子
                 db.delete(post)
                 deleted_count += 1
                 logger.info(f"删除空帖子 ID: {post.id}, 标题: {post.title}")
-            
+
             if deleted_count > 0:
                 db.commit()
-            
+                logger.info(f"清理空帖子完成: 删除 {deleted_count} 个帖子, {deleted_predictions} 个已删除预测")
+
             return {
                 "success": True,
-                "deleted_empty_posts": deleted_count
+                "deleted_empty_posts": deleted_count,
+                "deleted_old_predictions": deleted_predictions
             }
-            
+
         except Exception as e:
             db.rollback()
             logger.error(f"清理空帖子失败: {e}")
@@ -586,19 +608,21 @@ class CleanupManager:
     def run_full_cleanup(self) -> dict:
         """运行完整清理"""
         logger.info("开始自动清理任务...")
-        
+
         prediction_result = self.cleanup_expired_predictions()
         viewpoint_result = self.cleanup_expired_viewpoints()
         fund_history_result = self.cleanup_old_fund_history()
         empty_posts_result = self.cleanup_empty_posts()
         advice_result = self.cleanup_old_advice()
-        
+        orphan_funds_result = self.cleanup_orphan_funds(preview_only=False)
+
         total_deleted = (
             prediction_result.get("deleted_predictions", 0) +
             viewpoint_result.get("deleted_viewpoints", 0) +
             fund_history_result.get("deleted_fund_history", 0) +
             empty_posts_result.get("deleted_empty_posts", 0) +
-            advice_result.get("deleted_advice", 0)
+            advice_result.get("deleted_advice", 0) +
+            orphan_funds_result.get("deleted_count", 0)
         )
         
         result = {
@@ -607,7 +631,8 @@ class CleanupManager:
                 viewpoint_result.get("success", False),
                 fund_history_result.get("success", False),
                 empty_posts_result.get("success", False),
-                advice_result.get("success", False)
+                advice_result.get("success", False),
+                orphan_funds_result.get("success", False)
             ]),
             "predictions": {
                 "deleted": prediction_result.get("deleted_predictions", 0)
@@ -623,6 +648,9 @@ class CleanupManager:
             },
             "advice": {
                 "deleted": advice_result.get("deleted_advice", 0)
+            },
+            "orphan_funds": {
+                "deleted": orphan_funds_result.get("deleted_count", 0)
             },
             "total_deleted": total_deleted,
             "timestamp": date.today().isoformat()
