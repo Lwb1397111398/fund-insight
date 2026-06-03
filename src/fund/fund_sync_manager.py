@@ -288,9 +288,9 @@ class FundSyncManager:
     def update_all_funds_info(self, db: Session) -> Dict:
         """
         更新所有基金信息（净值、涨跌幅等）
-        
+
         注意：日涨幅(day_growth)优先使用历史净值中的实际涨跌幅，而不是估值涨跌幅
-        
+
         Returns:
             {
                 "total": 总基金数,
@@ -300,18 +300,22 @@ class FundSyncManager:
             }
         """
         from src.fund.fund_api import fund_data_manager
-        
+
         funds = db.query(FundInfo).all()
-        
+        total = len(funds)
+
         result = {
-            "total": len(funds),
+            "total": total,
             "updated": 0,
             "failed": 0,
             "details": []
         }
-        
-        for fund in funds:
+
+        print(f"[FundSync] 开始更新 {total} 只基金...")
+
+        for i, fund in enumerate(funds, 1):
             try:
+                print(f"[FundSync] 更新基金 ({i}/{total}): {fund.fund_code} {fund.fund_name}")
                 fund_info = fund_api.get_fund_info(fund.fund_code)
                 if fund_info:
                     fund.latest_nav = fund_info.get('nav', fund.latest_nav)
@@ -347,6 +351,7 @@ class FundSyncManager:
                         "day_growth_source": "实际涨跌幅" if actual_day_growth is not None else "估值涨跌幅",
                         "history_count": history_count
                     })
+                    print(f"[FundSync] 基金 {fund.fund_code} 更新成功")
                 else:
                     result["failed"] += 1
                     result["details"].append({
@@ -355,6 +360,7 @@ class FundSyncManager:
                         "action": "失败",
                         "reason": "无法获取基金信息"
                     })
+                    print(f"[FundSync] 基金 {fund.fund_code} 获取信息失败")
             except Exception as e:
                 result["failed"] += 1
                 result["details"].append({
@@ -363,9 +369,18 @@ class FundSyncManager:
                     "action": "失败",
                     "reason": str(e)
                 })
+                print(f"[FundSync] 基金 {fund.fund_code} 更新异常: {e}")
 
         # 循环结束后统一提交
-        db.commit()
+        try:
+            db.commit()
+            print(f"[FundSync] 数据库提交成功")
+        except Exception as e:
+            print(f"[FundSync] 数据库提交失败: {e}")
+            db.rollback()
+            raise
+
+        print(f"[FundSync] 更新完成: 成功 {result['updated']}, 失败 {result['failed']}")
         return result
     
     def sync_predictions_by_sector_mapping(self, db: Session) -> Dict:
@@ -552,11 +567,11 @@ class FundSyncManager:
     def full_sync(self, db: Session = None) -> Dict:
         """
         执行完整的基金同步流程
-        
+
         1. 检测预测-基金匹配情况
         2. 同步缺失的基金
         3. 更新所有基金信息
-        
+
         Returns:
             完整的同步报告
         """
@@ -564,17 +579,17 @@ class FundSyncManager:
         if db is None:
             db = SessionLocal()
             close_db = True
-        
+
         try:
             print("[FundSync] 开始完整基金同步...")
-            
+
             # 1. 检测匹配情况
             print("[FundSync] 步骤1: 检测预测-基金匹配情况...")
             match_report = self.check_prediction_fund_match(db)
             print(f"[FundSync] 检测完成: 总预测 {match_report['total_predictions']}, "
                   f"已匹配 {match_report['matched_predictions']}, "
                   f"未匹配 {match_report['unmatched_predictions']}")
-            
+
             # 2. 同步缺失的基金
             print("[FundSync] 步骤2: 同步缺失的基金...")
             sync_report = self.sync_missing_funds(db)
@@ -582,19 +597,34 @@ class FundSyncManager:
                   f"关联 {sync_report['linked']}, "
                   f"跳过 {sync_report['skipped']}, "
                   f"失败 {sync_report['failed']}")
-            
+
             # 3. 更新基金信息
             print("[FundSync] 步骤3: 更新基金信息...")
             update_report = self.update_all_funds_info(db)
             print(f"[FundSync] 更新完成: 成功 {update_report['updated']}, "
                   f"失败 {update_report['failed']}")
-            
+
+            # 收集失败详情
+            failed_details = []
             if update_report['failed'] > 0:
                 print("[FundSync] 失败详情:")
                 for detail in update_report['details']:
                     if detail.get('action') == '失败':
-                        print(f"  - {detail['fund_code']} ({detail['fund_name']}): {detail.get('reason', '未知原因')}")
-            
+                        reason = detail.get('reason', '未知原因')
+                        print(f"  - {detail['fund_code']} ({detail['fund_name']}): {reason}")
+                        failed_details.append(f"{detail['fund_code']}({detail['fund_name']}): {reason}")
+
+            # 构建成功消息
+            success_msg = f"同步完成：检测 {match_report['total_predictions']} 个预测，"
+            success_msg += f"新增 {sync_report['added']} 个基金，"
+            success_msg += f"关联 {sync_report['linked']} 个预测，"
+            success_msg += f"更新 {update_report['updated']} 个基金"
+
+            if failed_details:
+                success_msg += f"\n\n失败 {len(failed_details)} 个:\n" + "\n".join(failed_details[:5])
+                if len(failed_details) > 5:
+                    success_msg += f"\n...等共 {len(failed_details)} 个"
+
             return {
                 "success": True,
                 "match_report": match_report,
@@ -605,10 +635,13 @@ class FundSyncManager:
                     "total_funds": update_report['total'],
                     "new_funds_added": sync_report['added'],
                     "predictions_linked": sync_report['linked'],
-                    "funds_updated": update_report['updated']
-                }
+                    "funds_updated": update_report['updated'],
+                    "funds_failed": update_report['failed'],
+                    "failed_details": failed_details
+                },
+                "message": success_msg
             }
-            
+
         except Exception as e:
             print(f"[FundSync] 同步失败: {e}")
             import traceback

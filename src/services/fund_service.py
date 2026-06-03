@@ -489,24 +489,33 @@ class FundService(BaseService[FundInfo]):
             result = fund_sync_manager.full_sync(self.db)
 
             if result.get("success"):
-                summary = result.get("summary", {})
+                # 使用 full_sync 返回的详细消息
+                message = result.get("message", "")
+                if not message:
+                    # 兜底：如果没有 message，手动构建
+                    summary = result.get("summary", {})
+                    message = f"同步完成：检测 {summary.get('total_predictions', 0)} 个预测，"
+                    message += f"新增 {summary.get('new_funds_added', 0)} 个基金，"
+                    message += f"关联 {summary.get('predictions_linked', 0)} 个预测，"
+                    message += f"更新 {summary.get('funds_updated', 0)} 个基金"
+
                 return {
                     "success": True,
-                    "message": f"同步完成：检测 {summary.get('total_predictions', 0)} 个预测，"
-                              f"新增 {summary.get('new_funds_added', 0)} 个基金，"
-                              f"关联 {summary.get('predictions_linked', 0)} 个预测，"
-                              f"更新 {summary.get('funds_updated', 0)} 个基金",
+                    "message": message,
                     "data": result
                 }
             else:
+                error_msg = result.get('error', '未知错误')
                 return {
                     "success": False,
-                    "message": f"同步失败: {result.get('error', '未知错误')}",
-                    "data": None
+                    "message": f"同步失败: {error_msg}",
+                    "data": result
                 }
 
         except Exception as e:
             print(f"[FundService] 更新失败: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 "success": False,
                 "message": f"更新失败: {str(e)}",
