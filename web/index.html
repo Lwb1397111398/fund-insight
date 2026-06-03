@@ -2047,7 +2047,7 @@
                     <button class="action-btn primary" @click="loadView('predictions')"><i class="ri-target-line"></i> 管理预测</button>
                     <button class="action-btn primary" @click="loadView('viewpoints')"><i class="ri-lightbulb-line"></i> 管理观点</button>
                     <button class="action-btn success" @click="loadView('advice')"><i class="ri-line-chart-line"></i> 投资建议</button>
-                    <button class="action-btn danger" @click="cleanupData"><i class="ri-delete-bin-line"></i> 一键清理</button>
+                    <button class="action-btn danger" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理' }}</button>
                 </div>
                 <!-- 博主视图 -->
                 <div v-if="currentView === 'bloggers'">
@@ -2311,9 +2311,9 @@
                 <div v-if="currentView === 'cleanup'">
                     <div class="section-title">待清理数据</div>
                     <div class="sub-actions">
-                        <button class="action-btn danger small" @click="cleanupData"><i class="ri-delete-bin-line"></i> 一键清理过期数据</button>
-                        <button class="action-btn small" @click="cleanupOldestBatch(7)" style="background: #fa8c16; color: white;"><i class="ri-delete-bin-2-line"></i> 温和清理（7天前）</button>
-                        <button class="action-btn small" @click="cleanupOldestBatch(14)" style="background: #722ed1; color: white;"><i class="ri-delete-bin-2-line"></i> 温和清理（14天前）</button>
+                        <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理过期数据' }}</button>
+                        <button class="action-btn small" @click="cleanupOldestBatch(7)" :disabled="analyzing" style="background: #fa8c16; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（7天前）' }}</button>
+                        <button class="action-btn small" @click="cleanupOldestBatch(14)" :disabled="analyzing" style="background: #722ed1; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（14天前）' }}</button>
                     </div>
                     <div style="margin-bottom: 15px; padding: 10px 15px; background: #f6ffed; border-radius: 6px; border: 1px solid #b7eb8f; font-size: 13px; color: #389e0d;">
                         <i class="ri-information-line"></i> 温和清理只清理过期最久的数据（每批最多100条），对博主统计影响最小。适合日常维护使用。
@@ -2476,7 +2476,7 @@
                         <h4 style="color: #ff9800; margin-bottom: 10px;">🧪 测试数据 ({{ testData.summary.total }})</h4>
                         <div class="sub-actions" style="margin-bottom: 15px;">
                             <button class="action-btn warning small" @click="previewTestData">👁️ 预览测试数据</button>
-                            <button class="action-btn danger small" @click="cleanupTestData"><i class="ri-delete-bin-line"></i> 一键清理测试数据</button>
+                            <button class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                         </div>
                         <div class="test-data-summary"
                             style="background: #fff3e0; padding: 15px; border-radius: 6px; margin-bottom: 15px;">
@@ -3255,6 +3255,7 @@
                         <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}</span>
                         <span style="font-size: 13px; color: #faad14;">待审查 {{ sectorMappings.unreviewed_count }}</span>
                         <span style="flex: 1;"></span>
+                        <input v-model="mappingSearchKeyword" placeholder="搜索板块名、基金名称或基金代码" style="width: 220px; padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px;">
                         <button class="action-btn small" @click="loadSectorMappings(null)" :style="{ background: mappingFilter === null ? '#1890ff' : '#f5f5f5', color: mappingFilter === null ? '#fff' : '#666' }">全部</button>
                         <button class="action-btn small" @click="loadSectorMappings(false)" :style="{ background: mappingFilter === false ? '#faad14' : '#f5f5f5', color: mappingFilter === false ? '#fff' : '#666' }">待审查</button>
                         <button class="action-btn small" @click="loadSectorMappings(true)" :style="{ background: mappingFilter === true ? '#52c41a' : '#f5f5f5', color: mappingFilter === true ? '#fff' : '#666' }">已审查</button>
@@ -3272,7 +3273,7 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="m in sectorMappings.mappings" :key="m.id" :style="{ background: m.reviewed ? '#fff' : '#fffbe6' }">
+                                <tr v-for="m in filteredMappings" :key="m.id" :style="{ background: m.reviewed ? '#fff' : '#fffbe6' }">
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-weight: 600;">{{ m.sector_name }}</td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
                                         <input v-if="editingMappingId === m.id" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
@@ -3297,8 +3298,8 @@
                                         </template>
                                     </td>
                                 </tr>
-                                <tr v-if="sectorMappings.mappings && sectorMappings.mappings.length === 0">
-                                    <td colspan="5" style="padding: 20px; text-align: center; color: #999;">暂无数据</td>
+                                <tr v-if="filteredMappings.length === 0">
+                                    <td colspan="5" style="padding: 20px; text-align: center; color: #999;">{{ mappingSearchKeyword ? '未找到匹配的板块映射' : '暂无数据' }}</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -3815,7 +3816,25 @@ const fetchWeChatBatch = async () => {
                 const fetchSummaryStats = async () => { try { const res = await axios.get('/api/viewpoints/summary/stats'); if (res.data.success) summaryStats.value = res.data.data; } catch (e) { console.error('获取汇总统计失败:', e); } };
                 const showSummaryModal = async () => { await fetchSummaryStats(); if (!summaryStats.value || summaryStats.value.total_pending_viewpoints === 0) { alert('没有待汇总的观点'); return; } showSummaryConfirmModal.value = true; };
                 const executeSummary = async () => { summarizing.value = true; showSummaryConfirmModal.value = false; try { const res = await axios.post('/api/viewpoints/summary/execute', {}); alert(res.data.message); await fetchViewpoints(); await fetchStats(); await fetchSummaryStats(); } catch (e) { alert('汇总失败: ' + (e.response?.data?.message || e.message)); } summarizing.value = false; };
-                const updateAllFunds = async () => { analyzing.value = true; try { const res = await axios.post('/api/funds/update-all'); alert(res.data.message); await fetchFunds(); } catch (e) { alert('更新失败'); } analyzing.value = false; };
+                const updateAllFunds = async () => {
+    analyzing.value = true;
+    try {
+        const res = await axios.post('/api/funds/update-all', {}, { timeout: 300000 });
+        if (res.data.success) {
+            alert(res.data.message);
+            await fetchFunds();
+        } else {
+            alert(res.data.message || '更新失败');
+        }
+    } catch (e) {
+        if (e.code === 'ECONNABORTED') {
+            alert('更新超时，请稍后再试');
+        } else {
+            alert('更新失败: ' + (e.response?.data?.message || e.message));
+        }
+    }
+    analyzing.value = false;
+};
                 const crawlEastmoneyBlog = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📰 东方财富博客（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-blog/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
                 const crawlEastmoneyGuide = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📖 东方财富指南（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-guide/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
                 const crawlSinaFinance = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '🌐 新浪财经（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/sina-finance/auto-adopt', { category: 'finance', max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
@@ -3860,8 +3879,18 @@ const fetchWeChatBatch = async () => {
                 // ===== 板块匹配管理 =====
                 const sectorMappings = ref({ mappings: [], total: 0, reviewed_count: 0, unreviewed_count: 0 });
                 const mappingFilter = ref(null);
+                const mappingSearchKeyword = ref('');
                 const editingMappingId = ref(null);
                 const editingMapping = ref({ fund_name: '', fund_code: '' });
+                const filteredMappings = computed(() => {
+                    const keyword = mappingSearchKeyword.value.trim().toLowerCase();
+                    if (!keyword) return sectorMappings.value.mappings || [];
+                    return (sectorMappings.value.mappings || []).filter(m =>
+                        m.sector_name?.toLowerCase().includes(keyword) ||
+                        m.fund_name?.toLowerCase().includes(keyword) ||
+                        m.fund_code?.toLowerCase().includes(keyword)
+                    );
+                });
                 const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await axios.get(url); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
                 const startEditMapping = (m) => { editingMappingId.value = m.id; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code }; };
                 const saveMappingEdit = async (id) => { try { const res = await axios.put(`/api/config/sector-mappings/${id}`, editingMapping.value); if (res.data.success) { editingMappingId.value = null; await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('保存失败: ' + (e.response?.data?.detail || e.message)); } };
@@ -3869,7 +3898,7 @@ const fetchWeChatBatch = async () => {
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
             }
         }).mount('#app');
     </script>

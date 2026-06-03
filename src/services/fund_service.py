@@ -7,9 +7,14 @@ from datetime import date, datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import json
+import threading
 
 from .base import BaseService
 from src.models.database import FundInfo, FundHistory, Prediction
+
+# 基金更新锁，防止重复执行
+_update_lock = threading.Lock()
+_is_updating = False
 
 
 class FundService(BaseService[FundInfo]):
@@ -455,15 +460,34 @@ class FundService(BaseService[FundInfo]):
     def update_all_funds(self) -> Dict:
         """
         智能更新所有基金数据
-        
+
         Returns:
             更新结果
         """
+        global _is_updating
+
+        # 检查是否正在更新
+        if _is_updating:
+            return {
+                "success": False,
+                "message": "基金更新正在进行中，请稍后再试",
+                "data": None
+            }
+
+        # 获取锁
+        if not _update_lock.acquire(blocking=False):
+            return {
+                "success": False,
+                "message": "基金更新正在进行中，请稍后再试",
+                "data": None
+            }
+
         try:
+            _is_updating = True
             from src.fund.fund_sync_manager import fund_sync_manager
-            
+
             result = fund_sync_manager.full_sync(self.db)
-            
+
             if result.get("success"):
                 summary = result.get("summary", {})
                 return {
@@ -480,7 +504,7 @@ class FundService(BaseService[FundInfo]):
                     "message": f"同步失败: {result.get('error', '未知错误')}",
                     "data": None
                 }
-                
+
         except Exception as e:
             print(f"[FundService] 更新失败: {e}")
             return {
@@ -488,6 +512,9 @@ class FundService(BaseService[FundInfo]):
                 "message": f"更新失败: {str(e)}",
                 "data": None
             }
+        finally:
+            _is_updating = False
+            _update_lock.release()
     
     def delete_fund(self, fund_code: str) -> Dict:
         """

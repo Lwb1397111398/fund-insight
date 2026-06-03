@@ -97,11 +97,11 @@ async def delete_fund(fund_code: str, db: Session = Depends(get_db)):
 
 
 @router.post("/update-all")
-async def update_all_funds(db: Session = Depends(get_db)):
+def update_all_funds(db: Session = Depends(get_db)):
     """智能更新所有基金数据"""
     service = FundService(db)
     result = service.update_all_funds()
-    
+
     return result
 
 
