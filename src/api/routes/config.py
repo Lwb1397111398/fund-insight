@@ -12,7 +12,7 @@ from sqlalchemy import func
 
 from src.core.config import config
 from src.api.deps import get_db
-from src.models.database import Prediction, Viewpoint, Post, FundInfo, Blogger, SectorAlias
+from src.models.database import Prediction, Viewpoint, Post, FundInfo, Blogger, SectorAlias, SectorFundMapping
 
 router = APIRouter(prefix="/config", tags=["配置"])
 
@@ -366,17 +366,35 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                 "post_date": p.post_date.isoformat() if p.post_date else None
             })
         
-        funds_with_predictions = db.query(Prediction.fund_code).filter(
-            Prediction.fund_code != None,
-            Prediction.is_deleted == False
-        ).distinct().subquery()
-        
-        unused_funds = db.query(FundInfo).filter(
-            ~FundInfo.fund_code.in_(funds_with_predictions)
-        ).all()
-        
+        # 与 cleanup_orphan_funds 保持一致的逻辑
+        # 所有预测使用的基金代码（包括已删除的）
+        used_fund_codes = set(
+            row[0] for row in db.query(Prediction.fund_code).filter(
+                Prediction.fund_code.isnot(None),
+                Prediction.fund_code != ''
+            ).distinct().all()
+        )
+        # 板块映射中的基金代码
+        mapped_fund_codes = set(
+            row[0] for row in db.query(SectorFundMapping.fund_code).filter(
+                SectorFundMapping.fund_code.isnot(None),
+                SectorFundMapping.fund_code != ''
+            ).distinct().all()
+        )
+
+        all_funds = db.query(FundInfo).all()
         funds_list = []
-        for f in unused_funds:
+        for f in all_funds:
+            if f.is_core_fund:
+                continue
+            if not f.can_delete:
+                continue
+            if f.active_predictions and f.active_predictions > 0:
+                continue
+            if f.fund_code in used_fund_codes:
+                continue
+            if f.fund_code in mapped_fund_codes:
+                continue
             funds_list.append({
                 "id": f.id,
                 "fund_code": f.fund_code,

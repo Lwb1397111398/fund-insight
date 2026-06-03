@@ -5,7 +5,12 @@
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from src.models.database import Prediction, Viewpoint, Post, FundInfo, FundHistory, InvestmentAdvice, SessionLocal
+from src.models.database import (
+    Prediction, Viewpoint, Post, FundInfo, FundHistory,
+    InvestmentAdvice, VerificationTask,
+    AdviceReasoning, AdvicePerformance, AdviceFeedback,
+    SectorFundMapping, SessionLocal
+)
 from src.services.prediction_verify_service import PredictionVerifyService
 import logging
 
@@ -54,7 +59,7 @@ class CleanupManager:
             deleted_count = 0
             
             verify_service = PredictionVerifyService(db)
-            
+
             for data in prediction_data:
                 if data['verify_count'] and data['verify_count'] > 0:
                     verify_service.update_blogger_on_prediction_delete(
@@ -62,13 +67,18 @@ class CleanupManager:
                         verify_score=data['verify_score'],
                         is_correct=data['is_correct']
                     )
-                
+
+                # 先删除关联的验证任务（FK: verification_tasks.prediction_id）
+                db.query(VerificationTask).filter(
+                    VerificationTask.prediction_id == data['id']
+                ).delete()
+
                 db.query(Prediction).filter(Prediction.id == data['id']).delete()
                 deleted_count += 1
                 logger.info(f"删除过期预测 ID: {data['id']}, 帖子ID: {data['post_id']}")
-            
+
             db.commit()
-            
+
             cleaned_posts = self._cleanup_empty_posts(db, affected_posts)
             
             return {
@@ -312,6 +322,10 @@ class CleanupManager:
                     Prediction.is_deleted == True
                 ).all()
                 for pred in old_predictions:
+                    # 先删除关联的验证任务（FK: verification_tasks.prediction_id）
+                    db.query(VerificationTask).filter(
+                        VerificationTask.prediction_id == pred.id
+                    ).delete()
                     db.delete(pred)
                     deleted_predictions += 1
 
@@ -355,6 +369,11 @@ class CleanupManager:
             
             deleted_count = 0
             for advice in old_advice:
+                # 先删除关联的子表记录（FK: advice_id → investment_advice.id）
+                db.query(AdviceReasoning).filter(AdviceReasoning.advice_id == advice.id).delete()
+                db.query(AdvicePerformance).filter(AdvicePerformance.advice_id == advice.id).delete()
+                db.query(AdviceFeedback).filter(AdviceFeedback.advice_id == advice.id).delete()
+
                 db.delete(advice)
                 deleted_count += 1
                 logger.info(f"删除过期投资建议 ID: {advice.id}, 日期: {advice.advice_date}")
@@ -455,6 +474,11 @@ class CleanupManager:
                         is_correct=data['is_correct']
                     )
 
+                # 先删除关联的验证任务（FK: verification_tasks.prediction_id）
+                db.query(VerificationTask).filter(
+                    VerificationTask.prediction_id == data['id']
+                ).delete()
+
                 db.query(Prediction).filter(Prediction.id == data['id']).delete()
                 deleted_count += 1
 
@@ -534,11 +558,23 @@ class CleanupManager:
                 ).distinct().all()
             )
 
+            # 获取板块映射中的基金代码（这些基金不应被删除）
+            mapped_fund_codes = set(
+                row[0] for row in db.query(SectorFundMapping.fund_code).filter(
+                    SectorFundMapping.fund_code.isnot(None),
+                    SectorFundMapping.fund_code != ''
+                ).distinct().all()
+            )
+
             # 找出孤儿基金
             orphan_funds = []
             for fund in all_funds:
                 # 跳过核心基金
                 if fund.is_core_fund:
+                    continue
+
+                # 跳过标记为不可删除的基金
+                if not fund.can_delete:
                     continue
 
                 # 跳过有活跃预测的基金
@@ -547,6 +583,10 @@ class CleanupManager:
 
                 # 检查是否被任何预测使用
                 if fund.fund_code in used_fund_codes:
+                    continue
+
+                # 检查是否在板块映射中（板块映射中的基金不应被清理）
+                if fund.fund_code in mapped_fund_codes:
                     continue
 
                 # 这是一个孤儿基金

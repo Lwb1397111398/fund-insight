@@ -277,6 +277,7 @@ class FundAutoManager:
             try:
                 from src.fund.fund_api import fund_data_manager
                 fund_data_manager.update_fund_history(fund_code, days=30, db=db)
+                db.commit()
             except ImportError:
                 pass
             

@@ -399,6 +399,7 @@ class FundService(BaseService[FundInfo]):
         history_count = 0
         try:
             history_count = fund_data_manager.update_fund_history(fund_code, days=10, db=self.db)
+            self.db.commit()
         except Exception as e:
             print(f"[FundService] 获取历史净值失败: {e}")
         

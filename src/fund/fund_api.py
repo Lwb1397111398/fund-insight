@@ -296,12 +296,15 @@ class FundDataManager:
             # 计算周涨跌幅和月涨跌幅
             self._calculate_growth_rates(fund_code, db)
 
-            db.commit()
+            # 仅当使用内部创建的 session 时才提交，外部 session 由调用方管理事务
+            if close_db:
+                db.commit()
             return count
 
         except Exception as e:
             logger.error(f"更新历史净值失败: {e}")
-            db.rollback()
+            if close_db:
+                db.rollback()
             return 0
         finally:
             if close_db:

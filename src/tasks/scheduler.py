@@ -189,7 +189,8 @@ class TaskScheduler:
                     except Exception as e:
                         failed += 1
                         logger.warning(f"更新基金 {fund.fund_code} 失败: {e}")
-                
+
+                db.commit()
                 logger.info(f"基金数据更新完成: 成功 {updated} 个, 失败 {failed} 个")
                 
             finally:
