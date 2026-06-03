@@ -6,6 +6,7 @@ from typing import List, Optional, Dict
 from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+import re
 import logging
 
 logger = logging.getLogger(__name__)
