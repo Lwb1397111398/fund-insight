@@ -4,7 +4,8 @@
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
-from src.models.database import Prediction, Viewpoint, Post, FundHistory, InvestmentAdvice, SessionLocal
+from sqlalchemy import func
+from src.models.database import Prediction, Viewpoint, Post, FundInfo, FundHistory, InvestmentAdvice, SessionLocal
 from src.services.prediction_verify_service import PredictionVerifyService
 import logging
 
@@ -476,6 +477,109 @@ class CleanupManager:
             db.rollback()
             logger.error(f"温和清理观点失败: {e}")
             return {"success": False, "error": str(e), "deleted_viewpoints": 0}
+        finally:
+            db.close()
+
+    def cleanup_orphan_funds(self, preview_only: bool = False) -> dict:
+        """
+        清理无关联的孤儿基金
+
+        条件：
+        1. can_delete = True（没有活跃预测关联）
+        2. 没有任何预测使用该基金（包括已删除的预测）
+        3. 不是核心基金（is_core_fund = False）
+
+        Args:
+            preview_only: 如果为 True，只返回可清理的基金列表，不实际删除
+
+        Returns:
+            {
+                "success": bool,
+                "orphan_funds": [可清理的基金列表],
+                "deleted_count": 实际删除数（preview_only=False 时）
+            }
+        """
+        db = self._get_db()
+        try:
+            # 获取所有基金
+            all_funds = db.query(FundInfo).all()
+
+            # 获取所有预测使用的基金代码（包括已删除的）
+            used_fund_codes = set(
+                row[0] for row in db.query(Prediction.fund_code).filter(
+                    Prediction.fund_code.isnot(None),
+                    Prediction.fund_code != ''
+                ).distinct().all()
+            )
+
+            # 找出孤儿基金
+            orphan_funds = []
+            for fund in all_funds:
+                # 跳过核心基金
+                if fund.is_core_fund:
+                    continue
+
+                # 跳过有活跃预测的基金
+                if fund.active_predictions and fund.active_predictions > 0:
+                    continue
+
+                # 检查是否被任何预测使用
+                if fund.fund_code in used_fund_codes:
+                    continue
+
+                # 这是一个孤儿基金
+                orphan_funds.append({
+                    "fund_code": fund.fund_code,
+                    "fund_name": fund.fund_name,
+                    "sector_type": fund.sector_type,
+                    "latest_nav": fund.latest_nav,
+                    "nav_date": fund.nav_date.isoformat() if fund.nav_date else None,
+                    "can_delete": fund.can_delete
+                })
+
+            # 如果只是预览，返回列表
+            if preview_only:
+                return {
+                    "success": True,
+                    "orphan_funds": orphan_funds,
+                    "total_orphans": len(orphan_funds)
+                }
+
+            # 实际删除
+            deleted_count = 0
+            for fund_info in orphan_funds:
+                fund = db.query(FundInfo).filter(
+                    FundInfo.fund_code == fund_info['fund_code']
+                ).first()
+                if fund:
+                    # 删除相关的基金历史净值
+                    db.query(FundHistory).filter(
+                        FundHistory.fund_code == fund.fund_code
+                    ).delete()
+
+                    # 删除基金
+                    db.delete(fund)
+                    deleted_count += 1
+                    logger.info(f"删除孤儿基金: {fund.fund_code} ({fund.fund_name}), 板块: {fund.sector_type}")
+
+            db.commit()
+
+            logger.info(f"清理孤儿基金完成: 删除 {deleted_count} 个")
+            return {
+                "success": True,
+                "orphan_funds": orphan_funds,
+                "deleted_count": deleted_count
+            }
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"清理孤儿基金失败: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "orphan_funds": [],
+                "deleted_count": 0
+            }
         finally:
             db.close()
 

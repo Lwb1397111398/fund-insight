@@ -234,8 +234,37 @@ async def rollback_invalid_verifications(db: Session = Depends(get_db)):
     """回溯数据不足的已验证预测"""
     service = PredictionVerifyService(db)
     result = service.rollback_invalid_verifications(min_data_points=2)
-    
+
     return result
+
+
+@router.post("/sync-sector-mapping")
+async def sync_sector_mapping(db: Session = Depends(get_db)):
+    """根据板块-基金映射同步预测关联和基金数据"""
+    from src.fund.fund_sync_manager import fund_sync_manager
+    result = fund_sync_manager.sync_predictions_by_sector_mapping(db)
+
+    # 构建详细消息
+    parts = []
+    if result['predictions_updated'] > 0:
+        parts.append(f"更新 {result['predictions_updated']} 个预测")
+    if result['verified_reset'] > 0:
+        parts.append(f"重置 {result['verified_reset']} 个已验证预测")
+    if result['funds_added'] > 0:
+        parts.append(f"新增 {result['funds_added']} 个基金")
+    if result['funds_sector_updated'] > 0:
+        parts.append(f"更新 {result['funds_sector_updated']} 个基金板块")
+
+    if parts:
+        message = "同步完成：" + "，".join(parts)
+    else:
+        message = f"同步完成：无需更新（{result['predictions_unchanged']} 个预测未变，{result['predictions_no_mapping']} 个无映射）"
+
+    return {
+        "success": True,
+        "message": message,
+        "data": result
+    }
 
 
 _verify_batch_running = False

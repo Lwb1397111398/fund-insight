@@ -215,6 +215,79 @@ async def cleanup_oldest_batch(days: int = 7, limit: int = 100):
         }
 
 
+@router.get("/cleanup/orphan-funds/preview")
+async def preview_orphan_funds():
+    """
+    预览可清理的孤儿基金
+
+    孤儿基金条件：
+    1. can_delete = True（没有活跃预测关联）
+    2. 没有任何预测使用该基金（包括已删除的预测）
+    3. 不是核心基金（is_core_fund = False）
+    """
+    try:
+        from src.tasks.cleanup_tasks import get_cleanup_manager
+        manager = get_cleanup_manager()
+        result = manager.cleanup_orphan_funds(preview_only=True)
+
+        if result.get("success"):
+            orphan_count = result.get("total_orphans", 0)
+            return {
+                "success": True,
+                "message": f"发现 {orphan_count} 个可清理的孤儿基金",
+                "data": result
+            }
+        else:
+            return {
+                "success": False,
+                "message": "获取孤儿基金列表失败",
+                "data": result
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"获取孤儿基金列表失败: {str(e)}",
+            "data": None
+        }
+
+
+@router.post("/cleanup/orphan-funds")
+async def cleanup_orphan_funds():
+    """
+    清理无关联的孤儿基金
+
+    会同时删除基金的历史净值数据，请谨慎操作！
+    """
+    try:
+        from src.tasks.cleanup_tasks import get_cleanup_manager
+        manager = get_cleanup_manager()
+        result = manager.cleanup_orphan_funds(preview_only=False)
+
+        if result.get("success"):
+            deleted_count = result.get("deleted_count", 0)
+            if deleted_count > 0:
+                message = f"清理完成，删除了 {deleted_count} 个孤儿基金及其历史净值数据"
+            else:
+                message = "没有需要清理的孤儿基金"
+            return {
+                "success": True,
+                "message": message,
+                "data": result
+            }
+        else:
+            return {
+                "success": False,
+                "message": "清理孤儿基金失败",
+                "data": result
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"清理孤儿基金失败: {str(e)}",
+            "data": None
+        }
+
+
 @router.get("/cleanup/preview")
 async def get_cleanup_preview(db: Session = Depends(get_db)):
     """

@@ -5,13 +5,14 @@
 2. 自动抓取缺失的基金
 3. 同类型基金去重（一个板块只保留一个基金）
 4. 更新基金信息
+5. 根据板块-基金映射同步预测关联
 """
 import json
 from typing import Dict, List, Optional, Tuple
 from datetime import date, datetime
 from sqlalchemy.orm import Session
 
-from src.models.database import FundInfo, Prediction, SessionLocal
+from src.models.database import FundInfo, Prediction, SectorFundMapping, SessionLocal
 from src.fund.fund_api import fund_api
 from src.fund.fund_auto_manager import fund_auto_manager
 
@@ -367,6 +368,187 @@ class FundSyncManager:
         db.commit()
         return result
     
+    def sync_predictions_by_sector_mapping(self, db: Session) -> Dict:
+        """
+        根据板块-基金映射表同步预测和基金数据
+
+        完整流程：
+        1. 刷新 SectorFundService 缓存
+        2. 加载板块-基金映射（reviewed=True 优先）
+        3. 遍历所有预测，更新基金关联
+        4. 确保新基金在 FundInfo 表中（不存在则添加）
+        5. 更新 FundInfo 中旧基金的 sector_type（不删除）
+        6. 重置已验证预测的状态（基金变了，验证结果可能无效）
+
+        Returns:
+            {
+                "total_mappings": 映射数,
+                "predictions_updated": 预测更新数,
+                "predictions_unchanged": 预测未变数,
+                "predictions_no_mapping": 预测无映射数,
+                "funds_added": 新增基金数,
+                "funds_sector_updated": 基金板块更新数,
+                "verified_reset": 已验证重置数,
+                "details": [详细记录]
+            }
+        """
+        from src.services.sector_fund_service import get_sector_fund_service
+
+        result = {
+            "total_mappings": 0,
+            "predictions_updated": 0,
+            "predictions_unchanged": 0,
+            "predictions_no_mapping": 0,
+            "funds_added": 0,
+            "funds_sector_updated": 0,
+            "verified_reset": 0,
+            "details": []
+        }
+
+        # 1. 刷新缓存
+        service = get_sector_fund_service(db)
+        service.refresh_cache()
+
+        # 2. 加载板块-基金映射（reviewed=True 优先）
+        mappings = db.query(SectorFundMapping).filter(
+            SectorFundMapping.is_active == True
+        ).all()
+
+        # 构建映射表：sector_name -> {code, name, reviewed}
+        sector_map = {}
+        for m in mappings:
+            if m.sector_name not in sector_map or (m.reviewed and not sector_map[m.sector_name].get('reviewed')):
+                sector_map[m.sector_name] = {
+                    'code': m.fund_code,
+                    'name': m.fund_name,
+                    'reviewed': m.reviewed or False
+                }
+
+        result["total_mappings"] = len(sector_map)
+
+        if not sector_map:
+            result["details"].append({"action": "跳过", "reason": "板块-基金映射表为空"})
+            return result
+
+        # 3. 预加载现有基金（按 fund_code 索引，使用 no_autoflush 避免干扰）
+        with db.no_autoflush:
+            existing_funds_by_code = {f.fund_code: f for f in db.query(FundInfo).all()}
+
+        # 4. 获取所有预测
+        predictions = db.query(Prediction).filter(Prediction.is_deleted == False).all()
+
+        for pred in predictions:
+            # 确定板块名称
+            sector = pred.sector or pred.sector_type
+            if not sector:
+                result["predictions_no_mapping"] += 1
+                continue
+
+            # 查找映射
+            mapping = sector_map.get(sector)
+            if not mapping:
+                result["predictions_no_mapping"] += 1
+                continue
+
+            # 检查是否需要更新
+            if pred.fund_code == mapping['code']:
+                result["predictions_unchanged"] += 1
+                continue
+
+            # 记录旧基金信息
+            old_code = pred.fund_code
+            old_name = pred.fund_name
+
+            # 更新预测的基金关联
+            pred.fund_code = mapping['code']
+            pred.fund_name = mapping['name']
+            result["predictions_updated"] += 1
+
+            detail = {
+                "prediction_id": pred.id,
+                "sector": sector,
+                "old_fund": f"{old_name}({old_code})" if old_code else "无",
+                "new_fund": f"{mapping['name']}({mapping['code']})"
+            }
+
+            # 5. 重置已验证预测的状态（基金变了，验证结果可能无效）
+            if pred.status in ('correct', 'wrong', 'expired') and pred.verify_count and pred.verify_count > 0:
+                pred.status = 'pending'
+                pred.is_correct = None
+                pred.actual_change = None
+                pred.verify_count = 0
+                pred.verify_score = 0
+                pred.verified_at = None
+                result["verified_reset"] += 1
+                detail["reset_verified"] = True
+
+            result["details"].append(detail)
+
+        # 6. 确保新基金在 FundInfo 表中
+        for sector_name, mapping in sector_map.items():
+            fund_code = mapping['code']
+            fund_name = mapping['name']
+
+            if fund_code in existing_funds_by_code:
+                # 基金已存在，更新 sector_type
+                fund = existing_funds_by_code[fund_code]
+                if fund.sector_type != sector_name:
+                    fund.sector_type = sector_name
+                    result["funds_sector_updated"] += 1
+                    result["details"].append({
+                        "action": "更新基金板块",
+                        "fund_code": fund_code,
+                        "fund_name": fund_name,
+                        "old_sector": fund.sector_type,
+                        "new_sector": sector_name
+                    })
+            else:
+                # 基金不存在，添加新基金
+                try:
+                    fund_info = fund_api.get_fund_info(fund_code)
+                    if fund_info:
+                        history = fund_api.get_fund_history(fund_code, days=1)
+                        actual_day_growth = history[0].get('growth') if history else None
+                        day_growth = actual_day_growth if actual_day_growth is not None else fund_info.get('day_growth')
+
+                        new_fund = FundInfo(
+                            fund_code=fund_code,
+                            fund_name=fund_info.get('fund_name', fund_name),
+                            fund_type=fund_info.get('fund_type', '未知类型'),
+                            sector_type=sector_name,
+                            latest_nav=fund_info.get('nav'),
+                            nav_date=date.today(),
+                            day_growth=day_growth,
+                            can_delete=True
+                        )
+                        db.add(new_fund)
+                        existing_funds_by_code[fund_code] = new_fund
+
+                        # 获取历史数据
+                        try:
+                            from src.fund.fund_api import fund_data_manager
+                            fund_data_manager.update_fund_history(fund_code, days=30, db=db)
+                        except Exception as e:
+                            print(f"[FundSync] 获取基金 {fund_code} 历史数据失败: {e}")
+
+                        result["funds_added"] += 1
+                        result["details"].append({
+                            "action": "添加基金",
+                            "fund_code": fund_code,
+                            "fund_name": fund_name,
+                            "sector": sector_name
+                        })
+                except Exception as e:
+                    result["details"].append({
+                        "action": "添加基金失败",
+                        "fund_code": fund_code,
+                        "fund_name": fund_name,
+                        "error": str(e)
+                    })
+
+        db.commit()
+        return result
+
     def full_sync(self, db: Session = None) -> Dict:
         """
         执行完整的基金同步流程

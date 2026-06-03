@@ -3,7 +3,7 @@
 支持：自动分析、智能基金管理、定时验证、投资建议
 """
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Date, UniqueConstraint, Index, ForeignKey
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import Session, declarative_base, sessionmaker, relationship
 from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -35,10 +35,17 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
             echo=False,
             pool_size=10,
             max_overflow=10,
-            pool_recycle=300,
+            pool_recycle=120,
             pool_pre_ping=True,
             pool_timeout=30,
             pool_use_lifo=True,
+            connect_args={
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 5,
+                "sslmode": "require",
+            },
         )
         DB_TYPE = "postgresql"
         logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+5）")
@@ -54,7 +61,34 @@ else:
     engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
 
 Base = declarative_base()
-SessionLocal = sessionmaker(bind=engine)
+
+
+class _RetrySession(Session):
+    """自动重试 SSL 断开的 Session"""
+    _max_retries = 2
+
+    def execute(self, *args, **kwargs):
+        from sqlalchemy.exc import OperationalError
+        for attempt in range(self._max_retries):
+            try:
+                return super().execute(*args, **kwargs)
+            except OperationalError as e:
+                if attempt < self._max_retries - 1 and (
+                    "SSL connection has been closed" in str(e)
+                    or "server closed the connection" in str(e)
+                ):
+                    logger.warning(f"[数据库] SSL 断开，重试 {attempt + 1}/{self._max_retries}")
+                    self.rollback()
+                    # 使当前连接失效，pool_pre_ping 下次会用新连接
+                    try:
+                        self.connection().invalidate()
+                    except Exception:
+                        pass
+                    continue
+                raise
+
+
+SessionLocal = sessionmaker(bind=engine, class_=_RetrySession)
 
 
 class Blogger(Base):
