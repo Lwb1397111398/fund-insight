@@ -2298,8 +2298,10 @@
                                         f.day_growth ? f.day_growth.toFixed(2) + '%' : '-' }}</td>
                                     <td>{{ predictions.filter(p => p.fund_code === f.fund_code && !p.is_deleted).length || 0 }}</td>
                                     <td>
-                                        <div class="row-actions"><button class="row-btn primary"
-                                                @click="viewFundDetail(f.fund_code)">详情</button></div>
+                                        <div class="row-actions">
+                                            <button class="row-btn primary" @click="viewFundDetail(f.fund_code)">详情</button>
+                                            <button class="row-btn danger" @click="deleteFund(f.fund_code, f.fund_name)">删除</button>
+                                        </div>
                                     </td>
                                 </tr>
                             </tbody>
@@ -3714,6 +3716,20 @@ const fetchWeChatBatch = async () => {
                 const viewPostDetail = async (id) => { try { const res = await axios.get(`/api/posts/${id}`); if (res.data.success) { postDetail.value = res.data.data; showPostDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
                 const viewViewpointDetail = async (id) => { try { const res = await axios.get(`/api/viewpoints/${id}`); if (res.data.success) { viewpointDetail.value = res.data.data; showViewpointDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
                 const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const deleteFund = async (fundCode, fundName) => {
+                    if (!confirm(`确定要删除基金 ${fundName}（${fundCode}）吗？\n\n注意：如果有预测关联此基金，删除可能失败。`)) return;
+                    try {
+                        const res = await axios.delete(`/api/funds/${fundCode}`);
+                        if (res.data.success) {
+                            alert(res.data.message || '删除成功');
+                            await fetchFunds();
+                        } else {
+                            alert(res.data.message || '删除失败');
+                        }
+                    } catch (e) {
+                        alert('删除失败: ' + (e.response?.data?.detail || e.message));
+                    }
+                };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
                 const viewPredictionDetail = async (id) => { try { const res = await axios.get(`/api/predictions/${id}`); if (res.data.success) { predictionDetail.value = res.data.data; showPredictionDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
                 const editPrediction = (pred) => {
@@ -3898,7 +3914,7 @@ const fetchWeChatBatch = async () => {
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
             }
         }).mount('#app');
     </script>
