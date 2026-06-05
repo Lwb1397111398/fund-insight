@@ -319,9 +319,18 @@ class FundSyncManager:
                 fund_info = fund_api.get_fund_info(fund.fund_code)
                 if fund_info:
                     fund.latest_nav = fund_info.get('nav', fund.latest_nav)
-                    fund.nav_date = date.today()
                     fund.updated_at = datetime.now()
                     fund.day_growth = fund_info.get('day_growth', fund.day_growth)
+
+                    # 使用实际净值日期（jzrq），而不是 date.today()
+                    nav_date_str = fund_info.get('nav_date', '')
+                    if nav_date_str:
+                        try:
+                            fund.nav_date = datetime.strptime(nav_date_str, '%Y-%m-%d').date()
+                        except (ValueError, TypeError):
+                            fund.nav_date = date.today()
+                    else:
+                        fund.nav_date = date.today()
 
                     result["updated"] += 1
                     result["details"].append({
@@ -329,6 +338,7 @@ class FundSyncManager:
                         "fund_name": fund.fund_name,
                         "action": "更新",
                         "nav": fund.latest_nav,
+                        "nav_date": str(fund.nav_date),
                         "day_growth": fund.day_growth
                     })
                     print(f"[FundSync] 基金 {fund.fund_code} 更新成功")

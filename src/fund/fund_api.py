@@ -60,23 +60,39 @@ class FundAPI:
         self.close()
     
     def get_fund_info(self, fund_code: str) -> Optional[Dict]:
-        """获取基金实时信息"""
+        """获取基金实时信息
+
+        返回数据包含：
+        - nav/nav_date: 实际净值和净值日期（来自 jzrq/dwjz）
+        - estimate_nav/estimate_date: 估值和估值时间（来自 gsz/gztime）
+        - day_growth: 估值涨跌幅
+        """
         try:
             url = f"{self.base_url}/js/{fund_code}.js"
             response = self.session.get(url, headers=self.headers, timeout=self.timeout)
             response.encoding = 'utf-8'
-            
+
             text = response.text
             if 'jsonpgz' in text:
                 match = re.search(r'jsonpgz\((.+)\)', text)
                 if match:
                     data = json.loads(match.group(1))
-                    
+
+                    # 实际净值日期（如 "2026-06-04"）
+                    actual_nav_date = data.get('jzrq', '')
+                    # 估值时间（如 "2026-06-05 15:00"）
+                    estimate_time = data.get('gztime', '').split(' ')[0]
+
                     return {
                         'fund_code': data.get('fundcode'),
                         'fund_name': data.get('name'),
-                        'nav': float(data.get('gsz', 0) or 0),
-                        'nav_date': data.get('gztime', '').split(' ')[0],
+                        # 实际净值（收盘后确认的净值）
+                        'nav': float(data.get('dwjz', 0) or 0),
+                        'nav_date': actual_nav_date,
+                        # 估值数据（盘中实时）
+                        'estimate_nav': float(data.get('gsz', 0) or 0),
+                        'estimate_date': estimate_time,
+                        # 涨跌幅使用估值涨跌幅
                         'day_growth': float(data.get('gszzl', 0) or 0),
                         'fund_type': data.get('fundtype', '')
                     }

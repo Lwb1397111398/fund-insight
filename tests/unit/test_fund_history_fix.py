@@ -83,16 +83,18 @@ class TestFundHistoryFix:
 class TestFundSyncFix:
     """测试基金同步修复"""
     
-    def test_update_all_funds_info_calls_history_update(self):
-        """测试更新基金信息时调用历史净值更新"""
+    def test_update_all_funds_info_uses_actual_nav_date(self):
+        """测试更新基金信息时使用实际净值日期"""
         from src.fund.fund_sync_manager import FundSyncManager
-        
+
         manager = FundSyncManager()
-        
+
         assert hasattr(manager, 'update_all_funds_info')
-        
+
         import inspect
         source = inspect.getsource(manager.update_all_funds_info)
-        
-        assert 'fund_data_manager' in source
-        assert 'update_fund_history' in source
+
+        # 验证使用 fund_api 获取基金信息
+        assert 'fund_api.get_fund_info' in source
+        # 验证使用实际净值日期而不是 date.today()
+        assert 'nav_date' in source
