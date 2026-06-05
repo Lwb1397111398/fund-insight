@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import date, datetime
 from sqlalchemy.orm import Session
 
-from src.models.database import FundInfo, Prediction, SectorFundMapping, SessionLocal
+from src.models.database import FundInfo, FundHistory, Prediction, SectorFundMapping, SessionLocal
 from src.fund.fund_api import fund_api
 from src.fund.fund_auto_manager import fund_auto_manager
 
@@ -287,9 +287,7 @@ class FundSyncManager:
     
     def update_all_funds_info(self, db: Session) -> Dict:
         """
-        更新所有基金信息（净值、涨跌幅）
-
-        优化：只更新基本信息，不更新历史净值，大幅提升速度
+        更新所有基金信息（净值、涨跌幅、历史净值）
 
         Returns:
             {
@@ -332,6 +330,9 @@ class FundSyncManager:
                     else:
                         fund.nav_date = date.today()
 
+                    # 更新历史净值表
+                    self._update_fund_history(db, fund.fund_code, fund.fund_name)
+
                     result["updated"] += 1
                     result["details"].append({
                         "fund_code": fund.fund_code,
@@ -370,6 +371,33 @@ class FundSyncManager:
 
         print(f"[FundSync] 更新完成: 成功 {result['updated']}, 失败 {result['failed']}")
         return result
+
+    def _update_fund_history(self, db: Session, fund_code: str, fund_name: str, days: int = 30):
+        """更新单只基金的历史净值"""
+        try:
+            history = fund_api.get_fund_history(fund_code, days)
+            if not history:
+                return
+
+            # 批量查询已存在的日期
+            existing_dates = set(
+                r[0] for r in db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code
+                ).all()
+            )
+
+            for item in history:
+                if item['date'] not in existing_dates:
+                    record = FundHistory(
+                        fund_code=fund_code,
+                        fund_name=fund_name,
+                        nav_date=item['date'],
+                        nav=item['nav'],
+                        day_growth=item['growth']
+                    )
+                    db.add(record)
+        except Exception as e:
+            print(f"[FundSync] 更新基金 {fund_code} 历史净值失败: {e}")
     
     def sync_predictions_by_sector_mapping(self, db: Session) -> Dict:
         """
