@@ -2065,6 +2065,7 @@
                     <button class="action-btn primary" @click="loadView('viewpoints')"><i class="ri-lightbulb-line"></i> 管理观点</button>
                     <button class="action-btn success" @click="loadView('advice')"><i class="ri-line-chart-line"></i> 投资建议</button>
                     <button class="action-btn danger" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理' }}</button>
+                    <button class="action-btn danger" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                 </div>
                 <!-- 博主视图 -->
                 <div v-if="currentView === 'bloggers'">
