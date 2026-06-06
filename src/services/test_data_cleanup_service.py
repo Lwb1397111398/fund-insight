@@ -101,7 +101,7 @@ class TestDataCleanupService:
             Viewpoint.is_deleted == False
         ).all()
         test_viewpoints = []
-        
+
         for viewpoint in viewpoints:
             if self._matches_test_patterns(viewpoint.content):
                 test_viewpoints.append({
@@ -109,27 +109,48 @@ class TestDataCleanupService:
                     "content": viewpoint.content[:100] + "..." if len(viewpoint.content) > 100 else viewpoint.content,
                     "blogger_id": viewpoint.blogger_id
                 })
-        
+
         return test_viewpoints
-    
+
+    def find_test_predictions(self) -> List[Dict]:
+        """查找测试预测"""
+        predictions = self.db.query(Prediction).all()
+        test_predictions = []
+
+        for prediction in predictions:
+            if self._matches_test_patterns(prediction.prediction_content) or self._matches_test_patterns(prediction.fund_name):
+                test_predictions.append({
+                    "id": prediction.id,
+                    "post_id": prediction.post_id,
+                    "blogger_id": prediction.blogger_id,
+                    "fund_code": prediction.fund_code,
+                    "fund_name": prediction.fund_name,
+                    "prediction_content": prediction.prediction_content[:100] + "..." if prediction.prediction_content and len(prediction.prediction_content) > 100 else prediction.prediction_content,
+                })
+
+        return test_predictions
+
     def get_all_test_data(self) -> Dict:
         """获取所有测试数据"""
         test_bloggers = self.find_test_bloggers()
         test_posts = self.find_test_posts()
         test_funds = self.find_test_funds()
         test_viewpoints = self.find_test_viewpoints()
-        
+        test_predictions = self.find_test_predictions()
+
         return {
             "bloggers": test_bloggers,
             "posts": test_posts,
             "funds": test_funds,
             "viewpoints": test_viewpoints,
+            "predictions": test_predictions,
             "summary": {
                 "total_bloggers": len(test_bloggers),
                 "total_posts": len(test_posts),
                 "total_funds": len(test_funds),
                 "total_viewpoints": len(test_viewpoints),
-                "total": len(test_bloggers) + len(test_posts) + len(test_funds) + len(test_viewpoints)
+                "total_predictions": len(test_predictions),
+                "total": len(test_bloggers) + len(test_posts) + len(test_funds) + len(test_viewpoints) + len(test_predictions)
             }
         }
     
@@ -202,7 +223,24 @@ class TestDataCleanupService:
                 if viewpoint_obj:
                     self.db.delete(viewpoint_obj)
                     deleted["viewpoints"] += 1
-        
+
+        deleted_prediction_ids = set()
+        for prediction in test_data["predictions"]:
+            if prediction["blogger_id"] in [b["id"] for b in test_data["bloggers"]]:
+                continue
+            if prediction["post_id"] in [p["id"] for p in test_data["posts"]]:
+                continue
+            if prediction["fund_code"] in [f["fund_code"] for f in test_data["funds"]]:
+                continue
+            if prediction["id"] in deleted_prediction_ids:
+                continue
+
+            prediction_obj = self.db.query(Prediction).filter(Prediction.id == prediction["id"]).first()
+            if prediction_obj:
+                self.db.delete(prediction_obj)
+                deleted_prediction_ids.add(prediction["id"])
+                deleted["predictions"] += 1
+
         self.db.commit()
         
         return {

@@ -222,8 +222,7 @@ app.include_router(crawler_router, prefix="/api")
 app.include_router(advice_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
-if os.getenv("ENABLE_TEST_DATA_ROUTES", "false").lower() == "true":
-    app.include_router(test_data_router, prefix="/api")
+app.include_router(test_data_router, prefix="/api")
 app.include_router(batch_analysis_router, prefix="/api")
 
 

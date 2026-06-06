@@ -46,8 +46,8 @@ def test_database_import_requires_confirmation_header_when_enabled(monkeypatch):
     assert "确认" in response.json()["detail"]
 
 
-def test_test_data_cleanup_routes_are_hidden_by_default(monkeypatch):
-    """测试数据清理接口默认隐藏，避免生产误删"""
+def test_test_data_preview_route_is_available_by_default(monkeypatch):
+    """测试数据预览接口默认可用，避免前端清理入口失效"""
     monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
     monkeypatch.delenv("ENABLE_TEST_DATA_ROUTES", raising=False)
 
@@ -56,7 +56,22 @@ def test_test_data_cleanup_routes_are_hidden_by_default(monkeypatch):
     client = TestClient(app)
     response = client.get("/api/test-data/find", headers=AUTH_HEADERS)
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+
+def test_test_data_cleanup_requires_confirmation_header(monkeypatch):
+    """测试数据硬删除必须提供二次确认头，避免生产误删"""
+    monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
+    monkeypatch.delenv("ENABLE_TEST_DATA_ROUTES", raising=False)
+
+    from src.api.main import app
+
+    client = TestClient(app)
+    response = client.post("/api/test-data/cleanup", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert "确认" in response.json()["detail"]
 
 
 def test_stats_error_hides_traceback_in_production(monkeypatch):
