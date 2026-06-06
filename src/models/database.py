@@ -26,18 +26,25 @@ from src.core.config import config
 DATABASE_URL = os.getenv("DATABASE_URL")
 DB_TYPE = "sqlite"  # 默认值
 
+def _get_postgres_pool_settings() -> Dict[str, int]:
+    return {
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "3")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "2")),
+        "pool_recycle": int(os.getenv("DB_POOL_RECYCLE", "120")),
+        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
+    }
+
+
 if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
     # PostgreSQL 数据库
     try:
         import psycopg2  # 检查驱动是否可用
+        pool_settings = _get_postgres_pool_settings()
         engine = create_engine(
             DATABASE_URL,
             echo=False,
-            pool_size=10,
-            max_overflow=10,
-            pool_recycle=120,
+            **pool_settings,
             pool_pre_ping=True,
-            pool_timeout=30,
             pool_use_lifo=True,
             connect_args={
                 "keepalives": 1,
@@ -48,7 +55,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
             },
         )
         DB_TYPE = "postgresql"
-        logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: 5+5）")
+        logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: {pool_settings['pool_size']}+{pool_settings['max_overflow']}）")
     except ImportError:
         logger.warning(f"[数据库] psycopg2 未安装，回退到 SQLite")
         DB_PATH = Path(config.DB_PATH)

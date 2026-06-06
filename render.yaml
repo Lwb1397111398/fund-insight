@@ -9,10 +9,52 @@ services:
         value: "3.10.12"
       - key: CRAWLER_ENABLED
         value: "true"
+      - key: APP_ENV
+        value: production
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      - key: DB_POOL_RECYCLE
+        value: "120"
+      - key: DB_POOL_TIMEOUT
+        value: "30"
       - key: ACCESS_PASSWORD
         sync: false
       - key: CORS_ORIGINS
         value: "https://fund-insight.onrender.com"
+      - key: DATABASE_URL
+        sync: false
+      - key: LLM_PROVIDER
+        value: volcengine
+      - key: VOLCENGINE_API_KEY
+        sync: false
+      - key: VOLCENGINE_BASE_URL
+        value: "https://ark.cn-beijing.volces.com/api/v3"
+      - key: VOLCENGINE_MODEL
+        value: "ep-20260424143452-nhsrm"
+      - key: VOLCENGINE_LIGHT_MODEL
+        value: "ep-20260424143452-nhsrm"
+
+  - type: cron
+    name: fund-insight-scheduler
+    runtime: python
+    schedule: "30 10 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/run_scheduled_tasks.py daily
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10.12"
+      - key: APP_ENV
+        value: production
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      - key: DB_POOL_RECYCLE
+        value: "120"
+      - key: DB_POOL_TIMEOUT
+        value: "30"
       - key: DATABASE_URL
         sync: false
       - key: LLM_PROVIDER

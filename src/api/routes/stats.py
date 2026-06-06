@@ -2,6 +2,8 @@
 统计路由
 处理数据统计相关的 API 请求
 """
+import os
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,8 @@ async def get_stats(db: Session = Depends(get_db)):
         service = StatsService(db)
         return service.get_all_stats()
     except Exception as e:
+        if os.getenv("APP_ENV", "development").lower() == "production":
+            return {"success": False, "error": "统计数据获取失败"}
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 

@@ -2,7 +2,7 @@
 Fund Insight API - FastAPI 主应用
 模块化架构入口文件
 """
-from fastapi import FastAPI, Response, Request, status, UploadFile, File, Form
+from fastapi import FastAPI, Response, Request, status, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -45,13 +45,18 @@ from src.api.routes import (
 from src.api.routes.test_data import router as test_data_router
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理：启动和关闭逻辑"""
-    # ========== Startup ==========
-    init_db()
+class CachedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        return response
 
-    # 自动补全缺失的数据库列（ORM 新增字段时，已有表不会自动加列）
+
+def _startup_migrations_enabled() -> bool:
+    return os.getenv("ENABLE_STARTUP_MIGRATIONS", "false").lower() == "true"
+
+
+def _run_startup_migrations() -> None:
     try:
         from src.models.database import engine
         from sqlalchemy import text
@@ -66,109 +71,75 @@ async def lifespan(app: FastAPI):
             for table, column, col_def in missing_columns:
                 try:
                     if db_type.startswith("postgresql"):
-                        conn.execute(text(
-                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"
-                        ))
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"))
                     else:
-                        # SQLite 不支持 IF NOT EXISTS for ADD COLUMN
                         try:
                             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"))
                         except Exception:
-                            pass  # 列已存在
+                            pass
                     conn.commit()
                 except Exception as e:
-                    if "already exists" in str(e).lower():
-                        pass
-                    else:
+                    if "already exists" not in str(e).lower():
                         logger.warning(f"[Startup] 添加列 {table}.{column} 失败: {e}")
     except Exception as e:
         logger.error(f"[Startup] 列补全检查失败: {e}")
 
-    config.load_persisted_config()
-
-    # 自动创建缺失的索引
     try:
         from src.models.database import engine
         from sqlalchemy import text
         import sqlite3
 
+        indexes = [
+            ("ix_posts_blogger_id", "posts", ["blogger_id"]),
+            ("ix_posts_post_date", "posts", ["post_date"]),
+            ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
+            ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
+            ("ix_predictions_status", "predictions", ["status"]),
+            ("ix_predictions_fund_code", "predictions", ["fund_code"]),
+            ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
+            ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
+            ("ix_predictions_target_date", "predictions", ["target_date"]),
+            ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
+            ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
+            ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
+            ("ix_viewpoints_source", "viewpoints", ["source"]),
+            ("ix_bloggers_platform", "bloggers", ["platform"]),
+            ("ix_bloggers_is_active", "bloggers", ["is_active"]),
+        ]
+
         db_url = str(engine.url)
-        if db_url.startswith('sqlite'):
-            # SQLite: 直接使用 sqlite3 创建索引
-            db_path = db_url.replace('sqlite:///', '')
+        if db_url.startswith("sqlite"):
+            db_path = db_url.replace("sqlite:///", "")
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-
-            indexes = [
-                ("ix_posts_blogger_id", "posts", ["blogger_id"]),
-                ("ix_posts_post_date", "posts", ["post_date"]),
-                ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
-                ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
-                ("ix_predictions_status", "predictions", ["status"]),
-                ("ix_predictions_fund_code", "predictions", ["fund_code"]),
-                ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
-                ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
-                ("ix_predictions_target_date", "predictions", ["target_date"]),
-                ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
-                ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
-                ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
-                ("ix_viewpoints_source", "viewpoints", ["source"]),
-                ("ix_bloggers_platform", "bloggers", ["platform"]),
-                ("ix_bloggers_is_active", "bloggers", ["is_active"]),
-            ]
-
-            created_count = 0
             for idx_name, table, columns in indexes:
                 try:
-                    cols = ", ".join(columns)
-                    cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})")
-                    if cursor.rowcount == 0:
-                        # 索引已存在
-                        pass
-                    else:
-                        created_count += 1
+                    cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({', '.join(columns)})")
                 except Exception:
                     pass
-
             conn.commit()
             conn.close()
-            if created_count > 0:
-                logger.info(f"[Startup] 自动创建了 {created_count} 个索引")
         else:
-            # PostgreSQL: 使用 SQLAlchemy 创建索引
             with engine.connect() as conn:
-                indexes = [
-                    ("ix_posts_blogger_id", "posts", ["blogger_id"]),
-                    ("ix_posts_post_date", "posts", ["post_date"]),
-                    ("ix_posts_blogger_date", "posts", ["blogger_id", "post_date"]),
-                    ("ix_predictions_blogger_id", "predictions", ["blogger_id"]),
-                    ("ix_predictions_status", "predictions", ["status"]),
-                    ("ix_predictions_fund_code", "predictions", ["fund_code"]),
-                    ("ix_predictions_is_deleted", "predictions", ["is_deleted"]),
-                    ("ix_predictions_blogger_status", "predictions", ["blogger_id", "status", "is_deleted"]),
-                    ("ix_predictions_target_date", "predictions", ["target_date"]),
-                    ("ix_viewpoints_is_deleted", "viewpoints", ["is_deleted"]),
-                    ("ix_viewpoints_viewpoint_date", "viewpoints", ["viewpoint_date"]),
-                    ("ix_viewpoints_blogger_id", "viewpoints", ["blogger_id"]),
-                    ("ix_viewpoints_source", "viewpoints", ["source"]),
-                    ("ix_bloggers_platform", "bloggers", ["platform"]),
-                    ("ix_bloggers_is_active", "bloggers", ["is_active"]),
-                ]
-
-                created_count = 0
                 for idx_name, table, columns in indexes:
                     try:
-                        cols = ", ".join(columns)
-                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})"))
-                        created_count += 1
+                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({', '.join(columns)})"))
                     except Exception:
                         pass
-
                 conn.commit()
-                if created_count > 0:
-                    logger.info(f"[Startup] 自动创建了 {created_count} 个索引")
     except Exception as e:
         logger.error(f"[Startup] 索引创建检查失败: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理：启动和关闭逻辑"""
+    # ========== Startup ==========
+    init_db()
+    if _startup_migrations_enabled():
+        _run_startup_migrations()
+
+    config.load_persisted_config()
 
     logger.info(f"[Startup] Fund Insight API v2.0.0 已启动")
     logger.info(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
@@ -201,7 +172,7 @@ async def password_auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     # 放行健康检查接口
-    if request.url.path == "/api/health":
+    if request.url.path in ("/api/health", "/api/health/detail"):
         return await call_next(request)
     
     # 从环境变量获取密码
@@ -233,11 +204,11 @@ app.add_middleware(
 
 static_dir = Path(project_root) / "static"
 if static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount("/static", CachedStaticFiles(directory=str(static_dir)), name="static")
 
 web_dir = Path(project_root) / "web"
 if web_dir.exists():
-    app.mount("/web", StaticFiles(directory=str(web_dir)), name="web")
+    app.mount("/web", CachedStaticFiles(directory=str(web_dir)), name="web")
 
 app.include_router(eastmoney_routes.router)
 app.include_router(prediction_groups_router)
@@ -251,7 +222,8 @@ app.include_router(crawler_router, prefix="/api")
 app.include_router(advice_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
-app.include_router(test_data_router, prefix="/api")
+if os.getenv("ENABLE_TEST_DATA_ROUTES", "false").lower() == "true":
+    app.include_router(test_data_router, prefix="/api")
 app.include_router(batch_analysis_router, prefix="/api")
 
 
@@ -274,6 +246,32 @@ def health_check():
     finally:
         db.close()
     return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
+
+
+@app.get("/api/health/detail")
+def health_detail():
+    from src.models.database import DB_TYPE, SessionLocal
+    from src.tasks.scheduler import get_scheduler
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        database_ok = True
+    finally:
+        db.close()
+
+    return {
+        "status": "ok" if database_ok else "degraded",
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0",
+        "app_env": os.getenv("APP_ENV", "development"),
+        "db_type": DB_TYPE,
+        "database_ok": database_ok,
+        "llm_configured": bool(config.LLM_API_KEY or config.VOLCENGINE_API_KEY),
+        "crawler_enabled": config.CRAWLER_ENABLED,
+        "startup_migrations_enabled": _startup_migrations_enabled(),
+        "scheduler_running": get_scheduler().running,
+    }
 
 
 @app.get("/favicon.ico")
@@ -452,6 +450,11 @@ async def serve_import_page():
 @app.post("/api/import-database")
 async def import_database(file: UploadFile = File(...), request: Request = None):
     """导入 SQLite 数据库到 PostgreSQL（使用 ORM 自动处理类型转换）"""
+    if os.getenv("ENABLE_DATABASE_IMPORT", "false").lower() != "true":
+        raise HTTPException(status_code=403, detail="数据库导入接口已禁用")
+    if request is None or request.headers.get("X-Danger-Confirm") != "import-production-database":
+        raise HTTPException(status_code=403, detail="缺少数据库导入确认头")
+
     try:
         import tempfile
         import json as json_module
