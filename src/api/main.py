@@ -268,34 +268,12 @@ def read_root():
 @app.get("/api/health")
 def health_check():
     from src.models.database import DB_TYPE, SessionLocal
-    db = None
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        from src.models.database import Blogger, Post, Prediction, Viewpoint, FundInfo, FundHistory
-        counts = {
-            "bloggers": db.query(Blogger).count(),
-            "posts": db.query(Post).count(),
-            "predictions": db.query(Prediction).filter(Prediction.is_deleted == False).count(),
-            "predictions_total": db.query(Prediction).count(),
-            "viewpoints": db.query(Viewpoint).filter(Viewpoint.is_deleted == False).count(),
-            "fund_info": db.query(FundInfo).count(),
-            "fund_history": db.query(FundHistory).count(),
-        }
-        try:
-            blogger_ids = [r[0] for r in db.query(Blogger.id).all()]
-            pred_blogger_ids = [r[0] for r in db.query(Prediction.blogger_id).filter(Prediction.is_deleted == False).distinct().all()]
-            orphan_preds = len([pid for pid in pred_blogger_ids if pid not in blogger_ids])
-            counts["blogger_id_range"] = f"{min(blogger_ids)}-{max(blogger_ids)}" if blogger_ids else "empty"
-            counts["pred_blogger_ids_sample"] = pred_blogger_ids[:5] if pred_blogger_ids else []
-            counts["orphan_predictions"] = orphan_preds
-        except Exception as e:
-            counts["id_check_error"] = str(e)[:100]
-    except Exception as e:
-        counts = {"error": str(e)}
+        db.execute(text("SELECT 1"))
     finally:
-        if db:
-            db.close()
-    return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0", "counts": counts}
+        db.close()
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
 
 
 @app.get("/favicon.ico")
@@ -307,16 +285,27 @@ async def favicon():
 @app.get("/api/market-sentiment")
 def get_market_sentiment():
     """获取市场情绪"""
+    from sqlalchemy import func
     from src.models.database import SessionLocal, Viewpoint
     from datetime import date, timedelta
     
     db = SessionLocal()
     try:
-        recent_viewpoints = db.query(Viewpoint).filter(
-            Viewpoint.viewpoint_date >= date.today() - timedelta(days=7)
-        ).all()
-        
-        if not recent_viewpoints:
+        start_date = date.today() - timedelta(days=7)
+        direction_rows = db.query(
+            Viewpoint.market_direction,
+            func.count(Viewpoint.id)
+        ).filter(
+            Viewpoint.viewpoint_date >= start_date
+        ).group_by(Viewpoint.market_direction).all()
+        direction_counts = {direction: count for direction, count in direction_rows}
+
+        bullish_count = direction_counts.get('bullish', 0)
+        bearish_count = direction_counts.get('bearish', 0)
+        neutral_count = direction_counts.get('neutral', 0)
+        total = sum(direction_counts.values())
+
+        if total == 0:
             return {
                 "success": True,
                 "data": {
@@ -329,12 +318,6 @@ def get_market_sentiment():
                     "analysis": "暂无近期观点数据"
                 }
             }
-        
-        bullish_count = sum(1 for v in recent_viewpoints if v.market_direction == 'bullish')
-        bearish_count = sum(1 for v in recent_viewpoints if v.market_direction == 'bearish')
-        neutral_count = sum(1 for v in recent_viewpoints if v.market_direction == 'neutral')
-        
-        total = len(recent_viewpoints)
         if bullish_count > bearish_count and bullish_count > neutral_count:
             overall = "bullish"
             confidence = int(bullish_count / total * 100)
@@ -346,10 +329,16 @@ def get_market_sentiment():
             confidence = int(neutral_count / total * 100) if neutral_count > 0 else 50
         
         sector_counts = {}
-        for v in recent_viewpoints:
-            for sector in (v.sectors_bullish or []):
+        sector_rows = db.query(
+            Viewpoint.sectors_bullish,
+            Viewpoint.sectors_bearish
+        ).filter(
+            Viewpoint.viewpoint_date >= start_date
+        ).all()
+        for sectors_bullish, sectors_bearish in sector_rows:
+            for sector in (sectors_bullish or []):
                 sector_counts[sector] = sector_counts.get(sector, 0) + 1
-            for sector in (v.sectors_bearish or []):
+            for sector in (sectors_bearish or []):
                 sector_counts[sector] = sector_counts.get(sector, 0) + 1
         
         hot_sectors = sorted(sector_counts.items(), key=lambda x: x[1], reverse=True)[:5]

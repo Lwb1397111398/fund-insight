@@ -15,7 +15,8 @@ _executor = ThreadPoolExecutor(max_workers=3)
 
 from src.api.deps import get_db
 from src.services.fund_service import FundService
-from src.models.database import FundInfo, FundHistory
+from src.services.fund_update_task import fund_update_task
+from src.models.database import FundInfo, FundHistory, SessionLocal
 
 router = APIRouter(prefix="/funds", tags=["基金"])
 
@@ -30,7 +31,7 @@ class FundAdd(BaseModel):
 @router.get("")
 async def get_funds(
     skip: int = 0,
-    limit: int = 1000,
+    limit: int = 100,
     sector_type: Optional[str] = None,
     group_by_sector: bool = True,
     db: Session = Depends(get_db)
@@ -67,6 +68,15 @@ async def add_fund(fund: FundAdd, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/update-status")
+def get_fund_update_status():
+    """获取基金更新任务状态"""
+    return {
+        "success": True,
+        "data": fund_update_task.status()
+    }
+
+
 @router.get("/{fund_code}")
 async def get_fund_detail(fund_code: str, db: Session = Depends(get_db)):
     """获取基金详情"""
@@ -98,18 +108,22 @@ async def delete_fund(fund_code: str, db: Session = Depends(get_db)):
 
 @router.post("/update-all")
 def update_all_funds(db: Session = Depends(get_db)):
-    """智能更新所有基金数据"""
-    service = FundService(db)
-    result = service.update_all_funds()
+    """启动基金数据后台更新"""
+    def runner():
+        worker_db = SessionLocal()
+        try:
+            return FundService(worker_db).update_all_funds()
+        finally:
+            worker_db.close()
 
-    return result
+    return fund_update_task.start(runner)
 
 
 @router.get("/by-sector/{sector_type}")
 async def get_funds_by_sector(
     sector_type: str,
     skip: int = 0,
-    limit: int = 1000,
+    limit: int = 100,
     db: Session = Depends(get_db)
 ):
     """根据板块获取基金列表"""
@@ -136,7 +150,7 @@ async def get_funds_by_sector(
 @router.get("/active/list")
 async def get_active_funds(
     skip: int = 0,
-    limit: int = 1000,
+    limit: int = 100,
     db: Session = Depends(get_db)
 ):
     """获取活跃基金（有活跃预测的基金）"""

@@ -134,6 +134,7 @@ class FundSyncManager:
         # 获取现有基金
         existing_funds = db.query(FundInfo).all()
         existing_sectors = {f.sector_type: f for f in existing_funds if f.sector_type}
+        existing_fund_codes = {f.fund_code: f for f in existing_funds if f.fund_code}
         
         for pred in predictions:
             result["checked"] += 1
@@ -168,7 +169,7 @@ class FundSyncManager:
             # 2. 检查预测是否有指定基金代码
             if pred.fund_code:
                 # 检查基金是否已存在
-                existing = db.query(FundInfo).filter(FundInfo.fund_code == pred.fund_code).first()
+                existing = existing_fund_codes.get(pred.fund_code)
                 if existing:
                     # 基金已存在，更新sector_type
                     if not existing.sector_type:
@@ -216,7 +217,8 @@ class FundSyncManager:
                         
                         # 更新查找表
                         existing_sectors[sector] = new_fund
-                        
+                        existing_fund_codes[new_fund.fund_code] = new_fund
+
                         result["added"] += 1
                         result["details"].append({
                             "prediction_id": pred.id,
@@ -250,6 +252,7 @@ class FundSyncManager:
                     
                     # 更新查找表
                     existing_sectors[sector] = fund
+                    existing_fund_codes[fund.fund_code] = fund
 
                     # 关联预测
                     pred.fund_code = fund.fund_code

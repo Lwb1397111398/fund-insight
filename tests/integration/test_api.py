@@ -74,3 +74,5 @@ class TestHealthCheck:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
+        assert "db_type" in data
+        assert "counts" not in data

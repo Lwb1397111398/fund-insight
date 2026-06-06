@@ -227,6 +227,35 @@ class FundService(BaseService[FundInfo]):
     
     # ==================== 为路由重构新增的方法 ====================
     
+    def _get_recent_history_map(self, fund_codes: List[str], per_fund: int = 5) -> Dict[str, List[FundHistory]]:
+        if not fund_codes:
+            return {}
+
+        ranked_history = self.db.query(
+            FundHistory.id.label("id"),
+            func.row_number().over(
+                partition_by=FundHistory.fund_code,
+                order_by=FundHistory.nav_date.desc()
+            ).label("row_number")
+        ).filter(
+            FundHistory.fund_code.in_(fund_codes)
+        ).subquery()
+
+        rows = self.db.query(FundHistory).join(
+            ranked_history,
+            FundHistory.id == ranked_history.c.id
+        ).filter(
+            ranked_history.c.row_number <= per_fund
+        ).order_by(
+            FundHistory.fund_code,
+            FundHistory.nav_date.desc()
+        ).all()
+
+        history_map = {}
+        for item in rows:
+            history_map.setdefault(item.fund_code, []).append(item)
+        return history_map
+
     def get_funds_with_grouping(
         self,
         skip: int = 0,
@@ -249,16 +278,7 @@ class FundService(BaseService[FundInfo]):
         
         fund_codes = [f.fund_code for f in funds]
         
-        all_history = self.db.query(FundHistory).filter(
-            FundHistory.fund_code.in_(fund_codes)
-        ).order_by(FundHistory.fund_code, FundHistory.nav_date.desc()).all()
-        
-        history_map = {}
-        for h in all_history:
-            if h.fund_code not in history_map:
-                history_map[h.fund_code] = []
-            if len(history_map[h.fund_code]) < 5:
-                history_map[h.fund_code].append(h)
+        history_map = self._get_recent_history_map(fund_codes, per_fund=5)
         
         if group_by_sector:
             sector_groups = {}

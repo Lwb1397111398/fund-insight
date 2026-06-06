@@ -17,51 +17,51 @@
 
         :root {
             /* 主色调 */
-            --color-primary: #2563eb;
-            --color-primary-hover: #1d4ed8;
-            --color-primary-active: #1e40af;
-            --color-primary-light: #eff6ff;
-            --color-primary-border: #93bbfd;
+            --color-primary: oklch(53% 0.16 255);
+            --color-primary-hover: oklch(48% 0.17 255);
+            --color-primary-active: oklch(42% 0.16 255);
+            --color-primary-light: oklch(96% 0.025 255);
+            --color-primary-border: oklch(82% 0.07 255);
 
             /* 语义色 */
-            --color-success: #16a34a;
-            --color-success-light: #f0fdf4;
-            --color-success-border: #86efac;
-            --color-warning: #d97706;
-            --color-warning-light: #fffbeb;
-            --color-warning-border: #fcd34d;
-            --color-danger: #dc2626;
-            --color-danger-light: #fef2f2;
-            --color-danger-border: #fca5a5;
-            --color-info: #0891b2;
-            --color-info-light: #ecfeff;
+            --color-success: oklch(57% 0.15 148);
+            --color-success-light: oklch(96% 0.035 148);
+            --color-success-border: oklch(83% 0.09 148);
+            --color-warning: oklch(63% 0.14 70);
+            --color-warning-light: oklch(97% 0.04 82);
+            --color-warning-border: oklch(84% 0.11 78);
+            --color-danger: oklch(56% 0.19 27);
+            --color-danger-light: oklch(96% 0.035 27);
+            --color-danger-border: oklch(82% 0.09 27);
+            --color-info: oklch(56% 0.12 220);
+            --color-info-light: oklch(96% 0.03 220);
 
             /* 涨跌色 */
-            --color-up: #16a34a;
-            --color-up-bg: #f0fdf4;
-            --color-down: #dc2626;
-            --color-down-bg: #fef2f2;
-            --color-flat: #d97706;
-            --color-flat-bg: #fffbeb;
+            --color-up: oklch(57% 0.15 148);
+            --color-up-bg: oklch(96% 0.035 148);
+            --color-down: oklch(56% 0.19 27);
+            --color-down-bg: oklch(96% 0.035 27);
+            --color-flat: oklch(63% 0.14 70);
+            --color-flat-bg: oklch(97% 0.04 82);
 
             /* 中性色 */
-            --color-bg: #f8fafc;
-            --color-bg-elevated: #ffffff;
-            --color-bg-muted: #f1f5f9;
-            --color-bg-overlay: rgba(0, 0, 0, 0.5);
+            --color-bg: oklch(97.5% 0.008 255);
+            --color-bg-elevated: oklch(99% 0.004 255);
+            --color-bg-muted: oklch(94% 0.012 255);
+            --color-bg-overlay: oklch(12% 0.02 255 / 0.52);
 
-            --color-text: #0f172a;
-            --color-text-secondary: #475569;
-            --color-text-tertiary: #94a3b8;
-            --color-text-inverse: #ffffff;
+            --color-text: oklch(22% 0.035 255);
+            --color-text-secondary: oklch(43% 0.04 255);
+            --color-text-tertiary: oklch(64% 0.035 255);
+            --color-text-inverse: oklch(98% 0.005 255);
 
-            --color-border: #e2e8f0;
-            --color-border-hover: #cbd5e1;
+            --color-border: oklch(89% 0.018 255);
+            --color-border-hover: oklch(80% 0.03 255);
 
             /* 阴影 */
-            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-sm: 0 1px 2px oklch(22% 0.035 255 / 0.06);
+            --shadow-md: 0 8px 18px -12px oklch(22% 0.035 255 / 0.22);
+            --shadow-lg: 0 18px 42px -28px oklch(22% 0.035 255 / 0.28);
 
             /* 圆角 */
             --radius-sm: 6px;
@@ -94,45 +94,45 @@
         }
 
         [data-theme="dark"] {
-            --color-primary: #3b82f6;
-            --color-primary-hover: #60a5fa;
-            --color-primary-active: #93bbfd;
-            --color-primary-light: #1e293b;
-            --color-primary-border: #1e40af;
+            --color-primary: oklch(68% 0.13 255);
+            --color-primary-hover: oklch(74% 0.12 255);
+            --color-primary-active: oklch(80% 0.1 255);
+            --color-primary-light: oklch(26% 0.04 255);
+            --color-primary-border: oklch(42% 0.08 255);
 
-            --color-success: #22c55e;
-            --color-success-light: #052e16;
-            --color-success-border: #166534;
-            --color-warning: #f59e0b;
-            --color-warning-light: #451a03;
-            --color-warning-border: #92400e;
-            --color-danger: #ef4444;
-            --color-danger-light: #450a0a;
-            --color-danger-border: #991b1b;
+            --color-success: oklch(70% 0.14 148);
+            --color-success-light: oklch(24% 0.055 148);
+            --color-success-border: oklch(42% 0.09 148);
+            --color-warning: oklch(76% 0.13 74);
+            --color-warning-light: oklch(26% 0.05 74);
+            --color-warning-border: oklch(46% 0.09 74);
+            --color-danger: oklch(68% 0.17 27);
+            --color-danger-light: oklch(25% 0.055 27);
+            --color-danger-border: oklch(43% 0.09 27);
 
-            --color-up: #22c55e;
-            --color-up-bg: #052e16;
-            --color-down: #ef4444;
-            --color-down-bg: #450a0a;
-            --color-flat: #f59e0b;
-            --color-flat-bg: #451a03;
+            --color-up: oklch(70% 0.14 148);
+            --color-up-bg: oklch(24% 0.055 148);
+            --color-down: oklch(68% 0.17 27);
+            --color-down-bg: oklch(25% 0.055 27);
+            --color-flat: oklch(76% 0.13 74);
+            --color-flat-bg: oklch(26% 0.05 74);
 
-            --color-bg: #0f172a;
-            --color-bg-elevated: #1e293b;
-            --color-bg-muted: #1e293b;
-            --color-bg-overlay: rgba(0, 0, 0, 0.7);
+            --color-bg: oklch(18% 0.03 255);
+            --color-bg-elevated: oklch(23% 0.035 255);
+            --color-bg-muted: oklch(28% 0.035 255);
+            --color-bg-overlay: oklch(10% 0.02 255 / 0.72);
 
-            --color-text: #f1f5f9;
-            --color-text-secondary: #94a3b8;
-            --color-text-tertiary: #64748b;
-            --color-text-inverse: #0f172a;
+            --color-text: oklch(93% 0.012 255);
+            --color-text-secondary: oklch(73% 0.025 255);
+            --color-text-tertiary: oklch(55% 0.025 255);
+            --color-text-inverse: oklch(18% 0.03 255);
 
-            --color-border: #334155;
-            --color-border-hover: #475569;
+            --color-border: oklch(34% 0.035 255);
+            --color-border-hover: oklch(44% 0.04 255);
 
-            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+            --shadow-sm: 0 1px 2px oklch(8% 0.02 255 / 0.45);
+            --shadow-md: 0 10px 24px -16px oklch(8% 0.02 255 / 0.7);
+            --shadow-lg: 0 22px 48px -28px oklch(8% 0.02 255 / 0.78);
         }
 
         body {
@@ -144,44 +144,65 @@
         }
 
         .header {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: white;
+            background: var(--color-bg-elevated);
+            color: var(--color-text);
             padding: var(--space-4) var(--space-6);
-            box-shadow: var(--shadow-md);
+            border-bottom: 1px solid var(--color-border);
+            box-shadow: var(--shadow-sm);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 20;
         }
 
         .header h1 {
-            font-size: 22px;
-            font-weight: 600;
+            font-size: 20px;
+            font-weight: 650;
+            letter-spacing: -0.02em;
             display: flex;
             align-items: center;
             gap: var(--space-2);
         }
 
+        .header h1 i {
+            color: var(--color-primary);
+        }
+
         .header-actions {
             display: flex;
-            gap: 10px;
+            gap: var(--space-2);
         }
 
         .header-btn {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            color: white;
-            padding: 8px 16px;
+            background: var(--color-bg-muted);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-secondary);
+            padding: 8px 14px;
             border-radius: var(--radius-md);
             cursor: pointer;
             font-size: 13px;
-            transition: all var(--transition-fast);
+            font-weight: 500;
+            transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
             display: inline-flex;
             align-items: center;
             gap: var(--space-2);
         }
 
         .header-btn:hover {
-            background: rgba(255, 255, 255, 0.2);
+            background: var(--color-primary-light);
+            border-color: var(--color-primary-border);
+            color: var(--color-primary);
+        }
+
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible,
+        textarea:focus-visible {
+            outline: 2px solid var(--color-primary-border);
+            outline-offset: 2px;
+            box-shadow: 0 0 0 4px var(--color-primary-light);
         }
 
         .container {
@@ -205,17 +226,19 @@
             text-align: center;
             box-shadow: var(--shadow-sm);
             cursor: pointer;
-            transition: all var(--transition-fast);
+            transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
         }
 
         .stat-mini:hover {
-            transform: translateY(-2px);
+            border-color: var(--color-primary-border);
+            background: var(--color-primary-light);
             box-shadow: var(--shadow-md);
         }
 
         .stat-mini .value {
             font-size: 24px;
-            font-weight: 700;
+            font-weight: 750;
+            letter-spacing: -0.03em;
             color: var(--color-primary);
         }
 
@@ -241,12 +264,12 @@
             flex: 1;
             min-width: 120px;
             padding: var(--space-3) var(--space-4);
-            border: none;
+            border: 1px solid transparent;
             border-radius: var(--radius-lg);
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             cursor: pointer;
-            transition: all var(--transition-fast);
+            transition: filter var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -254,7 +277,7 @@
         }
 
         .action-btn:hover {
-            transform: translateY(-2px);
+            filter: brightness(0.98);
             box-shadow: var(--shadow-md);
         }
 
@@ -737,10 +760,10 @@
 
         .advice-box {
             background: var(--color-warning-light);
+            border: 1px solid var(--color-warning-border);
             border-radius: var(--radius-lg);
             padding: var(--space-5);
             margin-top: var(--space-4);
-            border-left: 4px solid var(--color-warning);
         }
 
         .advice-box h3 {
@@ -1215,8 +1238,8 @@
         }
 
         .advice-action-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            filter: brightness(0.98);
+            box-shadow: var(--shadow-md);
         }
 
         .advice-empty {
@@ -1767,7 +1790,7 @@
         .prediction-card,
         .viewpoint-card,
         .fund-card {
-            transition: all var(--transition-normal);
+            transition: border-color var(--transition-normal), box-shadow var(--transition-normal), background-color var(--transition-normal);
         }
 
         .blogger-card:hover,
@@ -1775,14 +1798,8 @@
         .prediction-card:hover,
         .viewpoint-card:hover,
         .fund-card:hover {
-            transform: translateY(-2px);
+            border-color: var(--color-border-hover);
             box-shadow: var(--shadow-md);
-        }
-
-        /* 按钮点击效果 */
-        .action-btn:active,
-        .row-btn:active {
-            transform: translateY(0);
         }
 
         /* 统计卡片渐变背景 */
@@ -2006,7 +2023,7 @@
                 <button class="header-btn" @click="toggleTheme" :title="theme === 'light' ? '切换到深色模式' : '切换到浅色模式'">
                     <i :class="theme === 'light' ? 'ri-moon-line' : 'ri-sun-line'"></i>
                 </button>
-                <button class="header-btn" @click="showConfig = true; configTab = 'llm'"><i class="ri-settings-3-line"></i> 配置</button>
+                <button class="header-btn" @click="openConfig"><i class="ri-settings-3-line"></i> 配置</button>
             </div>
         </div>
         <div class="container">
@@ -2966,7 +2983,7 @@
                                     </div>
                                 </div>
                                 <div
-                                    style="background: #fafafa; padding: 8px; border-radius: 4px; border-left: 3px solid #1890ff;">
+                                    style="background: var(--color-info-light); border: 1px solid var(--color-primary-border); padding: 8px; border-radius: 4px;">
                                     <strong>验证结论：</strong>{{ predictionDetail.verify_history[0].analysis || '-' }}
                                 </div>
                             </div>
@@ -3529,7 +3546,7 @@
                             await axios.get('/api/stats');
                             authReady.value = true;
                             // 密码有效，加载数据
-                            fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats();
+                            fetchStats(); fetchBloggers();
                             return;
                         } catch (e) {
                             // 密码失效，清除并弹出输入框
@@ -3551,7 +3568,7 @@
                             showPasswordModal.value = false; passwordInput.value = '';
                             authReady.value = true;
                             // 密码验证成功，加载数据
-                            fetchStats(); fetchBloggers(); loadAdviceHistory(); loadConfig(); loadTestData(); fetchSummaryStats();
+                            fetchStats(); fetchBloggers();
                         } else {
                             const errMsg = res.data?.error || '未知错误';
                             passwordError.value = '服务器内部错误: ' + errMsg;
@@ -3690,7 +3707,7 @@ const fetchWeChatBatch = async () => {
                 const fetchViewpoints = async () => { const res = await axios.get('/api/viewpoints'); if (res.data.success) viewpoints.value = res.data.data; };
                 const fetchFunds = async () => { const res = await axios.get('/api/funds?group_by_sector=false'); if (res.data.success) funds.value = res.data.data.sort((a, b) => (b.day_growth || 0) - (a.day_growth || 0)); };
                 const fetchCleanupPreview = async () => { try { const res = await axios.get('/api/config/cleanup/preview'); if (res.data.success) cleanupPreview.value = res.data.data; } catch (e) { console.error(e); } };
-                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await fetchViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } };
+                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await fetchViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } else if (view === 'advice') { await loadAdviceHistory(); } };
                 const addBlogger = async () => { try { await axios.post('/api/bloggers', newBlogger); showAddBlogger.value = false; newBlogger.name = ''; await fetchBloggers(); await fetchStats(); } catch (e) { alert('添加失败'); } };
                 const addPost = async () => { 
                     try { 
@@ -3832,25 +3849,46 @@ const fetchWeChatBatch = async () => {
                 const fetchSummaryStats = async () => { try { const res = await axios.get('/api/viewpoints/summary/stats'); if (res.data.success) summaryStats.value = res.data.data; } catch (e) { console.error('获取汇总统计失败:', e); } };
                 const showSummaryModal = async () => { await fetchSummaryStats(); if (!summaryStats.value || summaryStats.value.total_pending_viewpoints === 0) { alert('没有待汇总的观点'); return; } showSummaryConfirmModal.value = true; };
                 const executeSummary = async () => { summarizing.value = true; showSummaryConfirmModal.value = false; try { const res = await axios.post('/api/viewpoints/summary/execute', {}); alert(res.data.message); await fetchViewpoints(); await fetchStats(); await fetchSummaryStats(); } catch (e) { alert('汇总失败: ' + (e.response?.data?.message || e.message)); } summarizing.value = false; };
+                const pollFundUpdateStatus = async () => {
+                    const timer = setInterval(async () => {
+                        try {
+                            const res = await axios.get('/api/funds/update-status');
+                            const status = res.data.data;
+                            if (!status.in_progress) {
+                                clearInterval(timer);
+                                analyzing.value = false;
+                                if (status.last_result === null) {
+                                    alert('更新状态已丢失，请重新触发更新');
+                                } else if (status.last_result?.success === false) {
+                                    alert(status.last_result.message || '更新失败');
+                                } else {
+                                    alert(status.last_result?.message || '更新完成');
+                                    await fetchFunds();
+                                }
+                            }
+                        } catch (e) {
+                            clearInterval(timer);
+                            analyzing.value = false;
+                            alert('获取更新状态失败: ' + (e.response?.data?.message || e.message));
+                        }
+                    }, 3000);
+                };
                 const updateAllFunds = async () => {
-    analyzing.value = true;
-    try {
-        const res = await axios.post('/api/funds/update-all', {}, { timeout: 300000 });
-        if (res.data.success) {
-            alert(res.data.message || '更新完成');
-            await fetchFunds();
-        } else {
-            alert(res.data.message || '更新失败');
-        }
-    } catch (e) {
-        if (e.code === 'ECONNABORTED') {
-            alert('更新超时，请稍后再试');
-        } else {
-            alert('更新失败: ' + (e.response?.data?.message || e.message));
-        }
-    }
-    analyzing.value = false;
-};
+                    analyzing.value = true;
+                    try {
+                        const res = await axios.post('/api/funds/update-all');
+                        if (res.data.success) {
+                            alert(res.data.message || '更新任务已启动');
+                            await pollFundUpdateStatus();
+                        } else {
+                            analyzing.value = false;
+                            alert(res.data.message || '更新失败');
+                        }
+                    } catch (e) {
+                        analyzing.value = false;
+                        alert('更新失败: ' + (e.response?.data?.message || e.message));
+                    }
+                };
                 const crawlEastmoneyBlog = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📰 东方财富博客（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-blog/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
                 const crawlEastmoneyGuide = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '📖 东方财富指南（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/eastmoney-guide/auto-adopt', { max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
                 const crawlSinaFinance = async () => { showCrawlerResult.value = true; crawlerLoading.value = true; crawlerResult.title = '🌐 新浪财经（自动采纳）'; crawlerResult.articles = []; crawlerResult.error = ''; try { const res = await axios.post('/api/crawler/sina-finance/auto-adopt', { category: 'finance', max_articles: 15 }); if (res.data.success) { crawlerResult.articles = res.data.data.articles || []; await fetchViewpoints(); await fetchStats(); } else { crawlerResult.error = res.data.message || '抓取失败'; } } catch (e) { crawlerResult.error = '抓取失败: ' + (e.response?.data?.message || e.message); } crawlerLoading.value = false; };
@@ -3873,6 +3911,7 @@ const fetchWeChatBatch = async () => {
                 };
                 const loadAdviceHistory = async () => { try { const res = await axios.get('/api/advice/history'); if (res.data.success) { adviceHistory.value = res.data.data; console.log('历史记录已更新:', adviceHistory.value.length); } } catch (e) { console.error('加载历史失败:', e); } };
                 const loadConfig = async () => { try { const res = await axios.get('/api/config'); if (res.data.success) configData.value = res.data.data; } catch (e) { console.error(e); } };
+                const openConfig = async () => { showConfig.value = true; configTab.value = 'llm'; await loadConfig(); await loadTestData(); };
                 const updateConfig = async () => { try { const res = await axios.post('/api/config', configData.value); alert(res.data.message); showConfig.value = false; } catch (e) { alert('保存失败'); } };
                 const cleanupData = async () => { if (!confirm('确定要清理过期数据吗？')) return; analyzing.value = true; try { const res = await axios.post('/api/config/cleanup'); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
                 const cleanupOldestBatch = async (days) => { if (!confirm(`确定要清理最老的 ${days} 天过期数据吗？\n\n这只清理过期最久的数据，不影响近期过期数据，对博主统计影响最小。`)) return; analyzing.value = true; try { const res = await axios.post(`/api/config/cleanup/oldest?days=${days}&limit=100`); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('温和清理失败：' + res.data.message); } } catch (e) { alert('温和清理失败: ' + e.message); } analyzing.value = false; };
@@ -3914,7 +3953,7 @@ const fetchWeChatBatch = async () => {
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
             }
         }).mount('#app');
     </script>
