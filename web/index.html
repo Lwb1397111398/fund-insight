@@ -260,6 +260,17 @@
             flex-wrap: wrap;
         }
 
+        .cleanup-actions {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: var(--space-2);
+            margin-bottom: var(--space-4);
+        }
+
+        .cleanup-actions .action-btn {
+            width: 100%;
+        }
+
         .action-btn {
             flex: 1;
             min-width: 120px;
@@ -1543,6 +1554,14 @@
                 min-width: 100%;
             }
 
+            .cleanup-actions {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .cleanup-actions .action-btn {
+                min-width: 0;
+            }
+
             .detail-grid {
                 grid-template-columns: 1fr;
             }
@@ -2065,7 +2084,6 @@
                     <button class="action-btn primary" @click="loadView('viewpoints')"><i class="ri-lightbulb-line"></i> 管理观点</button>
                     <button class="action-btn success" @click="loadView('advice')"><i class="ri-line-chart-line"></i> 投资建议</button>
                     <button class="action-btn danger" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理' }}</button>
-                    <button class="action-btn danger" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                 </div>
                 <!-- 博主视图 -->
                 <div v-if="currentView === 'bloggers'">
@@ -2330,10 +2348,11 @@
                 <!-- 待清理视图 -->
                 <div v-if="currentView === 'cleanup'">
                     <div class="section-title">待清理数据</div>
-                    <div class="sub-actions">
+                    <div class="cleanup-actions">
                         <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理过期数据' }}</button>
                         <button class="action-btn small" @click="cleanupOldestBatch(7)" :disabled="analyzing" style="background: #fa8c16; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（7天前）' }}</button>
                         <button class="action-btn small" @click="cleanupOldestBatch(14)" :disabled="analyzing" style="background: #722ed1; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（14天前）' }}</button>
+                        <button class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                     </div>
                     <div style="margin-bottom: 15px; padding: 10px 15px; background: #f6ffed; border-radius: 6px; border: 1px solid #b7eb8f; font-size: 13px; color: #389e0d;">
                         <i class="ri-information-line"></i> 温和清理只清理过期最久的数据（每批最多100条），对博主统计影响最小。适合日常维护使用。
