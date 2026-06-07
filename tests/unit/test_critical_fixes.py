@@ -43,3 +43,39 @@ class TestEscapeHtml:
         with open("web/common.js", "r", encoding="utf-8") as f:
             content = f.read()
         assert "escapeHtml" in content
+
+
+class TestFundMappingSessionReuse:
+    """测试基金映射自动学习的数据库会话复用"""
+
+    def test_fundinfo_match_saves_mapping_without_opening_nested_session(self, test_db, monkeypatch):
+        from src.analyzer.llm_analyzer import LLMAnalyzer
+        from src.models import database
+        from src.models.database import FundInfo, SectorFundMapping
+
+        test_db.add(FundInfo(
+            fund_code="159732",
+            fund_name="消费电子ETF",
+            fund_type="ETF",
+            sector_type="消费电子",
+            can_delete=True,
+        ))
+        test_db.commit()
+
+        session_calls = 0
+
+        def session_factory():
+            nonlocal session_calls
+            session_calls += 1
+            return test_db
+
+        monkeypatch.setattr(database, "SessionLocal", session_factory)
+
+        analyzer = LLMAnalyzer.__new__(LLMAnalyzer)
+        result = analyzer._find_fund_in_fundinfo("消费电子")
+
+        assert result == {"code": "159732", "name": "消费电子ETF"}
+        assert session_calls == 1
+        assert test_db.query(SectorFundMapping).filter(
+            SectorFundMapping.sector_name == "消费电子"
+        ).first() is not None

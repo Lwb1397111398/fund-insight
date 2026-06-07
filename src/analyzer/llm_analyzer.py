@@ -1167,7 +1167,7 @@ class LLMAnalyzer:
                 ).first()
                 if fund:
                     result = {'code': fund.fund_code, 'name': fund.fund_name}
-                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False)
+                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False, db=db)
                     return result
 
                 # 模糊匹配
@@ -1176,7 +1176,7 @@ class LLMAnalyzer:
                 ).first()
                 if fund:
                     result = {'code': fund.fund_code, 'name': fund.fund_name}
-                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False)
+                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False, db=db)
                     return result
 
                 # 反向匹配（sector 包含 sector_type）
@@ -1186,7 +1186,7 @@ class LLMAnalyzer:
                 for f in funds:
                     if f.sector_type and (f.sector_type in sector or sector in f.sector_type):
                         result = {'code': f.fund_code, 'name': f.fund_name}
-                        self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False)
+                        self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False, db=db)
                         return result
             finally:
                 db.close()
@@ -1208,11 +1208,13 @@ class LLMAnalyzer:
             logger.warning(f"[基金匹配] API搜索失败: {e}")
         return None
 
-    def _save_fund_mapping(self, sector: str, fund_code: str, fund_name: str, reviewed: bool = False):
+    def _save_fund_mapping(self, sector: str, fund_code: str, fund_name: str, reviewed: bool = False, db=None):
         """自动保存映射到数据库（reviewed=False 表示待审查）"""
         try:
             from src.models.database import SessionLocal, SectorFundMapping
-            db = SessionLocal()
+            close_db = db is None
+            if db is None:
+                db = SessionLocal()
             try:
                 mapping = SectorFundMapping(
                     sector_name=sector,
@@ -1227,7 +1229,8 @@ class LLMAnalyzer:
                 db.rollback()
                 raise
             finally:
-                db.close()
+                if close_db:
+                    db.close()
         except Exception as e:
             logger.warning(f"[基金匹配] 保存映射失败: {e}")
     
