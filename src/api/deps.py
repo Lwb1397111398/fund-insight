@@ -19,7 +19,7 @@ from src.services import (
 def get_db() -> Generator[Session, None, None]:
     """
     获取数据库会话
-    
+
     Yields:
         数据库会话
     """

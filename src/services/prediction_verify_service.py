@@ -33,17 +33,17 @@ class PredictionVerifyService:
     def get_verify_config(self, period_days: int) -> Dict:
         """
         根据预测周期获取验证配置
-        
+
         Args:
             period_days: 预测周期天数
-            
+
         Returns:
             验证配置字典
         """
         flat_short = config.VERIFY_FLAT_THRESHOLD_SHORT
         flat_medium = config.VERIFY_FLAT_THRESHOLD_MEDIUM
         flat_long = config.VERIFY_FLAT_THRESHOLD_LONG
-        
+
         if period_days <= 1:
             return {
                 'window_days_before': 0,
@@ -55,7 +55,7 @@ class PredictionVerifyService:
         elif period_days <= 3:
             return {
                 'window_days_before': 1,
-                'window_days_after': 1,
+                'window_days_after': period_days,
                 'nav_start_days': 1,
                 'flat_threshold': flat_short * 1.6,
                 'is_ultra_short': True
@@ -63,7 +63,7 @@ class PredictionVerifyService:
         elif period_days <= 14:
             return {
                 'window_days_before': 3,
-                'window_days_after': 3,
+                'window_days_after': period_days,
                 'nav_start_days': 2,
                 'flat_threshold': flat_medium,
                 'is_ultra_short': False
@@ -71,7 +71,7 @@ class PredictionVerifyService:
         elif period_days <= 30:
             return {
                 'window_days_before': 4,
-                'window_days_after': 4,
+                'window_days_after': period_days,
                 'nav_start_days': 3,
                 'flat_threshold': flat_medium * 1.5,
                 'is_ultra_short': False
@@ -79,7 +79,7 @@ class PredictionVerifyService:
         elif period_days <= 90:
             return {
                 'window_days_before': 5,
-                'window_days_after': 5,
+                'window_days_after': period_days,
                 'nav_start_days': 4,
                 'flat_threshold': flat_long,
                 'is_ultra_short': False
@@ -87,7 +87,7 @@ class PredictionVerifyService:
         else:
             return {
                 'window_days_before': 6,
-                'window_days_after': 6,
+                'window_days_after': period_days,
                 'nav_start_days': 5,
                 'flat_threshold': flat_long * 1.5,
                 'is_ultra_short': False
@@ -510,11 +510,9 @@ class PredictionVerifyService:
                     }
         
         window_start = target_date - timedelta(days=config['window_days_before'])
-        
-        if target_date and today > target_date:
-            window_end = today
-        else:
-            window_end = min(target_date + timedelta(days=config['window_days_after']), today)
+
+        # 验证窗口结束时间：限制在预测周期内，不超过今天
+        window_end = min(target_date + timedelta(days=period_days), today)
         
         nav_start_days = max(config['nav_start_days'], 5)
         
