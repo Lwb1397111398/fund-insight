@@ -2,7 +2,12 @@ services:
   - type: web
     name: fund-insight
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+      export CARGO_HOME=/tmp/cargo
+      export RUSTUP_HOME=/tmp/rustup
+      pip install -r requirements.txt
     startCommand: uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
@@ -44,7 +49,12 @@ services:
     name: fund-insight-scheduler
     runtime: python
     schedule: "30 10 * * *"
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+      export CARGO_HOME=/tmp/cargo
+      export RUSTUP_HOME=/tmp/rustup
+      pip install -r requirements.txt
     startCommand: python scripts/run_scheduled_tasks.py daily
     envVars:
       - key: PYTHON_VERSION
