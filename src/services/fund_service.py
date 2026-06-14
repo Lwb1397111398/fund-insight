@@ -13,6 +13,8 @@ from .base import BaseService
 from src.models.database import FundInfo, FundHistory, Prediction
 
 # 基金更新锁，防止重复执行
+# ⚠️ 注意：这是单进程保护机制，多进程部署时无效
+# 多进程场景需要使用数据库级别的锁（如 PostgreSQL 的 advisory lock）或分布式锁（如 Redis）
 _update_lock = threading.Lock()
 _is_updating = False
 
@@ -132,40 +134,60 @@ class FundService(BaseService[FundInfo]):
     
     def increment_predictions(self, fund_code: str) -> Optional[FundInfo]:
         """
-        增加活跃预测数
-        
+        增加活跃预测数（使用数据库级别原子操作，避免竞态条件）
+
         Args:
             fund_code: 基金代码
-            
+
         Returns:
             更新后的基金实例
         """
-        fund = self.get_by_code(fund_code)
-        if fund:
-            fund.active_predictions = (fund.active_predictions or 0) + 1
-            fund.can_delete = False
-            self.db.commit()
-            self.db.refresh(fund)
-        return fund
-    
+        from sqlalchemy import update as sql_update
+
+        # 使用原子操作 UPDATE ... SET active_predictions = active_predictions + 1
+        stmt = sql_update(FundInfo).where(
+            FundInfo.fund_code == fund_code
+        ).values(
+            active_predictions=FundInfo.active_predictions + 1,
+            can_delete=False
+        )
+        result = self.db.execute(stmt)
+        self.db.commit()
+
+        if result.rowcount > 0:
+            return self.get_by_code(fund_code)
+        return None
+
     def decrement_predictions(self, fund_code: str) -> Optional[FundInfo]:
         """
-        减少活跃预测数
-        
+        减少活跃预测数（使用数据库级别原子操作，避免竞态条件）
+
         Args:
             fund_code: 基金代码
-            
+
         Returns:
             更新后的基金实例
         """
-        fund = self.get_by_code(fund_code)
-        if fund and fund.active_predictions > 0:
-            fund.active_predictions -= 1
-            if fund.active_predictions == 0:
-                fund.can_delete = True
-            self.db.commit()
-            self.db.refresh(fund)
-        return fund
+        from sqlalchemy import update as sql_update, case
+
+        # 使用原子操作 UPDATE ... SET active_predictions = active_predictions - 1
+        # 同时处理 can_delete 逻辑：当 active_predictions 减到 0 时设为 True
+        stmt = sql_update(FundInfo).where(
+            FundInfo.fund_code == fund_code,
+            FundInfo.active_predictions > 0
+        ).values(
+            active_predictions=FundInfo.active_predictions - 1,
+            can_delete=case(
+                (FundInfo.active_predictions - 1 == 0, True),
+                else_=FundInfo.can_delete
+            )
+        )
+        result = self.db.execute(stmt)
+        self.db.commit()
+
+        if result.rowcount > 0:
+            return self.get_by_code(fund_code)
+        return None
     
     def search(self, keyword: str, limit: int = 20) -> List[FundInfo]:
         """

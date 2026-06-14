@@ -23,7 +23,7 @@ class PostCreate(BaseModel):
     async_mode: bool = True
 
 
-_batch_analyzing = False
+_batch_analyzing = False  # 注意：全局变量在多进程部署时无效（每个进程有独立内存），生产环境应使用 Redis 等共享状态
 
 
 def _batch_analyze_background():
@@ -40,8 +40,10 @@ def _batch_analyze_background():
             db.close()
     except Exception as e:
         print(f"[Batch Analyze] 后台批量分析失败: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        _batch_analyzing = False
+        _batch_analyzing = False  # 注意：全局变量在多进程部署时无效（每个进程有独立内存），生产环境应使用 Redis 等共享状态
 
 
 @router.get("")
@@ -146,9 +148,10 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
     except Exception:
         pass
 
-    predictions = db.query(Prediction).filter(
+    # 使用分页查询避免一次性加载大量数据到内存
+    predictions_query = db.query(Prediction).filter(
         Prediction.is_deleted == False
-    ).all()
+    ).yield_per(100)
 
     service = get_sector_fund_service(db)
 
@@ -224,7 +227,7 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
     mismatch_details = []
     no_match_details = []
 
-    for pred in predictions:
+    for pred in predictions_query:
         sector = pred.sector or ''
         current_fund_code = pred.fund_code or ''
 

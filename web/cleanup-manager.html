@@ -197,14 +197,14 @@
                     await loadStatus();
                 } else {
                     resultBox.className = 'result-box error';
-                    resultBox.innerHTML = `<h3><i class="ri-error-warning-line"></i> 清理失败</h3><p>${res.data.message}</p>`;
+                    resultBox.innerHTML = `<h3><i class="ri-error-warning-line"></i> 清理失败</h3><p>${escapeHtml(res.data.message)}</p>`;
                     resultBox.style.display = 'block';
                     showMessage('清理失败: ' + res.data.message, 'error');
                 }
             } catch (e) {
                 console.error('清理失败:', e);
                 resultBox.className = 'result-box error';
-                resultBox.innerHTML = `<h3><i class="ri-error-warning-line"></i> 清理失败</h3><p>${e.response?.data?.message || e.message}</p>`;
+                resultBox.innerHTML = `<h3><i class="ri-error-warning-line"></i> 清理失败</h3><p>${escapeHtml(e.response?.data?.message || e.message)}</p>`;
                 resultBox.style.display = 'block';
                 showMessage('清理失败: ' + (e.response?.data?.message || e.message), 'error');
             } finally {

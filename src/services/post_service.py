@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 import re
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +314,7 @@ class PostService(BaseService[Post]):
         
         if async_mode:
             return {
+                "success": True,
                 "id": db_post.id,
                 "title": db_post.title,
                 "auto_titled": auto_titled,
@@ -320,11 +322,13 @@ class PostService(BaseService[Post]):
                 "predictions_created": 0,
                 "message": "帖子已添加，请手动点击分析"
             }
-        
+
         analysis_result = None
         predictions_created = 0
-        
+
         try:
+            # 将整个操作包裹在单个事务中，确保数据一致性
+            # 如果 LLM 分析成功但创建预测失败，会回滚所有更改
             result = llm_analyzer.analyze_post(
                 title=title or "",
                 content=content,
@@ -337,8 +341,12 @@ class PostService(BaseService[Post]):
                 self.db.commit()
                 return {
                     "success": False,
-                    "message": "分析失败：LLM未能提取有效预测（可能内容过短或无关）",
-                    "predictions_created": 0
+                    "id": db_post.id,
+                    "title": db_post.title,
+                    "auto_titled": auto_titled,
+                    "analyzed": False,
+                    "predictions_created": 0,
+                    "message": "分析失败：LLM未能提取有效预测（可能内容过短或无关）"
                 }
 
             db_post.analyzed = True
@@ -401,30 +409,34 @@ class PostService(BaseService[Post]):
                 )
                 self.db.add(prediction)
                 predictions_created += 1
-            
+
             self.db.commit()
-            
+
         except Exception as e:
             print(f"[PostService] 分析帖子失败: {e}")
             import traceback
             traceback.print_exc()
-            # 帖子已在前面 commit，此处不需要 rollback 或重新创建
-            # 仅需将 analysis_result 标记为失败状态
+            # 回滚事务，保持数据一致性
+            self.db.rollback()
+            # 重新刷新帖子状态
+            self.db.refresh(db_post)
+            # 将 analysis_result 标记为失败状态
             try:
-                db_post.analysis_result = json.dumps({"predictions": [], "summary": f"分析失败: {str(e)[:100]}"})
                 db_post.analyzed = False
+                db_post.analysis_result = json.dumps({"predictions": [], "summary": f"分析失败: {str(e)[:100]}"})
                 self.db.commit()
-                self.db.refresh(db_post)
             except Exception:
                 pass
             print(f"[PostService] 帖子已保存（分析失败）: ID={db_post.id}")
 
         return {
+            "success": True,
             "id": db_post.id,
             "title": db_post.title,
             "auto_titled": auto_titled,
             "analyzed": db_post.analyzed,
-            "predictions_created": predictions_created
+            "predictions_created": predictions_created,
+            "message": f"分析完成，创建 {predictions_created} 个预测" if predictions_created > 0 else "分析完成，但未创建预测"
         }
 
     def _validate_sector_fund_consistency(

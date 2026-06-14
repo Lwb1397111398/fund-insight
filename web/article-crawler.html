@@ -407,7 +407,7 @@
                     listDiv.innerHTML = `
                         <div class="empty-state">
                             <i class="ri-error-warning-line" style="color: #dc3545;"></i>
-                            <p>抓取失败: ${res.data.message}</p>
+                            <p>抓取失败: ${escapeHtml(res.data.message)}</p>
                         </div>
                     `;
                 }
@@ -417,7 +417,7 @@
                 listDiv.innerHTML = `
                     <div class="empty-state">
                         <i class="ri-error-warning-line" style="color: #dc3545;"></i>
-                        <p>抓取失败: ${e.message}</p>
+                        <p>抓取失败: ${escapeHtml(e.message)}</p>
                     </div>
                 `;
             }
@@ -499,7 +499,7 @@
                         article.source === 'eastmoney_guide' ? '博客导读' : '东财博客';
                 const showStats = article.source !== 'sina_finance' && article.source !== 'eastmoney_guide' && article.source !== 'sina_blog';
 
-                const contentText = article.content || '无内容';
+                const contentText = escapeHtml(article.content) || '无内容';
                 const needExpand = contentText.length > 200;
 
                 return `
@@ -508,7 +508,7 @@
                             <div class="card-meta">
                                 ${article.is_vip ? '<span class="tag tag-vip"><i class="ri-vip-crown-line"></i> VIP</span>' : ''}
                                 <span class="tag ${tagClass}">${tagName}</span>
-                                <span class="author"><i class="ri-user-line"></i> ${article.author || '未知'}</span>
+                                <span class="author"><i class="ri-user-line"></i> ${escapeHtml(article.author) || '未知'}</span>
                                 <span class="date"><i class="ri-calendar-line"></i> ${article.publish_time || '未知'}</span>
                                 ${showStats ? `
                                     <span><i class="ri-eye-line"></i> ${article.read_count || 0}</span>
@@ -516,10 +516,10 @@
                                 ` : ''}
                             </div>
                         </div>
-                        <div class="card-title">${article.title}</div>
+                        <div class="card-title">${escapeHtml(article.title)}</div>
                         <div class="content-wrapper">
                             <div class="content-text ${needExpand ? 'collapsed' : ''}" id="content-${index}">
-                                ${contentText}
+                                ${escapeHtml(contentText)}
                             </div>
                             ${needExpand ? `
                                 <span class="expand-btn" onclick="toggleContent(${index})">

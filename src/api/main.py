@@ -89,6 +89,9 @@ def _run_startup_migrations() -> None:
         from sqlalchemy import text
         import sqlite3
 
+        # 允许创建索引的表名白名单（防止 SQL 注入）
+        ALLOWED_INDEX_TABLES = {"posts", "predictions", "viewpoints", "bloggers"}
+
         indexes = [
             ("ix_posts_blogger_id", "posts", ["blogger_id"]),
             ("ix_posts_post_date", "posts", ["post_date"]),
@@ -106,6 +109,18 @@ def _run_startup_migrations() -> None:
             ("ix_bloggers_platform", "bloggers", ["platform"]),
             ("ix_bloggers_is_active", "bloggers", ["is_active"]),
         ]
+
+        # 验证所有表名都在白名单中（防御性编程）
+        for idx_name, table, columns in indexes:
+            if table not in ALLOWED_INDEX_TABLES:
+                logger.warning(f"[Startup] 跳过未授权的表 {table} 的索引创建")
+                indexes.remove((idx_name, table, columns))
+
+        # 验证所有表名都在白名单中（防御性编程）
+        for idx_name, table, columns in indexes:
+            if table not in ALLOWED_INDEX_TABLES:
+                logger.warning(f"[Startup] 跳过未授权的表 {table} 的索引创建")
+                indexes.remove((idx_name, table, columns))
 
         db_url = str(engine.url)
         if db_url.startswith("sqlite"):
@@ -447,12 +462,24 @@ async def serve_import_page():
 
 
 @app.post("/api/import-database")
-async def import_database(file: UploadFile = File(...), request: Request = None):
+def import_database(file: UploadFile = File(...), request: Request = None):
     """导入 SQLite 数据库到 PostgreSQL（使用 ORM 自动处理类型转换）"""
     if os.getenv("ENABLE_DATABASE_IMPORT", "false").lower() != "true":
         raise HTTPException(status_code=403, detail="数据库导入接口已禁用")
     if request is None or request.headers.get("X-Danger-Confirm") != "import-production-database":
         raise HTTPException(status_code=403, detail="缺少数据库导入确认头")
+
+    # 验证文件扩展名
+    if not file.filename or not file.filename.endswith('.db'):
+        raise HTTPException(status_code=400, detail="仅支持 .db 文件")
+
+    # 验证文件大小（最大 100MB）
+    max_size = 100 * 1024 * 1024  # 100MB
+    file.file.seek(0, 2)  # 移动到文件末尾
+    file_size = file.file.tell()
+    file.file.seek(0)  # 重置文件指针
+    if file_size > max_size:
+        raise HTTPException(status_code=400, detail="文件大小超过限制（最大 100MB）")
 
     try:
         import tempfile
@@ -472,7 +499,15 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         # 保存上传的文件
         with open(temp_file, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
+
+        # 验证文件头魔术字节（SQLite 数据库验证）
+        with open(temp_file, "rb") as f:
+            header = f.read(16)
+            if header != b"SQLite format 3\x00":
+                os.remove(temp_file)
+                os.rmdir(temp_dir)
+                raise HTTPException(status_code=400, detail="无效的 SQLite 数据库文件")
+
         # 连接源数据库（SQLite）- 使用反射获取表结构
         source_engine = create_engine(f"sqlite:///{temp_file}")
         SourceSession = sessionmaker(bind=source_engine)
@@ -482,6 +517,24 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
         target_db = SessionLocal()
         
         try:
+            # 允许导入的表名白名单（防止 SQL 注入）
+            ALLOWED_IMPORT_TABLES = {
+                'bloggers', 'posts', 'predictions', 'viewpoints', 'fund_info',
+                'fund_history', 'sector_fund_mapping', 'investment_advice',
+                'crawler_article_records', 'prediction_groups', 'batch_analysis_tasks',
+                'user_fund_bindings', 'sync_logs', 'fund_holdings', 'market_data',
+                'policy_data', 'sentiment_data', 'sector_fund_flow'
+            }
+
+            # 允许导入的表名白名单（防止 SQL 注入）
+            ALLOWED_IMPORT_TABLES = {
+                'bloggers', 'posts', 'predictions', 'viewpoints', 'fund_info',
+                'fund_history', 'sector_fund_mapping', 'investment_advice',
+                'crawler_article_records', 'prediction_groups', 'batch_analysis_tasks',
+                'user_fund_bindings', 'sync_logs', 'fund_holdings', 'market_data',
+                'policy_data', 'sentiment_data', 'sector_fund_flow'
+            }
+
             orm_map = [
                 ('bloggers', Blogger),
                 ('posts', Post),
@@ -502,6 +555,16 @@ async def import_database(file: UploadFile = File(...), request: Request = None)
                 ('sentiment_data', SentimentData),
                 ('sector_fund_flow', SectorFundFlow),
             ]
+
+            # 验证所有表名都在白名单中（防御性编程）
+            for table_name, _ in orm_map:
+                if table_name not in ALLOWED_IMPORT_TABLES:
+                    raise HTTPException(status_code=400, detail=f"未授权的表名: {table_name}")
+
+            # 验证所有表名都在白名单中（防御性编程）
+            for table_name, _ in orm_map:
+                if table_name not in ALLOWED_IMPORT_TABLES:
+                    raise HTTPException(status_code=400, detail=f"未授权的表名: {table_name}")
             
             tables_to_delete = [name for name, _ in reversed(orm_map)]
             

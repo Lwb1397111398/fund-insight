@@ -265,7 +265,7 @@
                     const expiredBadge = isExpired ? '<span class="tag" style="background: #ffebee; color: #c62828;">已过期</span>' : '';
                     const validityBadge = validUntilText ? `<span class="tag validity-tag" style="background: #e3f2fd; color: #1565c0; font-size: 11px; margin-left: 5px;">截止: ${validUntilText}</span>` : '';
                     
-                    const contentText = v.content || '无内容';
+                    const contentText = escapeHtml(v.content) || '无内容';
                     const needExpand = contentText.length > 200;
 
                     return `
@@ -273,8 +273,8 @@
                             <div class="card-header">
                                 <div class="card-meta">
                                     <span class="tag ${tagClass}">${tagName}</span>
-                                    <span class="author"><i class="ri-user-line"></i> ${v.author || '未知'}</span>
-                                    <span class="date"><i class="ri-calendar-line"></i> ${v.viewpoint_date || '未知日期'}</span>
+                                    <span class="author"><i class="ri-user-line"></i> ${escapeHtml(v.author) || '未知'}</span>
+                                    <span class="date"><i class="ri-calendar-line"></i> ${escapeHtml(v.viewpoint_date) || '未知日期'}</span>
                                     <span class="time-horizon" style="color: #666; font-size: 12px;">
                                         <i class="ri-time-line"></i> ${timeHorizonText}
                                     </span>
@@ -326,7 +326,7 @@
                 listDiv.innerHTML = `
                     <div class="empty-state">
                         <i class="ri-error-warning-line" style="color: #dc3545;"></i>
-                        <p>加载失败: ${e.message}</p>
+                        <p>加载失败: ${escapeHtml(e.message)}</p>
                         <button class="btn btn-primary" onclick="loadViewpoints()" style="margin-top: 15px;">
                             重试
                         </button>

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import date, datetime, timedelta
 import traceback
-import time
+import asyncio
 import logging
 from pydantic import BaseModel
 
@@ -40,22 +40,19 @@ class SummaryExecuteRequest(BaseModel):
 
 
 def _viewpoint_batch_analyze_background(task_id: int, limit: int, source: str):
-    """后台批量分析观点任务 - 每个观点独立会话，LLM调用期间不持有连接"""
+    """后台批量分析观点任务 - 复用数据库连接，减少连接创建/关闭开销"""
     from src.models.database import SessionLocal
 
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        try:
-            service = ViewpointService(db)
-            viewpoint_ids = [v.id for v in service.get_viewpoints_for_batch_analyze(
-                limit=limit, source=source, days=7
-            )]
-        finally:
-            db.close()
+        service = ViewpointService(db)
+        viewpoint_ids = [v.id for v in service.get_viewpoints_for_batch_analyze(
+            limit=limit, source=source, days=7
+        )]
 
         if not viewpoint_ids:
             logger.info("[Viewpoint Batch Analyze] 没有需要分析的观点")
-            _update_task_status(task_id, 'completed')
+            _update_task_status(task_id, 'completed', db=db)
             return
 
         logger.info(f"[Viewpoint Batch Analyze] 后台开始分析 {len(viewpoint_ids)} 个观点")
@@ -70,78 +67,77 @@ def _viewpoint_batch_analyze_background(task_id: int, limit: int, source: str):
         failed_count = 0
 
         for vp_id in viewpoint_ids:
-            db_read = SessionLocal()
             try:
-                service = ViewpointService(db_read)
-                vp = db_read.query(Viewpoint).filter(Viewpoint.id == vp_id).first()
+                vp = db.query(Viewpoint).filter(Viewpoint.id == vp_id).first()
                 if not vp:
                     continue
                 vp_content = vp.content or ""
                 vp_author = vp.author or ""
                 vp_source = vp.source or ""
-            finally:
-                db_read.close()
-            
-            try:
+
                 result = analyzer.analyze_viewpoint(
                     title=vp_content[:100],
                     content=vp_content,
                     author=vp_author,
                     source=vp_source
                 )
-                
+
                 time_horizon = result.get('time_horizon', 'medium')
                 validity_map = {'short': '1周', 'medium': '1个月', 'long': '3个月'}
                 validity_period = validity_map.get(time_horizon, '1个月')
                 valid_until = llm_analyzer.calculate_target_date(date.today(), validity_period)
                 reasoning = f"【AI深度分析】{result.get('analysis', '')}\n\n【判断理由】{result.get('reasoning', '')}"
-                
-                db_write = SessionLocal()
-                try:
-                    service_w = ViewpointService(db_write)
-                    service_w.update_viewpoint_analysis(
-                        viewpoint_id=vp_id,
-                        market_direction=result.get('market_direction', 'neutral'),
-                        confidence=result.get('confidence', 50),
-                        sectors_bullish=result.get('sectors_bullish', []),
-                        sectors_bearish=result.get('sectors_bearish', []),
-                        reasoning=reasoning,
-                        time_horizon=time_horizon,
-                        validity_period=validity_period,
-                        valid_until=valid_until,
-                        summary=result.get('summary', ''),
-                        credibility=result.get('credibility', 50),
-                        key_points=result.get('key_points', []),
-                        action_suggestion=result.get('action_suggestion', '观望'),
-                        risk_level=result.get('risk_level', 'medium'),
-                        sentiment_score=result.get('sentiment_score', 0.5)
-                    )
-                    analyzed_count += 1
-                except Exception as e:
-                    logger.error(f"[Viewpoint Batch Analyze] 写入观点 {vp_id} 失败: {e}")
-                    failed_count += 1
-                finally:
-                    db_write.close()
-                
-                time.sleep(0.5)
-                
+
+                service.update_viewpoint_analysis(
+                    viewpoint_id=vp_id,
+                    market_direction=result.get('market_direction', 'neutral'),
+                    confidence=result.get('confidence', 50),
+                    sectors_bullish=result.get('sectors_bullish', []),
+                    sectors_bearish=result.get('sectors_bearish', []),
+                    reasoning=reasoning,
+                    time_horizon=time_horizon,
+                    validity_period=validity_period,
+                    valid_until=valid_until,
+                    summary=result.get('summary', ''),
+                    credibility=result.get('credibility', 50),
+                    key_points=result.get('key_points', []),
+                    action_suggestion=result.get('action_suggestion', '观望'),
+                    risk_level=result.get('risk_level', 'medium'),
+                    sentiment_score=result.get('sentiment_score', 0.5),
+                    db=db
+                )
+                analyzed_count += 1
+
+                # 使用异步友好的方式释放控制权（如果在异步上下文中）
+                # time.sleep(0.5)  # 已移除同步阻塞调用
+
             except Exception as e:
                 logger.error(f"[Viewpoint Batch Analyze] 分析观点 {vp_id} 失败: {e}")
                 failed_count += 1
                 continue
 
+        db.commit()
         logger.info(f"[Viewpoint Batch Analyze] 后台分析完成: 成功={analyzed_count}, 失败={failed_count}")
-        _update_task_status(task_id, 'completed')
+        _update_task_status(task_id, 'completed', db=db)
 
     except Exception as e:
         logger.error(f"[Viewpoint Batch Analyze] 后台分析失败: {e}")
-        _update_task_status(task_id, 'failed', str(e))
+        _update_task_status(task_id, 'failed', str(e), db=db)
+        db.rollback()
+    finally:
+        db.close()
 
 
-def _update_task_status(task_id: int, status: str, error_message: str = None):
+def _update_task_status(task_id: int, status: str, error_message: str = None, db: Session = None):
     """更新批量分析任务状态"""
     from src.models.database import SessionLocal
-    db = SessionLocal()
+
+    # 复用传入的数据库会话，避免重复创建连接
+    should_close = False
+    if db is None:
+        db = SessionLocal()
+        should_close = True
+
     try:
         task = db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
         if task:
@@ -155,7 +151,8 @@ def _update_task_status(task_id: int, status: str, error_message: str = None):
         logger.error(f"[Viewpoint Batch Analyze] 更新任务状态失败: {e}")
         db.rollback()
     finally:
-        db.close()
+        if should_close:
+            db.close()
 
 
 router = APIRouter(prefix="/viewpoints", tags=["观点"])
@@ -385,7 +382,7 @@ async def update_viewpoint_summaries(db: Session = Depends(get_db)):
                     logger.info(f"[Update Summaries] 已更新 {updated_count} 个观点")
                     db.commit()
                 
-                time.sleep(0.3)
+                await asyncio.sleep(0.3)
                 
             except Exception as e:
                 logger.error(f"[Update Summaries] 更新观点 {viewpoint.id} 失败: {e}")
@@ -696,7 +693,7 @@ async def execute_summary(
                 
                 logger.info(f"[Execute Summary] 已汇总 {target_date}: {len(viewpoints)} 条观点")
                 
-                time.sleep(1)
+                await asyncio.sleep(1)
                 
             except Exception as e:
                 logger.error(f"[Execute Summary] 汇总 {target_date} 失败: {e}")

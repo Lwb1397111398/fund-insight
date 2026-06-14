@@ -22,13 +22,18 @@ logger = logging.getLogger(__name__)
 class PredictionVerifyService:
     """预测验证服务"""
 
+    # 缓存最大条目数，防止内存溢出
+    MAX_CACHE_SIZE = 10000
+
     def __init__(self, db: Session):
         self.db = db
         self.llm_analyzer = get_analyzer()
         self.fund_api = FundAPI()
         # 实例级净值缓存，用于批量验证时避免 N+1 查询
         # 结构: {(fund_code, date_str): nav, '_history': {fund_code: [FundHistory,...]}}
+        # 注意：使用 LRU 机制限制大小，防止内存溢出
         self._nav_cache: Dict = {}
+        self._cache_order: list = []  # 记录缓存插入顺序，用于 LRU 淘汰
     
     def get_verify_config(self, period_days: int) -> Dict:
         """
@@ -96,10 +101,33 @@ class PredictionVerifyService:
     def parse_period_days(self, period_str: str) -> int:
         return parse_period_to_days(period_str)
     
+    def _add_to_cache(self, key, value):
+        """
+        添加条目到缓存，使用 LRU 淘汰策略
+
+        Args:
+            key: 缓存键
+            value: 缓存值
+        """
+        # 如果 key 已存在，先删除旧的顺序记录
+        if key in self._nav_cache:
+            self._cache_order.remove(key)
+        # 如果缓存已满，淘汰最早的条目
+        elif len(self._cache_order) >= self.MAX_CACHE_SIZE:
+            oldest_key = self._cache_order.pop(0)
+            del self._nav_cache[oldest_key]
+
+        # 添加新条目
+        self._nav_cache[key] = value
+        self._cache_order.append(key)
+
     def get_nav_by_date(self, fund_code: str, target_date: date):
         """获取指定日期的基金净值（优先读缓存）"""
         cache_key = (fund_code, target_date.isoformat())
         if cache_key in self._nav_cache:
+            # 更新 LRU 顺序
+            self._cache_order.remove(cache_key)
+            self._cache_order.append(cache_key)
             return self._nav_cache[cache_key]
 
         nav_record = self.db.query(FundHistory).filter(
@@ -108,16 +136,16 @@ class PredictionVerifyService:
         ).order_by(FundHistory.nav_date.desc()).first()
 
         if nav_record:
-            self._nav_cache[cache_key] = nav_record.nav
+            self._add_to_cache(cache_key, nav_record.nav)
             return nav_record.nav
 
         fund_info = self.fund_api.get_fund_info(fund_code)
         if fund_info:
             nav = fund_info.get('nav')
-            self._nav_cache[cache_key] = nav
+            self._add_to_cache(cache_key, nav)
             return nav
 
-        self._nav_cache[cache_key] = None
+        self._add_to_cache(cache_key, None)
         return None
     
     def get_nav_history(self, fund_code: str, start_date: date, end_date: date) -> List[Dict]:
@@ -797,6 +825,7 @@ class PredictionVerifyService:
 
         # 清理缓存，释放内存
         self._nav_cache.clear()
+        self._cache_order.clear()
 
         return {
             "success": True,
@@ -844,17 +873,15 @@ class PredictionVerifyService:
             FundHistory.nav_date <= max_date
         ).order_by(FundHistory.fund_code, FundHistory.nav_date.asc()).all()
 
-        # 按基金代码分组存入缓存
+        # 按基金代码分组存入缓存（使用 LRU 淘汰）
         history_cache: Dict[str, List] = {}
-        nav_cache: Dict = {}
         for r in all_records:
             key = (r.fund_code, r.nav_date.isoformat())
-            nav_cache[key] = r.nav
+            self._add_to_cache(key, r.nav)
             if r.fund_code not in history_cache:
                 history_cache[r.fund_code] = []
             history_cache[r.fund_code].append(r)
 
-        self._nav_cache.update(nav_cache)
         self._nav_cache['_history'] = history_cache
 
         logger.info(f"[Verify] 预热完成：{len(all_records)} 条记录，{len(history_cache)} 个基金")
@@ -938,6 +965,7 @@ class PredictionVerifyService:
 
         # 清理缓存
         self._nav_cache.clear()
+        self._cache_order.clear()
 
         return {
             "success": True,

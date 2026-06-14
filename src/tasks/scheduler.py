@@ -4,20 +4,28 @@
 """
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 logger = logging.getLogger(__name__)
 
+# 北京时区（UTC+8），天天基金数据使用北京时间
+BEIJING_TZ = timezone(timedelta(hours=8))
+
 
 class TaskScheduler:
     """任务调度器"""
-    
+
     def __init__(self):
         self._running = False
         self._lock = threading.Lock()
+        self._state_lock = threading.Lock()  # 保护状态变量的独立锁
         self.thread = None
         self.cleanup_interval_hours = 24  # 每天运行一次
+        # 使用持久化状态，避免重启后重置
+        self._last_cleanup_date = None
+        self._last_verify_date = None
+        self._last_fund_update_date = None
 
     @property
     def running(self) -> bool:
@@ -44,8 +52,8 @@ class TaskScheduler:
         logger.info("定时任务调度器已停止")
 
     def _seconds_until_next_window(self):
-        """计算到下一个调度窗口的秒数"""
-        now = datetime.now()
+        """计算到下一个调度窗口的秒数（使用北京时间）"""
+        now = datetime.now(BEIJING_TZ)
         current_minute = now.hour * 60 + now.minute
         # 调度窗口: 2:00(120), 10:00(600), 15:30(930)
         windows = [120, 600, 930]
@@ -61,42 +69,57 @@ class TaskScheduler:
         self._run_prediction_verify()
         self._run_expired_verify()
 
-        last_cleanup_date = None
-        last_verify_date = None
-        last_fund_update_date = None
+        # 初始化状态变量
+        with self._state_lock:
+            now = datetime.now(BEIJING_TZ)
+            self._last_cleanup_date = now.date()
+            self._last_verify_date = now.date()
+            self._last_fund_update_date = now.date()
 
         while self.running:
             try:
-                now = datetime.now()
+                now = datetime.now(BEIJING_TZ)
                 current_date = now.date()
                 current_minute = now.hour * 60 + now.minute  # 当前分钟数（0-1439）
 
                 # 每天早上 10:00-10:59 之间执行预测验证（只需执行一次）
                 if 600 <= current_minute < 660:
-                    if last_verify_date != current_date:
+                    with self._state_lock:
+                        should_run = self._last_verify_date != current_date
+                    if should_run:
                         self._run_fund_update()
                         self._run_prediction_verify()
                         self._run_expired_verify()
-                        last_verify_date = current_date
+                        with self._state_lock:
+                            self._last_verify_date = current_date
 
                 # 每天凌晨 2:00-2:59 执行清理任务
                 if 120 <= current_minute < 180:
-                    if last_cleanup_date != current_date:
+                    with self._state_lock:
+                        should_run = self._last_cleanup_date != current_date
+                    if should_run:
                         self._run_cleanup()
-                        last_cleanup_date = current_date
+                        with self._state_lock:
+                            self._last_cleanup_date = current_date
 
                 # 每天下午 15:30-15:59 更新基金数据（收盘后）
                 if 930 <= current_minute < 960:
-                    if last_fund_update_date != current_date:
+                    with self._state_lock:
+                        should_run = self._last_fund_update_date != current_date
+                    if should_run:
                         self._run_fund_update()
-                        last_fund_update_date = current_date
+                        with self._state_lock:
+                            self._last_fund_update_date = current_date
 
                 # 计算到下一个调度窗口的秒数，上限300秒
                 sleep_seconds = min(self._seconds_until_next_window(), 300)
                 time.sleep(sleep_seconds)
 
+            except KeyboardInterrupt:
+                logger.info("调度器收到中断信号，正在停止...")
+                break
             except Exception as e:
-                logger.error(f"调度器异常: {e}")
+                logger.error(f"调度器异常: {e}", exc_info=True)
                 time.sleep(300)  # 异常后等待5分钟再试
     
     def _run_cleanup(self):
@@ -114,73 +137,77 @@ class TaskScheduler:
                 logger.error(f"清理任务失败: {result}")
                 
         except Exception as e:
-            logger.error(f"执行清理任务失败: {e}")
+            logger.error(f"执行清理任务失败: {e}", exc_info=True)
     
     def _run_prediction_verify(self):
         """执行预测验证任务"""
+        from src.services.prediction_verify_service import PredictionVerifyService
+        from src.models.database import SessionLocal
+
+        logger.info("开始执行预测验证任务...")
+        db = SessionLocal()
         try:
-            from src.services.prediction_verify_service import PredictionVerifyService
-            from src.models.database import SessionLocal
-            
-            logger.info("开始执行预测验证任务...")
-            
-            db = SessionLocal()
             try:
                 service = PredictionVerifyService(db)
                 result = service.verify_all_pending()
-                
+
                 if result.get("success"):
                     data = result.get("data", {})
                     logger.info(f"预测验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
                 else:
                     logger.error(f"预测验证失败: {result}")
-                    
             finally:
                 db.close()
-                
         except Exception as e:
-            logger.error(f"执行预测验证任务失败: {e}")
+            logger.error(f"执行预测验证任务失败: {e}", exc_info=True)
+            # 确保异常时也能关闭数据库连接
+            try:
+                db.close()
+            except Exception:
+                pass
     
     def _run_expired_verify(self):
         """执行已过期待验证预测的补救验证"""
+        from src.services.prediction_verify_service import PredictionVerifyService
+        from src.models.database import SessionLocal
+
+        logger.info("开始执行补救验证任务...")
+        db = SessionLocal()
         try:
-            from src.services.prediction_verify_service import PredictionVerifyService
-            from src.models.database import SessionLocal
-            
-            logger.info("开始执行补救验证任务...")
-            
-            db = SessionLocal()
             try:
                 service = PredictionVerifyService(db)
                 result = service.verify_expired_pending()
-                
+
                 if result.get("success"):
                     data = result.get("data", {})
                     logger.info(f"补救验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
                 else:
                     logger.error(f"补救验证失败: {result}")
-                    
             finally:
                 db.close()
-                
         except Exception as e:
-            logger.error(f"执行补救验证任务失败: {e}")
+            logger.error(f"执行补救验证任务失败: {e}", exc_info=True)
+            # 确保异常时也能关闭数据库连接
+            try:
+                db.close()
+            except Exception:
+                pass
     
     def _run_fund_update(self):
-        """执行基金数据更新"""
+        """执行基金数据更新（带事务隔离：全部成功或全部回滚）"""
+        from src.fund.fund_api import FundDataManager
+        from src.models.database import SessionLocal, FundInfo
+
+        logger.info("开始更新基金数据...")
+        db = SessionLocal()
         try:
-            from src.fund.fund_api import FundDataManager
-            from src.models.database import SessionLocal, FundInfo
-            
-            logger.info("开始更新基金数据...")
-            
-            db = SessionLocal()
             try:
                 dm = FundDataManager()
                 funds = db.query(FundInfo).all()
                 updated = 0
                 failed = 0
-                
+                failed_codes = []
+
                 for fund in funds:
                     try:
                         dm.update_fund_info(fund.fund_code, db=db)
@@ -188,27 +215,39 @@ class TaskScheduler:
                         updated += 1
                     except Exception as e:
                         failed += 1
+                        failed_codes.append(fund.fund_code)
                         logger.warning(f"更新基金 {fund.fund_code} 失败: {e}")
 
-                db.commit()
-                logger.info(f"基金数据更新完成: 成功 {updated} 个, 失败 {failed} 个")
-                
+                # 只有全部成功才提交，否则回滚
+                if failed == 0:
+                    db.commit()
+                    logger.info(f"基金数据更新完成: 成功 {updated} 个")
+                else:
+                    db.rollback()
+                    logger.warning(f"基金数据更新有 {failed} 个失败（{', '.join(failed_codes[:5])}{'...' if len(failed_codes) > 5 else ''}），已回滚所有更改")
             finally:
                 db.close()
-                
         except Exception as e:
-            logger.error(f"执行基金数据更新失败: {e}")
+            logger.error(f"执行基金数据更新失败: {e}", exc_info=True)
+            # 确保异常时也能关闭数据库连接
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
-# 全局调度器实例
+# 全局调度器实例（带线程保护）
 _scheduler = None
+_scheduler_lock = threading.Lock()
 
 
 def get_scheduler() -> TaskScheduler:
-    """获取调度器实例"""
+    """获取调度器实例（线程安全）"""
     global _scheduler
     if _scheduler is None:
-        _scheduler = TaskScheduler()
+        with _scheduler_lock:
+            if _scheduler is None:  # 双重检查锁定
+                _scheduler = TaskScheduler()
     return _scheduler
 
 
@@ -221,8 +260,11 @@ def start_scheduler():
 
 def stop_scheduler():
     """停止定时任务调度器"""
-    scheduler = get_scheduler()
-    scheduler.stop()
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.stop()
+        with _scheduler_lock:
+            _scheduler = None
 
 
 if __name__ == '__main__':

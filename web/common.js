@@ -138,7 +138,7 @@ function confirmDialog(message) {
                 width: 90%;
                 text-align: center;
             ">
-                <p style="margin-bottom: 20px; font-size: 16px; color: #333;">${message}</p>
+                <p style="margin-bottom: 20px; font-size: 16px; color: #333;">${escapeHtml(message)}</p>
                 <div style="display: flex; gap: 10px; justify-content: center;">
                     <button id="confirm-cancel" class="btn btn-secondary" style="min-width: 80px;">取消</button>
                     <button id="confirm-ok" class="btn btn-primary" style="min-width: 80px;">确定</button>

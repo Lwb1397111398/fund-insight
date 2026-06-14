@@ -289,6 +289,8 @@ def _verify_all_background():
         print(f"[Verify All] 后台验证完成: {result.get('message')}")
     except Exception as e:
         print(f"[Verify All] 后台验证失败: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         db.close()
         _verify_batch_running = False
@@ -629,7 +631,7 @@ async def merge_similar_predictions(db: Session = Depends(get_db)):
     
     groups = defaultdict(list)
     for p in predictions:
-        target_date_str = p.target_date.isoformat() if hasattr(p.target_date, 'isoformat') else str(p.target_date)
+        target_date_str = p.target_date.isoformat() if isinstance(p.target_date, (date, datetime)) else str(p.target_date)
         key = (p.fund_code, p.prediction_type, target_date_str)
         groups[key].append(p)
     

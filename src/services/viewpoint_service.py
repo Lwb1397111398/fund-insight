@@ -350,7 +350,8 @@ class ViewpointService(BaseService[Viewpoint]):
         key_points: List[str] = None,
         action_suggestion: str = None,
         risk_level: str = None,
-        sentiment_score: float = None
+        sentiment_score: float = None,
+        db: Session = None
     ) -> Optional[Viewpoint]:
         """
         更新观点分析结果
@@ -375,10 +376,15 @@ class ViewpointService(BaseService[Viewpoint]):
         Returns:
             更新后的观点实例或 None
         """
-        viewpoint = self.get_viewpoint_by_id(viewpoint_id)
+        # 使用传入的数据库会话，如果未提供则使用实例的会话
+        session = db if db is not None else self.db
+
+        # 需要在传入的会话中重新查询对象
+        from src.models.database import Viewpoint as ViewpointModel
+        viewpoint = session.query(ViewpointModel).filter(ViewpointModel.id == viewpoint_id).first()
         if not viewpoint:
             return None
-        
+
         viewpoint.market_direction = market_direction
         viewpoint.confidence = confidence
         viewpoint.sectors_bullish = sectors_bullish
@@ -399,14 +405,14 @@ class ViewpointService(BaseService[Viewpoint]):
             viewpoint.risk_level = risk_level
         if sentiment_score is not None:
             viewpoint.score = sentiment_score
-        
+
         if viewpoint.source and not viewpoint.source_authority:
             viewpoint.source_authority = get_source_authority(viewpoint.source)
-        
+
         if viewpoint.credibility_score:
             viewpoint.weight = viewpoint.calculate_weight()
-        
-        self.db.commit()
+
+        # 注意：不在这里提交，由调用方负责提交
         return viewpoint
     
     def get_pending_summary_dates(self) -> List[Dict]:

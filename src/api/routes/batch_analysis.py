@@ -236,21 +236,27 @@ async def get_batch_analysis_report(task_id: int, db: Session = Depends(get_db))
     }
 
 
-def _execute_batch_analysis_task(task_id: int, db: Session):
+def _execute_batch_analysis_task(task_id: int, db: Session = None):
     """
     执行批量分析任务（后台任务）
-    
+
     Args:
         task_id: 任务 ID
-        db: 数据库会话
+        db: 数据库会话（不传递时会创建独立会话，避免会话过期问题）
     """
+    from src.models.database import SessionLocal
+
+    # 在任务内部创建独立会话，避免传入的会话已过期
+    if db is None:
+        db = SessionLocal()
+
     llm_analyzer = get_analyzer()
-    
+
     # 获取任务
     task = db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
     if not task:
         return
-    
+
     # 更新任务状态
     task.status = 'running'
     task.started_at = datetime.now()
@@ -317,6 +323,16 @@ def _execute_batch_analysis_task(task_id: int, db: Session):
                     })
                     task.failed_count += 1
                     task.processed_count += 1
+
+                    # 添加重试次数限制，避免无限重试
+                    retry_count = task.task_params.get("retry_counts", {})
+                    retry_count[post.id] = retry_count.get(post.id, 0) + 1
+                    task.task_params["retry_counts"] = retry_count
+
+                    if retry_count[post.id] >= 3:
+                        print(f"[Batch Analysis] 帖子 {post.id} 已达最大重试次数（3次），标记为永久失败")
+                        task.failed_ids[-1]["error"] = "LLM返回空结果（已重试3次）"
+
                     continue
 
                 # 有预测结果，标记帖子已分析

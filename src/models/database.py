@@ -2,7 +2,7 @@
 数据库模型 - 增强版
 支持：自动分析、智能基金管理、定时验证、投资建议
 """
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Date, UniqueConstraint, Index, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Date, UniqueConstraint, Index, ForeignKey, event, Numeric
 from sqlalchemy.orm import Session, declarative_base, sessionmaker, relationship
 from datetime import datetime, date
 from pathlib import Path
@@ -61,11 +61,25 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
         DB_PATH = Path(config.DB_PATH)
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
+        # CRITICAL FIX: 启用 SQLite 外键约束
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys = ON")
+            cursor.close()
+        logger.info("[数据库] SQLite 外键约束已启用")
 else:
     # 回退到 SQLite
     DB_PATH = Path(config.DB_PATH)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
+    # CRITICAL FIX: 启用 SQLite 外键约束
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.close()
+    logger.info("[数据库] SQLite 外键约束已启用")
 
 Base = declarative_base()
 
@@ -278,41 +292,42 @@ class Viewpoint(Base):
     
     weight = Column(Float, default=1.0)
     source_authority = Column(Float, default=0.5)
-    
+
     read_count = Column(Integer, default=0)
     is_vip = Column(Boolean, default=False)
-    
+
     action_suggestion = Column(String(20))
     risk_level = Column(String(20), default='medium')
-    
+
     analysis_summary = Column(Text)
-    
+
     is_deleted = Column(Boolean, default=False)
     deleted_at = Column(DateTime)
     deleted_by = Column(String(50))
     delete_reason = Column(String(200))
     restore_before = Column(Date)
-    
+
     is_summary = Column(Boolean, default=False)
     original_count = Column(Integer, default=0)
     original_ids = Column(JSON)
     topics = Column(JSON)
-    
+
     def calculate_weight(self) -> float:
         base_weight = self.source_authority or 0.5
-        
+
         if self.credibility_score and self.credibility_score >= 80:
             base_weight += 0.2
         elif self.credibility_score and self.credibility_score >= 60:
             base_weight += 0.1
-        
+
         if self.is_vip:
             base_weight += 0.15
-        
+
         if self.read_count and self.read_count > 1000:
             base_weight += 0.1
-        
-        return min(2.0, max(0.3, base_weight))
+
+        self.weight = min(2.0, max(0.3, base_weight))  # HIGH FIX: 更新 self.weight
+        return self.weight
     
     def update_expiry_status(self):
         if self.valid_until and date.today() > self.valid_until:
@@ -348,13 +363,14 @@ class Viewpoint(Base):
         Index('ix_viewpoints_viewpoint_date', 'viewpoint_date'),
         Index('ix_viewpoints_blogger_id', 'blogger_id'),
         Index('ix_viewpoints_source', 'source'),
+        Index('ix_viewpoints_post_id', 'post_id'),  # CRITICAL FIX: 添加 post_id 索引
     )
 
 
 class CrawlerArticleRecord(Base):
     """爬虫文章记录表 - 用于去重"""
     __tablename__ = 'crawler_article_records'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     article_id = Column(String(100), unique=True, nullable=False)
     source = Column(String(50), nullable=False)
@@ -362,9 +378,9 @@ class CrawlerArticleRecord(Base):
     content_hash = Column(String(32))
     url = Column(String(500))
     author = Column(String(100))
-    
+
     is_adopted = Column(Boolean, default=False)
-    viewpoint_id = Column(Integer)
+    viewpoint_id = Column(Integer, ForeignKey('viewpoints.id'))  # CRITICAL FIX: 添加外键约束
     
     capture_score = Column(Float, default=0.0)
     skip_reason = Column(String(200))
@@ -432,8 +448,8 @@ class FundInfo(Base):
     actual_nav = Column(Float)
     actual_nav_time = Column(DateTime)
     nav_source = Column(String(20), default='eastmoney')
-    
-    fund_scale = Column(Float)
+
+    fund_scale = Column(Numeric(20, 2))  # HIGH FIX: 使用 Float 改为 Numeric
     establish_date = Column(Date)
     manager_name = Column(String(100))
     fee_rate = Column(Float)
@@ -468,8 +484,8 @@ class SectorFundMapping(Base):
     __tablename__ = 'sector_fund_mapping'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    sector_name = Column(String(50), unique=True, nullable=False)
-    fund_code = Column(String(20), nullable=False)
+    sector_name = Column(String(50), nullable=False)  # HIGH FIX: 移除 unique=True
+    fund_code = Column(String(20), ForeignKey('fund_info.fund_code'), nullable=False)  # CRITICAL FIX: 添加外键约束
     fund_name = Column(String(100))
     keywords = Column(JSON)
     is_active = Column(Boolean, default=True)
@@ -530,31 +546,31 @@ class VerificationTask(Base):
 class PredictionGroup(Base):
     """
     预测组 - 同一博主对同一基金在相近时间的多个预测组合
-    
+
     功能：
     - 将同一博主对同一基金在相近时间的预测分组
     - 选一个代表预测用于验证
     - 保留所有原始预测，但默认隐藏
     - 保持页面整洁，同时不丢失信息
-    
+
     分组规则：
     - 相同预测周期（1周、1月等）
     - 相邻预测间隔 ≤ 周期天数
     - 每组至少2个预测
     """
     __tablename__ = 'prediction_groups'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     blogger_id = Column(Integer, ForeignKey('bloggers.id'), nullable=False, index=True)
     fund_code = Column(String(20), nullable=False, index=True)
     fund_name = Column(String(100))
-    
+
     # 预测周期（用于分组）
     prediction_period = Column(String(20))  # 1 周、1 个月等
-    
+
     # 预测 ID 列表
     prediction_ids = Column(JSON)  # 所有成员的 ID
-    representative_id = Column(Integer)  # 代表预测的 ID（用于验证）
+    representative_id = Column(Integer, ForeignKey('predictions.id'))  # CRITICAL FIX: 添加外键约束
     prediction_count = Column(Integer, default=0)
     
     # 时间范围
@@ -592,16 +608,16 @@ class BatchAnalysisTask(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     task_type = Column(String(50), nullable=False)  # posts/predictions/viewpoints
     status = Column(String(20), default='pending')  # pending/running/completed/failed/cancelled
-    
+
     # 总数和进度
     total_count = Column(Integer, default=0)
     processed_count = Column(Integer, default=0)
     success_count = Column(Integer, default=0)
     failed_count = Column(Integer, default=0)
-    
+
     # 已处理的 ID 列表（JSON 格式）
-    processed_ids = Column(JSON)  # [1, 2, 3, ...]
-    failed_ids = Column(JSON)  # [{"id": 1, "error": "错误信息"}, ...]
+    processed_ids = Column(JSON, default=[])  # HIGH FIX: 添加默认值
+    failed_ids = Column(JSON, default=[])  # HIGH FIX: 添加默认值
     
     # 异常信息
     error_message = Column(Text)
@@ -623,17 +639,17 @@ class BatchAnalysisTask(Base):
 class AnalysisLog(Base):
     """
     分析日志表 - 详细记录分析过程
-    
+
     功能：
     - 记录每个帖子的分析过程
     - 便于问题排查
     - 性能分析
     """
     __tablename__ = 'analysis_logs'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(Integer)  # 关联批量分析任务
-    post_id = Column(Integer)
+    task_id = Column(Integer, ForeignKey('batch_analysis_tasks.id'))  # CRITICAL FIX: 添加外键约束
+    post_id = Column(Integer, ForeignKey('posts.id'))  # CRITICAL FIX: 添加外键约束
     
     # 分析过程
     llm_model = Column(String(50))
@@ -708,13 +724,13 @@ class SyncLog(Base):
 class FundHolding(Base):
     """
     基金持仓表 - 记录基金持仓股票
-    
+
     功能：
     - 支持按持仓相似度匹配基金
     - 分析基金投资风格
     """
     __tablename__ = 'fund_holdings'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     fund_code = Column(String(20), nullable=False, index=True)
     stock_code = Column(String(20), nullable=False)
@@ -722,24 +738,29 @@ class FundHolding(Base):
     holding_ratio = Column(Float)  # 持仓占比
     holding_shares = Column(Float)  # 持仓股数
     holding_value = Column(Float)  # 持仓市值
-    
+
     report_date = Column(Date)  # 报告日期
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('fund_code', 'stock_code', 'report_date', name='uix_fund_holdings_code_stock_date'),  # CRITICAL FIX: 添加唯一约束
+        Index('ix_fund_holdings_report_date', 'report_date'),  # CRITICAL FIX: 添加 report_date 索引
+    )
 
 
 class FundSyncRetry(Base):
     """
     基金同步重试队列表
-    
+
     功能：
     - 记录抓取失败的基金
     - 支持定时重试
     - 避免重复失败
     """
     __tablename__ = 'fund_sync_retry'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    fund_code = Column(String(20), nullable=False, index=True)
+    fund_code = Column(String(20), ForeignKey('fund_info.fund_code'), nullable=False, index=True)  # CRITICAL FIX: 添加外键约束
     retry_type = Column(String(20))  # nav/info/history
     error_message = Column(Text)
     retry_count = Column(Integer, default=0)
