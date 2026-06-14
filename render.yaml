@@ -7,6 +7,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
+      - key: CARGO_HOME
+        value: "/tmp/cargo"
+      - key: RUSTUP_HOME
+        value: "/tmp/rustup"
       - key: CRAWLER_ENABLED
         value: "true"
       - key: APP_ENV
