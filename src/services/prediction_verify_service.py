@@ -537,18 +537,18 @@ class PredictionVerifyService:
                         "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
                     }
         
-        window_start = target_date - timedelta(days=config['window_days_before'])
+        # 验证窗口：使用完整预测周期（prediction_date 到 target_date），不受 today 截断
+        window_end = target_date
 
-        # 验证窗口结束时间：限制在预测周期内，不超过今天
-        window_end = min(target_date + timedelta(days=period_days), today)
-        
-        nav_start_days = max(config['nav_start_days'], 5)
-        
-        # 超短期预测使用预测日期作为净值起始日期
-        if config['is_ultra_short'] and prediction.prediction_date:
-            nav_start_date = prediction.prediction_date
-        else:
-            nav_start_date = window_start - timedelta(days=nav_start_days)
+        # 检查验证时间窗口：只有目标日期已过期才允许验证
+        if today < target_date:
+            return {
+                "success": False,
+                "message": f"预测周期尚未结束，请等待至 {target_date.isoformat()} 后再验证"
+            }
+
+        # 所有预测都使用预测日期作为净值起始点，确保覆盖完整周期
+        nav_start_date = prediction.prediction_date
         
         data_check = self._check_fund_data_availability(
             fund_code=fund_code,
@@ -584,17 +584,11 @@ class PredictionVerifyService:
                 start_nav = prediction.start_nav
                 is_cumulative = True
             else:
-                if config['is_ultra_short'] and prediction.prediction_date:
-                    nav_start_date = prediction.prediction_date
-                else:
-                    nav_start_date = window_start - timedelta(days=config['nav_start_days'])
+                nav_start_date = prediction.prediction_date
                 start_nav = None
                 is_cumulative = False
         else:
-            if config['is_ultra_short'] and prediction.prediction_date:
-                nav_start_date = prediction.prediction_date
-            else:
-                nav_start_date = window_start - timedelta(days=config['nav_start_days'])
+            nav_start_date = prediction.prediction_date
             start_nav = None
             is_cumulative = False
         
@@ -640,7 +634,7 @@ class PredictionVerifyService:
         score = comprehensive_result["score"]
         analysis = comprehensive_result["analysis"]
         
-        # 扩大LLM调用范围：分数20-80，或者涨跌幅在边界附近
+        # 扩大LLM调用范围：分数20-80，或者涨跌幅在边界附近，或者预测方向与实际方向相反
         should_call_llm = False
         if not config['is_ultra_short']:
             # 条件1：分数在20-80之间
@@ -649,10 +643,9 @@ class PredictionVerifyService:
             # 条件2：涨跌幅在震荡阈值附近（扩大范围）
             elif abs(actual_change) < config['flat_threshold'] * 2:
                 should_call_llm = True
-            # 条件3：预测方向与实际方向相反，但幅度不大
-            elif prediction.prediction_type == 'up' and -config['flat_threshold'] * 2 < actual_change < 0:
-                should_call_llm = True
-            elif prediction.prediction_type == 'down' and 0 < actual_change < config['flat_threshold'] * 2:
+            # 条件3：预测方向与实际方向相反（需要LLM辅助判断博主是否正确）
+            elif (prediction.prediction_type == 'up' and actual_change < 0) or \
+                 (prediction.prediction_type == 'down' and actual_change > 0):
                 should_call_llm = True
         
         trend_description = None
@@ -778,36 +771,27 @@ class PredictionVerifyService:
         }
     
     def verify_all_pending(self) -> Dict:
-        """验证所有待验证的预测（跳过验证通道未开放，带缓存预热）"""
+        """验证所有待验证的预测（只验证已到期的，带缓存预热）"""
         today = date.today()
 
+        # 只查询已到期的预测（target_date <= today）
         all_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
             Prediction.prediction_type != 'flat',
-            Prediction.target_date <= today + timedelta(days=7)
+            Prediction.target_date <= today
         ).all()
 
-        pending_predictions = []
-        skipped_count = 0
-        for p in all_pending:
-            period_days = self.parse_period_days(p.prediction_period)
-            cfg = self.get_verify_config(period_days)
-            if p.target_date and (p.target_date - today).days > cfg['window_days_before']:
-                skipped_count += 1
-                continue
-            pending_predictions.append(p)
-
-        logger.info(f"[Verify] 找到 {len(all_pending)} 个待验证预测，跳过 {skipped_count} 个通道未开放，实际验证 {len(pending_predictions)} 个")
+        logger.info(f"[Verify] 找到 {len(all_pending)} 个已到期待验证预测")
 
         # 预热：收集所有涉及的 fund_code，批量查询 FundHistory 并填充缓存
-        self._warm_cache(pending_predictions, today)
+        self._warm_cache(all_pending, today)
 
         results = []
         success_count = 0
         failed_count = 0
 
-        for prediction in pending_predictions:
+        for prediction in all_pending:
             logger.info(f"[Verify] 正在验证预测 {prediction.id}: fund_code={prediction.fund_code}, sector={prediction.sector}, target_date={prediction.target_date}")
 
             result = self.verify_prediction(prediction.id)
@@ -829,12 +813,11 @@ class PredictionVerifyService:
 
         return {
             "success": True,
-            "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个，跳过 {skipped_count} 个通道未开放",
+            "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个",
             "data": {
-                "total": len(pending_predictions),
+                "total": len(all_pending),
                 "success_count": success_count,
                 "failed_count": failed_count,
-                "skipped": skipped_count,
                 "results": results
             }
         }
@@ -887,19 +870,35 @@ class PredictionVerifyService:
         logger.info(f"[Verify] 预热完成：{len(all_records)} 条记录，{len(history_cache)} 个基金")
     
     def verify_expired_pending(self) -> Dict:
-        """验证所有已过期但尚未验证的预测（补救验证，跳过超过30天补救期的，带缓存预热）"""
+        """验证所有超过30天补救期的待验证预测（补救验证，与 verify_all_pending 互补）
+
+        verify_all_pending 验证 target_date <= today 的预测，
+        verify_expired_pending 验证 target_date < grace_cutoff (30天前) 的预测。
+        """
         today = date.today()
         grace_cutoff = today - timedelta(days=30)
 
+        # 查询超过30天补救期的预测（这些预测不会被 verify_all_pending 处理）
         expired_pending = self.db.query(Prediction).filter(
             Prediction.status == 'pending',
             Prediction.is_deleted == False,
             Prediction.prediction_type != 'flat',
-            Prediction.target_date < today,
-            Prediction.target_date >= grace_cutoff
+            Prediction.target_date < grace_cutoff
         ).all()
 
-        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个已过期待验证预测（30天补救期内）")
+        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个超过30天补救期的待验证预测")
+
+        if not expired_pending:
+            return {
+                "success": True,
+                "message": "没有需要补救验证的预测",
+                "data": {
+                    "total": 0,
+                    "success_count": 0,
+                    "failed_count": 0,
+                    "results": []
+                }
+            }
 
         # 预热缓存
         self._warm_cache(expired_pending, today)
@@ -909,7 +908,7 @@ class PredictionVerifyService:
         failed_count = 0
 
         for prediction in expired_pending:
-            
+
             fund_code, fund_name = self.match_fund_for_prediction(prediction)
             if not fund_code:
                 logger.warning(f"[Verify-Expired] 预测 {prediction.id} 无法匹配基金，跳过")
@@ -920,43 +919,15 @@ class PredictionVerifyService:
                     "message": f"无法匹配基金：{prediction.sector}"
                 })
                 continue
-            
-            period_days = self.parse_period_days(prediction.prediction_period)
-            verify_config = self.get_verify_config(period_days)
-            
-            target_date = prediction.target_date
-            window_end = target_date + timedelta(days=verify_config['window_days_after'])
-            
-            nav_start_days = max(verify_config['nav_start_days'], 5)
-            if verify_config['is_ultra_short'] and prediction.prediction_date:
-                nav_start_date = prediction.prediction_date
-            else:
-                nav_start_date = target_date - timedelta(days=verify_config['window_days_before']) - timedelta(days=nav_start_days)
-            
-            data_check = self._check_fund_data_availability(
-                fund_code=fund_code,
-                nav_start_date=nav_start_date,
-                window_end=window_end,
-                min_data_points=2
-            )
-            
-            if not data_check['available']:
-                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 基金数据不足: {data_check['message']}")
-                failed_count += 1
-                results.append({
-                    "prediction_id": prediction.id,
-                    "success": False,
-                    "message": data_check['message']
-                })
-                continue
-            
+
+            # 直接调用 verify_prediction，由它内部处理数据可用性检查
             result = self.verify_prediction(prediction.id)
             results.append({
                 "prediction_id": prediction.id,
                 "success": result.get("success"),
                 "message": result.get("message")
             })
-            
+
             if result.get("success"):
                 success_count += 1
             else:
@@ -1093,20 +1064,16 @@ class PredictionVerifyService:
                 
                 period_days = self.parse_period_days(prediction.prediction_period)
                 config = self.get_verify_config(period_days)
-                
+
                 target_date = prediction.target_date
                 if not target_date:
                     kept += 1
                     continue
-                
-                window_start = target_date - timedelta(days=config['window_days_before'])
-                window_end = min(target_date + timedelta(days=config['window_days_after']), today)
-                
-                if config['is_ultra_short'] and prediction.prediction_date:
-                    nav_start_date = prediction.prediction_date
-                else:
-                    nav_start_date = window_start - timedelta(days=config['nav_start_days'])
-                
+
+                # 验证窗口：使用完整预测周期（prediction_date 到 target_date）
+                window_end = target_date
+                nav_start_date = prediction.prediction_date
+
                 data_check = self._check_fund_data_availability(
                     fund_code=fund_code,
                     nav_start_date=nav_start_date,
@@ -1234,22 +1201,18 @@ class PredictionVerifyService:
                     'data_status': None,
                     'prediction_status': prediction.status
                 }
-        
-        window_start = target_date - timedelta(days=config['window_days_before'])
-        window_end = min(target_date + timedelta(days=config['window_days_after']), today)
-        
-        if config['is_ultra_short'] and prediction.prediction_date:
-            nav_start_date = prediction.prediction_date
-        else:
-            nav_start_date = window_start - timedelta(days=config['nav_start_days'])
-        
+
+        # 验证窗口：使用完整预测周期（prediction_date 到 target_date）
+        window_end = target_date
+        nav_start_date = prediction.prediction_date
+
         data_check = self._check_fund_data_availability(
             fund_code=fund_code,
             nav_start_date=nav_start_date,
             window_end=window_end,
             min_data_points=2
         )
-        
+
         return {
             'can_verify': data_check['available'],
             'reason': data_check['message'],
