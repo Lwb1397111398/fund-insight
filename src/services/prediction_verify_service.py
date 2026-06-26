@@ -539,8 +539,9 @@ class PredictionVerifyService:
                             "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
                         }
         
-        # 验证窗口：使用完整预测周期（prediction_date 到 target_date），不受 today 截断
-        window_end = target_date
+        # 验证窗口：已过期的预测扩展到 today，允许用最新交易日数据验证
+        # 解决 target_date 是非交易日（周末/节假日）导致数据不足的问题
+        window_end = today if today > target_date else target_date
 
         # 检查验证时间窗口：只有目标日期已过期才允许验证
         if today < target_date:
