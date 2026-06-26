@@ -469,13 +469,14 @@ class PredictionVerifyService:
         
         return None, None
     
-    def verify_prediction(self, prediction_id: int) -> Dict:
+    def verify_prediction(self, prediction_id: int, force: bool = False) -> Dict:
         """
         验证单个预测（支持过程验证）
-        
+
         Args:
             prediction_id: 预测 ID
-            
+            force: 强制验证模式，跳过30天补救期检查（用于 verify_expired_pending）
+
         Returns:
             验证结果
         """
@@ -521,21 +522,22 @@ class PredictionVerifyService:
                 }
             
             has_verified = (prediction.verify_count or 0) > 0
-            
-            if has_verified and prediction.status not in ('pending',):
-                grace_period_days = 30
-                if days_to_target < -grace_period_days:
-                    return {
-                        "success": False,
-                        "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
-                    }
-            elif not has_verified:
-                grace_period_days = 30
-                if days_to_target < -grace_period_days:
-                    return {
-                        "success": False,
-                        "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
-                    }
+
+            if not force:
+                if has_verified and prediction.status not in ('pending',):
+                    grace_period_days = 30
+                    if days_to_target < -grace_period_days:
+                        return {
+                            "success": False,
+                            "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
+                        }
+                elif not has_verified:
+                    grace_period_days = 30
+                    if days_to_target < -grace_period_days:
+                        return {
+                            "success": False,
+                            "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
+                        }
         
         # 验证窗口：使用完整预测周期（prediction_date 到 target_date），不受 today 截断
         window_end = target_date
@@ -921,7 +923,7 @@ class PredictionVerifyService:
                 continue
 
             # 直接调用 verify_prediction，由它内部处理数据可用性检查
-            result = self.verify_prediction(prediction.id)
+            result = self.verify_prediction(prediction.id, force=True)
             results.append({
                 "prediction_id": prediction.id,
                 "success": result.get("success"),

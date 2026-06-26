@@ -3,16 +3,22 @@
 处理配置相关的 API 请求
 """
 import os
-from fastapi import APIRouter, Depends
+import json
+from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from src.core.config import config
 from src.api.deps import get_db
-from src.models.database import Prediction, Viewpoint, Post, FundInfo, Blogger, SectorAlias, SectorFundMapping
+from src.models.database import (
+    Prediction, Viewpoint, Post, FundInfo, Blogger,
+    SectorAlias, SectorFundMapping, InvestmentAdvice,
+    FundHistory
+)
 
 router = APIRouter(prefix="/config", tags=["配置"])
 
@@ -783,3 +789,279 @@ async def seed_sector_mappings(db: Session = Depends(get_db)):
             "success": False,
             "message": f"导入失败: {str(e)}"
         }
+
+
+# ===== 数据导入导出 =====
+
+def _serialize_row(obj, exclude_fields=None):
+    """将 SQLAlchemy 模型对象序列化为字典"""
+    exclude = set(exclude_fields or [])
+    d = {}
+    for col in obj.__table__.columns:
+        if col.name in exclude:
+            continue
+        val = getattr(obj, col.name)
+        if isinstance(val, (date, datetime)):
+            d[col.name] = val.isoformat()
+        else:
+            d[col.name] = val
+    return d
+
+
+@router.get("/export")
+async def export_all_data(db: Session = Depends(get_db)):
+    """导出全部业务数据为 JSON 文件"""
+    try:
+        bloggers = [_serialize_row(b) for b in db.query(Blogger).all()]
+        posts = [_serialize_row(p) for p in db.query(Post).all()]
+        predictions = [_serialize_row(p, exclude_fields=['llm_raw_response'])
+                       for p in db.query(Prediction).all()]
+        viewpoints = [_serialize_row(v) for v in db.query(Viewpoint).all()]
+        funds = [_serialize_row(f) for f in db.query(FundInfo).all()]
+        fund_history = [_serialize_row(h) for h in db.query(FundHistory).all()]
+        aliases = [_serialize_row(a) for a in db.query(SectorAlias).all()]
+        mappings = [_serialize_row(m) for m in db.query(SectorFundMapping).all()]
+        advice = [_serialize_row(a) for a in db.query(InvestmentAdvice).all()]
+
+        export_data = {
+            "export_version": "1.0",
+            "export_date": datetime.now().isoformat(),
+            "bloggers": bloggers,
+            "posts": posts,
+            "predictions": predictions,
+            "viewpoints": viewpoints,
+            "fund_info": funds,
+            "fund_history": fund_history,
+            "sector_alias": aliases,
+            "sector_fund_mapping": mappings,
+            "investment_advice": advice,
+            "summary": {
+                "bloggers": len(bloggers),
+                "posts": len(posts),
+                "predictions": len(predictions),
+                "viewpoints": len(viewpoints),
+                "fund_info": len(funds),
+                "fund_history": len(fund_history),
+                "sector_alias": len(aliases),
+                "sector_fund_mapping": len(mappings),
+                "investment_advice": len(advice)
+            }
+        }
+
+        json_bytes = json.dumps(export_data, ensure_ascii=False, indent=2).encode('utf-8')
+        filename = f"fund_insight_export_{date.today().isoformat()}.json"
+
+        return Response(
+            content=json_bytes,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except Exception as e:
+        return {"success": False, "message": f"导出失败: {str(e)}"}
+
+
+@router.get("/export/config")
+async def export_config(db: Session = Depends(get_db)):
+    """导出系统配置（LLM 设置 + 别名 + 板块映射）"""
+    try:
+        from src.constants.sector_fund_map import SECTOR_ALIASES
+
+        aliases_custom = [_serialize_row(a) for a in db.query(SectorAlias).all()]
+        mappings = [_serialize_row(m) for m in db.query(SectorFundMapping).all()]
+
+        config_data = {
+            "export_version": "1.0",
+            "export_date": datetime.now().isoformat(),
+            "type": "config",
+            "llm_config": {
+                "llm_provider": config.LLM_PROVIDER,
+                "llm_base_url": config.LLM_BASE_URL,
+                "llm_model": config.LLM_MODEL,
+                "llm_light_model": config.LLM_LIGHT_MODEL,
+                "llm_strategy": config.LLM_STRATEGY,
+                "volcengine_base_url": config.VOLCENGINE_BASE_URL,
+                "volcengine_model": config.VOLCENGINE_MODEL,
+                "volcengine_light_model": config.VOLCENGINE_LIGHT_MODEL,
+            },
+            "builtin_aliases": SECTOR_ALIASES,
+            "custom_aliases": aliases_custom,
+            "sector_mappings": mappings
+        }
+
+        json_bytes = json.dumps(config_data, ensure_ascii=False, indent=2).encode('utf-8')
+        filename = f"fund_insight_config_{date.today().isoformat()}.json"
+
+        return Response(
+            content=json_bytes,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except Exception as e:
+        return {"success": False, "message": f"导出配置失败: {str(e)}"}
+
+
+class ImportDataRequest(BaseModel):
+    """导入数据请求"""
+    data: dict
+
+
+@router.post("/import")
+async def import_data(req: ImportDataRequest, db: Session = Depends(get_db)):
+    """
+    导入 JSON 数据（合并模式：跳过已存在的记录，按 natural key 判断）
+    """
+    try:
+        data = req.data
+        imported = {}
+        skipped = {}
+
+        # 导入博主
+        if "bloggers" in data:
+            count, skip = 0, 0
+            for item in data["bloggers"]:
+                existing = db.query(Blogger).filter(Blogger.id == item.get("id")).first()
+                if existing:
+                    skip += 1
+                    continue
+                blogger = Blogger(**{k: v for k, v in item.items()
+                                     if hasattr(Blogger, k) and k != 'id'})
+                if 'id' in item:
+                    blogger.id = item['id']
+                db.add(blogger)
+                count += 1
+            imported["bloggers"] = count
+            skipped["bloggers"] = skip
+
+        # 导入帖子
+        if "posts" in data:
+            count, skip = 0, 0
+            for item in data["posts"]:
+                existing = db.query(Post).filter(Post.id == item.get("id")).first()
+                if existing:
+                    skip += 1
+                    continue
+                post = Post(**{k: v for k, v in item.items()
+                               if hasattr(Post, k) and k != 'id'})
+                if 'id' in item:
+                    post.id = item['id']
+                db.add(post)
+                count += 1
+            imported["posts"] = count
+            skipped["posts"] = skip
+
+        # 导入基金信息
+        if "fund_info" in data:
+            count, skip = 0, 0
+            for item in data["fund_info"]:
+                existing = db.query(FundInfo).filter(
+                    FundInfo.fund_code == item.get("fund_code")).first()
+                if existing:
+                    skip += 1
+                    continue
+                fund = FundInfo(**{k: v for k, v in item.items()
+                                   if hasattr(FundInfo, k)})
+                db.add(fund)
+                count += 1
+            imported["fund_info"] = count
+            skipped["fund_info"] = skip
+
+        # 导入预测
+        if "predictions" in data:
+            count, skip = 0, 0
+            for item in data["predictions"]:
+                existing = db.query(Prediction).filter(
+                    Prediction.id == item.get("id")).first()
+                if existing:
+                    skip += 1
+                    continue
+                pred = Prediction(**{k: v for k, v in item.items()
+                                     if hasattr(Prediction, k) and k != 'id'})
+                if 'id' in item:
+                    pred.id = item['id']
+                db.add(pred)
+                count += 1
+            imported["predictions"] = count
+            skipped["predictions"] = skip
+
+        # 导入观点
+        if "viewpoints" in data:
+            count, skip = 0, 0
+            for item in data["viewpoints"]:
+                existing = db.query(Viewpoint).filter(
+                    Viewpoint.id == item.get("id")).first()
+                if existing:
+                    skip += 1
+                    continue
+                vp = Viewpoint(**{k: v for k, v in item.items()
+                                  if hasattr(Viewpoint, k) and k != 'id'})
+                if 'id' in item:
+                    vp.id = item['id']
+                db.add(vp)
+                count += 1
+            imported["viewpoints"] = count
+            skipped["viewpoints"] = skip
+
+        # 导入板块别名
+        if "sector_alias" in data:
+            count, skip = 0, 0
+            for item in data["sector_alias"]:
+                existing = db.query(SectorAlias).filter(
+                    SectorAlias.alias_name == item.get("alias_name")).first()
+                if existing:
+                    skip += 1
+                    continue
+                alias = SectorAlias(**{k: v for k, v in item.items()
+                                       if hasattr(SectorAlias, k) and k != 'id'})
+                db.add(alias)
+                count += 1
+            imported["sector_alias"] = count
+            skipped["sector_alias"] = skip
+
+        # 导入板块映射
+        if "sector_fund_mapping" in data:
+            count, skip = 0, 0
+            for item in data["sector_fund_mapping"]:
+                existing = db.query(SectorFundMapping).filter(
+                    SectorFundMapping.sector_name == item.get("sector_name"),
+                    SectorFundMapping.fund_code == item.get("fund_code")
+                ).first()
+                if existing:
+                    skip += 1
+                    continue
+                mapping = SectorFundMapping(**{k: v for k, v in item.items()
+                                               if hasattr(SectorFundMapping, k) and k != 'id'})
+                db.add(mapping)
+                count += 1
+            imported["sector_fund_mapping"] = count
+            skipped["sector_fund_mapping"] = skip
+
+        db.commit()
+
+        total_imported = sum(imported.values())
+        total_skipped = sum(skipped.values())
+
+        parts = []
+        for table, count in imported.items():
+            if count > 0:
+                parts.append(f"{table}: {count} 条")
+
+        if total_imported > 0:
+            message = f"导入完成，共导入 {total_imported} 条记录"
+            if total_skipped > 0:
+                message += f"（跳过 {total_skipped} 条已存在记录）"
+        else:
+            message = f"无新数据导入（{total_skipped} 条已存在）"
+
+        return {
+            "success": True,
+            "message": message,
+            "data": {
+                "imported": imported,
+                "skipped": skipped,
+                "total_imported": total_imported,
+                "total_skipped": total_skipped
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "message": f"导入失败: {str(e)}"}

@@ -194,7 +194,7 @@ class TaskScheduler:
                 pass
     
     def _run_fund_update(self):
-        """执行基金数据更新（带事务隔离：全部成功或全部回滚）"""
+        """执行基金数据更新（逐个提交：成功的即时保存，失败的不影响其他）"""
         from src.fund.fund_api import FundDataManager
         from src.models.database import SessionLocal, FundInfo
 
@@ -212,24 +212,23 @@ class TaskScheduler:
                     try:
                         dm.update_fund_info(fund.fund_code, db=db)
                         dm.update_fund_history(fund.fund_code, days=30, db=db)
+                        db.commit()  # 每个基金单独提交
                         updated += 1
                     except Exception as e:
+                        db.rollback()  # 单个失败只回滚当前
+                        db.expire_all()  # 重置 session 状态，避免 detached 对象问题
                         failed += 1
                         failed_codes.append(fund.fund_code)
                         logger.warning(f"更新基金 {fund.fund_code} 失败: {e}")
 
-                # 只有全部成功才提交，否则回滚
                 if failed == 0:
-                    db.commit()
                     logger.info(f"基金数据更新完成: 成功 {updated} 个")
                 else:
-                    db.rollback()
-                    logger.warning(f"基金数据更新有 {failed} 个失败（{', '.join(failed_codes[:5])}{'...' if len(failed_codes) > 5 else ''}），已回滚所有更改")
+                    logger.warning(f"基金数据更新完成: 成功 {updated} 个, 失败 {failed} 个（{', '.join(failed_codes[:5])}{'...' if len(failed_codes) > 5 else ''}）")
             finally:
                 db.close()
         except Exception as e:
             logger.error(f"执行基金数据更新失败: {e}", exc_info=True)
-            # 确保异常时也能关闭数据库连接
             try:
                 db.close()
             except Exception:

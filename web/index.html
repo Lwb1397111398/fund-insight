@@ -3252,6 +3252,7 @@
                     <button @click="configTab = 'llm'" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'llm' ? '#1890ff' : 'transparent', color: configTab === 'llm' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'llm' ? '600' : '400' }">LLM 配置</button>
                     <button @click="configTab = 'aliases'; loadAliases()" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'aliases' ? '#1890ff' : 'transparent', color: configTab === 'aliases' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'aliases' ? '600' : '400' }">板块别名</button>
                     <button @click="configTab = 'mappings'; loadSectorMappings()" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'mappings' ? '#1890ff' : 'transparent', color: configTab === 'mappings' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'mappings' ? '600' : '400' }">板块匹配</button>
+                    <button @click="configTab = 'data'" :style="{ padding: '8px 20px', border: 'none', background: configTab === 'data' ? '#1890ff' : 'transparent', color: configTab === 'data' ? '#fff' : '#666', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontWeight: configTab === 'data' ? '600' : '400' }">数据管理</button>
                 </div>
                 <div v-if="configTab === 'aliases'">
                     <div style="margin-bottom: 15px; padding: 12px; background: #f6ffed; border-radius: 8px; border: 1px solid #b7eb8f;">
@@ -3396,6 +3397,50 @@
                                 </div>
                                 <div v-if="testResult.data.error" style="color: #ff4d4f;">
                                     错误: {{ testResult.data.error }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="configTab === 'data'">
+                    <!-- 导出区域 -->
+                    <div style="margin-bottom: 20px; padding: 15px; background: #f6ffed; border-radius: 8px; border: 1px solid #b7eb8f;">
+                        <h4 style="color: #389e0d; margin-bottom: 12px;">📤 导出数据</h4>
+                        <p style="font-size: 13px; color: #666; margin-bottom: 12px;">将系统数据导出为 JSON 文件，可用于备份或迁移到其他环境。</p>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <button class="action-btn" @click="exportAllData" :disabled="exportLoading">
+                                {{ exportLoading ? '导出中...' : '📦 导出全部数据' }}
+                            </button>
+                            <button class="action-btn" @click="exportConfig" :disabled="exportConfigLoading" style="background: #722ed1; color: #fff;">
+                                {{ exportConfigLoading ? '导出中...' : '⚙️ 导出系统配置' }}
+                            </button>
+                        </div>
+                        <div v-if="exportResult" style="margin-top: 10px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px;">
+                            <span :style="{ color: exportResult.success ? '#52c41a' : '#ff4d4f' }">{{ exportResult.message }}</span>
+                        </div>
+                    </div>
+
+                    <!-- 导入区域 -->
+                    <div style="padding: 15px; background: #fff7e6; border-radius: 8px; border: 1px solid #ffd591;">
+                        <h4 style="color: #d46b08; margin-bottom: 12px;">📥 导入数据</h4>
+                        <p style="font-size: 13px; color: #666; margin-bottom: 12px;">从 JSON 文件导入数据。默认为合并模式（跳过已存在的记录）。</p>
+
+                        <div style="margin-bottom: 12px;">
+                            <label style="font-size: 13px; color: #333; display: block; margin-bottom: 6px;">选择导入文件：</label>
+                            <input type="file" accept=".json" @change="onImportFileChange" ref="importFileInput"
+                                   style="font-size: 13px; padding: 6px; border: 1px solid #d9d9d9; border-radius: 4px; width: 100%;">
+                        </div>
+
+                        <button class="action-btn" @click="importData" :disabled="importLoading || !importFile"
+                                style="background: #fa8c16; color: #fff;">
+                            {{ importLoading ? '导入中...' : '📥 开始导入' }}
+                        </button>
+
+                        <div v-if="importResult" style="margin-top: 10px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px;">
+                            <span :style="{ color: importResult.success ? '#52c41a' : '#ff4d4f' }">{{ importResult.message }}</span>
+                            <div v-if="importResult.data" style="margin-top: 6px; color: #666;">
+                                <div v-for="(count, table) in importResult.data.imported" :key="table">
+                                    <span v-if="count > 0">✅ {{ table }}: 导入 {{ count }} 条</span>
                                 </div>
                             </div>
                         </div>
@@ -3975,8 +4020,86 @@ const fetchWeChatBatch = async () => {
                 const reviewMapping = async (id) => { try { const res = await axios.post(`/api/config/sector-mappings/${id}/review`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
+                // ===== 数据导入导出 =====
+                const exportLoading = ref(false);
+                const exportConfigLoading = ref(false);
+                const exportResult = ref(null);
+                const importFile = ref(null);
+                const importLoading = ref(false);
+                const importResult = ref(null);
+                const importFileInput = ref(null);
+                const _parseBlobError = async (e) => {
+                    if (e.response?.data instanceof Blob) {
+                        try { return JSON.parse(await e.response.data.text()).message || e.message; } catch { return e.message; }
+                    }
+                    return e.response?.data?.message || e.message;
+                };
+                const exportAllData = async () => {
+                    exportLoading.value = true;
+                    exportResult.value = null;
+                    try {
+                        const res = await axios.get('/api/config/export', { responseType: 'blob' });
+                        const url = window.URL.createObjectURL(new Blob([res.data]));
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `fund_insight_export_${new Date().toISOString().slice(0,10)}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                        exportResult.value = { success: true, message: '数据导出成功！' };
+                    } catch (e) {
+                        exportResult.value = { success: false, message: '导出失败: ' + await _parseBlobError(e) };
+                    }
+                    exportLoading.value = false;
+                };
+                const exportConfig = async () => {
+                    exportConfigLoading.value = true;
+                    exportResult.value = null;
+                    try {
+                        const res = await axios.get('/api/config/export/config', { responseType: 'blob' });
+                        const url = window.URL.createObjectURL(new Blob([res.data]));
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `fund_insight_config_${new Date().toISOString().slice(0,10)}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                        exportResult.value = { success: true, message: '配置导出成功！' };
+                    } catch (e) {
+                        exportResult.value = { success: false, message: '导出配置失败: ' + await _parseBlobError(e) };
+                    }
+                    exportConfigLoading.value = false;
+                };
+                const onImportFileChange = (e) => {
+                    importFile.value = e.target.files[0] || null;
+                    importResult.value = null;
+                };
+                const importData = async () => {
+                    if (!importFile.value) { alert('请先选择导入文件'); return; }
+                    importLoading.value = true;
+                    importResult.value = null;
+                    try {
+                        const text = await importFile.value.text();
+                        const data = JSON.parse(text);
+                        const res = await axios.post('/api/config/import', { data });
+                        importResult.value = res.data;
+                        if (res.data.success) {
+                            await fetchStats();
+                            await fetchBloggers();
+                        }
+                    } catch (e) {
+                        if (e instanceof SyntaxError) {
+                            importResult.value = { success: false, message: '文件格式错误：不是有效的 JSON 文件' };
+                        } else {
+                            importResult.value = { success: false, message: '导入失败: ' + (e.response?.data?.message || e.message) };
+                        }
+                    }
+                    importLoading.value = false;
+                };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData };
             }
         }).mount('#app');
     </script>

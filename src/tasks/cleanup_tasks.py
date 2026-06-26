@@ -26,7 +26,7 @@ class CleanupManager:
     def cleanup_expired_predictions(self) -> dict:
         """
         清理过期的预测
-        规则：target_date + 7天后自动删除
+        规则：target_date + 7天后自动删除（只删除已验证的预测，跳过 pending 状态）
         """
         db = self._get_db()
         try:
@@ -34,7 +34,8 @@ class CleanupManager:
             
             expired_predictions = db.query(Prediction).filter(
                 Prediction.target_date < cutoff_date,
-                Prediction.is_deleted == False
+                Prediction.is_deleted == False,
+                Prediction.status != 'pending'  # 跳过未验证的预测，留给验证任务处理
             ).all()
             
             if not expired_predictions:
@@ -444,7 +445,8 @@ class CleanupManager:
 
             expired_predictions = db.query(Prediction).filter(
                 Prediction.target_date < cutoff_date,
-                Prediction.is_deleted == False
+                Prediction.is_deleted == False,
+                Prediction.status != 'pending'  # 跳过未验证的预测，留给验证任务处理
             ).order_by(Prediction.target_date.asc()).limit(limit).all()
 
             if not expired_predictions:
