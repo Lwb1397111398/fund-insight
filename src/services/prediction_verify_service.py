@@ -436,37 +436,64 @@ class PredictionVerifyService:
         }
     
     def match_fund_for_prediction(self, prediction: Prediction) -> Tuple:
-        """为预测匹配基金"""
+        """为预测匹配基金
+
+        匹配优先级：
+        1. prediction 自带 fund_code
+        2. prediction 自带 fund_name 查 FundInfo
+        3. sector 查 SectorFundMapping 表（与创建时共享映射源）
+        4. sector 查 FundInfo 精确匹配
+        5. sector 查 FundInfo 模糊匹配
+        """
         if prediction.fund_code:
             return prediction.fund_code, prediction.fund_name
-        
+
         if prediction.fund_name:
             fund = self.db.query(FundInfo).filter(
                 FundInfo.fund_name == prediction.fund_name
             ).first()
             if fund:
                 return fund.fund_code, fund.fund_name
-        
+
         sector = prediction.sector or prediction.sector_type
         if sector:
             excluded_keywords = ['债券', '债', '货币', '理财', '短债', '纯债', '利率债', '信用债']
-            
+
+            # 第3步：查 SectorFundMapping 表（与 LLM 分析器共享同一映射源）
+            from src.models.database import SectorFundMapping
+            from src.constants.sector_fund_map import normalize_sector_name
+            standard_sector = normalize_sector_name(sector)
+            mapping = self.db.query(SectorFundMapping).filter(
+                SectorFundMapping.sector_name == standard_sector
+            ).first()
+            if mapping and mapping.fund_code:
+                fund_name = mapping.fund_name or ''
+                if not any(kw in fund_name for kw in excluded_keywords):
+                    return mapping.fund_code, fund_name
+
+            # 第4步：硬编码表
+            from src.constants.sector_fund_map import get_fund_for_sector
+            hardcoded = get_fund_for_sector(standard_sector)
+            if hardcoded:
+                return hardcoded['code'], hardcoded['name']
+
+            # 第5步：FundInfo 精确匹配
             all_funds = self.db.query(FundInfo).filter(
                 FundInfo.sector_type == sector
             ).all()
-            
             for f in all_funds:
                 fund_name = f.fund_name or ''
                 if not any(kw in fund_name for kw in excluded_keywords):
                     return f.fund_code, f.fund_name
-            
+
+            # 第6步：FundInfo 模糊匹配
             all_funds = self.db.query(FundInfo).all()
             for f in all_funds:
                 if f.sector_type and (sector in f.sector_type or f.sector_type in sector):
                     fund_name = f.fund_name or ''
                     if not any(kw in fund_name for kw in excluded_keywords):
-                        return f.fund_code, f.fund_name
-        
+                        return f.fund_code, fund_name
+
         return None, None
     
     def verify_prediction(self, prediction_id: int, force: bool = False) -> Dict:

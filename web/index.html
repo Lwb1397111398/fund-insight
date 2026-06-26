@@ -3311,12 +3311,13 @@
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0; width: 120px;">板块名</th>
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0;">基金名称</th>
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0; width: 80px;">基金代码</th>
+                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 70px;">来源</th>
                                     <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 70px;">状态</th>
                                     <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 130px;">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="m in filteredMappings" :key="m.id" :style="{ background: m.reviewed ? '#fff' : '#fffbe6' }">
+                                <tr v-for="m in filteredMappings" :key="m.sector_name + m.fund_code" :style="{ background: m.source === 'builtin' ? '#f0f5ff' : (m.reviewed ? '#fff' : '#fffbe6') }">
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-weight: 600;">{{ m.sector_name }}</td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
                                         <input v-if="editingMappingId === m.id" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
@@ -3327,10 +3328,17 @@
                                         <span v-else>{{ m.fund_code }}</span>
                                     </td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
-                                        <span :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? '已审查' : '待审查' }}</span>
+                                        <span :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.source === 'builtin' ? '#e6f7ff' : '#f5f5f5', color: m.source === 'builtin' ? '#1890ff' : '#999' }">{{ m.source === 'builtin' ? '内置' : '自定义' }}</span>
                                     </td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
-                                        <template v-if="editingMappingId === m.id">
+                                        <span v-if="m.source === 'builtin'" :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: '#f6ffed', color: '#52c41a' }">已审查</span>
+                                        <span v-else :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? '已审查' : '待审查' }}</span>
+                                    </td>
+                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                                        <template v-if="m.source === 'builtin'">
+                                            <span style="color: #999; font-size: 12px;">—</span>
+                                        </template>
+                                        <template v-else-if="editingMappingId === m.id">
                                             <button @click="saveMappingEdit(m.id)" style="background: #52c41a; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 4px;">保存</button>
                                             <button @click="editingMappingId = null" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
                                         </template>
@@ -3342,7 +3350,7 @@
                                     </td>
                                 </tr>
                                 <tr v-if="filteredMappings.length === 0">
-                                    <td colspan="5" style="padding: 20px; text-align: center; color: #999;">{{ mappingSearchKeyword ? '未找到匹配的板块映射' : '暂无数据' }}</td>
+                                    <td colspan="6" style="padding: 20px; text-align: center; color: #999;">{{ mappingSearchKeyword ? '未找到匹配的板块映射' : '暂无数据' }}</td>
                                 </tr>
                             </tbody>
                         </table>

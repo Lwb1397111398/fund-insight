@@ -651,8 +651,9 @@ async def get_sector_mappings(
     reviewed: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """获取所有板块映射（含 reviewed 状态）"""
+    """获取所有板块映射（含 reviewed 状态 + 硬编码映射）"""
     from src.services.sector_fund_service import get_sector_fund_service
+    from src.constants.sector_fund_map import SECTOR_FUND_MAP
 
     # 手动解析布尔值（FastAPI 对 query string 的 bool 解析不可靠）
     reviewed_filter = None
@@ -660,8 +661,25 @@ async def get_sector_mappings(
         reviewed_filter = reviewed.lower() in ('true', '1', 'yes')
 
     service = get_sector_fund_service(db)
-    mappings = service.get_all_mappings_with_status(reviewed_filter=reviewed_filter)
+    db_mappings = service.get_all_mappings_with_status(reviewed_filter=reviewed_filter)
 
+    # 收集 DB 中已有的板块名
+    db_sectors = {m['sector_name'] for m in db_mappings}
+
+    # 合入硬编码映射中 DB 没有的条目
+    merged = list(db_mappings)
+    for sector_name, fund_info in sorted(SECTOR_FUND_MAP.items()):
+        if sector_name not in db_sectors:
+            merged.append({
+                'id': None,
+                'sector_name': sector_name,
+                'fund_code': fund_info.get('code', ''),
+                'fund_name': fund_info.get('name', ''),
+                'reviewed': True,
+                'source': 'builtin'
+            })
+
+    mappings = merged
     reviewed_count = sum(1 for m in mappings if m['reviewed'])
     unreviewed_count = len(mappings) - reviewed_count
 
