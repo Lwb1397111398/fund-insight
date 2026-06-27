@@ -3320,11 +3320,11 @@
                                 <tr v-for="m in filteredMappings" :key="m.sector_name + m.fund_code" :style="{ background: m.source === 'builtin' ? '#f0f5ff' : (m.reviewed ? '#fff' : '#fffbe6') }">
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-weight: 600;">{{ m.sector_name }}</td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
-                                        <input v-if="editingMappingId === m.id" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
+                                        <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
                                         <span v-else>{{ m.fund_name }}</span>
                                     </td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
-                                        <input v-if="editingMappingId === m.id" v-model="editingMapping.fund_code" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
+                                        <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_code" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
                                         <span v-else>{{ m.fund_code }}</span>
                                     </td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
@@ -3335,17 +3335,15 @@
                                         <span v-else :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? '已审查' : '待审查' }}</span>
                                     </td>
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
-                                        <template v-if="m.source === 'builtin'">
-                                            <span style="color: #999; font-size: 12px;">—</span>
-                                        </template>
-                                        <template v-else-if="editingMappingId === m.id">
-                                            <button @click="saveMappingEdit(m.id)" style="background: #52c41a; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 4px;">保存</button>
-                                            <button @click="editingMappingId = null" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
+                                        <template v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)">
+                                            <button @click="saveMappingEdit(m)" style="background: #52c41a; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 4px;">保存</button>
+                                            <button @click="editingMappingKey = null" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
                                         </template>
                                         <template v-else>
                                             <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
-                                            <button v-if="!m.reviewed" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
-                                            <button @click="deleteMapping(m.id, m.sector_name)" style="color: #ff4d4f; background: none; border: none; cursor: pointer; font-size: 12px;">删除</button>
+                                            <button v-if="!m.reviewed && m.source !== 'builtin'" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
+                                            <button v-if="m.source !== 'builtin'" @click="deleteMapping(m.id, m.sector_name)" style="color: #ff4d4f; background: none; border: none; cursor: pointer; font-size: 12px;">删除</button>
+                                            <span v-if="m.source === 'builtin'" style="color: #999; font-size: 11px;">编辑后覆盖</span>
                                         </template>
                                     </td>
                                 </tr>
@@ -4011,8 +4009,8 @@ const fetchWeChatBatch = async () => {
                 const sectorMappings = ref({ mappings: [], total: 0, reviewed_count: 0, unreviewed_count: 0 });
                 const mappingFilter = ref(null);
                 const mappingSearchKeyword = ref('');
-                const editingMappingId = ref(null);
-                const editingMapping = ref({ fund_name: '', fund_code: '' });
+                const editingMappingKey = ref(null);
+                const editingMapping = ref({ fund_name: '', fund_code: '', sector_name: '', source: null });
                 const filteredMappings = computed(() => {
                     const keyword = mappingSearchKeyword.value.trim().toLowerCase();
                     if (!keyword) return sectorMappings.value.mappings || [];
@@ -4023,8 +4021,27 @@ const fetchWeChatBatch = async () => {
                     );
                 });
                 const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await axios.get(url); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
-                const startEditMapping = (m) => { editingMappingId.value = m.id; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code }; };
-                const saveMappingEdit = async (id) => { try { const res = await axios.put(`/api/config/sector-mappings/${id}`, editingMapping.value); if (res.data.success) { editingMappingId.value = null; await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('保存失败: ' + (e.response?.data?.detail || e.message)); } };
+                const startEditMapping = (m) => { editingMappingKey.value = m.sector_name + m.fund_code; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code, sector_name: m.sector_name, source: m.source, id: m.id }; };
+                const saveMappingEdit = async (m) => {
+                    try {
+                        let res;
+                        if (editingMapping.value.source === 'builtin' || !editingMapping.value.id) {
+                            // 内置条目：创建新的 DB 映射覆盖
+                            res = await axios.post('/api/config/sector-mappings', {
+                                sector_name: editingMapping.value.sector_name,
+                                fund_code: editingMapping.value.fund_code,
+                                fund_name: editingMapping.value.fund_name
+                            });
+                        } else {
+                            // DB 条目：更新
+                            res = await axios.put(`/api/config/sector-mappings/${editingMapping.value.id}`, {
+                                fund_code: editingMapping.value.fund_code,
+                                fund_name: editingMapping.value.fund_name
+                            });
+                        }
+                        if (res.data.success) { editingMappingKey.value = null; await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); }
+                    } catch (e) { alert('保存失败: ' + (e.response?.data?.detail || e.message)); }
+                };
                 const reviewMapping = async (id) => { try { const res = await axios.post(`/api/config/sector-mappings/${id}/review`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
@@ -4107,7 +4124,7 @@ const fetchWeChatBatch = async () => {
                     importLoading.value = false;
                 };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingId, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData };
             }
         }).mount('#app');
     </script>

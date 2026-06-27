@@ -640,6 +640,13 @@ class MappingUpdate(BaseModel):
     fund_name: Optional[str] = None
 
 
+class MappingCreate(BaseModel):
+    """创建映射请求"""
+    sector_name: str
+    fund_code: str
+    fund_name: Optional[str] = None
+
+
 class BatchReviewRequest(BaseModel):
     """批量审查请求"""
     ids: list[int]
@@ -728,7 +735,72 @@ async def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Sess
         return {"success": False, "message": f"保存失败: {str(e)}"}
 
 
-@router.post("/sector-mappings/{mapping_id}/review")
+@router.post("/sector-mappings")
+async def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db)):
+    """创建新的板块映射（覆盖内置映射或新增）"""
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    try:
+        service = get_sector_fund_service(db)
+
+        # 检查是否已存在同板块的 DB 映射
+        existing_mapping = db.query(SectorFundMapping).filter(
+            SectorFundMapping.sector_name == mapping.sector_name
+        ).first()
+        if existing_mapping:
+            # 已存在，更新
+            result = service.update_mapping(
+                mapping_id=existing_mapping.id,
+                fund_code=mapping.fund_code,
+                fund_name=mapping.fund_name
+            )
+            if result and result.get('sector_name') and result.get('fund_code'):
+                try:
+                    service.cascade_cleanup_conflicts(
+                        result['sector_name'], result['fund_code'], result.get('fund_name', '')
+                    )
+                except Exception as e:
+                    print(f"[板块匹配] 级联清理失败（不影响保存）: {e}")
+            return {
+                "success": True,
+                "message": f"已更新映射: {mapping.sector_name} → {mapping.fund_name or mapping.fund_code}",
+                "data": result
+            }
+
+        # 不存在，创建新记录
+        from src.models.database import SectorFundMapping
+        new_mapping = SectorFundMapping(
+            sector_name=mapping.sector_name,
+            fund_code=mapping.fund_code,
+            fund_name=mapping.fund_name or '',
+            reviewed=True
+        )
+        db.add(new_mapping)
+        db.commit()
+        db.refresh(new_mapping)
+
+        # 级联清理冲突
+        if mapping.fund_code:
+            try:
+                service.cascade_cleanup_conflicts(
+                    mapping.sector_name, mapping.fund_code, mapping.fund_name or ''
+                )
+            except Exception as e:
+                print(f"[板块匹配] 级联清理失败（不影响保存）: {e}")
+
+        return {
+            "success": True,
+            "message": f"已创建映射: {mapping.sector_name} → {mapping.fund_name or mapping.fund_code}",
+            "data": {
+                "id": new_mapping.id,
+                "sector_name": new_mapping.sector_name,
+                "fund_code": new_mapping.fund_code,
+                "fund_name": new_mapping.fund_name
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "message": f"创建失败: {str(e)}"}@router.post("/sector-mappings/{mapping_id}/review")
 async def review_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
     """标记映射为已审查"""
     from src.services.sector_fund_service import get_sector_fund_service
