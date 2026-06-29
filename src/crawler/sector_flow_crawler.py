@@ -137,16 +137,17 @@ class SectorFlowCrawler:
                     continue
 
                 # 解析各单型资金流向（单位：元）
+                # 注意：f62 不是主力净流入，它是主力-散户的差值
+                # 正确计算：主力 = 超大单(f66) + 大单(f72)，散户 = 中单(f78) + 小单(f84)
                 super_large = self._safe_float(item.get("f66"))  # 超大单净流入
                 large = self._safe_float(item.get("f72"))        # 大单净流入
                 medium = self._safe_float(item.get("f78"))       # 中单净流入
                 small = self._safe_float(item.get("f84"))        # 小单净流入
-                main_net = self._safe_float(item.get("f62"))     # 主力净流入（API直接给出）
 
-                # 如果 f62 缺失，用超大单+大单计算
-                if main_net is None:
-                    if super_large is not None and large is not None:
-                        main_net = super_large + large
+                # 主力净流入 = 超大单 + 大单
+                main_net = None
+                if super_large is not None and large is not None:
+                    main_net = super_large + large
 
                 # 散户净流入 = 中单 + 小单
                 retail_net = None

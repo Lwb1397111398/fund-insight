@@ -1067,7 +1067,7 @@ class SectorFundFlow(Base):
     main_intensity = Column(Float)         # 主力强度（%）= (暗盘 / 成交额) × 100
     behavior = Column(String(10))          # 行为判定: grab/build/wash/sell
     data_category = Column(String(10))     # 板块类型: industry/concept
-    fetched_at = Column(DateTime)          # 抓取时间戳
+    fetched_at = Column(DateTime, default=datetime.now)  # 抓取时间戳
 
     data_source = Column(String(50))
     created_at = Column(DateTime, default=datetime.now)

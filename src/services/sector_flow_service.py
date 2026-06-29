@@ -438,4 +438,5 @@ class SectorFlowService:
             "behavior": record.behavior,
             "behavior_cn": BEHAVIOR_CN.get(record.behavior, ""),
             "data_category": record.data_category,
+            "fetched_at": record.fetched_at.isoformat() if record.fetched_at else None,
         }

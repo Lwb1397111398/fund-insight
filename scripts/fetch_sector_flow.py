@@ -14,8 +14,9 @@ from datetime import date, datetime
 from typing import Dict, List, Optional
 
 import requests
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from src.models.database import SectorFundFlow
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -98,15 +99,22 @@ def fetch_sector_list(sector_type: str) -> List[Dict]:
             if not sector_code or not sector_name:
                 continue
 
-            main_net = safe_float(item.get("f62"))
+            # 东方财富API数据结构：
+            # f66=超大单净流入, f72=大单净流入, f78=中单净流入, f84=小单净流入
+            # f62=主力暗盘（主力-散户的差值），f184=主力净流入占比
+            # 注意：f66+f72 = -(f78+f84)，API定义如此
             super_large = safe_float(item.get("f66"))
             large = safe_float(item.get("f72"))
             medium = safe_float(item.get("f78"))
             small = safe_float(item.get("f84"))
+            dark_pool = safe_float(item.get("f62"))  # 主力暗盘，API直接给出
 
-            if main_net is None and super_large is not None and large is not None:
+            # 主力净流入 = 超大单 + 大单
+            main_net = None
+            if super_large is not None and large is not None:
                 main_net = super_large + large
 
+            # 散户净流入 = 中单 + 小单
             retail_net = None
             if medium is not None and small is not None:
                 retail_net = medium + small
@@ -121,6 +129,7 @@ def fetch_sector_list(sector_type: str) -> List[Dict]:
                 "medium_flow": medium,
                 "small_flow": small,
                 "retail_net_flow": retail_net,
+                "dark_pool": dark_pool,
                 "main_net_ratio": safe_float(item.get("f184")),
                 "data_category": sector_type,
             })
@@ -166,13 +175,6 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
-def calculate_dark_pool(main_net: Optional[float], retail_net: Optional[float]) -> Optional[float]:
-    """主力暗盘 = 主力净流入 − 散户净流入"""
-    if main_net is None or retail_net is None:
-        return None
-    return main_net - retail_net
-
-
 def calculate_intensity(dark_pool: Optional[float], turnover: Optional[float]) -> Optional[float]:
     """主力强度 = (暗盘 / 成交额) × 100"""
     if dark_pool is None or turnover is None or turnover == 0:
@@ -194,61 +196,43 @@ def judge_behavior(intensity: Optional[float]) -> Optional[str]:
 
 
 def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
-    """保存数据到数据库（upsert）"""
+    """保存数据到数据库（先删旧数据，再插入新数据）"""
     engine = create_engine(db_url)
     Session = sessionmaker(bind=engine)
     session = Session()
 
     saved = 0
     try:
+        # 先删除当天旧数据（只保留最新一次抓取）
+        deleted = session.query(SectorFundFlow).filter(
+            SectorFundFlow.flow_date == flow_date
+        ).delete(synchronize_session=False)
+        if deleted > 0:
+            logger.info(f"删除当天旧数据 {deleted} 条")
+
         for record in records:
-            dark_pool = calculate_dark_pool(record.get("main_net_flow"), record.get("retail_net_flow"))
+            # 暗盘直接用API的f62值
+            dark_pool = record.get("dark_pool")
             intensity = calculate_intensity(dark_pool, record.get("turnover"))
             behavior = judge_behavior(intensity)
 
-            # Upsert
-            sql = text("""
-                INSERT INTO sector_fund_flow
-                    (flow_date, sector_code, sector_name, main_net_flow, retail_net_flow,
-                     turnover, sector_change_pct, dark_pool, main_intensity, behavior,
-                     data_category, data_source, created_at)
-                VALUES
-                    (:flow_date, :sector_code, :sector_name, :main_net_flow, :retail_net_flow,
-                     :turnover, :sector_change_pct, :dark_pool, :main_intensity, :behavior,
-                     :data_category, 'eastmoney', NOW())
-                ON CONFLICT (flow_date, sector_name) DO UPDATE SET
-                    sector_code = EXCLUDED.sector_code,
-                    main_net_flow = EXCLUDED.main_net_flow,
-                    retail_net_flow = EXCLUDED.retail_net_flow,
-                    turnover = EXCLUDED.turnover,
-                    sector_change_pct = EXCLUDED.sector_change_pct,
-                    dark_pool = EXCLUDED.dark_pool,
-                    main_intensity = EXCLUDED.main_intensity,
-                    behavior = EXCLUDED.behavior,
-                    data_category = EXCLUDED.data_category,
-                    data_source = 'eastmoney'
-            """)
-
-            # 先检查是否需要添加唯一约束
-            try:
-                session.execute(sql, {
-                    "flow_date": flow_date,
-                    "sector_code": record.get("sector_code", ""),
-                    "sector_name": record.get("sector_name", ""),
-                    "main_net_flow": record.get("main_net_flow"),
-                    "retail_net_flow": record.get("retail_net_flow"),
-                    "turnover": record.get("turnover"),
-                    "sector_change_pct": record.get("change_pct"),
-                    "dark_pool": dark_pool,
-                    "main_intensity": intensity,
-                    "behavior": behavior,
-                    "data_category": record.get("data_category"),
-                })
-                saved += 1
-            except Exception as e:
-                logger.warning(f"保存 {record.get('sector_name')} 失败: {e}")
-                session.rollback()
-                continue
+            # 直接插入（已先删旧数据，无需 upsert）
+            new_record = SectorFundFlow(
+                flow_date=flow_date,
+                sector_code=record.get("sector_code", ""),
+                sector_name=record.get("sector_name", ""),
+                main_net_flow=record.get("main_net_flow"),
+                retail_net_flow=record.get("retail_net_flow"),
+                turnover=record.get("turnover"),
+                sector_change_pct=record.get("change_pct"),
+                dark_pool=dark_pool,
+                main_intensity=intensity,
+                behavior=behavior,
+                data_category=record.get("data_category"),
+                data_source="eastmoney",
+            )
+            session.add(new_record)
+            saved += 1
 
         session.commit()
         logger.info(f"成功保存 {saved} 条记录")
@@ -261,20 +245,6 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
     return saved
 
 
-def ensure_constraint(db_url: str):
-    """确保唯一约束存在"""
-    engine = create_engine(db_url)
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uix_sector_flow_date_name
-                ON sector_fund_flow (flow_date, sector_name)
-            """))
-            conn.commit()
-        except Exception:
-            conn.rollback()
-
-
 def main():
     logger.info("=" * 50)
     logger.info("板块资金流向数据抓取开始")
@@ -282,9 +252,6 @@ def main():
 
     flow_date = date.today()
     logger.info(f"目标日期: {flow_date}")
-
-    # 确保约束
-    ensure_constraint(DATABASE_URL)
 
     # 抓取行业板块
     industry_list = fetch_sector_list("industry")
