@@ -210,7 +210,7 @@ class SectorFlowCrawler:
         time.sleep(0.1)  # 请求间隔，避免限流
         return turnover
 
-    def fetch_all(self, turnover_limit: int = 200) -> List[Dict]:
+    def fetch_all(self, turnover_limit: int = 100) -> List[Dict]:
         """
         完整抓取流程
 

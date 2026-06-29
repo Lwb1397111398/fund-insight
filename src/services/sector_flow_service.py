@@ -142,7 +142,7 @@ class SectorFlowService:
 
     # ==================== 数据操作 ====================
 
-    def fetch_and_save(self, turnover_limit: int = 200) -> int:
+    def fetch_and_save(self, turnover_limit: int = 100) -> int:
         """
         触发抓取 → 计算衍生指标 → 保存到数据库
 

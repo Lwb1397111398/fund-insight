@@ -23,7 +23,7 @@ VALID_BEHAVIORS = {"grab", "build", "wash", "sell"}
 
 @router.post("/fetch")
 async def fetch_sector_flow(
-    limit: int = Query(default=30, ge=1, le=200, description="取前N个板块"),
+    limit: int = Query(default=100, ge=1, le=200, description="取前N个板块"),
     db: Session = Depends(get_db),
 ):
     """
@@ -69,7 +69,7 @@ async def get_ranking(
     sort_by: str = Query(default="intensity", description="排序方式: turnover/intensity/change_pct"),
     query_date: Optional[str] = Query(default=None, description="查询日期 YYYY-MM-DD，默认今天"),
     behavior: Optional[str] = Query(default=None, description="行为过滤: grab/build/wash/sell"),
-    limit: int = Query(default=50, ge=1, le=200, description="返回条数"),
+    limit: int = Query(default=100, ge=1, le=200, description="返回条数"),
     db: Session = Depends(get_db),
 ):
     """

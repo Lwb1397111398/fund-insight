@@ -270,8 +270,8 @@ def main():
     total_count = len(all_sectors)
     logger.info(f"合并后共 {total_count} 个板块")
 
-    # 取前 200 个主力资金最活跃的板块补充成交额
-    top_n = min(200, len(all_sectors))
+    # 取前 100 个主力资金最活跃的板块补充成交额
+    top_n = min(100, len(all_sectors))
     top_sectors = all_sectors[:top_n]
     logger.info(f"开始补充前 {top_n} 个板块的成交额...")
 
@@ -306,7 +306,7 @@ def main():
         sys.exit(1)
 
     saved = save_to_database(all_sectors, flow_date, DATABASE_URL)
-    logger.info(f"抓取完成: 保存 {saved}/{total_count} 条（含 {top_n} 条有成交额）")
+    logger.info(f"抓取完成: 保存 {saved}/{total_count} 条（含 {top_n} 条有成交额，前100名）")
 
     if saved == 0:
         logger.error("未保存任何数据")
