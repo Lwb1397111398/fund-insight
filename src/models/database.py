@@ -1061,12 +1061,21 @@ class SectorFundFlow(Base):
     # 成交数据
     turnover = Column(Float)
     turnover_ratio = Column(Float)
-    
+
+    # 主力强度策略衍生指标
+    dark_pool = Column(Float)              # 主力暗盘（元）= 主力净流入 − 散户净流入
+    main_intensity = Column(Float)         # 主力强度（%）= (暗盘 / 成交额) × 100
+    behavior = Column(String(10))          # 行为判定: grab/build/wash/sell
+    data_category = Column(String(10))     # 板块类型: industry/concept
+    fetched_at = Column(DateTime)          # 抓取时间戳
+
     data_source = Column(String(50))
     created_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
         Index('ix_sector_fund_flow_date', 'flow_date'),
+        Index('ix_sector_flow_date_behavior', 'flow_date', 'behavior'),
+        Index('ix_sector_flow_intensity', 'main_intensity'),
     )
 
 

@@ -41,6 +41,7 @@ from src.api.routes import (
     stats_router,
     config_router,
 )
+from src.api.routes.sector_flow import router as sector_flow_router
 
 from src.api.routes.test_data import router as test_data_router
 
@@ -239,6 +240,7 @@ app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(test_data_router, prefix="/api")
 app.include_router(batch_analysis_router, prefix="/api")
+app.include_router(sector_flow_router, prefix="/api")
 
 
 @app.get("/api")

@@ -213,7 +213,7 @@
 
         .stats-mini-grid {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(7, 1fr);
             gap: var(--space-3);
             margin-bottom: var(--space-4);
         }
@@ -548,6 +548,55 @@
             background: var(--color-danger-light);
             color: var(--color-danger);
             border: 1px solid var(--color-danger-border);
+        }
+
+        /* 板块资金分析 - 行为标签 */
+        .behavior-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .behavior-grab {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+        }
+        .behavior-build {
+            background: #fff7ed;
+            color: #ea580c;
+            border: 1px solid #fdba74;
+        }
+        .behavior-wash {
+            background: #fefce8;
+            color: #ca8a04;
+            border: 1px solid #fde047;
+        }
+        .behavior-sell {
+            background: #f0fdf4;
+            color: #16a34a;
+            border: 1px solid #86efac;
+        }
+        .sector-type-tag {
+            font-size: 10px;
+            color: var(--color-text-tertiary);
+        }
+        .intensity-positive { color: var(--color-danger); font-weight: 600; }
+        .intensity-negative { color: var(--color-success); font-weight: 600; }
+        .fund-link-btn {
+            background: none;
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 11px;
+            cursor: pointer;
+            color: var(--color-primary);
+        }
+        .fund-link-btn:hover {
+            background: var(--color-primary-light);
+            border-color: var(--color-primary-border);
         }
 
         .verify-type-badge {
@@ -2076,6 +2125,10 @@
                         <div class="value">{{ cleanupPreview?.summary?.total || 0 }}</div>
                         <div class="label">待清理</div>
                     </div>
+                    <div class="stat-mini" @click="loadView('sector-flow')">
+                        <div class="value" style="color: #dc2626;">{{ sectorFlowStats.grab || 0 }}</div>
+                        <div class="label">🔥 抢筹板块</div>
+                    </div>
                 </div>
                 <div class="action-bar">
                     <button class="action-btn primary" @click="showAddBlogger = true"><i class="ri-user-line"></i> 管理博主</button>
@@ -2083,6 +2136,7 @@
                     <button class="action-btn primary" @click="loadView('predictions')"><i class="ri-target-line"></i> 管理预测</button>
                     <button class="action-btn primary" @click="loadView('viewpoints')"><i class="ri-lightbulb-line"></i> 管理观点</button>
                     <button class="action-btn success" @click="loadView('advice')"><i class="ri-line-chart-line"></i> 投资建议</button>
+                    <button class="action-btn" @click="loadView('sector-flow')" style="background: #fef2f2; color: #dc2626; border-color: #fca5a5;"><i class="ri-funds-line"></i> 板块资金</button>
                     <button class="action-btn danger" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理' }}</button>
                 </div>
                 <!-- 博主视图 -->
@@ -2707,6 +2761,139 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                <!-- 板块资金分析视图 -->
+                <div v-if="currentView === 'sector-flow'">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                        <h2 style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                            <i class="ri-funds-line" style="color: #dc2626;"></i> 板块主力资金分析
+                        </h2>
+                        <button class="action-btn primary small" @click="fetchSectorFlowData" :disabled="sectorFlowLoading">
+                            <i class="ri-refresh-line"></i> {{ sectorFlowLoading ? '抓取中...' : '刷新数据' }}
+                        </button>
+                    </div>
+                    <p style="color: var(--color-text-secondary); font-size: 13px; margin-bottom: 16px;">
+                        基于东方财富实时数据，计算<span style="color: #dc2626; font-weight: 600;">主力强度</span>识别主力行为：
+                        <span class="behavior-badge behavior-grab">抢筹</span>
+                        <span class="behavior-badge behavior-build">建仓</span>
+                        <span class="behavior-badge behavior-wash">洗盘</span>
+                        <span class="behavior-badge behavior-sell">出货</span>
+                    </p>
+                    <!-- 排序按钮 -->
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                        <button :class="['action-btn', 'small', sectorFlowSortBy === 'intensity' ? 'primary' : '']" @click="changeSortBy('intensity')">
+                            🔥 按主力强度
+                        </button>
+                        <button :class="['action-btn', 'small', sectorFlowSortBy === 'turnover' ? 'primary' : '']" @click="changeSortBy('turnover')">
+                            💰 按成交额
+                        </button>
+                        <button :class="['action-btn', 'small', sectorFlowSortBy === 'change_pct' ? 'primary' : '']" @click="changeSortBy('change_pct')">
+                            📈 按涨跌幅
+                        </button>
+                    </div>
+                    <!-- 行为筛选 -->
+                    <div style="display: flex; gap: 6px; margin-bottom: 16px;">
+                        <button :class="['behavior-badge', sectorFlowBehavior === 'all' ? 'behavior-grab' : '', 'cursor:pointer']" @click="filterByBehavior('all')" style="cursor: pointer;">全部</button>
+                        <button :class="['behavior-badge', 'behavior-grab', sectorFlowBehavior === 'grab' ? '' : 'opacity-50']" @click="filterByBehavior('grab')" style="cursor: pointer;">🔥 抢筹</button>
+                        <button :class="['behavior-badge', 'behavior-build', sectorFlowBehavior === 'build' ? '' : 'opacity-50']" @click="filterByBehavior('build')" style="cursor: pointer;">📥 建仓</button>
+                        <button :class="['behavior-badge', 'behavior-wash', sectorFlowBehavior === 'wash' ? '' : 'opacity-50']" @click="filterByBehavior('wash')" style="cursor: pointer;">🔄 洗盘</button>
+                        <button :class="['behavior-badge', 'behavior-sell', sectorFlowBehavior === 'sell' ? '' : 'opacity-50']" @click="filterByBehavior('sell')" style="cursor: pointer;">📤 出货</button>
+                    </div>
+                    <!-- 数据表格 -->
+                    <div class="data-table" v-if="filteredSectorFlow.length > 0">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>板块名称</th>
+                                    <th>类型</th>
+                                    <th>成交额(亿)</th>
+                                    <th>主力净流入</th>
+                                    <th>散户净流入</th>
+                                    <th>主力暗盘</th>
+                                    <th>主力强度</th>
+                                    <th>涨跌幅</th>
+                                    <th>行为</th>
+                                    <th>关联基金</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(item, index) in filteredSectorFlow" :key="item.sector_code + item.flow_date">
+                                    <td>{{ index + 1 }}</td>
+                                    <td>
+                                        <strong>{{ item.sector_name }}</strong>
+                                        <span class="sector-type-tag">{{ item.sector_code }}</span>
+                                    </td>
+                                    <td>
+                                        <span class="behavior-badge" :class="item.data_category === 'industry' ? 'behavior-build' : 'behavior-wash'">
+                                            {{ item.data_category === 'industry' ? '行业' : '概念' }}
+                                        </span>
+                                    </td>
+                                    <td>{{ item.turnover ? formatNumber(item.turnover, 2) : '-' }}</td>
+                                    <td :class="item.main_net_flow > 0 ? 'intensity-positive' : 'intensity-negative'">
+                                        {{ item.main_net_flow ? formatFlow(item.main_net_flow) : '-' }}
+                                    </td>
+                                    <td :class="item.retail_net_flow > 0 ? 'intensity-positive' : 'intensity-negative'">
+                                        {{ item.retail_net_flow ? formatFlow(item.retail_net_flow) : '-' }}
+                                    </td>
+                                    <td :class="item.dark_pool > 0 ? 'intensity-positive' : 'intensity-negative'">
+                                        {{ item.dark_pool ? formatFlow(item.dark_pool) : '-' }}
+                                    </td>
+                                    <td :class="item.main_intensity > 0 ? 'intensity-positive' : 'intensity-negative'">
+                                        {{ item.main_intensity != null ? item.main_intensity.toFixed(2) + '%' : '-' }}
+                                    </td>
+                                    <td :class="item.sector_change_pct > 0 ? 'intensity-positive' : 'intensity-negative'">
+                                        {{ item.sector_change_pct != null ? item.sector_change_pct.toFixed(2) + '%' : '-' }}
+                                    </td>
+                                    <td>
+                                        <span class="behavior-badge" :class="'behavior-' + item.behavior">
+                                            {{ item.behavior_cn || '-' }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <button class="fund-link-btn" @click="showFundLink(item.sector)">
+                                            🔍 查看
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="empty-state">
+                        <div class="empty-state-icon"><i class="ri-funds-line"></i></div>
+                        <h3>暂无板块资金数据</h3>
+                        <p>点击"刷新数据"按钮从东方财富获取最新数据</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 关联基金弹窗 -->
+        <div v-if="showFundLinkModal" class="modal-overlay" @click.self="showFundLinkModal = false">
+            <div class="modal" style="max-width: 600px;">
+                <div class="modal-header">
+                    <span>🔍 {{ selectedSectorForFundLink }} - 关联基金</span>
+                    <button class="modal-close" @click="showFundLinkModal = false">×</button>
+                </div>
+                <div style="padding: 16px 0;">
+                    <div v-if="fundLinkData.length > 0">
+                        <p style="color: var(--color-text-secondary); font-size: 13px; margin-bottom: 12px;">
+                            该板块关联 {{ fundLinkData.length }} 只基金：
+                        </p>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+                            <div v-for="fund in fundLinkData" :key="fund.code" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--color-bg-secondary); border-radius: 6px;">
+                                <span style="font-weight: 600; color: var(--color-primary); font-size: 12px;">{{ fund.code }}</span>
+                                <span style="font-size: 13px; flex: 1;">{{ fund.name }}</span>
+                                <span v-if="fund.reviewed" style="font-size: 10px; background: #dbeafe; color: #1d4ed8; padding: 2px 6px; border-radius: 4px;">已审</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="empty-state">
+                        <p>该板块暂无关联基金</p>
+                        <p style="font-size: 12px; color: var(--color-text-tertiary);">请在"板块-基金映射"中添加关联</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn" @click="showFundLinkModal = false">关闭</button>
                 </div>
             </div>
         </div>
@@ -3609,6 +3796,8 @@
                     localStorage.setItem('theme', theme.value);
                 };
                 const loading = ref(true), currentView = ref('bloggers'), stats = ref({}), bloggers = ref([]), posts = ref([]), predictions = ref([]), viewpoints = ref([]), funds = ref([]);
+                // 板块资金分析
+                const sectorFlowData = ref([]), sectorFlowSortBy = ref('intensity'), sectorFlowBehavior = ref('all'), sectorFlowLoading = ref(false), sectorFlowStats = ref({}), selectedSectorForFundLink = ref(null), showFundLinkModal = ref(false), fundLinkData = ref([]);
                 // 密码认证相关
                 const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false), passwordError = ref(''), authReady = ref(false);
                 const checkAuth = async () => {
@@ -3773,6 +3962,20 @@ const fetchWeChatBatch = async () => {
                         return new Date(b.target_date) - new Date(a.target_date);
                     });
                 });
+                // 板块资金数据筛选
+                const filteredSectorFlow = computed(() => {
+                    let data = sectorFlowData.value;
+                    if (sectorFlowBehavior.value !== 'all') {
+                        data = data.filter(d => d.behavior === sectorFlowBehavior.value);
+                    }
+                    return data;
+                });
+                // 格式化资金（亿）
+                const formatFlow = (val) => {
+                    if (!val) return '-';
+                    const yi = val / 1e8;
+                    return (yi > 0 ? '+' : '') + yi.toFixed(2) + '亿';
+                };
                 const postDetail = ref(null), viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null);
                 const fetchStats = async () => { try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
                 const fetchBloggers = async () => { const res = await axios.get('/api/bloggers'); if (res.data.success) bloggers.value = res.data.data.sort((a, b) => (b.accuracy_rate || 0) - (a.accuracy_rate || 0)); };
@@ -3781,7 +3984,14 @@ const fetchWeChatBatch = async () => {
                 const fetchViewpoints = async () => { const res = await axios.get('/api/viewpoints'); if (res.data.success) viewpoints.value = res.data.data; };
                 const fetchFunds = async () => { const res = await axios.get('/api/funds?group_by_sector=false'); if (res.data.success) funds.value = res.data.data.sort((a, b) => (b.day_growth || 0) - (a.day_growth || 0)); };
                 const fetchCleanupPreview = async () => { try { const res = await axios.get('/api/config/cleanup/preview'); if (res.data.success) cleanupPreview.value = res.data.data; } catch (e) { console.error(e); } };
-                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await fetchViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } else if (view === 'advice') { await loadAdviceHistory(); } };
+                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await fetchViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } else if (view === 'advice') { await loadAdviceHistory(); } else if (view === 'sector-flow') { await fetchSectorRanking(); await fetchSectorStats(); } };
+                // 板块资金分析 - 数据获取
+                const fetchSectorFlowData = async () => { sectorFlowLoading.value = true; try { const res = await axios.post('/api/sector-flow/fetch', null, { params: { limit: 30 } }); if (res.data.success) { alert(res.data.message); await fetchSectorRanking(); await fetchSectorStats(); } else { alert('抓取失败: ' + (res.data.error || '未知错误')); } } catch (e) { alert('抓取失败: ' + (e.response?.data?.detail || e.message)); } sectorFlowLoading.value = false; };
+                const fetchSectorRanking = async () => { try { const res = await axios.get('/api/sector-flow/ranking', { params: { sort_by: sectorFlowSortBy.value, behavior: sectorFlowBehavior.value === 'all' ? '' : sectorFlowBehavior.value, limit: 50 } }); if (res.data.success) sectorFlowData.value = res.data.data; } catch (e) { console.error('fetchSectorRanking error:', e); } };
+                const fetchSectorStats = async () => { try { const res = await axios.get('/api/sector-flow/stats'); if (res.data.success) sectorFlowStats.value = res.data.data; } catch (e) { console.error('fetchSectorStats error:', e); } };
+                const changeSortBy = async (sortBy) => { sectorFlowSortBy.value = sortBy; await fetchSectorRanking(); };
+                const filterByBehavior = async (behavior) => { sectorFlowBehavior.value = behavior; await fetchSectorRanking(); };
+                const showFundLink = async (sectorName) => { try { const res = await axios.get('/api/sector-flow/fund-link', { params: { limit: 50 } }); if (res.data.success) { const match = res.data.data.find(d => d.sector_name === sectorName); fundLinkData.value = match ? match.funds : []; selectedSectorForFundLink.value = sectorName; showFundLinkModal.value = true; } } catch (e) { alert('获取关联基金失败'); } };
                 const addBlogger = async () => { try { await axios.post('/api/bloggers', newBlogger); showAddBlogger.value = false; newBlogger.name = ''; await fetchBloggers(); await fetchStats(); } catch (e) { alert('添加失败'); } };
                 const addPost = async () => { 
                     try { 
@@ -4124,7 +4334,7 @@ const fetchWeChatBatch = async () => {
                     importLoading.value = false;
                 };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData, sectorFlowData, sectorFlowSortBy, sectorFlowBehavior, sectorFlowLoading, sectorFlowStats, filteredSectorFlow, formatFlow, fetchSectorFlowData, fetchSectorRanking, fetchSectorStats, changeSortBy, filterByBehavior, showFundLink, showFundLinkModal, fundLinkData, selectedSectorForFundLink };
             }
         }).mount('#app');
     </script>
