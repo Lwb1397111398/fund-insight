@@ -99,15 +99,13 @@ def fetch_sector_list(sector_type: str) -> List[Dict]:
             if not sector_code or not sector_name:
                 continue
 
-            # 东方财富API数据结构：
-            # f66=超大单净流入, f72=大单净流入, f78=中单净流入, f84=小单净流入
-            # f62=主力暗盘（主力-散户的差值），f184=主力净流入占比
-            # 注意：f66+f72 = -(f78+f84)，API定义如此
+            # 东方财富API字段：
+            # f66=超大单净流入, f72=大单净流入
+            # f78=中单净流入, f84=小单净流入
             super_large = safe_float(item.get("f66"))
             large = safe_float(item.get("f72"))
             medium = safe_float(item.get("f78"))
             small = safe_float(item.get("f84"))
-            dark_pool = safe_float(item.get("f62"))  # 主力暗盘，API直接给出
 
             # 主力净流入 = 超大单 + 大单
             main_net = None
@@ -118,6 +116,11 @@ def fetch_sector_list(sector_type: str) -> List[Dict]:
             retail_net = None
             if medium is not None and small is not None:
                 retail_net = medium + small
+
+            # 主力暗盘 = 主力 - 散户（按用户策略公式计算）
+            dark_pool = None
+            if main_net is not None and retail_net is not None:
+                dark_pool = main_net - retail_net
 
             results.append({
                 "sector_code": sector_code,
@@ -211,7 +214,7 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
             logger.info(f"删除当天旧数据 {deleted} 条")
 
         for record in records:
-            # 暗盘直接用API的f62值
+            # 暗盘 = 主力 - 散户（已在fetch_sector_list中计算）
             dark_pool = record.get("dark_pool")
             intensity = calculate_intensity(dark_pool, record.get("turnover"))
             behavior = judge_behavior(intensity)

@@ -137,8 +137,6 @@ class SectorFlowCrawler:
                     continue
 
                 # 解析各单型资金流向（单位：元）
-                # 注意：f62 不是主力净流入，它是主力-散户的差值
-                # 正确计算：主力 = 超大单(f66) + 大单(f72)，散户 = 中单(f78) + 小单(f84)
                 super_large = self._safe_float(item.get("f66"))  # 超大单净流入
                 large = self._safe_float(item.get("f72"))        # 大单净流入
                 medium = self._safe_float(item.get("f78"))       # 中单净流入
@@ -153,6 +151,11 @@ class SectorFlowCrawler:
                 retail_net = None
                 if medium is not None and small is not None:
                     retail_net = medium + small
+
+                # 主力暗盘 = 主力 - 散户
+                dark_pool = None
+                if main_net is not None and retail_net is not None:
+                    dark_pool = main_net - retail_net
 
                 results.append({
                     "sector_code": sector_code,
