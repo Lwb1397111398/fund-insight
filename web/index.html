@@ -2830,7 +2830,7 @@
                                             {{ item.data_category === 'industry' ? '行业' : '概念' }}
                                         </span>
                                     </td>
-                                    <td>{{ item.turnover ? formatNumber(item.turnover, 2) : '-' }}</td>
+                                    <td>{{ item.turnover != null ? item.turnover.toFixed(2) : '-' }}</td>
                                     <td :class="item.main_net_flow > 0 ? 'intensity-positive' : 'intensity-negative'">
                                         {{ item.main_net_flow ? formatFlow(item.main_net_flow) : '-' }}
                                     </td>
@@ -2852,7 +2852,7 @@
                                         </span>
                                     </td>
                                     <td>
-                                        <button class="fund-link-btn" @click="showFundLink(item.sector)">
+                                        <button class="fund-link-btn" @click="showFundLink(item.sector_name)">
                                             🔍 查看
                                         </button>
                                     </td>
