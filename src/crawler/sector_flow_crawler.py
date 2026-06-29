@@ -142,15 +142,13 @@ class SectorFlowCrawler:
                 medium = self._safe_float(item.get("f78"))       # 中单净流入
                 small = self._safe_float(item.get("f84"))        # 小单净流入
 
-                # 主力净流入 = 超大单 + 大单
+                # 主力净流入 = 超大单 + 大单 + 中单
                 main_net = None
-                if super_large is not None and large is not None:
-                    main_net = super_large + large
+                if super_large is not None and large is not None and medium is not None:
+                    main_net = super_large + large + medium
 
-                # 散户净流入 = 中单 + 小单
-                retail_net = None
-                if medium is not None and small is not None:
-                    retail_net = medium + small
+                # 散户净流入 = 小单
+                retail_net = small
 
                 # 主力暗盘 = 主力 - 散户
                 dark_pool = None
