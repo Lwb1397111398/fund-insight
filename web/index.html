@@ -2811,9 +2811,9 @@
                                     <th>板块名称</th>
                                     <th>类型</th>
                                     <th>成交额(亿)</th>
-                                    <th>主力净流入</th>
-                                    <th>散户净流入</th>
-                                    <th>主力暗盘</th>
+                                    <th>主力净流入(万)</th>
+                                    <th>散户净流入(万)</th>
+                                    <th>主力暗盘(万)</th>
                                     <th>主力强度</th>
                                     <th>涨跌幅</th>
                                     <th>行为</th>
@@ -3973,11 +3973,11 @@ const fetchWeChatBatch = async () => {
                     }
                     return data;
                 });
-                // 格式化资金（亿）
+                // 格式化资金（万元，保留整数避免精度丢失）
                 const formatFlow = (val) => {
                     if (!val) return '-';
-                    const yi = val / 1e8;
-                    return (yi > 0 ? '+' : '') + yi.toFixed(2) + '亿';
+                    const wan = val / 1e4;
+                    return (wan > 0 ? '+' : '') + Math.round(wan).toLocaleString() + '万';
                 };
                 // 格式化抓取时间
                 const formatFetchedTime = (isoStr) => {
