@@ -40,8 +40,8 @@ HEADERS = {
 }
 
 
-def fetch_with_retry(url: str, params: dict, max_retries: int = 3) -> Optional[dict]:
-    """带重试的 HTTP 请求"""
+def fetch_with_retry(url: str, params: dict, max_retries: int = 5) -> Optional[dict]:
+    """带重试的 HTTP 请求（502/503/504 用指数退避，最多重试5次）"""
     session = requests.Session()
     session.headers.update(HEADERS)
 
@@ -57,8 +57,9 @@ def fetch_with_retry(url: str, params: dict, max_retries: int = 3) -> Optional[d
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if hasattr(e, 'response') and e.response is not None else 0
             if status in (502, 503, 504):
+                # 东方财富服务端临时错误，指数退避重试（3s, 6s, 12s, 24s, 48s）
                 wait = 3 * (2 ** attempt)
-                logger.warning(f"服务端错误({status})，等待 {wait}s 后重试")
+                logger.warning(f"服务端错误({status})，等待 {wait}s 后重试 ({attempt + 1}/{max_retries})")
                 time.sleep(wait)
             elif status == 429:
                 time.sleep(5)
@@ -246,6 +247,40 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
     return saved
 
 
+def fetch_all_sectors_with_retry(max_attempts: int = 3, wait_seconds: int = 60) -> List[Dict]:
+    """
+    带重试的板块数据抓取
+
+    如果 API 返回空数据（502/503/504），等待后重试，最多 max_attempts 次。
+    这样不需要人工干预，自动等到 API 恢复。
+    """
+    for attempt in range(1, max_attempts + 1):
+        logger.info(f"第 {attempt}/{max_attempts} 次尝试抓取...")
+
+        # 抓取行业板块
+        industry_list = fetch_sector_list("industry")
+        time.sleep(1)
+
+        # 抓取概念板块
+        concept_list = fetch_sector_list("concept")
+
+        # 合并排序
+        all_sectors = industry_list + concept_list
+        all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
+
+        if all_sectors:
+            logger.info(f"成功获取 {len(all_sectors)} 个板块数据")
+            return all_sectors
+
+        # 获取失败，等待后重试
+        if attempt < max_attempts:
+            logger.warning(f"未获取到数据，等待 {wait_seconds}s 后重试...")
+            time.sleep(wait_seconds)
+
+    logger.error(f"重试 {max_attempts} 次后仍无法获取数据")
+    return []
+
+
 def main():
     logger.info("=" * 50)
     logger.info("板块资金流向数据抓取开始")
@@ -254,23 +289,19 @@ def main():
     flow_date = date.today()
     logger.info(f"目标日期: {flow_date}")
 
-    # 抓取行业板块
-    industry_list = fetch_sector_list("industry")
-    time.sleep(1)
-
-    # 抓取概念板块
-    concept_list = fetch_sector_list("concept")
-
-    # 合并排序
-    all_sectors = industry_list + concept_list
-    all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
+    # 带重试抓取板块列表（最多3次，每次间隔60s）
+    all_sectors = fetch_all_sectors_with_retry(max_attempts=3, wait_seconds=60)
 
     total_count = len(all_sectors)
     logger.info(f"合并后共 {total_count} 个板块")
 
+    if not all_sectors:
+        # API 不可用（502/503/504），保留旧数据，不删不写
+        logger.warning("API 不可用，未获取到数据，保留旧数据不变。下次运行将自动重试。")
+        sys.exit(0)  # 退出码0，避免 GitHub Actions 标记为失败
+
     # 为所有板块补充成交额（共100个）
-    top_sectors = all_sectors
-    logger.info(f"开始补充 {len(top_sectors)} 个板块的成交额...")
+    logger.info(f"开始补充 {total_count} 个板块的成交额...")
 
     # 总时间预算：5 分钟（300s），避免个别超时拖垮整体
     budget_seconds = 300
@@ -278,7 +309,7 @@ def main():
     success_count = 0
     skip_count = 0
 
-    for i, sector in enumerate(top_sectors):
+    for i, sector in enumerate(all_sectors):
         # 检查时间预算
         elapsed = time.time() - start_time
         if elapsed > budget_seconds:
@@ -293,21 +324,17 @@ def main():
             skip_count += 1
         time.sleep(0.05)  # 限流：50ms 间隔
         if (i + 1) % 50 == 0:
-            logger.info(f"  成交额进度: {i + 1}/{top_n} (成功 {success_count}, 跳过 {skip_count})")
+            logger.info(f"  成交额进度: {i + 1}/{total_count} (成功 {success_count}, 跳过 {skip_count})")
 
     logger.info(f"成交额补充完成: 成功 {success_count}, 跳过 {skip_count}, 用时 {time.time() - start_time:.0f}s")
 
-    # 保存全量数据（包括无成交额的，至少有资金流向数据）
-    if not all_sectors:
-        logger.error("未获取到任何板块数据")
-        sys.exit(1)
-
+    # 保存全量数据
     saved = save_to_database(all_sectors, flow_date, DATABASE_URL)
-    logger.info(f"抓取完成: 保存 {saved}/{total_count} 条（含 {top_n} 条有成交额，前100名）")
+    logger.info(f"抓取完成: 保存 {saved}/{total_count} 条")
 
     if saved == 0:
-        logger.error("未保存任何数据")
-        sys.exit(1)
+        logger.warning("未保存任何数据，保留旧数据不变。下次运行将自动重试。")
+        sys.exit(0)  # 退出码0，避免 GitHub Actions 标记为失败
 
 
 if __name__ == "__main__":
