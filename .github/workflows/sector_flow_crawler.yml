@@ -23,4 +23,5 @@ jobs:
       - name: Run crawler
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: ${{ github.workspace }}
         run: python scripts/fetch_sector_flow.py
