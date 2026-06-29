@@ -146,20 +146,39 @@ class SectorFlowService:
         """
         触发抓取 → 计算衍生指标 → 保存到数据库
 
+        如果东方财富 API 不可用（502/503/504），会尝试使用最近一次缓存数据。
+
         Args:
             limit: 取前 N 个板块补充成交额
 
         Returns:
-            保存/更新的记录数
+            保存/更新的记录数，失败返回 0
         """
+        raw_data = None
         try:
             raw_data = self.crawler.fetch_all(limit=limit)
         except Exception as e:
-            logger.error(f"[SectorFlowService] 抓取失败: {e}")
-            return 0
+            logger.error(f"[SectorFlowService] 抓取异常: {e}")
 
         if not raw_data:
-            logger.warning("[SectorFlowService] 抓取返回空数据")
+            logger.warning("[SectorFlowService] 抓取返回空数据，尝试使用最近缓存")
+            # 尝试使用最近的缓存数据
+            latest_date = self._get_latest_data_date()
+            if latest_date and latest_date != date.today():
+                cached = self.db.query(SectorFundFlow).filter(
+                    SectorFundFlow.flow_date == latest_date
+                ).limit(limit).all()
+                if cached:
+                    logger.info(f"[SectorFlowService] 使用 {latest_date} 的缓存数据 ({len(cached)} 条)")
+                    # 将缓存数据日期更新为今天
+                    for r in cached:
+                        r.flow_date = date.today()
+                    try:
+                        self.db.commit()
+                        return len(cached)
+                    except Exception as e:
+                        self.db.rollback()
+                        logger.error(f"[SectorFlowService] 缓存更新失败: {e}")
             return 0
 
         saved_count = 0
@@ -395,6 +414,12 @@ class SectorFlowService:
         return stats
 
     # ==================== 工具方法 ====================
+
+    def _get_latest_data_date(self) -> Optional[date]:
+        """获取最近一次有数据的日期"""
+        from sqlalchemy import func
+        result = self.db.query(func.max(SectorFundFlow.flow_date)).scalar()
+        return result
 
     @staticmethod
     def _record_to_dict(record: SectorFundFlow) -> Dict:

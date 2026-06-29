@@ -41,16 +41,26 @@ async def fetch_sector_flow(
     try:
         service = SectorFlowService(db)
         count = service.fetch_and_save(limit=limit)
-        return {
-            "success": True,
-            "data": {"saved_count": count},
-            "message": f"成功保存 {count} 条板块资金流向数据",
-        }
+        if count > 0:
+            return {
+                "success": True,
+                "data": {"saved_count": count},
+                "message": f"成功保存 {count} 条板块资金流向数据",
+            }
+        else:
+            return {
+                "success": False,
+                "data": {"saved_count": 0},
+                "message": "数据抓取失败：东方财富 API 暂时不可用（502），请稍后重试。最近一次缓存数据仍可用于查看。",
+                "error_code": "UPSTREAM_API_ERROR",
+            }
     except Exception as e:
         logger.error(f"[SectorFlow API] 抓取失败: {e}")
         return {
             "success": False,
-            "error": f"数据抓取失败: {str(e)}",
+            "data": {"saved_count": 0},
+            "message": f"数据抓取失败: {str(e)}",
+            "error_code": "INTERNAL_ERROR",
         }
 
 

@@ -77,12 +77,18 @@ class SectorFlowCrawler:
                 logger.warning(f"[SectorFlow] 超时 (尝试 {attempt + 1}/{self.max_retries})，等待 {wait}s")
                 time.sleep(wait)
             except requests.exceptions.HTTPError as e:
-                if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
+                status = e.response.status_code if hasattr(e, 'response') and e.response is not None else 0
+                if status == 429:
                     logger.warning("[SectorFlow] 限流(429)，等待 5s")
                     time.sleep(5)
+                elif status in (502, 503, 504):
+                    # 东方财富服务端临时错误，指数退避重试
+                    wait = 3 * (2 ** attempt)
+                    logger.warning(f"[SectorFlow] 服务端错误({status})，等待 {wait}s 后重试 ({attempt + 1}/{self.max_retries})")
+                    time.sleep(wait)
                 else:
-                    logger.warning(f"[SectorFlow] HTTP 错误: {e}")
-                    break
+                    logger.warning(f"[SectorFlow] HTTP 错误({status}): {e}")
+                    time.sleep(2 ** attempt)
             except Exception as e:
                 logger.warning(f"[SectorFlow] 请求异常: {e}")
                 time.sleep(1)
