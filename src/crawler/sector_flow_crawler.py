@@ -111,7 +111,7 @@ class SectorFlowCrawler:
 
         params = {
             "pn": 1,
-            "pz": 5000,
+            "pz": 50,
             "po": 1,
             "np": 1,
             "fltt": 2,
@@ -212,18 +212,18 @@ class SectorFlowCrawler:
         """
         完整抓取流程
 
-        1. 抓取行业板块和概念板块列表（全量）
+        1. 抓取行业板块和概念板块列表（各50个）
         2. 合并后按主力净流入降序排序
-        3. 取前 turnover_limit 个板块补充成交额
-        4. 返回全量数据（包括有/无成交额的）
+        3. 为所有板块补充成交额
+        4. 返回全量数据
 
         Args:
-            turnover_limit: 取前 N 个板块补充成交额（默认 200）
+            turnover_limit: 保留参数（兼容旧接口），实际返回所有板块
 
         Returns:
-            全量板块资金流向列表
+            全量板块资金流向列表（100条）
         """
-        # 第一步：抓取两种板块
+        # 第一步：抓取两种板块（各50个）
         industry_list = self.fetch_sector_list("industry")
         time.sleep(0.5)  # 板块间延迟
         concept_list = self.fetch_sector_list("concept")
@@ -233,12 +233,11 @@ class SectorFlowCrawler:
         # 按主力净流入降序（None 排到最后）
         all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
 
-        # 第三步：取前 turnover_limit 个补充成交额
-        top_sectors = all_sectors[:turnover_limit]
-        if top_sectors:
-            self._fill_turnovers(top_sectors)
+        # 第三步：为所有板块补充成交额
+        if all_sectors:
+            self._fill_turnovers(all_sectors)
 
-        logger.info(f"[SectorFlow] 最终获取 {len(all_sectors)} 条板块数据（{len(top_sectors)} 条有成交额）")
+        logger.info(f"[SectorFlow] 最终获取 {len(all_sectors)} 条板块数据（全部有成交额）")
         return all_sectors
 
     def _fill_turnovers(self, sectors: List[Dict]):

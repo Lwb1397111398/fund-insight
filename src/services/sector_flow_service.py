@@ -151,7 +151,7 @@ class SectorFlowService:
         如果东方财富 API 不可用（502/503/504），会尝试使用最近一次缓存数据。
 
         Args:
-            turnover_limit: 取前 N 个板块补充成交额（默认 200）
+            turnover_limit: 保留参数（兼容旧接口），实际返回所有板块
 
         Returns:
             保存/更新的记录数，失败返回 0

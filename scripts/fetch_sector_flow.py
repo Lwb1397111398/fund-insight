@@ -79,7 +79,7 @@ def fetch_sector_list(sector_type: str) -> List[Dict]:
         return []
 
     params = {
-        "pn": 1, "pz": 5000, "po": 1, "np": 1,
+        "pn": 1, "pz": 50, "po": 1, "np": 1,
         "fltt": 2, "invt": 2, "fid": "f62",
         "fs": fs, "fields": SECTOR_FIELDS,
     }
@@ -268,10 +268,9 @@ def main():
     total_count = len(all_sectors)
     logger.info(f"合并后共 {total_count} 个板块")
 
-    # 取前 100 个主力资金最活跃的板块补充成交额
-    top_n = min(100, len(all_sectors))
-    top_sectors = all_sectors[:top_n]
-    logger.info(f"开始补充前 {top_n} 个板块的成交额...")
+    # 为所有板块补充成交额（共100个）
+    top_sectors = all_sectors
+    logger.info(f"开始补充 {len(top_sectors)} 个板块的成交额...")
 
     # 总时间预算：5 分钟（300s），避免个别超时拖垮整体
     budget_seconds = 300
