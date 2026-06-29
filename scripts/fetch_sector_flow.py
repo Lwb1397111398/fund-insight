@@ -289,21 +289,30 @@ def main():
     all_sectors = industry_list + concept_list
     all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
 
-    # 取前 50 个补充成交额
-    top_sectors = all_sectors[:50]
-    for sector in top_sectors:
+    total_count = len(all_sectors)
+    logger.info(f"合并后共 {total_count} 个板块")
+
+    # 取前 200 个主力资金最活跃的板块补充成交额
+    # 200 个 × 0.1s = 约 20s，远低于 GitHub Actions 10 分钟限制
+    top_n = min(200, len(all_sectors))
+    top_sectors = all_sectors[:top_n]
+    logger.info(f"开始补充前 {top_n} 个板块的成交额...")
+
+    for i, sector in enumerate(top_sectors):
         turnover = fetch_turnover(sector["sector_code"])
         if turnover is not None:
             sector["turnover"] = turnover
-        time.sleep(0.1)
+        time.sleep(0.1)  # 限流：100ms 间隔
+        if (i + 1) % 50 == 0:
+            logger.info(f"  成交额进度: {i + 1}/{top_n}")
 
-    if not top_sectors:
+    # 保存全量数据（包括无成交额的，至少有资金流向数据）
+    if not all_sectors:
         logger.error("未获取到任何板块数据")
         sys.exit(1)
 
-    # 保存
-    saved = save_to_database(top_sectors, flow_date, DATABASE_URL)
-    logger.info(f"抓取完成: 保存 {saved}/{len(top_sectors)} 条")
+    saved = save_to_database(all_sectors, flow_date, DATABASE_URL)
+    logger.info(f"抓取完成: 保存 {saved}/{total_count} 条（含 {top_n} 条有成交额）")
 
     if saved == 0:
         logger.error("未保存任何数据")

@@ -142,21 +142,21 @@ class SectorFlowService:
 
     # ==================== 数据操作 ====================
 
-    def fetch_and_save(self, limit: int = 30) -> int:
+    def fetch_and_save(self, turnover_limit: int = 200) -> int:
         """
         触发抓取 → 计算衍生指标 → 保存到数据库
 
         如果东方财富 API 不可用（502/503/504），会尝试使用最近一次缓存数据。
 
         Args:
-            limit: 取前 N 个板块补充成交额
+            turnover_limit: 取前 N 个板块补充成交额（默认 200）
 
         Returns:
             保存/更新的记录数，失败返回 0
         """
         raw_data = None
         try:
-            raw_data = self.crawler.fetch_all(limit=limit)
+            raw_data = self.crawler.fetch_all(turnover_limit=turnover_limit)
         except Exception as e:
             logger.error(f"[SectorFlowService] 抓取异常: {e}")
 
