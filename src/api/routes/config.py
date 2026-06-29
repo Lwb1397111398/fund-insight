@@ -130,6 +130,7 @@ async def run_cleanup():
             orphan_funds = result.get("orphan_funds", {})
             total = result.get("total_deleted", 0)
 
+            sector_flow = result.get("sector_flow", {})
             parts = []
             if predictions.get('deleted', 0) > 0:
                 parts.append(f"{predictions.get('deleted', 0)} 个过期预测")
@@ -143,6 +144,8 @@ async def run_cleanup():
                 parts.append(f"{advice.get('deleted', 0)} 条过期投资建议")
             if orphan_funds.get('deleted', 0) > 0:
                 parts.append(f"{orphan_funds.get('deleted', 0)} 个孤儿基金")
+            if sector_flow.get('deleted', 0) > 0:
+                parts.append(f"{sector_flow.get('deleted', 0)} 条板块资金历史")
 
             if parts:
                 message = f"清理完成，共删除 {total} 项：{', '.join(parts)}"
@@ -423,7 +426,14 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                 "name": b.name,
                 "grade": b.grade
             })
-        
+
+        # 板块资金流向 - 超过 90 天的历史数据
+        from src.models.database import SectorFundFlow
+        cutoff_90_days = today - timedelta(days=90)
+        old_sector_flow_count = db.query(SectorFundFlow).filter(
+            SectorFundFlow.flow_date < cutoff_90_days
+        ).count()
+
         return {
             "success": True,
             "data": {
@@ -432,13 +442,15 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                 "posts": posts_list,
                 "funds": funds_list,
                 "bloggers": bloggers_list,
+                "sector_flow_old_count": old_sector_flow_count,
                 "summary": {
                     "predictions_count": len(predictions_list),
                     "viewpoints_count": len(viewpoints_list),
                     "posts_count": len(posts_list),
                     "funds_count": len(funds_list),
                     "bloggers_count": len(bloggers_list),
-                    "total": len(predictions_list) + len(viewpoints_list) + len(posts_list) + len(funds_list) + len(bloggers_list)
+                    "sector_flow_old_count": old_sector_flow_count,
+                    "total": len(predictions_list) + len(viewpoints_list) + len(posts_list) + len(funds_list) + len(bloggers_list) + old_sector_flow_count
                 }
             }
         }
