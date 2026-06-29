@@ -133,18 +133,26 @@ def fetch_sector_list(sector_type: str) -> List[Dict]:
 
 
 def fetch_turnover(sector_code: str) -> Optional[float]:
-    """获取单个板块成交额（亿元）"""
+    """获取单个板块成交额（亿元），超时返回 None"""
     params = {
         "secid": f"90.{sector_code}",
         "fields": "f48",
         "fltt": 2, "invt": 2,
     }
 
-    data = fetch_with_retry(SECTOR_DETAIL_URL, params)
-    if data and "data" in data and data["data"] is not None:
-        raw = data["data"].get("f48")
-        if raw is not None:
-            return float(raw) / 1e8
+    # 使用较短超时，避免个别板块拖慢整体
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    try:
+        resp = session.get(SECTOR_DETAIL_URL, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data and "data" in data and data["data"] is not None:
+            raw = data["data"].get("f48")
+            if raw is not None:
+                return float(raw) / 1e8
+    except Exception:
+        pass
     return None
 
 
@@ -293,18 +301,34 @@ def main():
     logger.info(f"合并后共 {total_count} 个板块")
 
     # 取前 200 个主力资金最活跃的板块补充成交额
-    # 200 个 × 0.1s = 约 20s，远低于 GitHub Actions 10 分钟限制
     top_n = min(200, len(all_sectors))
     top_sectors = all_sectors[:top_n]
     logger.info(f"开始补充前 {top_n} 个板块的成交额...")
 
+    # 总时间预算：5 分钟（300s），避免个别超时拖垮整体
+    budget_seconds = 300
+    start_time = time.time()
+    success_count = 0
+    skip_count = 0
+
     for i, sector in enumerate(top_sectors):
+        # 检查时间预算
+        elapsed = time.time() - start_time
+        if elapsed > budget_seconds:
+            logger.warning(f"时间预算用尽 ({elapsed:.0f}s)，停止补充成交额")
+            break
+
         turnover = fetch_turnover(sector["sector_code"])
         if turnover is not None:
             sector["turnover"] = turnover
-        time.sleep(0.1)  # 限流：100ms 间隔
+            success_count += 1
+        else:
+            skip_count += 1
+        time.sleep(0.05)  # 限流：50ms 间隔
         if (i + 1) % 50 == 0:
-            logger.info(f"  成交额进度: {i + 1}/{top_n}")
+            logger.info(f"  成交额进度: {i + 1}/{top_n} (成功 {success_count}, 跳过 {skip_count})")
+
+    logger.info(f"成交额补充完成: 成功 {success_count}, 跳过 {skip_count}, 用时 {time.time() - start_time:.0f}s")
 
     # 保存全量数据（包括无成交额的，至少有资金流向数据）
     if not all_sectors:
