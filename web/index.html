@@ -2769,9 +2769,11 @@
                         <h2 style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
                             <i class="ri-funds-line" style="color: #dc2626;"></i> 板块主力资金分析
                         </h2>
-                        <button class="action-btn primary small" @click="fetchSectorFlowData" :disabled="sectorFlowLoading">
-                            <i class="ri-refresh-line"></i> {{ sectorFlowLoading ? '抓取中...' : '刷新数据' }}
-                        </button>
+                        <span style="font-size: 12px; color: var(--color-text-tertiary); display: flex; align-items: center; gap: 4px;">
+                            <i class="ri-time-line"></i>
+                            {{ sectorFlowData.length > 0 ? '数据日期: ' + (sectorFlowData[0].flow_date || '今日') : '暂无数据' }}
+                            | 共 {{ sectorFlowData.length }} 个板块
+                        </span>
                     </div>
                     <p style="color: var(--color-text-secondary); font-size: 13px; margin-bottom: 16px;">
                         基于东方财富实时数据，计算<span style="color: #dc2626; font-weight: 600;">主力强度</span>识别主力行为：
@@ -2779,6 +2781,7 @@
                         <span class="behavior-badge behavior-build">建仓</span>
                         <span class="behavior-badge behavior-wash">洗盘</span>
                         <span class="behavior-badge behavior-sell">出货</span>
+                        <span style="margin-left: 8px; font-size: 11px; color: var(--color-text-tertiary);">📅 每个交易日 15:30 自动更新</span>
                     </p>
                     <!-- 排序按钮 -->
                     <div style="display: flex; gap: 8px; margin-bottom: 12px;">
