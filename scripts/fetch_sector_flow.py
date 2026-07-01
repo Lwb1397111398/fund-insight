@@ -2,18 +2,20 @@
 板块资金流向数据抓取脚本
 由 GitHub Actions 定时执行，数据直接写入 Supabase
 
+使用 AkShare 获取东方财富板块资金流向数据（一次请求返回全部字段含成交额）。
+
 使用方式:
-1. GitHub Actions 自动执行（每个交易日 15:30 北京时间）
+1. GitHub Actions 自动执行（每个交易日 13:30 北京时间）
 2. 手动触发: python scripts/fetch_sector_flow.py
 """
 import os
 import sys
-import time
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Dict, List, Optional
 
-import requests
+import akshare as ak
+import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from src.models.database import SectorFundFlow
@@ -28,148 +30,88 @@ if not DATABASE_URL:
     logger.error("DATABASE_URL 环境变量未设置")
     sys.exit(1)
 
-# 东方财富 API
-SECTOR_LIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
-SECTOR_DETAIL_URL = "https://push2.eastmoney.com/api/qt/stock/get"
-SECTOR_FIELDS = "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f85,f124"
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Referer': 'https://data.eastmoney.com/',
-}
+def fetch_sector_fund_flow(sector_type: str) -> List[Dict]:
+    """
+    使用 AkShare 获取板块资金流向数据
 
+    Args:
+        sector_type: "行业资金流" 或 "概念资金流"
 
-def fetch_with_retry(url: str, params: dict, max_retries: int = 5) -> Optional[dict]:
-    """带重试的 HTTP 请求（502/503/504 用指数退避，最多重试5次）"""
-    session = requests.Session()
-    session.headers.update(HEADERS)
+    Returns:
+        板块数据列表
+    """
+    type_label = "行业" if "行业" in sector_type else "概念"
+    logger.info(f"开始获取{type_label}板块资金流向...")
 
-    for attempt in range(max_retries):
-        try:
-            resp = session.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.Timeout:
-            wait = 2 ** attempt
-            logger.warning(f"超时 (尝试 {attempt + 1}/{max_retries})，等待 {wait}s")
-            time.sleep(wait)
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if hasattr(e, 'response') and e.response is not None else 0
-            if status in (502, 503, 504):
-                # 东方财富服务端临时错误，指数退避重试（3s, 6s, 12s, 24s, 48s）
-                wait = 3 * (2 ** attempt)
-                logger.warning(f"服务端错误({status})，等待 {wait}s 后重试 ({attempt + 1}/{max_retries})")
-                time.sleep(wait)
-            elif status == 429:
-                time.sleep(5)
-            else:
-                logger.error(f"HTTP 错误({status}): {e}")
-                break
-        except Exception as e:
-            logger.error(f"请求异常: {e}")
-            time.sleep(1)
-    return None
-
-
-def fetch_sector_list(sector_type: str) -> List[Dict]:
-    """获取板块资金流向列表"""
-    fs_map = {"industry": "m:90+t:2", "concept": "m:90+t:3"}
-    fs = fs_map.get(sector_type)
-    if not fs:
+    try:
+        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
+    except Exception as e:
+        logger.error(f"AkShare 获取{type_label}板块数据失败: {e}")
         return []
 
-    params = {
-        "pn": 1, "pz": 50, "po": 1, "np": 1,
-        "fltt": 2, "invt": 2, "fid": "f62",
-        "fs": fs, "fields": SECTOR_FIELDS,
-    }
-
-    data = fetch_with_retry(SECTOR_LIST_URL, params)
-    if not data or "data" not in data or data["data"] is None:
-        logger.warning(f"{sector_type} 列表返回为空")
+    if df is None or df.empty:
+        logger.warning(f"{type_label}板块数据为空")
         return []
 
-    items = data["data"].get("diff", [])
+    # 打印列名以便调试
+    logger.info(f"AkShare 返回列名: {df.columns.tolist()}")
+
     results = []
-
-    for item in items:
+    for _, row in df.iterrows():
         try:
-            sector_code = str(item.get("f12", ""))
-            sector_name = str(item.get("f14", ""))
-            if not sector_code or not sector_name:
+            sector_name = str(row.get("名称", ""))
+            if not sector_name:
                 continue
 
-            # 东方财富API字段：
-            # f66=超大单净流入, f72=大单净流入
-            # f78=中单净流入, f84=小单净流入
-            super_large = safe_float(item.get("f66"))
-            large = safe_float(item.get("f72"))
-            medium = safe_float(item.get("f78"))
-            small = safe_float(item.get("f84"))
+            # 涨跌幅
+            change_pct = _safe_float(row.get("今日涨跌幅"))
 
-            # 主力净流入 = 超大单 + 大单 + 中单
+            # 成交额（元）
+            turnover_raw = _safe_float(row.get("成交额"))
+            # 转为亿元
+            turnover = turnover_raw / 1e8 if turnover_raw is not None else None
+
+            # 各单型资金净流入（元）
+            super_large = _safe_float(row.get("超大单净流入-净额"))  # 超大单
+            large = _safe_float(row.get("大单净流入-净额"))          # 大单
+            medium = _safe_float(row.get("中单净流入-净额"))         # 中单
+            small = _safe_float(row.get("小单净流入-净额"))          # 小单
+
+            # 主力净流入 = 超大单 + 大单
             main_net = None
-            if super_large is not None and large is not None and medium is not None:
-                main_net = super_large + large + medium
+            if super_large is not None and large is not None:
+                main_net = super_large + large
 
-            # 散户净流入 = 小单
-            retail_net = small
-
-            # 主力暗盘 = 主力 - 散户（按用户策略公式计算）
-            dark_pool = None
-            if main_net is not None and retail_net is not None:
-                dark_pool = main_net - retail_net
+            # 散户净流入 = 中单 + 小单
+            retail_net = None
+            if medium is not None and small is not None:
+                retail_net = medium + small
 
             results.append({
-                "sector_code": sector_code,
+                "sector_code": "",  # AkShare 不返回板块代码，后续通过映射补充
                 "sector_name": sector_name,
-                "change_pct": safe_float(item.get("f3")),
+                "change_pct": change_pct,
+                "turnover": turnover,
                 "main_net_flow": main_net,
                 "super_large_flow": super_large,
                 "large_flow": large,
                 "medium_flow": medium,
                 "small_flow": small,
                 "retail_net_flow": retail_net,
-                "dark_pool": dark_pool,
-                "main_net_ratio": safe_float(item.get("f184")),
-                "data_category": sector_type,
+                "data_category": "industry" if "行业" in sector_type else "concept",
             })
         except Exception as e:
-            logger.warning(f"解析板块数据异常: {e}")
+            logger.warning(f"解析{type_label}板块数据异常: {e}")
             continue
 
-    logger.info(f"{sector_type} 获取 {len(results)} 条")
+    logger.info(f"{type_label}板块获取 {len(results)} 条")
     return results
 
 
-def fetch_turnover(sector_code: str) -> Optional[float]:
-    """获取单个板块成交额（亿元），超时返回 None"""
-    params = {
-        "secid": f"90.{sector_code}",
-        "fields": "f48",
-        "fltt": 2, "invt": 2,
-    }
-
-    # 使用较短超时，避免个别板块拖慢整体
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    try:
-        resp = session.get(SECTOR_DETAIL_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if data and "data" in data and data["data"] is not None:
-            raw = data["data"].get("f48")
-            if raw is not None:
-                return float(raw) / 1e8
-    except Exception:
-        pass
-    return None
-
-
-def safe_float(value) -> Optional[float]:
+def _safe_float(value) -> Optional[float]:
     """安全转 float"""
-    if value is None or value == "-" or value == "":
+    if value is None or pd.isna(value):
         return None
     try:
         return float(value)
@@ -177,15 +119,37 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
+def calculate_dark_pool(main_net: Optional[float], retail_net: Optional[float]) -> Optional[float]:
+    """
+    主力暗盘 = 主力净流入 - 散户净流入
+
+    主力 = 超大单 + 大单
+    散户 = 中单 + 小单
+    """
+    if main_net is None or retail_net is None:
+        return None
+    return main_net - retail_net
+
+
 def calculate_intensity(dark_pool: Optional[float], turnover: Optional[float]) -> Optional[float]:
-    """主力强度 = (暗盘 / 成交额) × 100"""
+    """
+    主力强度 = (暗盘 / 成交额) × 100
+
+    暗盘单位：元，成交额单位：亿元
+    """
     if dark_pool is None or turnover is None or turnover == 0:
         return None
     return (dark_pool / (turnover * 1e8)) * 100
 
 
 def judge_behavior(intensity: Optional[float]) -> Optional[str]:
-    """行为判定"""
+    """
+    行为判定：
+    - ≥ 3  抢筹 (grab)
+    - 1~3  建仓 (build)
+    - -1~1 洗盘 (wash)
+    - ≤ -1 出货 (sell)
+    """
     if intensity is None:
         return None
     if intensity >= 3.0:
@@ -213,12 +177,10 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
             logger.info(f"删除当天旧数据 {deleted} 条")
 
         for record in records:
-            # 暗盘 = 主力 - 散户（已在fetch_sector_list中计算）
-            dark_pool = record.get("dark_pool")
+            dark_pool = calculate_dark_pool(record.get("main_net_flow"), record.get("retail_net_flow"))
             intensity = calculate_intensity(dark_pool, record.get("turnover"))
             behavior = judge_behavior(intensity)
 
-            # 直接插入（已先删旧数据，无需 upsert）
             new_record = SectorFundFlow(
                 flow_date=flow_date,
                 sector_code=record.get("sector_code", ""),
@@ -231,7 +193,7 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
                 main_intensity=intensity,
                 behavior=behavior,
                 data_category=record.get("data_category"),
-                data_source="eastmoney",
+                data_source="akshare_eastmoney",
             )
             session.add(new_record)
             saved += 1
@@ -247,94 +209,39 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
     return saved
 
 
-def fetch_all_sectors_with_retry(max_attempts: int = 3, wait_seconds: int = 60) -> List[Dict]:
-    """
-    带重试的板块数据抓取
-
-    如果 API 返回空数据（502/503/504），等待后重试，最多 max_attempts 次。
-    这样不需要人工干预，自动等到 API 恢复。
-    """
-    for attempt in range(1, max_attempts + 1):
-        logger.info(f"第 {attempt}/{max_attempts} 次尝试抓取...")
-
-        # 抓取行业板块
-        industry_list = fetch_sector_list("industry")
-        time.sleep(1)
-
-        # 抓取概念板块
-        concept_list = fetch_sector_list("concept")
-
-        # 合并排序
-        all_sectors = industry_list + concept_list
-        all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
-
-        if all_sectors:
-            logger.info(f"成功获取 {len(all_sectors)} 个板块数据")
-            return all_sectors
-
-        # 获取失败，等待后重试
-        if attempt < max_attempts:
-            logger.warning(f"未获取到数据，等待 {wait_seconds}s 后重试...")
-            time.sleep(wait_seconds)
-
-    logger.error(f"重试 {max_attempts} 次后仍无法获取数据")
-    return []
-
-
 def main():
     logger.info("=" * 50)
-    logger.info("板块资金流向数据抓取开始")
+    logger.info("板块资金流向数据抓取开始（AkShare）")
     logger.info("=" * 50)
 
     flow_date = date.today()
     logger.info(f"目标日期: {flow_date}")
 
-    # 带重试抓取板块列表（最多3次，每次间隔60s）
-    all_sectors = fetch_all_sectors_with_retry(max_attempts=3, wait_seconds=60)
+    # 获取行业板块
+    industry_list = fetch_sector_fund_flow("行业资金流")
 
+    # 获取概念板块
+    concept_list = fetch_sector_fund_flow("概念资金流")
+
+    # 合并
+    all_sectors = industry_list + concept_list
     total_count = len(all_sectors)
     logger.info(f"合并后共 {total_count} 个板块")
 
     if not all_sectors:
-        # API 不可用（502/503/504），保留旧数据，不删不写
-        logger.warning("API 不可用，未获取到数据，保留旧数据不变。下次运行将自动重试。")
-        sys.exit(0)  # 退出码0，避免 GitHub Actions 标记为失败
+        logger.warning("未获取到任何数据，保留旧数据不变。")
+        sys.exit(0)
 
-    # 为所有板块补充成交额（共100个）
-    logger.info(f"开始补充 {total_count} 个板块的成交额...")
+    # 按主力净流入降序排序
+    all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
 
-    # 总时间预算：5 分钟（300s），避免个别超时拖垮整体
-    budget_seconds = 300
-    start_time = time.time()
-    success_count = 0
-    skip_count = 0
-
-    for i, sector in enumerate(all_sectors):
-        # 检查时间预算
-        elapsed = time.time() - start_time
-        if elapsed > budget_seconds:
-            logger.warning(f"时间预算用尽 ({elapsed:.0f}s)，停止补充成交额")
-            break
-
-        turnover = fetch_turnover(sector["sector_code"])
-        if turnover is not None:
-            sector["turnover"] = turnover
-            success_count += 1
-        else:
-            skip_count += 1
-        time.sleep(0.05)  # 限流：50ms 间隔
-        if (i + 1) % 50 == 0:
-            logger.info(f"  成交额进度: {i + 1}/{total_count} (成功 {success_count}, 跳过 {skip_count})")
-
-    logger.info(f"成交额补充完成: 成功 {success_count}, 跳过 {skip_count}, 用时 {time.time() - start_time:.0f}s")
-
-    # 保存全量数据
+    # 保存数据
     saved = save_to_database(all_sectors, flow_date, DATABASE_URL)
     logger.info(f"抓取完成: 保存 {saved}/{total_count} 条")
 
     if saved == 0:
-        logger.warning("未保存任何数据，保留旧数据不变。下次运行将自动重试。")
-        sys.exit(0)  # 退出码0，避免 GitHub Actions 标记为失败
+        logger.warning("未保存任何数据，保留旧数据不变。")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

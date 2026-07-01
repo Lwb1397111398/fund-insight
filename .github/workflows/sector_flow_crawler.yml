@@ -2,6 +2,7 @@ name: Sector Flow Crawler
 
 on:
   schedule:
+    # 每个交易日 13:30 北京时间（05:30 UTC）
     - cron: '30 5 * * 1-5'
   workflow_dispatch:
 
@@ -25,3 +26,14 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONPATH: ${{ github.workspace }}
         run: python scripts/fetch_sector_flow.py
+
+      # 如果 AkShare 失败，尝试重试一次
+      - name: Retry on failure
+        if: failure()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "首次抓取失败，等待 30 秒后重试..."
+          sleep 30
+          python scripts/fetch_sector_flow.py
