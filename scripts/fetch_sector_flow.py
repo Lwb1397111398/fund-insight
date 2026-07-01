@@ -301,10 +301,20 @@ def save_to_database(sectors: list):
         time_str = now.strftime("%H:%M:%S")
 
         for sector in sectors:
-            # 使用原生 SQL 避免模型不匹配问题
+            # 使用数据库中已有的表结构
+            # 字段映射:
+            # - flow_date: 日期
+            # - flow_time: 时间
+            # - sector_name: 板块名称
+            # - sector_code: 板块代码
+            # - main_net_flow: 主力净流入
+            # - retail_net_flow: 散户净流入
+            # - sector_change_pct: 涨跌幅
+            # - turnover: 成交额
+
             # 先检查是否已存在
             result = session.execute(
-                text("SELECT id FROM sector_fund_flow WHERE sector_name = :name AND date = :date"),
+                text("SELECT id FROM sector_fund_flow WHERE sector_name = :name AND flow_date = :date"),
                 {"name": sector["name"], "date": date_str}
             )
             existing = result.fetchone()
@@ -314,25 +324,19 @@ def save_to_database(sectors: list):
                 session.execute(
                     text("""
                         UPDATE sector_fund_flow
-                        SET change_pct = :change_pct,
-                            main_net_inflow = :main_net_inflow,
+                        SET main_net_flow = :main_net_flow,
                             retail_net_flow = :retail_net_flow,
-                            dark_pool = :dark_pool,
-                            intensity = :intensity,
-                            behavior = :behavior,
+                            sector_change_pct = :change_pct,
                             turnover = :turnover,
-                            update_time = :update_time
-                        WHERE sector_name = :name AND date = :date
+                            flow_time = :flow_time
+                        WHERE sector_name = :name AND flow_date = :date
                     """),
                     {
-                        "change_pct": sector["change_pct"],
-                        "main_net_inflow": sector["main_net_inflow"],
+                        "main_net_flow": sector["main_net_inflow"],
                         "retail_net_flow": sector["retail_net_flow"],
-                        "dark_pool": sector["dark_pool"],
-                        "intensity": sector["intensity"],
-                        "behavior": sector["behavior"],
+                        "change_pct": sector["change_pct"],
                         "turnover": sector["turnover"],
-                        "update_time": now,
+                        "flow_time": now,
                         "name": sector["name"],
                         "date": date_str,
                     }
@@ -342,26 +346,21 @@ def save_to_database(sectors: list):
                 session.execute(
                     text("""
                         INSERT INTO sector_fund_flow
-                        (sector_name, sector_code, change_pct, main_net_inflow, retail_net_flow,
-                         dark_pool, intensity, behavior, turnover, date, time, create_time, update_time)
+                        (flow_date, flow_time, sector_name, sector_code,
+                         main_net_flow, retail_net_flow, sector_change_pct, turnover)
                         VALUES
-                        (:sector_name, :sector_code, :change_pct, :main_net_inflow, :retail_net_flow,
-                         :dark_pool, :intensity, :behavior, :turnover, :date, :time, :create_time, :update_time)
+                        (:flow_date, :flow_time, :sector_name, :sector_code,
+                         :main_net_flow, :retail_net_flow, :change_pct, :turnover)
                     """),
                     {
+                        "flow_date": date_str,
+                        "flow_time": now,
                         "sector_name": sector["name"],
                         "sector_code": sector["code"],
-                        "change_pct": sector["change_pct"],
-                        "main_net_inflow": sector["main_net_inflow"],
+                        "main_net_flow": sector["main_net_inflow"],
                         "retail_net_flow": sector["retail_net_flow"],
-                        "dark_pool": sector["dark_pool"],
-                        "intensity": sector["intensity"],
-                        "behavior": sector["behavior"],
+                        "change_pct": sector["change_pct"],
                         "turnover": sector["turnover"],
-                        "date": date_str,
-                        "time": time_str,
-                        "create_time": now,
-                        "update_time": now,
                     }
                 )
 
