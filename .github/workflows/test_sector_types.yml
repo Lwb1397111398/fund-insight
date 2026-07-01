@@ -14,5 +14,8 @@ jobs:
       with:
         python-version: '3.12'
 
+    - name: Install dependencies
+      run: pip install requests
+
     - name: Run test
       run: python scripts/test_sector_types.py
