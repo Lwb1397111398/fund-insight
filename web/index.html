@@ -2121,13 +2121,13 @@
                         <div class="value">{{ stats.overall?.total_funds || 0 }}</div>
                         <div class="label">基金</div>
                     </div>
-                    <div class="stat-mini" @click="loadView('cleanup')">
-                        <div class="value">{{ cleanupPreview?.summary?.total || 0 }}</div>
-                        <div class="label">待清理</div>
-                    </div>
                     <div class="stat-mini" @click="loadView('sector-flow')">
                         <div class="value" style="color: #dc2626;">{{ sectorFlowStats.grab || 0 }}</div>
                         <div class="label">🔥 抢筹板块</div>
+                    </div>
+                    <div class="stat-mini" @click="loadView('cleanup')">
+                        <div class="value">{{ cleanupPreview?.summary?.total || 0 }}</div>
+                        <div class="label">待清理</div>
                     </div>
                 </div>
                 <div class="action-bar">
