@@ -23,7 +23,10 @@ import requests
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from src.models.database import SectorFundFlow
-from src.crawler.sector_mapping import get_level1_sector
+
+# 直接导入映射模块，避免触发 src.crawler 的导入链
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sector_mapping import get_level1_sector
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
