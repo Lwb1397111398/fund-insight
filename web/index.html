@@ -2780,6 +2780,9 @@
                         <span class="behavior-badge behavior-build">建仓</span>
                         <span class="behavior-badge behavior-wash">洗盘</span>
                         <span class="behavior-badge behavior-sell">出货</span>
+                        <br>
+                        <small>主力=超大单+大单 | 散户=仅小单 | 主力暗盘=主力-散户 | 主力强度=暗盘/成交额×100</small>
+                        <span class="behavior-badge behavior-sell">出货</span>
                         <span style="margin-left: 8px; font-size: 11px; color: var(--color-text-tertiary);">📅 每个交易日 13:30 自动更新</span>
                     </p>
                     <!-- 排序按钮 -->
@@ -2811,9 +2814,9 @@
                                     <th>板块名称</th>
                                     <th>类型</th>
                                     <th>成交额(亿)</th>
-                                    <th>主力净流入(万)</th>
-                                    <th>散户净流入(万)</th>
-                                    <th>主力暗盘(万)</th>
+                                    <th>主力净流入(亿)</th>
+                                    <th>散户净流入(亿)</th>
+                                    <th>主力暗盘(亿)</th>
                                     <th>主力强度</th>
                                     <th>涨跌幅</th>
                                     <th>行为</th>
@@ -3973,11 +3976,10 @@ const fetchWeChatBatch = async () => {
                     }
                     return data;
                 });
-                // 格式化资金（万元，保留整数避免精度丢失）
+                // 格式化资金（亿元，保留两位小数）
                 const formatFlow = (val) => {
-                    if (!val) return '-';
-                    const wan = val / 1e4;
-                    return (wan > 0 ? '+' : '') + Math.round(wan).toLocaleString() + '万';
+                    if (!val && val !== 0) return '-';
+                    return (val > 0 ? '+' : '') + val.toFixed(2) + '亿';
                 };
                 // 格式化抓取时间
                 const formatFetchedTime = (isoStr) => {
