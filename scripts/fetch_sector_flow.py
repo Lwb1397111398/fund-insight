@@ -107,15 +107,15 @@ def fetch_sector_data(order_by: str, count: int, max_retries: int = 3) -> list:
             # 主力强度 = 暗盘 / 成交额 × 100
             intensity = (dark_pool / turnover_yi * 100) if turnover_yi > 0 else 0
 
-            # 行为判定
+            # 行为判定（英文标签，与数据库一致）
             if intensity >= 3:
-                behavior = "抢筹"
+                behavior = "grab"
             elif intensity >= 1:
-                behavior = "建仓"
+                behavior = "build"
             elif intensity >= -1:
-                behavior = "洗盘"
+                behavior = "wash"
             else:
-                behavior = "出货"
+                behavior = "sell"
 
             sectors.append({
                 "name": name,
@@ -188,15 +188,15 @@ def aggregate_by_level1(sectors: list) -> list:
         else:
             intensity = 0
 
-        # 行为判定
+        # 行为判定（英文标签，与数据库一致）
         if intensity >= 3:
-            behavior = "抢筹"
+            behavior = "grab"
         elif intensity >= 1:
-            behavior = "建仓"
+            behavior = "build"
         elif intensity >= -1:
-            behavior = "洗盘"
+            behavior = "wash"
         else:
-            behavior = "出货"
+            behavior = "sell"
 
         result.append({
             "name": level1,
@@ -246,13 +246,17 @@ def main():
     aggregated = aggregate_by_level1(merged_sectors)
     print(f"   聚合后共 {len(aggregated)} 个板块")
 
+    # 行为中文映射（仅用于打印显示）
+    BEHAVIOR_CN = {"grab": "抢筹", "build": "建仓", "wash": "洗盘", "sell": "出货"}
+
     # 5. 打印统计
     print("\n=== 板块资金流向统计 ===")
     print(f"{'板块名称':12} {'涨跌幅':>8} {'主力净流入':>12} {'散户净流入':>12} {'主力暗盘':>12} {'主力强度':>8} {'行为':>6} {'成交额':>10}")
     print("-" * 100)
 
     for sector in aggregated[:15]:  # 只显示前15个
-        print(f"{sector['name']:12} {sector['change_pct']:>7.2f}% {sector['main_net_inflow']:>11.2f}亿 {sector['retail_net_flow']:>11.2f}亿 {sector['dark_pool']:>11.2f}亿 {sector['intensity']:>7.2f}% {sector['behavior']:>6} {sector['turnover']:>9.2f}亿")
+        behavior_cn = BEHAVIOR_CN.get(sector['behavior'], sector['behavior'])
+        print(f"{sector['name']:12} {sector['change_pct']:>7.2f}% {sector['main_net_inflow']:>11.2f}亿 {sector['retail_net_flow']:>11.2f}亿 {sector['dark_pool']:>11.2f}亿 {sector['intensity']:>7.2f}% {behavior_cn:>6} {sector['turnover']:>9.2f}亿")
 
     if len(aggregated) > 15:
         print(f"... 还有 {len(aggregated) - 15} 个板块")
@@ -324,6 +328,9 @@ def save_to_database(sectors: list):
                         UPDATE sector_fund_flow
                         SET main_net_flow = :main_net_flow,
                             retail_net_flow = :retail_net_flow,
+                            dark_pool = :dark_pool,
+                            main_intensity = :main_intensity,
+                            behavior = :behavior,
                             sector_change_pct = :change_pct,
                             turnover = :turnover,
                             flow_time = :flow_time
@@ -332,6 +339,9 @@ def save_to_database(sectors: list):
                     {
                         "main_net_flow": sector["main_net_inflow"],
                         "retail_net_flow": sector["retail_net_flow"],
+                        "dark_pool": sector["dark_pool"],
+                        "main_intensity": sector["intensity"],
+                        "behavior": sector["behavior"],
                         "change_pct": sector["change_pct"],
                         "turnover": sector["turnover"],
                         "flow_time": now,
@@ -345,10 +355,12 @@ def save_to_database(sectors: list):
                     text("""
                         INSERT INTO sector_fund_flow
                         (flow_date, flow_time, sector_name, sector_code,
-                         main_net_flow, retail_net_flow, sector_change_pct, turnover)
+                         main_net_flow, retail_net_flow, dark_pool, main_intensity, behavior,
+                         sector_change_pct, turnover)
                         VALUES
                         (:flow_date, :flow_time, :sector_name, :sector_code,
-                         :main_net_flow, :retail_net_flow, :change_pct, :turnover)
+                         :main_net_flow, :retail_net_flow, :dark_pool, :main_intensity, :behavior,
+                         :change_pct, :turnover)
                     """),
                     {
                         "flow_date": date_str,
@@ -357,6 +369,9 @@ def save_to_database(sectors: list):
                         "sector_code": sector["code"],
                         "main_net_flow": sector["main_net_inflow"],
                         "retail_net_flow": sector["retail_net_flow"],
+                        "dark_pool": sector["dark_pool"],
+                        "main_intensity": sector["intensity"],
+                        "behavior": sector["behavior"],
                         "change_pct": sector["change_pct"],
                         "turnover": sector["turnover"],
                     }
