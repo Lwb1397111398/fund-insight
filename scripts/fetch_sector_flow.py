@@ -1,374 +1,346 @@
 """
-板块资金流向数据抓取脚本
-由 GitHub Actions 定时执行，数据直接写入 Supabase
+板块资金流向爬取脚本（GitHub Actions 专用）
 
-核心口径（对齐直播间）：
-- 主力 = 超大单 + 大单
-- 散户 = 仅小单（中单被剥离）
-- 主力 + 散户 + 中单 = 0（零和）
-- 主力 + 散户 ≠ 0（因为中单被排除）
-
-使用方式:
-1. GitHub Actions 自动执行（每个交易日 13:30 北京时间）
-2. 手动触发: python scripts/fetch_sector_flow.py
+使用东方财富直接 API，按申万一级行业聚合。
+数据获取策略：按成交额取前80个 + 按主力净流入取前20个，去重后聚合。
 """
-import os
+
 import sys
-import logging
-from datetime import date
-from typing import Dict, List, Optional
-from collections import defaultdict
+import os
+from pathlib import Path
+
+# 添加 scripts 目录到 Python 路径
+sys.path.insert(0, str(Path(__file__).parent))
 
 import requests
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from src.models.database import SectorFundFlow
-
-# 直接导入映射模块，避免触发 src.crawler 的导入链
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import json
+from datetime import datetime
+from collections import defaultdict
 from sector_mapping import get_level1_sector
 
-# 设置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger(__name__)
-
-# 数据库连接
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-if not DATABASE_URL:
-    logger.error("DATABASE_URL 环境变量未设置")
-    sys.exit(1)
-
-# 东方财富 API 配置
+# === 配置 ===
 API_URL = "https://push2.eastmoney.com/api/qt/clist/get"
-API_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Referer": "https://data.eastmoney.com/",
-}
 
-# 板块类型映射
-SECTOR_TYPE_MAP = {
-    "industry": "m:90+t:2",   # 行业板块
-    "concept": "m:90+t:3",    # 概念板块
-}
+# 东方财富 API 字段说明:
+# f12=板块代码, f14=板块名称, f3=涨跌幅(%), f62=主力净流入, f184=主力净流入占比
+# f66=超大单净流入, f69=超大单占比, f72=大单净流入, f75=大单占比
+# f78=中单净流入, f81=中单占比, f84=小单净流入, f87=小单占比, f6=成交额
 
 
-def fetch_sector_fund_flow(sector_type: str) -> List[Dict]:
+def fetch_sector_data(order_by: str, count: int) -> list:
     """
-    使用东方财富直接 API 获取板块资金流向数据
+    从东方财富 API 获取板块资金流向数据
 
     Args:
-        sector_type: "industry"（行业板块）或 "concept"（概念板块）
+        order_by: 排序字段（f6=成交额, f62=主力净流入）
+        count: 获取数量
 
     Returns:
         板块数据列表
     """
-    fs = SECTOR_TYPE_MAP.get(sector_type, SECTOR_TYPE_MAP["industry"])
-    type_label = "行业" if sector_type == "industry" else "概念"
-
-    logger.info(f"开始获取{type_label}板块资金流向...")
-
+    # 获取行业板块 (fs=m:90+t:2)
     params = {
         "pn": 1,
-        "pz": 500,  # 最多获取500个板块
-        "po": 1,
+        "pz": count,
+        "po": 1,  # 降序
         "np": 1,
-        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
         "fltt": 2,
         "invt": 2,
-        "fid": "f267",  # 按主力净流入排序
-        "fs": fs,
-        "fields": "f12,f14,f3,f6,f267,f269,f271,f273,f275",
-        "_": "1625292448803",
+        "fid0": order_by,
+        "fs": "m:90+t:2",  # 行业板块
+        "stat": 1,
+        "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f6,f124",
+        "rt": "52975239",
+        "_": int(datetime.now().timestamp() * 1000),
     }
 
-    try:
-        resp = requests.get(API_URL, params=params, headers=API_HEADERS, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+    response = requests.get(API_URL, params=params, timeout=30)
+    data = response.json()
 
-        if "data" not in data or not data["data"]:
-            logger.warning(f"{type_label}板块数据为空")
-            return []
-
-        items = data["data"].get("diff", [])
-
-    except Exception as e:
-        logger.error(f"API 获取{type_label}板块数据失败: {e}")
+    if not data or "data" not in data or not data["data"]:
         return []
 
-    results = []
-    for item in items:
+    diff = data["data"].get("diff", [])
+    if not diff:
+        return []
+
+    sectors = []
+    for item in diff:
         try:
-            sector_name = item.get("f14", "")
-            if not sector_name:
-                continue
-
-            # 涨跌幅
-            change_pct = _safe_float(item.get("f3"))
-
-            # 成交额（元 → 亿元）
-            turnover_raw = _safe_float(item.get("f6"))
-            turnover = turnover_raw / 1e8 if turnover_raw is not None else None
-
-            # 各单型资金净流入（元 → 亿元）
-            super_large = _safe_float(item.get("f269"))  # 超大单
-            large = _safe_float(item.get("f271"))          # 大单
-            medium = _safe_float(item.get("f273"))         # 中单
-            small = _safe_float(item.get("f275"))          # 小单
+            # 解析数据
+            code = item.get("f12", "")
+            name = item.get("f14", "")
+            change_pct = item.get("f3", 0) or 0
+            main_net_inflow = item.get("f62", 0) or 0  # 主力净流入
+            super_large_net = item.get("f66", 0) or 0   # 超大单净流入
+            large_net = item.get("f72", 0) or 0         # 大单净流入
+            medium_net = item.get("f78", 0) or 0        # 中单净流入
+            small_net = item.get("f84", 0) or 0         # 小单净流入
+            turnover = item.get("f6", 0) or 0           # 成交额
 
             # 转换为亿元
-            if super_large is not None:
-                super_large = super_large / 1e8
-            if large is not None:
-                large = large / 1e8
-            if medium is not None:
-                medium = medium / 1e8
-            if small is not None:
-                small = small / 1e8
+            main_net_inflow_yi = main_net_inflow / 1e8
+            super_large_yi = super_large_net / 1e8
+            large_yi = large_net / 1e8
+            medium_yi = medium_net / 1e8
+            small_yi = small_net / 1e8
+            turnover_yi = turnover / 1e8
 
-            # 主力净流入 = 超大单 + 大单
-            main_net = None
-            if super_large is not None and large is not None:
-                main_net = super_large + large
+            # 自定义计算
+            # 主力 = 超大单 + 大单
+            custom_main = super_large_yi + large_yi
+            # 散户 = 仅小单
+            custom_retail = small_yi
+            # 主力暗盘 = 主力 - 散户
+            dark_pool = custom_main - custom_retail
+            # 主力强度 = 暗盘 / 成交额 × 100
+            intensity = (dark_pool / turnover_yi * 100) if turnover_yi > 0 else 0
 
-            # 散户净流入 = 仅小单（核心口径！）
-            retail_net = small
+            # 行为判定
+            if intensity >= 3:
+                behavior = "抢筹"
+            elif intensity >= 1:
+                behavior = "建仓"
+            elif intensity >= -1:
+                behavior = "洗盘"
+            else:
+                behavior = "出货"
 
-            results.append({
-                "sector_code": item.get("f12", ""),
-                "sector_name": sector_name,
+            sectors.append({
+                "name": name,
+                "code": code,
                 "change_pct": change_pct,
-                "turnover": turnover,
-                "main_net_flow": main_net,
-                "super_large_flow": super_large,
-                "large_flow": large,
-                "medium_flow": medium,
-                "small_flow": small,
-                "retail_net_flow": retail_net,
-                "data_category": sector_type,
+                "main_net_inflow": round(custom_main, 2),
+                "retail_net_flow": round(custom_retail, 2),
+                "dark_pool": round(dark_pool, 2),
+                "intensity": round(intensity, 2),
+                "behavior": behavior,
+                "turnover": round(turnover_yi, 2),
             })
         except Exception as e:
-            logger.warning(f"解析{type_label}板块数据异常: {e}")
+            print(f"Error parsing item: {e}")
             continue
 
-    logger.info(f"{type_label}板块获取 {len(results)} 条")
-    return results
+    return sectors
 
 
-def _safe_float(value) -> Optional[float]:
-    """安全转 float"""
-    if value is None or value == "-" or value == "":
-        return None
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return None
-
-
-def calculate_dark_pool(main_net: Optional[float], retail_net: Optional[float]) -> Optional[float]:
+def aggregate_by_level1(sectors: list) -> list:
     """
-    主力暗盘 = 主力净流入 - 散户净流入
+    按申万一级行业聚合板块数据
 
-    主力 = 超大单 + 大单
-    散户 = 仅小单
+    聚合规则:
+    - 涨跌幅: 按成交额加权平均
+    - 资金流相关: 直接求和
+    - 强度: 重新计算
+    - 行为: 重新判定
     """
-    if main_net is None or retail_net is None:
-        return None
-    return main_net - retail_net
-
-
-def calculate_intensity(dark_pool: Optional[float], turnover: Optional[float]) -> Optional[float]:
-    """
-    主力强度 = (暗盘 / 成交额) × 100
-
-    暗盘单位：亿元，成交额单位：亿元
-    """
-    if dark_pool is None or turnover is None or turnover == 0:
-        return None
-    return (dark_pool / turnover) * 100
-
-
-def judge_behavior(intensity: Optional[float]) -> Optional[str]:
-    """
-    行为判定：
-    - ≥ 3  抢筹 (grab)
-    - 1~3  建仓 (build)
-    - -1~1 洗盘 (wash)
-    - ≤ -1 出货 (sell)
-    """
-    if intensity is None:
-        return None
-    if intensity >= 3.0:
-        return "grab"
-    if intensity >= 1.0:
-        return "build"
-    if intensity > -1.0:
-        return "wash"
-    return "sell"
-
-
-def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
-    """保存数据到数据库（先删旧数据，再插入新数据）"""
-    engine = create_engine(db_url)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-
-    saved = 0
-    try:
-        # 先删除当天旧数据（只保留最新一次抓取）
-        deleted = session.query(SectorFundFlow).filter(
-            SectorFundFlow.flow_date == flow_date
-        ).delete(synchronize_session=False)
-        if deleted > 0:
-            logger.info(f"删除当天旧数据 {deleted} 条")
-
-        for record in records:
-            dark_pool = calculate_dark_pool(record.get("main_net_flow"), record.get("retail_net_flow"))
-            intensity = calculate_intensity(dark_pool, record.get("turnover"))
-            behavior = judge_behavior(intensity)
-
-            new_record = SectorFundFlow(
-                flow_date=flow_date,
-                sector_code=record.get("sector_code", ""),
-                sector_name=record.get("sector_name", ""),
-                main_net_flow=record.get("main_net_flow"),
-                retail_net_flow=record.get("retail_net_flow"),
-                turnover=record.get("turnover"),
-                sector_change_pct=record.get("change_pct"),
-                dark_pool=dark_pool,
-                main_intensity=intensity,
-                behavior=behavior,
-                data_category=record.get("data_category"),
-                data_source="eastmoney_push2",
-            )
-            session.add(new_record)
-            saved += 1
-
-        session.commit()
-        logger.info(f"成功保存 {saved} 条记录")
-    except Exception as e:
-        session.rollback()
-        logger.error(f"数据库操作失败: {e}")
-    finally:
-        session.close()
-
-    return saved
-
-
-def aggregate_by_level1(sectors: List[Dict]) -> List[Dict]:
-    """
-    将细分板块聚合到申万一级行业
-
-    Args:
-        sectors: 细分板块数据列表
-
-    Returns:
-        按申万一级行业聚合后的数据列表
-    """
-    aggregated = defaultdict(lambda: {
-        "sector_code": "",
-        "sector_name": "",
-        "change_pct": None,
-        "turnover": 0.0,
-        "main_net_flow": 0.0,
-        "super_large_flow": 0.0,
-        "large_flow": 0.0,
-        "medium_flow": 0.0,
-        "small_flow": 0.0,
-        "retail_net_flow": 0.0,
-        "data_category": "industry",
-        "sub_sectors": [],
+    # 按一级行业分组
+    groups = defaultdict(lambda: {
         "_weighted_change": 0.0,
         "_total_weight": 0.0,
+        "main_net_inflow": 0.0,
+        "retail_net_flow": 0.0,
+        "dark_pool": 0.0,
+        "turnover": 0.0,
+        "sub_sectors": [],
     })
 
     for sector in sectors:
-        # 映射到申万一级行业
-        level1_name = get_level1_sector(sector["sector_name"])
+        level1 = get_level1_sector(sector["name"])
+        group = groups[level1]
 
-        # 聚合数据
-        agg = aggregated[level1_name]
-        agg["sector_name"] = level1_name
-        agg["sub_sectors"].append(sector["sector_name"])
+        # 累加资金流
+        group["main_net_inflow"] += sector["main_net_inflow"]
+        group["retail_net_flow"] += sector["retail_net_flow"]
+        group["dark_pool"] += sector["dark_pool"]
+        group["turnover"] += sector["turnover"]
 
-        # 累加数值字段
-        if sector.get("turnover") is not None:
-            agg["turnover"] += sector["turnover"]
-        if sector.get("main_net_flow") is not None:
-            agg["main_net_flow"] += sector["main_net_flow"]
-        if sector.get("super_large_flow") is not None:
-            agg["super_large_flow"] += sector["super_large_flow"]
-        if sector.get("large_flow") is not None:
-            agg["large_flow"] += sector["large_flow"]
-        if sector.get("medium_flow") is not None:
-            agg["medium_flow"] += sector["medium_flow"]
-        if sector.get("small_flow") is not None:
-            agg["small_flow"] += sector["small_flow"]
-        if sector.get("retail_net_flow") is not None:
-            agg["retail_net_flow"] += sector["retail_net_flow"]
+        # 加权涨跌幅
+        if sector["turnover"] > 0:
+            group["_weighted_change"] += sector["change_pct"] * sector["turnover"]
+            group["_total_weight"] += sector["turnover"]
 
-        # 涨跌幅用成交额加权平均
-        if sector.get("change_pct") is not None and sector.get("turnover") is not None:
-            if agg["_weighted_change"] is None:
-                agg["_weighted_change"] = 0.0
-                agg["_total_weight"] = 0.0
-            agg["_weighted_change"] += sector["change_pct"] * sector["turnover"]
-            agg["_total_weight"] += sector["turnover"]
+        group["sub_sectors"].append(sector["name"])
 
-    # 计算加权平均涨跌幅
+    # 生成聚合结果
     result = []
-    for level1_name, agg in aggregated.items():
-        if agg.get("_total_weight") and agg["_total_weight"] > 0:
-            agg["change_pct"] = agg["_weighted_change"] / agg["_total_weight"]
-        # 清理临时字段
-        agg.pop("_weighted_change", None)
-        agg.pop("_total_weight", None)
-        result.append(agg)
+    for level1, data in groups.items():
+        # 计算加权涨跌幅
+        if data["_total_weight"] > 0:
+            change_pct = data["_weighted_change"] / data["_total_weight"]
+        else:
+            change_pct = 0
 
+        # 重新计算强度
+        if data["turnover"] > 0:
+            intensity = (data["dark_pool"] / data["turnover"]) * 100
+        else:
+            intensity = 0
+
+        # 行为判定
+        if intensity >= 3:
+            behavior = "抢筹"
+        elif intensity >= 1:
+            behavior = "建仓"
+        elif intensity >= -1:
+            behavior = "洗盘"
+        else:
+            behavior = "出货"
+
+        result.append({
+            "name": level1,
+            "code": "",
+            "change_pct": round(change_pct, 2),
+            "main_net_inflow": round(data["main_net_inflow"], 2),
+            "retail_net_flow": round(data["retail_net_flow"], 2),
+            "dark_pool": round(data["dark_pool"], 2),
+            "intensity": round(intensity, 2),
+            "behavior": behavior,
+            "turnover": round(data["turnover"], 2),
+            "sub_count": len(data["sub_sectors"]),
+            "sub_sectors": data["sub_sectors"],
+        })
+
+    # 按主力净流入排序
+    result.sort(key=lambda x: x["main_net_inflow"], reverse=True)
     return result
 
 
 def main():
-    logger.info("=" * 50)
-    logger.info("板块资金流向数据抓取开始（东方财富直接 API）")
-    logger.info("=" * 50)
+    """主函数"""
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始获取板块资金流向数据")
 
-    flow_date = date.today()
-    logger.info(f"目标日期: {flow_date}")
+    # 1. 按成交额获取前80个
+    print("1. 按成交额获取前80个板块...")
+    sectors_by_turnover = fetch_sector_data("f6", 80)
+    print(f"   获取到 {len(sectors_by_turnover)} 个板块")
 
-    # 获取行业板块
-    industry_list = fetch_sector_fund_flow("industry")
+    # 2. 按主力净流入获取前20个
+    print("2. 按主力净流入获取前20个板块...")
+    sectors_by_inflow = fetch_sector_data("f62", 20)
+    print(f"   获取到 {len(sectors_by_inflow)} 个板块")
 
-    # 获取概念板块（可选，如果失败不影响主流程）
-    concept_list = []
+    # 3. 合并去重
+    print("3. 合并去重...")
+    seen = set()
+    merged_sectors = []
+    for sector in sectors_by_turnover + sectors_by_inflow:
+        if sector["name"] not in seen:
+            seen.add(sector["name"])
+            merged_sectors.append(sector)
+    print(f"   去重后共 {len(merged_sectors)} 个板块")
+
+    # 4. 按申万一级行业聚合
+    print("4. 按申万一级行业聚合...")
+    aggregated = aggregate_by_level1(merged_sectors)
+    print(f"   聚合后共 {len(aggregated)} 个板块")
+
+    # 5. 打印统计
+    print("\n=== 板块资金流向统计 ===")
+    print(f"{'板块名称':12} {'涨跌幅':>8} {'主力净流入':>12} {'散户净流入':>12} {'主力暗盘':>12} {'主力强度':>8} {'行为':>6} {'成交额':>10}")
+    print("-" * 100)
+
+    for sector in aggregated[:15]:  # 只显示前15个
+        print(f"{sector['name']:12} {sector['change_pct']:>7.2f}% {sector['main_net_inflow']:>11.2f}亿 {sector['retail_net_flow']:>11.2f}亿 {sector['dark_pool']:>11.2f}亿 {sector['intensity']:>7.2f}% {sector['behavior']:>6} {sector['turnover']:>9.2f}亿")
+
+    if len(aggregated) > 15:
+        print(f"... 还有 {len(aggregated) - 15} 个板块")
+
+    # 6. 保存到数据库
+    print("\n5. 保存到数据库...")
     try:
-        concept_list = fetch_sector_fund_flow("concept")
+        save_to_database(aggregated)
+        print(f"   成功保存 {len(aggregated)} 条记录")
     except Exception as e:
-        logger.warning(f"概念板块获取失败，跳过: {e}")
+        print(f"   保存失败: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
-    # 合并
-    all_sectors = industry_list + concept_list
-    total_count = len(all_sectors)
-    logger.info(f"合并后共 {total_count} 个细分板块")
+    print("\n=== 完成 ===")
 
-    if not all_sectors:
-        logger.warning("未获取到任何数据，保留旧数据不变。")
-        sys.exit(0)
 
-    # 按申万一级行业聚合
-    aggregated = aggregate_by_level1(all_sectors)
-    logger.info(f"聚合后共 {len(aggregated)} 个申万一级行业")
+def save_to_database(sectors: list):
+    """
+    保存板块资金流向数据到数据库
 
-    # 按主力净流入降序排序
-    aggregated.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
+    Args:
+        sectors: 聚合后的板块数据列表
+    """
+    import sys
+    from pathlib import Path
 
-    # 保存数据
-    saved = save_to_database(aggregated, flow_date, DATABASE_URL)
-    logger.info(f"抓取完成: 保存 {saved}/{len(aggregated)} 条")
+    # 添加项目根目录到 Python 路径
+    project_root = Path(__file__).parent.parent
+    sys.path.insert(0, str(project_root))
 
-    if saved == 0:
-        logger.warning("未保存任何数据，保留旧数据不变。")
-        sys.exit(0)
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    # 导入项目配置
+    from src.config import settings
+
+    # 导入模型
+    from src.models.database import SectorFundFlow, Base
+
+    # 创建数据库连接
+    engine = create_engine(settings.database_url, echo=False)
+
+    # 创建表（如果不存在）
+    Base.metadata.create_all(engine)
+
+    # 创建会话
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    try:
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+
+        for sector in sectors:
+            # 检查是否已存在（同一天同一个板块）
+            existing = session.query(SectorFundFlow).filter(
+                SectorFundFlow.sector_name == sector["name"],
+                SectorFundFlow.date == date_str,
+            ).first()
+
+            if existing:
+                # 更新现有记录
+                existing.change_pct = sector["change_pct"]
+                existing.main_net_inflow = sector["main_net_inflow"]
+                existing.retail_net_flow = sector["retail_net_flow"]
+                existing.dark_pool = sector["dark_pool"]
+                existing.intensity = sector["intensity"]
+                existing.behavior = sector["behavior"]
+                existing.turnover = sector["turnover"]
+                existing.update_time = now
+            else:
+                # 创建新记录
+                record = SectorFundFlow(
+                    sector_name=sector["name"],
+                    sector_code=sector["code"],
+                    change_pct=sector["change_pct"],
+                    main_net_inflow=sector["main_net_inflow"],
+                    retail_net_flow=sector["retail_net_flow"],
+                    dark_pool=sector["dark_pool"],
+                    intensity=sector["intensity"],
+                    behavior=sector["behavior"],
+                    turnover=sector["turnover"],
+                    date=date_str,
+                    time=time_str,
+                    create_time=now,
+                    update_time=now,
+                )
+                session.add(record)
+
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":
