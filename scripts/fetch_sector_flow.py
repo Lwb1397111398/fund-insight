@@ -27,13 +27,14 @@ API_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 # f78=中单净流入, f81=中单占比, f84=小单净流入, f87=小单占比, f6=成交额
 
 
-def fetch_sector_data(order_by: str, count: int) -> list:
+def fetch_sector_data(order_by: str, count: int, max_retries: int = 3) -> list:
     """
     从东方财富 API 获取板块资金流向数据
 
     Args:
         order_by: 排序字段（f6=成交额, f62=主力净流入）
         count: 获取数量
+        max_retries: 最大重试次数
 
     Returns:
         板块数据列表
@@ -55,8 +56,19 @@ def fetch_sector_data(order_by: str, count: int) -> list:
         "_": int(datetime.now().timestamp() * 1000),
     }
 
-    response = requests.get(API_URL, params=params, timeout=30)
-    data = response.json()
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(API_URL, params=params, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"   请求失败，重试 {attempt + 1}/{max_retries}: {e}")
+                import time
+                time.sleep(5)
+            else:
+                raise
 
     if not data or "data" not in data or not data["data"]:
         return []
