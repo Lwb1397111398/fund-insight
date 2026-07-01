@@ -122,8 +122,8 @@ def fetch_northbound_flow() -> Optional[dict]:
         logger.info("获取北向资金行业数据...")
 
         interfaces = [
-            ("stock_hsgt_industry_flow", lambda: ak.stock_hsgt_industry_flow(symbol="北向资金")),
-            ("stock_hsgt_board_flow_em", lambda: ak.stock_hsgt_board_flow_em(symbol="北向资金")),
+            ("stock_hsgt_board_rank_em", lambda: ak.stock_hsgt_board_rank_em(symbol="北向资金", indicator="今日")),
+            ("stock_hsgt_fund_flow_summary_em", lambda: ak.stock_hsgt_fund_flow_summary_em()),
         ]
 
         df = None
@@ -184,12 +184,12 @@ def fetch_tiger_list() -> Optional[dict]:
 
         df = None
         interfaces = [
-            ("stock_tiger_list", lambda: ak.stock_tiger_list()),
-            ("stock_lhb_detail_em", lambda: ak.stock_lhb_detail_em(
+            ("stock_lhb_jgmmtj_em", lambda: ak.stock_lhb_jgmmtj_em(
+                symbol="近一月",
                 start_date=(datetime.now() - timedelta(days=7)).strftime("%Y%m%d"),
                 end_date=datetime.now().strftime("%Y%m%d"),
-                symbol="近一月"
             )),
+            ("stock_lhb_stock_statistic_em", lambda: ak.stock_lhb_stock_statistic_em(symbol="近一月")),
         ]
 
         for name, func in interfaces:
@@ -224,16 +224,20 @@ def fetch_block_trade() -> Optional[dict]:
     try:
         logger.info("获取大宗交易数据...")
 
+        # 尝试可能的接口名
+        possible_names = ["stock_dzjy_mrtj", "stock_dzjy_sctj", "stock_dzjy_mrmx"]
+
         df = None
-        for i in range(5):
-            date = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
-            try:
-                df = ak.stock_block_trade(date=date)
-                if df is not None and not df.empty:
-                    logger.info(f"获取 {date} 大宗交易数据，共 {len(df)} 条")
-                    break
-            except:
-                continue
+        for name in possible_names:
+            if hasattr(ak, name):
+                try:
+                    func = getattr(ak, name)
+                    df = func()
+                    if df is not None and not df.empty:
+                        logger.info(f"使用 {name} 获取大宗交易数据，共 {len(df)} 条")
+                        break
+                except Exception as e:
+                    logger.warning(f"{name} 失败: {e}")
 
         if df is None or df.empty:
             logger.warning("大宗交易数据获取失败")
