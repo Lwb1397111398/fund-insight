@@ -17,11 +17,13 @@ import sys
 import logging
 from datetime import date
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 import requests
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from src.models.database import SectorFundFlow
+from src.crawler.sector_mapping import get_level1_sector
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -250,6 +252,77 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
     return saved
 
 
+def aggregate_by_level1(sectors: List[Dict]) -> List[Dict]:
+    """
+    将细分板块聚合到申万一级行业
+
+    Args:
+        sectors: 细分板块数据列表
+
+    Returns:
+        按申万一级行业聚合后的数据列表
+    """
+    aggregated = defaultdict(lambda: {
+        "sector_code": "",
+        "sector_name": "",
+        "change_pct": None,
+        "turnover": 0.0,
+        "main_net_flow": 0.0,
+        "super_large_flow": 0.0,
+        "large_flow": 0.0,
+        "medium_flow": 0.0,
+        "small_flow": 0.0,
+        "retail_net_flow": 0.0,
+        "data_category": "industry",
+        "sub_sectors": [],
+    })
+
+    for sector in sectors:
+        # 映射到申万一级行业
+        level1_name = get_level1_sector(sector["sector_name"])
+
+        # 聚合数据
+        agg = aggregated[level1_name]
+        agg["sector_name"] = level1_name
+        agg["sub_sectors"].append(sector["sector_name"])
+
+        # 累加数值字段
+        if sector.get("turnover") is not None:
+            agg["turnover"] += sector["turnover"]
+        if sector.get("main_net_flow") is not None:
+            agg["main_net_flow"] += sector["main_net_flow"]
+        if sector.get("super_large_flow") is not None:
+            agg["super_large_flow"] += sector["super_large_flow"]
+        if sector.get("large_flow") is not None:
+            agg["large_flow"] += sector["large_flow"]
+        if sector.get("medium_flow") is not None:
+            agg["medium_flow"] += sector["medium_flow"]
+        if sector.get("small_flow") is not None:
+            agg["small_flow"] += sector["small_flow"]
+        if sector.get("retail_net_flow") is not None:
+            agg["retail_net_flow"] += sector["retail_net_flow"]
+
+        # 涨跌幅用成交额加权平均
+        if sector.get("change_pct") is not None and sector.get("turnover") is not None:
+            if agg["_weighted_change"] is None:
+                agg["_weighted_change"] = 0.0
+                agg["_total_weight"] = 0.0
+            agg["_weighted_change"] += sector["change_pct"] * sector["turnover"]
+            agg["_total_weight"] += sector["turnover"]
+
+    # 计算加权平均涨跌幅
+    result = []
+    for level1_name, agg in aggregated.items():
+        if agg.get("_total_weight") and agg["_total_weight"] > 0:
+            agg["change_pct"] = agg["_weighted_change"] / agg["_total_weight"]
+        # 清理临时字段
+        agg.pop("_weighted_change", None)
+        agg.pop("_total_weight", None)
+        result.append(agg)
+
+    return result
+
+
 def main():
     logger.info("=" * 50)
     logger.info("板块资金流向数据抓取开始（东方财富直接 API）")
@@ -261,24 +334,32 @@ def main():
     # 获取行业板块
     industry_list = fetch_sector_fund_flow("industry")
 
-    # 获取概念板块
-    concept_list = fetch_sector_fund_flow("concept")
+    # 获取概念板块（可选，如果失败不影响主流程）
+    concept_list = []
+    try:
+        concept_list = fetch_sector_fund_flow("concept")
+    except Exception as e:
+        logger.warning(f"概念板块获取失败，跳过: {e}")
 
     # 合并
     all_sectors = industry_list + concept_list
     total_count = len(all_sectors)
-    logger.info(f"合并后共 {total_count} 个板块")
+    logger.info(f"合并后共 {total_count} 个细分板块")
 
     if not all_sectors:
         logger.warning("未获取到任何数据，保留旧数据不变。")
         sys.exit(0)
 
+    # 按申万一级行业聚合
+    aggregated = aggregate_by_level1(all_sectors)
+    logger.info(f"聚合后共 {len(aggregated)} 个申万一级行业")
+
     # 按主力净流入降序排序
-    all_sectors.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
+    aggregated.sort(key=lambda x: x.get("main_net_flow") or 0, reverse=True)
 
     # 保存数据
-    saved = save_to_database(all_sectors, flow_date, DATABASE_URL)
-    logger.info(f"抓取完成: 保存 {saved}/{total_count} 条")
+    saved = save_to_database(aggregated, flow_date, DATABASE_URL)
+    logger.info(f"抓取完成: 保存 {saved}/{len(aggregated)} 条")
 
     if saved == 0:
         logger.warning("未保存任何数据，保留旧数据不变。")
