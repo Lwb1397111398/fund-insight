@@ -280,24 +280,37 @@ def save_to_database(sectors: list):
     Args:
         sectors: 聚合后的板块数据列表
     """
-    import sys
-    from pathlib import Path
+    from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+    from sqlalchemy.orm import sessionmaker, declarative_base
 
-    # 添加项目根目录到 Python 路径
-    project_root = Path(__file__).parent.parent
-    sys.path.insert(0, str(project_root))
+    Base = declarative_base()
 
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
+    class SectorFundFlow(Base):
+        """板块资金流向模型"""
+        __tablename__ = "sector_fund_flow"
 
-    # 导入项目配置
-    from src.config import settings
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        sector_name = Column(String(50), nullable=False)
+        sector_code = Column(String(20))
+        change_pct = Column(Float)
+        main_net_inflow = Column(Float)
+        retail_net_flow = Column(Float)
+        dark_pool = Column(Float)
+        intensity = Column(Float)
+        behavior = Column(String(20))
+        turnover = Column(Float)
+        date = Column(String(10), nullable=False)
+        time = Column(String(10))
+        create_time = Column(DateTime)
+        update_time = Column(DateTime)
 
-    # 导入模型
-    from src.models.database import SectorFundFlow, Base
+    # 从环境变量获取数据库连接
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise ValueError("DATABASE_URL 环境变量未设置")
 
     # 创建数据库连接
-    engine = create_engine(settings.database_url, echo=False)
+    engine = create_engine(database_url, echo=False)
 
     # 创建表（如果不存在）
     Base.metadata.create_all(engine)
