@@ -51,7 +51,7 @@ def fetch_sector_data(order_by: str, count: int, max_retries: int = 3) -> list:
         "fid0": order_by,
         "fs": "m:90+t:2",  # 行业板块
         "stat": 1,
-        "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f6,f124",
+        "fields": "f12,f14,f3,f6,f267,f269,f271,f273,f275",
         "rt": "52975239",
         "_": int(datetime.now().timestamp() * 1000),
     }
@@ -84,15 +84,13 @@ def fetch_sector_data(order_by: str, count: int, max_retries: int = 3) -> list:
             code = item.get("f12", "")
             name = item.get("f14", "")
             change_pct = item.get("f3", 0) or 0
-            main_net_inflow = item.get("f62", 0) or 0  # 主力净流入
-            super_large_net = item.get("f66", 0) or 0   # 超大单净流入
-            large_net = item.get("f72", 0) or 0         # 大单净流入
-            medium_net = item.get("f78", 0) or 0        # 中单净流入
-            small_net = item.get("f84", 0) or 0         # 小单净流入
             turnover = item.get("f6", 0) or 0           # 成交额
+            super_large_net = item.get("f269", 0) or 0   # 超大单净流入
+            large_net = item.get("f271", 0) or 0         # 大单净流入
+            medium_net = item.get("f273", 0) or 0        # 中单净流入
+            small_net = item.get("f275", 0) or 0         # 小单净流入
 
             # 转换为亿元
-            main_net_inflow_yi = main_net_inflow / 1e8
             super_large_yi = super_large_net / 1e8
             large_yi = large_net / 1e8
             medium_yi = medium_net / 1e8
