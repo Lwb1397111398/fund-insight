@@ -278,6 +278,8 @@ def aggregate_by_level1(sectors: List[Dict]) -> List[Dict]:
         "retail_net_flow": 0.0,
         "data_category": "industry",
         "sub_sectors": [],
+        "_weighted_change": 0.0,
+        "_total_weight": 0.0,
     })
 
     for sector in sectors:
