@@ -2,9 +2,11 @@
 板块资金流向核心服务
 负责：计算衍生指标、数据保存、排行榜查询、历史趋势、板块-基金联动
 
-核心算法（v2）：
+核心算法（v3 - 对齐直播间）：
 - 主力 = 超大单 + 大单
-- 散户 = 中单 + 小单
+- 散户 = 仅小单（中单被剥离，既不算主力也不算散户）
+- 主力 + 散户 + 中单 = 0（零和）
+- 主力 + 散户 ≠ 0（因为中单被排除）
 - 主力暗盘 = 主力净流入 − 散户净流入
 - 主力强度 = (主力暗盘 / 板块成交额) × 100
 - 行为判定：≥3抢筹 / 1~3建仓 / -1~1洗盘 / ≤-1出货
@@ -80,7 +82,7 @@ class SectorFlowService:
         公式：主力强度 = (主力暗盘 / 板块成交额) × 100
 
         Args:
-            dark_pool: 主力暗盘（元）
+            dark_pool: 主力暗盘（亿元）
             turnover: 板块成交额（亿元）
 
         Returns:
@@ -88,9 +90,8 @@ class SectorFlowService:
         """
         if dark_pool is None or turnover is None or turnover == 0:
             return None
-        # 暗盘单位是元，成交额单位是亿元，需要统一
-        # 暗盘 / (成交额 * 1e8) * 100 = 暗盘 / 成交额 / 1e8 * 100
-        return (dark_pool / (turnover * 1e8)) * 100
+        # 暗盘和成交额单位都是亿元，直接计算
+        return (dark_pool / turnover) * 100
 
     @staticmethod
     def judge_behavior(intensity: Optional[float]) -> Optional[str]:

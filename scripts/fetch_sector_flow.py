@@ -2,7 +2,11 @@
 板块资金流向数据抓取脚本
 由 GitHub Actions 定时执行，数据直接写入 Supabase
 
-使用 AkShare 获取东方财富板块资金流向数据（一次请求返回全部字段含成交额）。
+核心口径（对齐直播间）：
+- 主力 = 超大单 + 大单
+- 散户 = 仅小单（中单被剥离）
+- 主力 + 散户 + 中单 = 0（零和）
+- 主力 + 散户 ≠ 0（因为中单被排除）
 
 使用方式:
 1. GitHub Actions 自动执行（每个交易日 13:30 北京时间）
@@ -14,8 +18,7 @@ import logging
 from datetime import date
 from typing import Dict, List, Optional
 
-import akshare as ak
-import pandas as pd
+import requests
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from src.models.database import SectorFundFlow
@@ -30,66 +33,104 @@ if not DATABASE_URL:
     logger.error("DATABASE_URL 环境变量未设置")
     sys.exit(1)
 
+# 东方财富 API 配置
+API_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+API_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://data.eastmoney.com/",
+}
+
+# 板块类型映射
+SECTOR_TYPE_MAP = {
+    "industry": "m:90+t:2",   # 行业板块
+    "concept": "m:90+t:3",    # 概念板块
+}
+
 
 def fetch_sector_fund_flow(sector_type: str) -> List[Dict]:
     """
-    使用 AkShare 获取板块资金流向数据
+    使用东方财富直接 API 获取板块资金流向数据
 
     Args:
-        sector_type: "行业资金流" 或 "概念资金流"
+        sector_type: "industry"（行业板块）或 "concept"（概念板块）
 
     Returns:
         板块数据列表
     """
-    type_label = "行业" if "行业" in sector_type else "概念"
+    fs = SECTOR_TYPE_MAP.get(sector_type, SECTOR_TYPE_MAP["industry"])
+    type_label = "行业" if sector_type == "industry" else "概念"
+
     logger.info(f"开始获取{type_label}板块资金流向...")
 
+    params = {
+        "pn": 1,
+        "pz": 500,  # 最多获取500个板块
+        "po": 1,
+        "np": 1,
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": 2,
+        "invt": 2,
+        "fid": "f267",  # 按主力净流入排序
+        "fs": fs,
+        "fields": "f12,f14,f3,f6,f267,f269,f271,f273,f275",
+        "_": "1625292448803",
+    }
+
     try:
-        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
+        resp = requests.get(API_URL, params=params, headers=API_HEADERS, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if "data" not in data or not data["data"]:
+            logger.warning(f"{type_label}板块数据为空")
+            return []
+
+        items = data["data"].get("diff", [])
+
     except Exception as e:
-        logger.error(f"AkShare 获取{type_label}板块数据失败: {e}")
+        logger.error(f"API 获取{type_label}板块数据失败: {e}")
         return []
-
-    if df is None or df.empty:
-        logger.warning(f"{type_label}板块数据为空")
-        return []
-
-    # 打印列名以便调试
-    logger.info(f"AkShare 返回列名: {df.columns.tolist()}")
 
     results = []
-    for _, row in df.iterrows():
+    for item in items:
         try:
-            sector_name = str(row.get("名称", ""))
+            sector_name = item.get("f14", "")
             if not sector_name:
                 continue
 
             # 涨跌幅
-            change_pct = _safe_float(row.get("今日涨跌幅"))
+            change_pct = _safe_float(item.get("f3"))
 
-            # 成交额（元）
-            turnover_raw = _safe_float(row.get("成交额"))
-            # 转为亿元
+            # 成交额（元 → 亿元）
+            turnover_raw = _safe_float(item.get("f6"))
             turnover = turnover_raw / 1e8 if turnover_raw is not None else None
 
-            # 各单型资金净流入（元）
-            super_large = _safe_float(row.get("超大单净流入-净额"))  # 超大单
-            large = _safe_float(row.get("大单净流入-净额"))          # 大单
-            medium = _safe_float(row.get("中单净流入-净额"))         # 中单
-            small = _safe_float(row.get("小单净流入-净额"))          # 小单
+            # 各单型资金净流入（元 → 亿元）
+            super_large = _safe_float(item.get("f269"))  # 超大单
+            large = _safe_float(item.get("f271"))          # 大单
+            medium = _safe_float(item.get("f273"))         # 中单
+            small = _safe_float(item.get("f275"))          # 小单
+
+            # 转换为亿元
+            if super_large is not None:
+                super_large = super_large / 1e8
+            if large is not None:
+                large = large / 1e8
+            if medium is not None:
+                medium = medium / 1e8
+            if small is not None:
+                small = small / 1e8
 
             # 主力净流入 = 超大单 + 大单
             main_net = None
             if super_large is not None and large is not None:
                 main_net = super_large + large
 
-            # 散户净流入 = 中单 + 小单
-            retail_net = None
-            if medium is not None and small is not None:
-                retail_net = medium + small
+            # 散户净流入 = 仅小单（核心口径！）
+            retail_net = small
 
             results.append({
-                "sector_code": "",  # AkShare 不返回板块代码，后续通过映射补充
+                "sector_code": item.get("f12", ""),
                 "sector_name": sector_name,
                 "change_pct": change_pct,
                 "turnover": turnover,
@@ -99,7 +140,7 @@ def fetch_sector_fund_flow(sector_type: str) -> List[Dict]:
                 "medium_flow": medium,
                 "small_flow": small,
                 "retail_net_flow": retail_net,
-                "data_category": "industry" if "行业" in sector_type else "concept",
+                "data_category": sector_type,
             })
         except Exception as e:
             logger.warning(f"解析{type_label}板块数据异常: {e}")
@@ -111,7 +152,7 @@ def fetch_sector_fund_flow(sector_type: str) -> List[Dict]:
 
 def _safe_float(value) -> Optional[float]:
     """安全转 float"""
-    if value is None or pd.isna(value):
+    if value is None or value == "-" or value == "":
         return None
     try:
         return float(value)
@@ -124,7 +165,7 @@ def calculate_dark_pool(main_net: Optional[float], retail_net: Optional[float]) 
     主力暗盘 = 主力净流入 - 散户净流入
 
     主力 = 超大单 + 大单
-    散户 = 中单 + 小单
+    散户 = 仅小单
     """
     if main_net is None or retail_net is None:
         return None
@@ -135,11 +176,11 @@ def calculate_intensity(dark_pool: Optional[float], turnover: Optional[float]) -
     """
     主力强度 = (暗盘 / 成交额) × 100
 
-    暗盘单位：元，成交额单位：亿元
+    暗盘单位：亿元，成交额单位：亿元
     """
     if dark_pool is None or turnover is None or turnover == 0:
         return None
-    return (dark_pool / (turnover * 1e8)) * 100
+    return (dark_pool / turnover) * 100
 
 
 def judge_behavior(intensity: Optional[float]) -> Optional[str]:
@@ -193,7 +234,7 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
                 main_intensity=intensity,
                 behavior=behavior,
                 data_category=record.get("data_category"),
-                data_source="akshare_eastmoney",
+                data_source="eastmoney_push2",
             )
             session.add(new_record)
             saved += 1
@@ -211,17 +252,17 @@ def save_to_database(records: List[Dict], flow_date: date, db_url: str) -> int:
 
 def main():
     logger.info("=" * 50)
-    logger.info("板块资金流向数据抓取开始（AkShare）")
+    logger.info("板块资金流向数据抓取开始（东方财富直接 API）")
     logger.info("=" * 50)
 
     flow_date = date.today()
     logger.info(f"目标日期: {flow_date}")
 
     # 获取行业板块
-    industry_list = fetch_sector_fund_flow("行业资金流")
+    industry_list = fetch_sector_fund_flow("industry")
 
     # 获取概念板块
-    concept_list = fetch_sector_fund_flow("概念资金流")
+    concept_list = fetch_sector_fund_flow("concept")
 
     # 合并
     all_sectors = industry_list + concept_list
