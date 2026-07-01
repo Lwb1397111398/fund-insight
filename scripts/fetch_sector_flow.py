@@ -280,29 +280,8 @@ def save_to_database(sectors: list):
     Args:
         sectors: 聚合后的板块数据列表
     """
-    from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
-    from sqlalchemy.orm import sessionmaker, declarative_base
-
-    Base = declarative_base()
-
-    class SectorFundFlow(Base):
-        """板块资金流向模型"""
-        __tablename__ = "sector_fund_flow"
-
-        id = Column(Integer, primary_key=True, autoincrement=True)
-        sector_name = Column(String(50), nullable=False)
-        sector_code = Column(String(20))
-        change_pct = Column(Float)
-        main_net_inflow = Column(Float)
-        retail_net_flow = Column(Float)
-        dark_pool = Column(Float)
-        intensity = Column(Float)
-        behavior = Column(String(20))
-        turnover = Column(Float)
-        date = Column(String(10), nullable=False)
-        time = Column(String(10))
-        create_time = Column(DateTime)
-        update_time = Column(DateTime)
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
 
     # 从环境变量获取数据库连接
     database_url = os.environ.get("DATABASE_URL")
@@ -311,9 +290,6 @@ def save_to_database(sectors: list):
 
     # 创建数据库连接
     engine = create_engine(database_url, echo=False)
-
-    # 创建表（如果不存在）
-    Base.metadata.create_all(engine)
 
     # 创建会话
     Session = sessionmaker(bind=engine)
@@ -325,40 +301,69 @@ def save_to_database(sectors: list):
         time_str = now.strftime("%H:%M:%S")
 
         for sector in sectors:
-            # 检查是否已存在（同一天同一个板块）
-            existing = session.query(SectorFundFlow).filter(
-                SectorFundFlow.sector_name == sector["name"],
-                SectorFundFlow.date == date_str,
-            ).first()
+            # 使用原生 SQL 避免模型不匹配问题
+            # 先检查是否已存在
+            result = session.execute(
+                text("SELECT id FROM sector_fund_flow WHERE sector_name = :name AND date = :date"),
+                {"name": sector["name"], "date": date_str}
+            )
+            existing = result.fetchone()
 
             if existing:
                 # 更新现有记录
-                existing.change_pct = sector["change_pct"]
-                existing.main_net_inflow = sector["main_net_inflow"]
-                existing.retail_net_flow = sector["retail_net_flow"]
-                existing.dark_pool = sector["dark_pool"]
-                existing.intensity = sector["intensity"]
-                existing.behavior = sector["behavior"]
-                existing.turnover = sector["turnover"]
-                existing.update_time = now
-            else:
-                # 创建新记录
-                record = SectorFundFlow(
-                    sector_name=sector["name"],
-                    sector_code=sector["code"],
-                    change_pct=sector["change_pct"],
-                    main_net_inflow=sector["main_net_inflow"],
-                    retail_net_flow=sector["retail_net_flow"],
-                    dark_pool=sector["dark_pool"],
-                    intensity=sector["intensity"],
-                    behavior=sector["behavior"],
-                    turnover=sector["turnover"],
-                    date=date_str,
-                    time=time_str,
-                    create_time=now,
-                    update_time=now,
+                session.execute(
+                    text("""
+                        UPDATE sector_fund_flow
+                        SET change_pct = :change_pct,
+                            main_net_inflow = :main_net_inflow,
+                            retail_net_flow = :retail_net_flow,
+                            dark_pool = :dark_pool,
+                            intensity = :intensity,
+                            behavior = :behavior,
+                            turnover = :turnover,
+                            update_time = :update_time
+                        WHERE sector_name = :name AND date = :date
+                    """),
+                    {
+                        "change_pct": sector["change_pct"],
+                        "main_net_inflow": sector["main_net_inflow"],
+                        "retail_net_flow": sector["retail_net_flow"],
+                        "dark_pool": sector["dark_pool"],
+                        "intensity": sector["intensity"],
+                        "behavior": sector["behavior"],
+                        "turnover": sector["turnover"],
+                        "update_time": now,
+                        "name": sector["name"],
+                        "date": date_str,
+                    }
                 )
-                session.add(record)
+            else:
+                # 插入新记录
+                session.execute(
+                    text("""
+                        INSERT INTO sector_fund_flow
+                        (sector_name, sector_code, change_pct, main_net_inflow, retail_net_flow,
+                         dark_pool, intensity, behavior, turnover, date, time, create_time, update_time)
+                        VALUES
+                        (:sector_name, :sector_code, :change_pct, :main_net_inflow, :retail_net_flow,
+                         :dark_pool, :intensity, :behavior, :turnover, :date, :time, :create_time, :update_time)
+                    """),
+                    {
+                        "sector_name": sector["name"],
+                        "sector_code": sector["code"],
+                        "change_pct": sector["change_pct"],
+                        "main_net_inflow": sector["main_net_inflow"],
+                        "retail_net_flow": sector["retail_net_flow"],
+                        "dark_pool": sector["dark_pool"],
+                        "intensity": sector["intensity"],
+                        "behavior": sector["behavior"],
+                        "turnover": sector["turnover"],
+                        "date": date_str,
+                        "time": time_str,
+                        "create_time": now,
+                        "update_time": now,
+                    }
+                )
 
         session.commit()
     except Exception as e:
