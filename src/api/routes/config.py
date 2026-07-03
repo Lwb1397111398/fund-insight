@@ -131,6 +131,7 @@ async def run_cleanup():
             total = result.get("total_deleted", 0)
 
             sector_flow = result.get("sector_flow", {})
+            sector_flow_runs = result.get("sector_flow_runs", {})
             parts = []
             if predictions.get('deleted', 0) > 0:
                 parts.append(f"{predictions.get('deleted', 0)} 个过期预测")
@@ -146,6 +147,8 @@ async def run_cleanup():
                 parts.append(f"{orphan_funds.get('deleted', 0)} 个孤儿基金")
             if sector_flow.get('deleted', 0) > 0:
                 parts.append(f"{sector_flow.get('deleted', 0)} 条板块资金历史")
+            if sector_flow_runs.get('deleted', 0) > 0:
+                parts.append(f"{sector_flow_runs.get('deleted', 0)} 条抢筹抓取日志")
 
             if parts:
                 message = f"清理完成，共删除 {total} 项：{', '.join(parts)}"
@@ -427,11 +430,15 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                 "grade": b.grade
             })
 
-        # 板块资金流向 - 超过 90 天的历史数据
-        from src.models.database import SectorFundFlow
+        # 板块资金流向 - 超过 90 天的历史数据；抓取日志保留 180 天
+        from src.models.database import SectorFundFlow, SectorFlowFetchRun
         cutoff_90_days = today - timedelta(days=90)
         old_sector_flow_count = db.query(SectorFundFlow).filter(
             SectorFundFlow.flow_date < cutoff_90_days
+        ).count()
+        cutoff_180_days = today - timedelta(days=180)
+        old_sector_flow_runs_count = db.query(SectorFlowFetchRun).filter(
+            SectorFlowFetchRun.flow_date < cutoff_180_days
         ).count()
 
         return {
@@ -443,6 +450,7 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                 "funds": funds_list,
                 "bloggers": bloggers_list,
                 "sector_flow_old_count": old_sector_flow_count,
+                "sector_flow_runs_old_count": old_sector_flow_runs_count,
                 "summary": {
                     "predictions_count": len(predictions_list),
                     "viewpoints_count": len(viewpoints_list),
@@ -450,7 +458,8 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                     "funds_count": len(funds_list),
                     "bloggers_count": len(bloggers_list),
                     "sector_flow_old_count": old_sector_flow_count,
-                    "total": len(predictions_list) + len(viewpoints_list) + len(posts_list) + len(funds_list) + len(bloggers_list) + old_sector_flow_count
+                    "sector_flow_runs_old_count": old_sector_flow_runs_count,
+                    "total": len(predictions_list) + len(viewpoints_list) + len(posts_list) + len(funds_list) + len(bloggers_list) + old_sector_flow_count + old_sector_flow_runs_count
                 }
             }
         }

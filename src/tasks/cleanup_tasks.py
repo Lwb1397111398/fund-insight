@@ -748,6 +748,7 @@ class CleanupManager:
         advice_result = self.cleanup_old_advice()
         orphan_funds_result = self.cleanup_orphan_funds(preview_only=False)
         sector_flow_result = self.cleanup_old_sector_flow(keep_days=90)
+        sector_flow_runs_result = self.cleanup_old_sector_flow_runs(keep_days=180)
 
         total_deleted = (
             prediction_result.get("deleted_predictions", 0) +
@@ -756,7 +757,8 @@ class CleanupManager:
             empty_posts_result.get("deleted_empty_posts", 0) +
             advice_result.get("deleted_advice", 0) +
             orphan_funds_result.get("deleted_count", 0) +
-            sector_flow_result.get("deleted_sector_flow", 0)
+            sector_flow_result.get("deleted_sector_flow", 0) +
+            sector_flow_runs_result.get("deleted_sector_flow_runs", 0)
         )
 
         result = {
@@ -767,7 +769,8 @@ class CleanupManager:
                 empty_posts_result.get("success", False),
                 advice_result.get("success", False),
                 orphan_funds_result.get("success", False),
-                sector_flow_result.get("success", False)
+                sector_flow_result.get("success", False),
+                sector_flow_runs_result.get("success", False)
             ]),
             "predictions": {
                 "deleted": prediction_result.get("deleted_predictions", 0)
@@ -789,6 +792,9 @@ class CleanupManager:
             },
             "sector_flow": {
                 "deleted": sector_flow_result.get("deleted_sector_flow", 0)
+            },
+            "sector_flow_runs": {
+                "deleted": sector_flow_runs_result.get("deleted_sector_flow_runs", 0)
             },
             "total_deleted": total_deleted,
             "timestamp": date.today().isoformat()
