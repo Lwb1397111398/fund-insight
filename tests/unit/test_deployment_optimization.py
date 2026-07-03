@@ -26,6 +26,10 @@ def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
     calls = []
 
     class DummyScheduler:
+        def _run_sector_flow(self, trigger="scheduler"):
+            calls.append(f"sector_flow:{trigger}")
+            return {"success": True}
+
         def _run_fund_update(self):
             calls.append("fund_update")
 
@@ -40,7 +44,7 @@ def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
     result = run_scheduled_tasks.run_daily_tasks()
 
     assert result["success"] is True
-    assert calls == ["fund_update", "prediction_verify", "expired_verify"]
+    assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify", "expired_verify"]
 
 
 def test_startup_migrations_are_disabled_by_default(monkeypatch):
