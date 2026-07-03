@@ -7,33 +7,43 @@
 - 主力 + 散户 + 中单 = 0（零和）
 - 主力 + 散户 ≠ 0（因为中单被排除）
 
-字段映射（东方财富 push2 API）：
+字段映射（东方财富 push2 API，今日口径）：
 - f12: 板块代码
 - f14: 板块名称
 - f3: 涨跌幅
 - f6: 成交额（元）
-- f267: 主力净流入（超大单+大单）
-- f269: 超大单净流入
-- f271: 大单净流入
-- f273: 中单净流入
-- f275: 小单净流入
+- f62: 今日主力净流入
+- f66: 今日超大单净流入
+- f72: 今日大单净流入
+- f78: 今日中单净流入
+- f84: 今日小单净流入
 """
 import logging
+import time
 import requests
+import urllib3
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 东方财富 API 配置
-API_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+API_URLS = [
+    "https://push2.eastmoney.com/api/qt/clist/get",
+    "https://push2delay.eastmoney.com/api/qt/clist/get",
+    "https://push2his.eastmoney.com/api/qt/clist/get",
+    "https://push2test.eastmoney.com/api/qt/clist/get",
+]
 API_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Referer": "https://data.eastmoney.com/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://data.eastmoney.com/bkzj/hy.html",
 }
 
 # 板块类型映射
 SECTOR_TYPE_MAP = {
-    "industry": "m:90+t:2",   # 行业板块
+    "industry": "m:90+s:4",   # 行业板块（东方财富页面当前口径）
     "concept": "m:90+t:3",    # 概念板块
 }
 
@@ -63,41 +73,62 @@ class SectorFlowCrawler:
 
         params = {
             "pn": 1,
-            "pz": 500,  # 最多获取500个板块
+            "pz": 100,  # 东方财富页面默认分页，过大时接口容易断开
             "po": 1,
             "np": 1,
-            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
             "fltt": 2,
             "invt": 2,
-            "fid": "f267",  # 按主力净流入排序
+            "fid": "f62",  # 按今日主力净流入排序
             "fs": fs,
-            "fields": "f12,f14,f3,f6,f267,f269,f271,f273,f275",
-            "_": "1625292448803",
+            "fields": "f12,f14,f3,f6,f62,f66,f72,f78,f84",
+            "_": int(time.time() * 1000),
         }
 
-        for attempt in range(self.max_retries):
-            try:
-                resp = requests.get(
-                    API_URL,
-                    params=params,
-                    headers=API_HEADERS,
-                    timeout=self.timeout,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+        items = []
+        page = 1
+        total = None
+        while True:
+            params["pn"] = page
+            params["_"] = int(time.time() * 1000)
+            page_items = None
 
-                if "data" not in data or not data["data"]:
-                    logger.warning(f"[SectorFlow] {sector_type} 返回为空")
-                    return []
+            for attempt in range(self.max_retries):
+                api_url = API_URLS[attempt % len(API_URLS)]
+                try:
+                    resp = requests.get(
+                        api_url,
+                        params=params,
+                        headers=API_HEADERS,
+                        timeout=self.timeout,
+                        verify=False,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
 
-                items = data["data"].get("diff", [])
+                    if "data" not in data or not data["data"]:
+                        logger.warning(f"[SectorFlow] {sector_type} 第 {page} 页返回为空")
+                        return items
+
+                    total = data["data"].get("total", total)
+                    page_items = data["data"].get("diff", [])
+                    break
+
+                except Exception as e:
+                    logger.warning(f"[SectorFlow] API 请求失败 (页 {page}, 源 {api_url}, 尝试 {attempt + 1}/{self.max_retries}): {e}")
+                    if attempt == self.max_retries - 1:
+                        logger.error(f"[SectorFlow] {sector_type} 第 {page} 页获取失败，已重试 {self.max_retries} 次")
+                        return items
+
+            if not page_items:
                 break
 
-            except Exception as e:
-                logger.warning(f"[SectorFlow] API 请求失败 (尝试 {attempt + 1}/{self.max_retries}): {e}")
-                if attempt == self.max_retries - 1:
-                    logger.error(f"[SectorFlow] {sector_type} 获取失败，已重试 {self.max_retries} 次")
-                    return []
+            items.extend(page_items)
+            if total is not None and len(items) >= int(total):
+                break
+            if len(page_items) < params["pz"]:
+                break
+            page += 1
 
         results = []
         for item in items:
@@ -107,16 +138,21 @@ class SectorFlowCrawler:
                     continue
 
                 # 各单型资金净流入（元 → 亿元）
-                super_large = self._safe_float(item.get("f269"))
-                large = self._safe_float(item.get("f271"))
-                medium = self._safe_float(item.get("f273"))
-                small = self._safe_float(item.get("f275"))
+                super_large_raw = self._safe_float(item.get("f66"))
+                large_raw = self._safe_float(item.get("f72"))
+                medium_raw = self._safe_float(item.get("f78"))
+                small_raw = self._safe_float(item.get("f84"))
+
+                super_large = super_large_raw / 1e8 if super_large_raw is not None else None
+                large = large_raw / 1e8 if large_raw is not None else None
+                medium = medium_raw / 1e8 if medium_raw is not None else None
+                small = small_raw / 1e8 if small_raw is not None else None
 
                 # 成交额（元 → 亿元）
                 turnover_raw = self._safe_float(item.get("f6"))
                 turnover = turnover_raw / 1e8 if turnover_raw is not None else None
 
-                # 主力净流入 = 超大单 + 大单（也可以直接用 f267）
+                # 主力净流入 = 超大单 + 大单
                 main_net = None
                 if super_large is not None and large is not None:
                     main_net = super_large + large
