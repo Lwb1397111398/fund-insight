@@ -11,6 +11,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from src.models.database import init_db
 from src.tasks.scheduler import TaskScheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 def run_daily_tasks() -> dict:
     started_at = datetime.now()
+    init_db()
     scheduler = TaskScheduler()
     sector_flow_result = scheduler._run_sector_flow(trigger="render_cron")
     try:

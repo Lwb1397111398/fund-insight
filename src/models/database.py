@@ -1076,7 +1076,7 @@ class SectorFundFlow(Base):
         Index('ix_sector_fund_flow_date', 'flow_date'),
         Index('ix_sector_flow_date_behavior', 'flow_date', 'behavior'),
         Index('ix_sector_flow_intensity', 'main_intensity'),
-        Index('ix_sector_flow_date_code_category', 'flow_date', 'sector_code', 'data_category', unique=True),
+        Index('ix_sector_flow_date_code_category', 'flow_date', 'sector_code', 'data_category'),
     )
 
 

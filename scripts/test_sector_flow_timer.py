@@ -9,7 +9,7 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.models.database import SessionLocal
+from src.models.database import SessionLocal, init_db
 from src.services.sector_flow_service import SectorFlowService
 
 
@@ -21,6 +21,7 @@ def main() -> int:
     print(f"将在 {args.delay} 秒后执行抢筹抓取验证...")
     time.sleep(args.delay)
 
+    init_db()
     db = SessionLocal()
     try:
         service = SectorFlowService(db)
