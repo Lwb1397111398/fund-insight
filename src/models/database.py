@@ -1076,6 +1076,31 @@ class SectorFundFlow(Base):
         Index('ix_sector_fund_flow_date', 'flow_date'),
         Index('ix_sector_flow_date_behavior', 'flow_date', 'behavior'),
         Index('ix_sector_flow_intensity', 'main_intensity'),
+        Index('ix_sector_flow_date_code_category', 'flow_date', 'sector_code', 'data_category', unique=True),
+    )
+
+
+class SectorFlowFetchRun(Base):
+    """板块资金流向抓取运行日志"""
+    __tablename__ = 'sector_flow_fetch_runs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trigger = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default='running')
+    flow_date = Column(Date, nullable=False)
+    categories = Column(String(100))
+    started_at = Column(DateTime, default=datetime.now)
+    finished_at = Column(DateTime)
+    fetched_count = Column(Integer, default=0)
+    saved_count = Column(Integer, default=0)
+    error_message = Column(Text)
+    data_source = Column(String(50), default='eastmoney')
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_sector_flow_fetch_runs_date', 'flow_date'),
+        Index('ix_sector_flow_fetch_runs_status', 'status'),
+        Index('ix_sector_flow_fetch_runs_trigger', 'trigger'),
     )
 
 

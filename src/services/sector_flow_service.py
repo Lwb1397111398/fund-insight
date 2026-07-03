@@ -13,12 +13,12 @@
 """
 import logging
 from typing import Dict, List, Optional
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, asc, nulls_last
 
-from src.models.database import SectorFundFlow, SectorFundMapping
+from src.models.database import SectorFundFlow, SectorFlowFetchRun, SectorFundMapping
 from src.crawler.sector_flow_crawler import SectorFlowCrawler
 
 logger = logging.getLogger(__name__)
@@ -145,66 +145,118 @@ class SectorFlowService:
 
     # ==================== 数据操作 ====================
 
-    def fetch_and_save(self, turnover_limit: int = 100) -> int:
+    def run_fetch(self, trigger: str, categories: Optional[List[str]] = None) -> Dict:
         """
-        触发抓取 → 计算衍生指标 → 保存到数据库
+        统一抓取入口。
 
-        如果东方财富 API 不可用（502/503/504），会尝试使用最近一次缓存数据。
-
-        Args:
-            turnover_limit: 保留参数（兼容旧接口），实际返回所有板块
-
-        Returns:
-            保存/更新的记录数，失败返回 0
+        GitHub Actions、Render Cron 和手动接口都调用此方法，确保抓取、计算、保存和日志口径一致。
         """
-        raw_data = None
-        try:
-            raw_data = self.crawler.fetch_all(turnover_limit=turnover_limit)
-        except Exception as e:
-            logger.error(f"[SectorFlowService] 抓取异常: {e}")
+        flow_date = date.today()
+        target_categories = categories or ["industry", "concept"]
+        run = self._start_run(trigger, flow_date, target_categories)
+        raw_data: List[Dict] = []
+        errors: List[str] = []
+
+        for category in target_categories:
+            try:
+                items = self.crawler.fetch_sector_list(category)
+                if items:
+                    raw_data.extend(items)
+                else:
+                    errors.append(f"{category} 返回空数据")
+            except Exception as e:
+                logger.error(f"[SectorFlowService] {category} 抓取异常: {e}")
+                errors.append(f"{category}: {e}")
 
         if not raw_data:
-            logger.warning("[SectorFlowService] 抓取返回空数据，尝试使用最近缓存")
-            # 尝试使用最近的缓存数据
-            latest_date = self._get_latest_data_date()
-            if latest_date and latest_date != date.today():
-                cached = self.db.query(SectorFundFlow).filter(
-                    SectorFundFlow.flow_date == latest_date
-                ).limit(limit).all()
-                if cached:
-                    logger.info(f"[SectorFlowService] 使用 {latest_date} 的缓存数据 ({len(cached)} 条)")
-                    # 将缓存数据日期更新为今天
-                    for r in cached:
-                        r.flow_date = date.today()
-                    try:
-                        self.db.commit()
-                        return len(cached)
-                    except Exception as e:
-                        self.db.rollback()
-                        logger.error(f"[SectorFlowService] 缓存更新失败: {e}")
-            return 0
+            message = "; ".join(errors) if errors else "抓取返回空数据"
+            result = self._finish_run(run, "failed", 0, 0, message)
+            logger.warning(f"[SectorFlowService] 抓取失败: {message}")
+            return result
 
         saved_count = 0
-        flow_date = date.today()
-
+        save_errors: List[str] = []
         for item in raw_data:
             try:
                 enriched = self.enrich(item)
                 self._upsert(enriched, flow_date)
                 saved_count += 1
             except Exception as e:
-                logger.warning(f"[SectorFlowService] 保存失败 {item.get('sector_name')}: {e}")
-                continue
+                sector_name = item.get("sector_name") or item.get("name") or "未知板块"
+                save_errors.append(f"{sector_name}: {e}")
+                logger.warning(f"[SectorFlowService] 保存失败 {sector_name}: {e}")
+
+        status = "success"
+        error_message = None
+        if errors or save_errors:
+            status = "partial" if saved_count > 0 else "failed"
+            error_message = "; ".join(errors + save_errors)
 
         try:
-            self.db.commit()
+            result = self._finish_run(run, status, len(raw_data), saved_count, error_message)
+            logger.info(f"[SectorFlowService] 抓取完成: status={status}, fetched={len(raw_data)}, saved={saved_count}")
+            return result
         except Exception as e:
             self.db.rollback()
             logger.error(f"[SectorFlowService] 提交失败: {e}")
-            return 0
+            run_result = {
+                "success": False,
+                "status": "failed",
+                "trigger": trigger,
+                "flow_date": flow_date.isoformat(),
+                "fetched_count": len(raw_data),
+                "saved_count": 0,
+                "run_id": getattr(run, "id", None),
+                "error_message": str(e),
+            }
+            return run_result
 
-        logger.info(f"[SectorFlowService] 保存 {saved_count} 条记录")
-        return saved_count
+    def fetch_and_save(self, turnover_limit: int = 100) -> int:
+        """兼容旧接口：触发统一抓取并返回保存数量。"""
+        result = self.run_fetch(trigger="service_compat")
+        return result.get("saved_count", 0) if result.get("success") else 0
+
+    def _start_run(self, trigger: str, flow_date: date, categories: List[str]) -> SectorFlowFetchRun:
+        """创建抓取运行日志。"""
+        run = SectorFlowFetchRun(
+            trigger=trigger,
+            status="running",
+            flow_date=flow_date,
+            categories=",".join(categories),
+            started_at=datetime.now(),
+            fetched_count=0,
+            saved_count=0,
+            data_source="eastmoney",
+        )
+        self.db.add(run)
+        self.db.flush()
+        return run
+
+    def _finish_run(
+        self,
+        run: SectorFlowFetchRun,
+        status: str,
+        fetched_count: int,
+        saved_count: int,
+        error_message: Optional[str] = None,
+    ) -> Dict:
+        """完成抓取运行日志并提交事务。"""
+        run.status = status
+        run.finished_at = datetime.now()
+        run.fetched_count = fetched_count
+        run.saved_count = saved_count
+        run.error_message = error_message
+        self.db.commit()
+        return {
+            "success": status in {"success", "partial"},
+            "status": status,
+            "trigger": run.trigger,
+            "flow_date": run.flow_date.isoformat() if run.flow_date else None,
+            "fetched_count": fetched_count,
+            "saved_count": saved_count,
+            "run_id": run.id,
+            "error_message": error_message,
+        }
 
     def _upsert(self, item: Dict, flow_date: date):
         """
@@ -215,12 +267,22 @@ class SectorFlowService:
         sector_name = item.get("sector_name", "")
         sector_code = item.get("sector_code", "")
 
-        existing = self.db.query(SectorFundFlow).filter(
-            and_(
-                SectorFundFlow.flow_date == flow_date,
-                SectorFundFlow.sector_name == sector_name,
-            )
-        ).first()
+        query = self.db.query(SectorFundFlow).filter(SectorFundFlow.flow_date == flow_date)
+        data_category = item.get("data_category")
+        if sector_code:
+            existing = query.filter(
+                and_(
+                    SectorFundFlow.sector_code == sector_code,
+                    SectorFundFlow.data_category == data_category,
+                )
+            ).first()
+        else:
+            existing = query.filter(
+                and_(
+                    SectorFundFlow.sector_name == sector_name,
+                    SectorFundFlow.data_category == data_category,
+                )
+            ).first()
 
         if existing:
             # 更新已有记录
@@ -423,6 +485,42 @@ class SectorFlowService:
         from sqlalchemy import func
         result = self.db.query(func.max(SectorFundFlow.flow_date)).scalar()
         return result
+
+    def get_fetch_status(self) -> Dict:
+        """获取最近抓取状态和数据可用性。"""
+        today = date.today()
+        latest_run = self.db.query(SectorFlowFetchRun).order_by(
+            desc(SectorFlowFetchRun.started_at),
+            desc(SectorFlowFetchRun.id),
+        ).first()
+        latest_data_date = self._get_latest_data_date()
+        today_data_count = self.db.query(SectorFundFlow).filter(
+            SectorFundFlow.flow_date == today
+        ).count()
+
+        return {
+            "latest_run": self._run_to_dict(latest_run) if latest_run else None,
+            "latest_data_date": latest_data_date.isoformat() if latest_data_date else None,
+            "today_data_count": today_data_count,
+            "displaying_stale_data": bool(latest_data_date and latest_data_date != today),
+        }
+
+    @staticmethod
+    def _run_to_dict(run: SectorFlowFetchRun) -> Dict:
+        """抓取运行日志转字典。"""
+        return {
+            "id": run.id,
+            "trigger": run.trigger,
+            "status": run.status,
+            "flow_date": run.flow_date.isoformat() if run.flow_date else None,
+            "categories": run.categories,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "fetched_count": run.fetched_count,
+            "saved_count": run.saved_count,
+            "error_message": run.error_message,
+            "data_source": run.data_source,
+        }
 
     @staticmethod
     def _record_to_dict(record: SectorFundFlow) -> Dict:

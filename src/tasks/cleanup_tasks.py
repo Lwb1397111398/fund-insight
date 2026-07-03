@@ -340,6 +340,47 @@ class CleanupManager:
         finally:
             db.close()
 
+    def cleanup_old_sector_flow_runs(self, keep_days: int = 180) -> dict:
+        """清理过期的板块资金流向抓取运行日志"""
+        db = self._get_db()
+        try:
+            cutoff_date = date.today() - timedelta(days=keep_days)
+
+            from src.models.database import SectorFlowFetchRun
+
+            old_runs = db.query(SectorFlowFetchRun).filter(
+                SectorFlowFetchRun.flow_date < cutoff_date
+            )
+            deleted = old_runs.count()
+
+            if deleted == 0:
+                return {
+                    "success": True,
+                    "deleted_sector_flow_runs": 0,
+                    "message": "没有需要清理的抓取运行日志"
+                }
+
+            old_runs.delete(synchronize_session=False)
+            db.commit()
+
+            logger.info(f"清理板块资金流向抓取日志: 删除 {deleted} 条记录（{keep_days}天前）")
+
+            return {
+                "success": True,
+                "deleted_sector_flow_runs": deleted,
+                "cutoff_date": cutoff_date.isoformat()
+            }
+        except Exception as e:
+            db.rollback()
+            logger.error(f"清理板块资金流向抓取日志失败: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "deleted_sector_flow_runs": 0
+            }
+        finally:
+            db.close()
+
     def cleanup_empty_posts(self) -> dict:
         """
         清理没有活跃预测的空帖子
