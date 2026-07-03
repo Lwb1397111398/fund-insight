@@ -20,14 +20,25 @@ logger = logging.getLogger(__name__)
 def run_daily_tasks() -> dict:
     started_at = datetime.now()
     scheduler = TaskScheduler()
+    sector_flow_result = scheduler._run_sector_flow(trigger="render_cron")
     try:
         scheduler._run_fund_update()
         scheduler._run_prediction_verify()
         scheduler._run_expired_verify()
-        return {"success": True, "started_at": started_at.isoformat(), "finished_at": datetime.now().isoformat()}
+        return {
+            "success": True,
+            "sector_flow": sector_flow_result,
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now().isoformat(),
+        }
     except Exception as e:
         logger.exception("定时任务执行失败")
-        return {"success": False, "error": str(e), "started_at": started_at.isoformat()}
+        return {
+            "success": False,
+            "sector_flow": sector_flow_result,
+            "error": str(e),
+            "started_at": started_at.isoformat(),
+        }
 
 
 def main() -> int:

@@ -169,6 +169,21 @@ class TestSchedulerFixes:
         # 验证：即使发生异常，数据库连接也会被关闭
         mock_db.close.assert_called()
 
+    def test_run_sector_flow_invokes_service(self):
+        """测试抢筹抓取调度调用服务层"""
+        scheduler = TaskScheduler()
+        mock_db = Mock()
+        mock_db.close = Mock()
+        with patch('src.models.database.SessionLocal', return_value=mock_db):
+            with patch('src.services.sector_flow_service.SectorFlowService') as MockService:
+                service = MockService.return_value
+                service.run_fetch.return_value = {"success": True, "saved_count": 1}
+                result = scheduler._run_sector_flow(trigger="render_cron")
+
+        service.run_fetch.assert_called_once_with(trigger="render_cron")
+        assert result["success"] is True
+        mock_db.close.assert_called()
+
     def test_stop_scheduler_resets_global(self):
         """测试 stop_scheduler 重置全局变量"""
         import src.tasks.scheduler as scheduler_module

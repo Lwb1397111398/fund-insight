@@ -23,7 +23,6 @@ VALID_BEHAVIORS = {"grab", "build", "wash", "sell"}
 
 @router.post("/fetch")
 async def fetch_sector_flow(
-    limit: int = Query(default=100, ge=1, le=200, description="取前N个板块"),
     db: Session = Depends(get_db),
 ):
     """
@@ -31,29 +30,22 @@ async def fetch_sector_flow(
 
     从东方财富 API 获取最新数据，计算衍生指标后保存到数据库。
     同日期同板块的数据会被更新（幂等操作）。
-
-    Args:
-        limit: 取前 N 个板块补充成交额（按主力净流入排序）
-
-    Returns:
-        {"success": True, "saved_count": N}
     """
     try:
         service = SectorFlowService(db)
-        count = service.fetch_and_save(limit=limit)
-        if count > 0:
+        result = service.run_fetch(trigger="manual")
+        if result.get("success"):
             return {
                 "success": True,
-                "data": {"saved_count": count},
-                "message": f"成功保存 {count} 条板块资金流向数据",
+                "data": result,
+                "message": f"成功保存 {result.get('saved_count', 0)} 条板块资金流向数据",
             }
-        else:
-            return {
-                "success": False,
-                "data": {"saved_count": 0},
-                "message": "数据抓取失败：东方财富 API 暂时不可用（502），请稍后重试。最近一次缓存数据仍可用于查看。",
-                "error_code": "UPSTREAM_API_ERROR",
-            }
+        return {
+            "success": False,
+            "data": result,
+            "message": result.get("error_message") or "数据抓取失败，请稍后重试。最近一次缓存数据仍可用于查看。",
+            "error_code": "SECTOR_FLOW_FETCH_FAILED",
+        }
     except Exception as e:
         logger.error(f"[SectorFlow API] 抓取失败: {e}")
         return {
@@ -61,6 +53,24 @@ async def fetch_sector_flow(
             "data": {"saved_count": 0},
             "message": f"数据抓取失败: {str(e)}",
             "error_code": "INTERNAL_ERROR",
+        }
+
+
+@router.get("/fetch-status")
+async def get_fetch_status(db: Session = Depends(get_db)):
+    """获取最近一次抢筹抓取状态。"""
+    try:
+        service = SectorFlowService(db)
+        return {
+            "success": True,
+            "data": service.get_fetch_status(),
+        }
+    except Exception as e:
+        logger.error(f"[SectorFlow API] 抓取状态查询失败: {e}")
+        return {
+            "success": False,
+            "message": f"查询失败: {str(e)}",
+            "data": None,
         }
 
 

@@ -193,6 +193,27 @@ class TaskScheduler:
             except Exception:
                 pass
     
+    def _run_sector_flow(self, trigger: str = "scheduler"):
+        """执行抢筹板块资金流向抓取"""
+        from src.models.database import SessionLocal
+        from src.services.sector_flow_service import SectorFlowService
+
+        logger.info("开始执行抢筹板块资金流向抓取...")
+        db = SessionLocal()
+        try:
+            service = SectorFlowService(db)
+            result = service.run_fetch(trigger=trigger)
+            if result.get("success"):
+                logger.info(f"抢筹抓取完成: 保存 {result.get('saved_count', 0)} 条")
+            else:
+                logger.error(f"抢筹抓取失败: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"执行抢筹抓取失败: {e}", exc_info=True)
+            return {"success": False, "error_message": str(e)}
+        finally:
+            db.close()
+
     def _run_fund_update(self):
         """执行基金数据更新（逐个提交：成功的即时保存，失败的不影响其他）"""
         from src.fund.fund_api import FundDataManager
