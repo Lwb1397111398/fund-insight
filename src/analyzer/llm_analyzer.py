@@ -1328,13 +1328,17 @@ class LLMAnalyzer:
             peak_hit_ratio = process_metrics.get('peak_hit_ratio', 0)
             peak_hit_days = process_metrics.get('peak_hit_days', 0)
             total_days = process_metrics.get('total_days', 0)
+            daily_direction_hit_ratio = process_metrics.get('daily_direction_hit_ratio', 0)
+            daily_direction_hit_days = process_metrics.get('daily_direction_hit_days', 0)
+            daily_direction_total_days = process_metrics.get('daily_direction_total_days', 0)
             
             process_context = f"""
 
 【过程指标】
 - 最大涨幅: {max_change:+.2f}%
 - 最大跌幅: {min_change:+.2f}%
-- 方向正确: {peak_hit_days}/{total_days}天({int(peak_hit_ratio*100)}%)"""
+- 相对起点方向正确: {peak_hit_days}/{total_days}天({int(peak_hit_ratio*100)}%)
+- 日涨跌方向正确: {daily_direction_hit_days}/{daily_direction_total_days}天({int(daily_direction_hit_ratio*100)}%，仅作辅助参考)"""
 
         trend_context = ""
         if trend_description:

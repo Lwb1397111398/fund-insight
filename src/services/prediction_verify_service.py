@@ -311,18 +311,37 @@ class PredictionVerifyService:
         trough_date = min_record["date"]
         trough_nav = min_record["nav"]
         
+        daily_changes = []
+        previous_nav = float(start_nav)
+        direction_records = nav_history
+        if direction_records and abs(float(direction_records[0]["nav"]) - previous_nav) < 1e-9:
+            direction_records = direction_records[1:]
+
+        for record in direction_records:
+            nav = float(record["nav"])
+            if previous_nav:
+                daily_changes.append((nav - previous_nav) / previous_nav * 100)
+            previous_nav = nav
+
         if prediction_type == 'up':
             peak_hit = max_change > 0
             peak_hit_days = sum(1 for c in changes if c["change"] > 0)
             peak_hit_ratio = peak_hit_days / len(changes) if changes else 0
+            daily_direction_hit_days = sum(1 for change in daily_changes if change > 0)
         elif prediction_type == 'down':
             peak_hit = min_change < 0
             peak_hit_days = sum(1 for c in changes if c["change"] < 0)
             peak_hit_ratio = peak_hit_days / len(changes) if changes else 0
+            daily_direction_hit_days = sum(1 for change in daily_changes if change < 0)
         else:
             peak_hit = abs(max_change) < flat_threshold and abs(min_change) < flat_threshold
             peak_hit_days = sum(1 for c in changes if abs(c["change"]) < flat_threshold)
             peak_hit_ratio = peak_hit_days / len(changes) if changes else 0
+            daily_direction_hit_days = sum(1 for change in daily_changes if abs(change) < flat_threshold)
+
+        daily_direction_hit_ratio = (
+            daily_direction_hit_days / len(daily_changes) if daily_changes else 0
+        )
         
         max_drawdown = 0
         if max_change > 0:
@@ -342,6 +361,9 @@ class PredictionVerifyService:
             "peak_hit": peak_hit,
             "peak_hit_days": peak_hit_days,
             "peak_hit_ratio": round(peak_hit_ratio, 2),
+            "daily_direction_hit_days": daily_direction_hit_days,
+            "daily_direction_total_days": len(daily_changes),
+            "daily_direction_hit_ratio": round(daily_direction_hit_ratio, 2),
             "max_drawdown": round(max_drawdown, 2),
             "total_days": len(changes)
         }
@@ -410,13 +432,13 @@ class PredictionVerifyService:
                 "analysis": f"最终涨跌{final_change:+.2f}%，预测正确"
             }
         
-        if peak_correct:
+        if peak_correct and peak_hit_ratio >= 0.5:
             score = int(60 + peak_hit_ratio * 30)
             return {
                 "is_correct": True,
                 "verify_type": "process",
                 "score": min(score, 90),
-                "analysis": f"过程中{int(peak_hit_ratio*100)}%时间在阈值内，判定部分正确"
+                "analysis": f"过程中{int(peak_hit_ratio*100)}%交易日相对起点方向正确，判定过程正确"
             }
         
         if peak_hit_ratio >= 0.3:
@@ -425,7 +447,7 @@ class PredictionVerifyService:
                 "is_correct": False,
                 "verify_type": "partial",
                 "score": min(score, 60),
-                "analysis": f"过程中{int(peak_hit_ratio*100)}%时间在阈值内，判定部分正确"
+                "analysis": f"过程中{int(peak_hit_ratio*100)}%交易日相对起点方向正确，判定部分正确"
             }
         
         return {
@@ -824,7 +846,8 @@ class PredictionVerifyService:
         for prediction in all_pending:
             logger.info(f"[Verify] 正在验证预测 {prediction.id}: fund_code={prediction.fund_code}, sector={prediction.sector}, target_date={prediction.target_date}")
 
-            result = self.verify_prediction(prediction.id)
+            force = bool(prediction.target_date and (today - prediction.target_date).days > 30)
+            result = self.verify_prediction(prediction.id, force=force)
             results.append({
                 "prediction_id": prediction.id,
                 "success": result.get("success"),
@@ -1215,6 +1238,14 @@ class PredictionVerifyService:
         
         if target_date:
             days_to_target = (target_date - today).days
+
+            if days_to_target > 0:
+                return {
+                    'can_verify': False,
+                    'reason': f"预测周期尚未结束，请等待至 {target_date.isoformat()} 后再验证",
+                    'data_status': None,
+                    'prediction_status': prediction.status
+                }
             
             if days_to_target > config['window_days_before']:
                 return {

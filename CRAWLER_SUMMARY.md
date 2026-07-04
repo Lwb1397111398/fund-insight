@@ -1,5 +1,7 @@
 # 爬虫模块实现总结
 
+> 历史记录说明：本文是早期爬虫模块实现总结，用于了解当时的设计背景和修复脉络，不代表当前完整架构。当前项目入口请优先阅读 `AGENTS.md` / `CLAUDE.md`，整体架构请阅读 `ARCHITECTURE.md`，部署请阅读 `DEPLOYMENT.md`。
+
 ## ✅ 完成情况
 
 ### 已实现功能
@@ -24,9 +26,9 @@
    - ✅ 添加爬虫配置项
 
 5. **文档和测试**
-   - ✅ `CRAWLER_USAGE.md` - 详细使用说明
-   - ✅ `test_crawler.py` - 测试脚本
    - ✅ 本总结文档
+   - ✅ 早期测试脚本记录
+   - 说明：当前完整使用和部署说明已迁移到 `README.md`、`ARCHITECTURE.md`、`DEPLOYMENT.md`
 
 ---
 
@@ -118,7 +120,7 @@ CRAWLER_ENABLED=true
 ### 2. 重启服务器
 
 ```bash
-python start.py
+python -m src --port 8002
 ```
 
 ### 3. 调用 API
@@ -246,7 +248,7 @@ fund-insight/
 │       ├── tiantian_crawler.py      # 爬虫核心
 │       └── sentiment_analyzer.py    # 情绪分析器
 ├── .env                             # 更新：添加爬虫配置
-├── CRAWLER_USAGE.md                 # 详细使用说明
+├── README.md / DEPLOYMENT.md        # 当前使用和部署说明
 ├── test_crawler.py                  # 测试脚本
 └── CRAWLER_SUMMARY.md               # 本文件
 ```
@@ -273,7 +275,7 @@ fund-insight/
 - [x] API 端点已添加到 `main.py`
 - [x] 环境变量已添加到 `.env`
 - [x] 测试脚本已创建 (`test_crawler.py`)
-- [x] 使用文档已创建 (`CRAWLER_USAGE.md`)
+- [x] 当前使用文档已迁移到 `README.md` / `DEPLOYMENT.md`
 - [x] 情绪分析器测试通过 (75% 准确率)
 - [x] API 导入成功
 - [x] 现有功能不受影响

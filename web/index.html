@@ -2240,7 +2240,7 @@
                     </div>
                     <div class="sub-actions">
                         <button class="action-btn warning small" @click="batchAnalyzePredictions"
-                            :disabled="analyzing">{{ analyzing ? '分析中...' : '🚀 一键AI分析' }}</button>
+                            :disabled="analyzing">{{ analyzing ? '验证中...' : '🚀 一键验证预测' }}</button>
                         <button class="action-btn info small" @click="mergeSimilarPredictions" :disabled="analyzing">{{
                             analyzing ? '处理中...' : '🔀 合并同类预测' }}</button>
                         <button class="action-btn danger small" @click="rollbackInvalidVerifications"
@@ -3184,7 +3184,7 @@
                                         </div>
                                     </div>
                                     <div style="margin-bottom: 8px;">
-                                        <strong>方向正确时间占比：</strong>
+                                        <strong>相对起点方向正确占比：</strong>
                                         <span
                                             :style="{ color: (predictionDetail.verify_history[0].process_metrics.peak_hit_ratio || 0) >= 0.5 ? '#52c41a' : '#faad14', fontWeight: 600 }">
                                             {{
@@ -3195,6 +3195,19 @@
                                             predictionDetail.verify_history[0].process_metrics.peak_hit_days || 0 }}/{{
                                             predictionDetail.verify_history[0].process_metrics.total_days || 0
                                             }}天）</span>
+                                    </div>
+                                    <div v-if="predictionDetail.verify_history[0].process_metrics.daily_direction_total_days"
+                                        style="margin-bottom: 8px;">
+                                        <strong>日涨跌方向占比：</strong>
+                                        <span style="color: #666; font-weight: 600;">
+                                            {{
+                                            Math.round((predictionDetail.verify_history[0].process_metrics.daily_direction_hit_ratio
+                                            || 0) * 100) }}%
+                                        </span>
+                                        <span style="color: #999; font-size: 11px;">（{{
+                                            predictionDetail.verify_history[0].process_metrics.daily_direction_hit_days || 0 }}/{{
+                                            predictionDetail.verify_history[0].process_metrics.daily_direction_total_days || 0
+                                            }}天，仅作参考）</span>
                                     </div>
                                     <div style="margin-bottom: 8px;">
                                         <strong>最终涨跌：</strong>
@@ -3246,7 +3259,10 @@
                                         (h.process_metrics.max_change || 0).toFixed(2) }}%<br>
                                         最大跌{{ h.process_metrics.min_change >= 0 ? '+' : '' }}{{
                                         (h.process_metrics.min_change || 0).toFixed(2) }}%<br>
-                                        方向正确{{ Math.round((h.process_metrics.peak_hit_ratio || 0) * 100) }}%
+                                        相对起点方向{{ Math.round((h.process_metrics.peak_hit_ratio || 0) * 100) }}%
+                                        <span v-if="h.process_metrics.daily_direction_total_days"><br>
+                                            日涨跌方向{{ Math.round((h.process_metrics.daily_direction_hit_ratio || 0) * 100) }}%
+                                        </span>
                                     </td>
                                     <td v-else>-</td>
                                     <td>
@@ -4147,7 +4163,50 @@ const fetchWeChatBatch = async () => {
                     }
                     analyzing.value = false;
                 };
-                const batchAnalyzePredictions = async () => { analyzing.value = true; try { const res = await axios.post('/api/predictions/verify-all'); alert(res.data.message); if (res.data.data?.in_progress) { setTimeout(() => { analyzing.value = false; fetchPredictions(); fetchStats(); }, 60000); } else { analyzing.value = false; await fetchPredictions(); await fetchStats(); } } catch (e) { alert('验证失败'); analyzing.value = false; } };
+                const batchAnalyzePredictions = async () => {
+                    analyzing.value = true;
+                    try {
+                        const res = await axios.post('/api/predictions/verify-all');
+                        alert(res.data.message);
+                        if (res.data.data?.in_progress) {
+                            let checkCount = 0;
+                            const maxChecks = 120;
+                            const checkInterval = setInterval(async () => {
+                                checkCount++;
+                                try {
+                                    const statusRes = await axios.get('/api/predictions/verify-all/status');
+                                    const status = statusRes.data.data || {};
+                                    if (!status.in_progress || checkCount >= maxChecks) {
+                                        clearInterval(checkInterval);
+                                        analyzing.value = false;
+                                        await fetchPredictions();
+                                        await fetchStats();
+                                        if (!status.in_progress) {
+                                            alert(status.last_result?.message || '批量验证已完成！');
+                                        } else {
+                                            alert('批量验证耗时较长，请稍后刷新页面查看结果');
+                                        }
+                                    }
+                                } catch (e) {
+                                    if (checkCount >= maxChecks) {
+                                        clearInterval(checkInterval);
+                                        analyzing.value = false;
+                                        await fetchPredictions();
+                                        await fetchStats();
+                                        alert('无法获取验证进度，请稍后刷新页面查看结果');
+                                    }
+                                }
+                            }, 5000);
+                        } else {
+                            analyzing.value = false;
+                            await fetchPredictions();
+                            await fetchStats();
+                        }
+                    } catch (e) {
+                        alert('验证失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message));
+                        analyzing.value = false;
+                    }
+                };
                 const mergeSimilarPredictions = async () => { if (!confirm('确定要合并同类预测吗？\n\n合并规则：相同博主、相同基金、相同判断、相同目标日期的预测将被合并，置信度取平均值。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/merge-similar'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '合并失败'); } } catch (e) { alert('合并失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
                 const rollbackInvalidVerifications = async () => { if (!confirm('确定要回溯无效验证吗？\n\n将检查所有已验证的预测，如果基金数据不足（少于2个数据点），则重置验证状态，等数据充足后重新验证。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/rollback-invalid'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '回溯失败'); } } catch (e) { alert('回溯失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
                 const syncSectorMapping = async () => { if (!confirm('确定要同步板块映射吗？\n\n将根据板块-基金映射表更新所有预测的基金关联。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/sync-sector-mapping'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '同步失败'); } } catch (e) { alert('同步失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message)); } analyzing.value = false; };

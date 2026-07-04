@@ -1,5 +1,7 @@
 # 安全修复报告
 
+> 历史记录说明：本文记录一次安全修复，不代表当前完整安全架构。当前项目入口请优先阅读 `AGENTS.md` / `CLAUDE.md`，整体架构请阅读 `ARCHITECTURE.md`，部署与生产安全配置请阅读 `DEPLOYMENT.md`。
+
 ## 修复的 High 级别安全 Bug
 
 ### 1. SQL 注入风险 (import_database 路由)

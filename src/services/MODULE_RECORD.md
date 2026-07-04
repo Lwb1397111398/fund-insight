@@ -1,285 +1,67 @@
-# 模块记录文档 - Services 模块
+# 模块记录 - Services
 
-## 基本信息
+## 模块定位
 
-| 属性 | 值 |
-|------|-----|
-| **模块名称** | Services (服务层模块) |
-| **模块路径** | src/services/ |
-| **负责人** | Fund Insight Team |
-| **创建日期** | 2026-03-07 |
-| **最后更新** | 2026-03-07 |
-| **版本** | 1.0.0 |
+`src/services/` 是业务逻辑层。API 层负责接收请求，服务层负责事务、查询、验证、统计、后台任务状态和跨模块协调。
 
-## 一、模块概述
+## 当前职责
 
-### 1.1 职责定义
+- 封装基础 CRUD。
+- 管理博主、帖子、预测、基金、观点、建议。
+- 执行预测验证、批量验证状态管理、基金更新状态管理。
+- 处理板块资金流抓取、计算、幂等保存和抓取日志。
+- 处理市场数据、观点统计、板块基金映射、测试数据清理。
 
-封装业务逻辑，提供统一的服务接口，隔离 API 层与数据层的直接耦合，实现关注点分离。
+## 主要文件
 
-### 1.2 功能范围
+| 文件 | 职责 |
+| --- | --- |
+| `base.py` | 通用 `BaseService` |
+| `blogger_service.py` | 博主查询、统计、准确率更新 |
+| `post_service.py` | 帖子创建、标题生成、同步/异步分析、预测落库 |
+| `prediction_service.py` | 预测查询、统计、状态管理 |
+| `prediction_verify_service.py` | 预测验证核心，按净值和过程表现打分 |
+| `prediction_verify_task.py` | 批量验证后台运行状态 |
+| `fund_service.py` | 基金 CRUD、活跃预测计数、最近历史 |
+| `fund_update_task.py` | 基金批量更新后台状态 |
+| `viewpoint_service.py` | 观点查询、采纳、批量分析、汇总 |
+| `viewpoint_stats_service.py` | 观点统计、告警、权重、关联 |
+| `advice_service.py` | 投资建议生成和历史 |
+| `crawler_service.py` | 爬虫采纳协调 |
+| `sector_flow_service.py` | 板块资金流抓取、计算、写库、状态 |
+| `sector_flow_calculator.py` | 板块资金流指标计算 |
+| `sector_fund_service.py` | 板块-基金映射和审核 |
+| `market_data_service.py` | 市场、政策、情绪辅助数据 |
+| `stats_service.py` | 总体统计 |
+| `test_data_cleanup_service.py` | 测试数据识别和清理 |
 
-| 功能 | 描述 | 状态 |
-|------|------|------|
-| 基础 CRUD | 通用增删改查操作 | 已实现 |
-| 博主服务 | 博主相关业务逻辑 | 已实现 |
-| 帖子服务 | 帖子相关业务逻辑 | 已实现 |
-| 预测服务 | 预测相关业务逻辑 | 已实现 |
-| 基金服务 | 基金相关业务逻辑 | 已实现 |
-| 观点服务 | 观点相关业务逻辑 | 已实现 |
+## 核心流
 
-### 1.3 边界定义
+### 帖子分析
 
-**包含：**
-- 业务逻辑封装
-- 数据访问抽象
-- 跨模块协调
-- 数据转换
+`PostService` 创建帖子后可调用 LLM 分析，生成 `Prediction`。失败时必须保持帖子状态、分析结果和预测数量一致。
 
-**不包含：**
-- HTTP 请求处理（由 api 负责）
-- 数据模型定义（由 models 负责）
-- LLM 分析（由 analyzer 负责）
+### 预测验证
 
-## 二、文件清单
+`PredictionVerifyService` 是准确率核心，读取 `FundHistory`，写回 `Prediction`，并影响 `Blogger` 分数。它包含净值缓存、过程验证、震荡阈值和过期补救逻辑。
 
-| 文件名 | 职责 | 代码行数 | 关键类/函数 |
-|--------|------|----------|-------------|
-| base.py | 基础服务类 | ~100 | BaseService |
-| blogger_service.py | 博主服务 | ~150 | BloggerService |
-| post_service.py | 帖子服务 | ~130 | PostService |
-| prediction_service.py | 预测服务 | ~180 | PredictionService |
-| fund_service.py | 基金服务 | ~180 | FundService |
-| viewpoint_service.py | 观点服务 | ~180 | ViewpointService |
-| __init__.py | 模块导出 | 15 | - |
+### 板块资金流
 
-## 三、依赖关系
+`SectorFlowService.run_fetch()` 调用 `SectorFlowCrawler`，计算暗盘和主力强度，按日期、板块代码和类型幂等写入 `SectorFundFlow`，并记录 `SectorFlowFetchRun`。
 
-### 3.1 上游依赖（本模块依赖的其他模块）
+## 高风险点
 
-| 模块 | 依赖方式 | 依赖内容 | 耦合度 |
-|------|----------|----------|--------|
-| models | 直接导入 | 所有模型类 | 中 |
-| analyzer | 可选导入 | get_analyzer | 低 |
+- `prediction_verify_service.py` 改动会直接改变准确率和历史判断。
+- `post_service.py` 改动会影响帖子分析和预测创建事务。
+- `sector_flow_service.py` 改动会影响抓取幂等、运行日志和前端排行。
+- 后台状态对象是进程内状态，多进程部署不能当作分布式锁。
 
-### 3.2 下游依赖（依赖本模块的其他模块）
-
-| 模块 | 依赖方式 | 依赖内容 |
-|------|----------|----------|
-| api | 直接导入 | 所有服务类 |
-
-## 四、核心接口
-
-### 4.1 公开接口
-
-```python
-from src.services import (
-    BaseService,
-    BloggerService,
-    PostService,
-    PredictionService,
-    FundService,
-    ViewpointService,
-)
-```
-
-### 4.2 接口说明
-
-#### BaseService 基类
-
-```python
-class BaseService(Generic[ModelType]):
-    """基础服务类"""
-    
-    def __init__(self, db: Session, model: Type[ModelType]):
-        """初始化"""
-        
-    def get(self, id: int) -> Optional[ModelType]:
-        """根据 ID 获取单个记录"""
-        
-    def get_all(self, skip: int = 0, limit: int = 100) -> List[ModelType]:
-        """获取所有记录（分页）"""
-        
-    def create(self, obj_in: dict) -> ModelType:
-        """创建新记录"""
-        
-    def update(self, id: int, obj_in: dict) -> Optional[ModelType]:
-        """更新记录"""
-        
-    def delete(self, id: int) -> bool:
-        """删除记录"""
-        
-    def count(self) -> int:
-        """获取记录总数"""
-        
-    def exists(self, id: int) -> bool:
-        """检查记录是否存在"""
-```
-
-#### BloggerService
-
-```python
-class BloggerService(BaseService[Blogger]):
-    """博主服务"""
-    
-    def get_by_name(self, name: str) -> Optional[Blogger]:
-        """根据名称获取博主"""
-        
-    def get_by_platform(self, platform: str) -> List[Blogger]:
-        """根据平台获取博主列表"""
-        
-    def get_active_bloggers(self) -> List[Blogger]:
-        """获取活跃博主列表"""
-        
-    def get_top_bloggers(self, limit: int = 10) -> List[Blogger]:
-        """获取准确率最高的博主"""
-        
-    def get_with_stats(self, blogger_id: int) -> Optional[Dict]:
-        """获取博主及其统计数据"""
-        
-    def update_accuracy(self, blogger_id: int) -> Optional[Blogger]:
-        """更新博主准确率"""
-```
-
-#### PredictionService
-
-```python
-class PredictionService(BaseService[Prediction]):
-    """预测服务"""
-    
-    def get_by_blogger(self, blogger_id: int) -> List[Prediction]:
-        """获取博主的预测列表"""
-        
-    def get_by_fund(self, fund_code: str) -> List[Prediction]:
-        """获取基金的预测列表"""
-        
-    def get_active(self) -> List[Prediction]:
-        """获取活跃预测"""
-        
-    def get_pending_verification(self, days: int = 7) -> List[Prediction]:
-        """获取待验证的预测"""
-        
-    def verify(self, prediction_id: int, actual_change: float, 
-               is_correct: bool) -> Optional[Prediction]:
-        """验证预测"""
-        
-    def get_stats(self, blogger_id: int = None) -> Dict:
-        """获取预测统计"""
-```
-
-## 五、使用示例
-
-### 5.1 基本使用
-
-```python
-from sqlalchemy.orm import Session
-from src.models.database import SessionLocal
-from src.services import BloggerService, PostService
-
-# 创建数据库会话
-db: Session = SessionLocal()
-
-# 创建服务实例
-blogger_service = BloggerService(db)
-post_service = PostService(db)
-
-# 获取博主
-blogger = blogger_service.get(1)
-
-# 获取博主的帖子
-posts = post_service.get_by_blogger(blogger.id)
-
-# 关闭会话
-db.close()
-```
-
-### 5.2 依赖注入方式
-
-```python
-from fastapi import Depends
-from sqlalchemy.orm import Session
-from src.models.database import get_db
-from src.services import BloggerService
-
-@app.get("/bloggers/{blogger_id}")
-def get_blogger(
-    blogger_id: int,
-    db: Session = Depends(get_db)
-):
-    service = BloggerService(db)
-    return service.get(blogger_id)
-```
-
-### 5.3 创建记录
-
-```python
-from src.services import PostService
-
-service = PostService(db)
-
-# 创建帖子
-post = service.create({
-    "blogger_id": 1,
-    "title": "看好白酒板块",
-    "content": "白酒板块调整充分...",
-    "post_date": date.today()
-})
-```
-
-### 5.4 更新记录
-
-```python
-from src.services import PredictionService
-
-service = PredictionService(db)
-
-# 验证预测
-prediction = service.verify(
-    prediction_id=1,
-    actual_change=2.5,
-    is_correct=True,
-    ai_judgment="预测正确，实际涨幅2.5%"
-)
-```
-
-## 六、测试指南
-
-### 6.1 单元测试
+## 推荐验证
 
 ```bash
-# 运行单元测试
-pytest tests/unit/test_services.py -v
+pytest tests/unit/test_prediction_verify_batch_task.py -v
+pytest tests/unit/test_prediction_verify_process_metrics.py -v
+pytest tests/unit/test_sector_flow_service.py -v
+pytest tests/unit/test_fund_update_task.py -v
+pytest tests/unit/test_services/test_services.py -v
 ```
-
-### 6.2 测试覆盖
-
-| 文件 | 覆盖率 | 目标 |
-|------|--------|------|
-| base.py | 待测试 | 80% |
-| blogger_service.py | 待测试 | 80% |
-| post_service.py | 待测试 | 80% |
-| prediction_service.py | 待测试 | 80% |
-| fund_service.py | 待测试 | 80% |
-| viewpoint_service.py | 待测试 | 80% |
-
-## 七、变更记录
-
-| 日期 | 版本 | 变更内容 | 变更人 |
-|------|------|----------|--------|
-| 2026-03-07 | 1.0.0 | 初始版本，创建服务层 | Agent |
-
-## 八、已知问题与改进计划
-
-### 8.1 已知问题
-
-| 问题 | 严重程度 | 计划解决时间 |
-|------|----------|--------------|
-| 无 | - | - |
-
-### 8.2 改进计划
-
-| 改进项 | 优先级 | 预计工作量 |
-|--------|--------|------------|
-| 添加事务管理 | 中 | 0.5人天 |
-| 添加缓存支持 | 低 | 1人天 |
-| 添加异步支持 | 低 | 2人天 |

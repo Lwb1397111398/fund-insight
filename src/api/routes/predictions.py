@@ -13,6 +13,7 @@ from src.api.deps import get_db
 from src.models.database import Prediction
 from src.services.prediction_service import PredictionService
 from src.services.prediction_verify_service import PredictionVerifyService
+from src.services.prediction_verify_task import prediction_verify_task
 
 router = APIRouter(prefix="/predictions", tags=["预测"])
 logger = logging.getLogger(__name__)
@@ -275,51 +276,64 @@ async def sync_sector_mapping(db: Session = Depends(get_db)):
         }
 
 
-_verify_batch_running = False
+def _count_due_predictions(db: Session, today: date) -> int:
+    """统计真正可批量验证的预测：只包含预测周期已结束的记录。"""
+    return db.query(Prediction).filter(
+        Prediction.status == 'pending',
+        Prediction.is_deleted == False,
+        Prediction.prediction_type != 'flat',
+        Prediction.target_date <= today
+    ).count()
 
 
 def _verify_all_background():
     """后台验证所有待验证预测"""
-    global _verify_batch_running
     from src.models.database import SessionLocal
     db = SessionLocal()
+    result = None
     try:
         service = PredictionVerifyService(db)
         result = service.verify_all_pending()
         print(f"[Verify All] 后台验证完成: {result.get('message')}")
     except Exception as e:
-        print(f"[Verify All] 后台验证失败: {e}")
+        result = {"success": False, "message": f"后台验证失败: {e}"}
+        print(f"[Verify All] {result['message']}")
         import traceback
         traceback.print_exc()
     finally:
         db.close()
-        _verify_batch_running = False
+        prediction_verify_task.finish(result)
 
 
 @router.post("/verify-all")
 async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """验证所有待验证的预测（异步模式，跳过通道未开放的）"""
-    global _verify_batch_running
-    
-    if _verify_batch_running:
-        return {"success": True, "message": "验证正在进行中，请稍候...", "data": {"in_progress": True}}
-    
-    service = PredictionVerifyService(db)
+    status = prediction_verify_task.status()
+    if status["in_progress"]:
+        return {"success": True, "message": "验证正在进行中，请稍候...", "data": status}
+
     today = date.today()
-    pending_count = db.query(Prediction).filter(
-        Prediction.status == 'pending',
-        Prediction.is_deleted == False,
-        Prediction.prediction_type != 'flat',
-        Prediction.target_date <= today + timedelta(days=7)
-    ).count()
+    pending_count = _count_due_predictions(db, today)
     
     if pending_count == 0:
         return {"success": True, "message": "没有需要验证的预测", "data": {"total": 0}}
     
-    _verify_batch_running = True
+    start_result = prediction_verify_task.start(pending_count)
+    if not start_result["success"]:
+        return start_result
+
     background_tasks.add_task(_verify_all_background)
     
-    return {"success": True, "message": f"已开始后台验证 {pending_count} 个预测，请稍后刷新查看结果", "data": {"total": pending_count, "in_progress": True}}
+    return {"success": True, "message": f"已开始后台验证 {pending_count} 个预测，请稍后等待完成", "data": prediction_verify_task.status()}
+
+
+@router.get("/verify-all/status")
+async def get_verify_all_status():
+    """获取批量预测验证后台任务状态"""
+    return {
+        "success": True,
+        "data": prediction_verify_task.status()
+    }
 
 
 @router.post("/verify-expired")

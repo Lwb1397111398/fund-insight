@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code when working in this repository.
+This file provides guidance to Codex when working in this repository.
 
 ## 项目一句话
 
@@ -65,7 +65,7 @@ codegraph sync .
 ## 系统分层
 
 ```text
-web/*.html + web/common.*
+web/*.html + web/common.* 
         |
         v
 src/api/main.py  ->  src/api/routes/*  ->  src/api/schemas/*

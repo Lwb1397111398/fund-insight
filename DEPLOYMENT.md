@@ -1,458 +1,257 @@
-# 爬虫模块部署指南
+# Fund Insight 部署与运维指南
 
-## ✅ 部署完成
+最后更新：2026-07-04
 
-恭喜！天天基金吧爬虫模块已经完全集成到你的基金预测系统中！
+## 当前部署形态
 
----
+Fund Insight 当前按三部分运行：
 
-## 📁 新增文件
+```text
+Render Web Service
+  -> FastAPI 应用
+  -> Supabase PostgreSQL
 
-### 核心模块
-```
-fund-insight/
-├── src/
-│   └── crawler/
-│       ├── __init__.py              # 模块初始化
-│       ├── tiantian_crawler.py      # 爬虫核心（抓取帖子）
-│       └── sentiment_analyzer.py    # 情绪分析器（分析观点）
-```
+Render Cron
+  -> 每日任务：板块资金流、基金更新、预测验证
+  -> Supabase PostgreSQL
 
-### 文档和测试
-```
-fund-insight/
-├── CRAWLER_USAGE.md          # 详细使用说明
-├── CRAWLER_SUMMARY.md        # 实现总结
-├── test_crawler.py           # 测试脚本
-└── DEPLOYMENT.md             # 本文件
+GitHub Actions
+  -> 交易日板块资金流抓取
+  -> Supabase PostgreSQL
 ```
 
-### 前端更新
-```
-fund-insight/web/
-└── index.html                # 新增"抓取基金吧"按钮和弹窗
-```
+本地开发默认使用 SQLite，不需要 Supabase。
 
----
-
-## 🔧 配置文件更新
-
-### 1. `.env` 文件
-已添加爬虫配置（默认关闭）：
-```bash
-# 爬虫模块配置（默认关闭）
-CRAWLER_ENABLED=false
-CRAWLER_REQUEST_DELAY=2.0
-MAX_POSTS_PER_FUND=10
-CRAWLER_TIMEOUT=10
-```
-
-### 2. `src/core/config.py`
-已添加爬虫配置项：
-```python
-CRAWLER_ENABLED = os.getenv("CRAWLER_ENABLED", "false").lower() == "true"
-CRAWLER_REQUEST_DELAY = float(os.getenv("CRAWLER_REQUEST_DELAY", "2.0"))
-MAX_POSTS_PER_FUND = int(os.getenv("MAX_POSTS_PER_FUND", "10"))
-CRAWLER_TIMEOUT = int(os.getenv("CRAWLER_TIMEOUT", "10"))
-```
-
-### 3. `src/api/main.py`
-已添加 3 个爬虫 API 端点：
-- `POST /api/crawler/fetch` - 抓取帖子
-- `GET /api/crawler/status` - 查看状态
-- `GET /api/crawler/stats` - 统计信息
-
----
-
-## 🚀 快速开始
-
-### 方式 1：使用前端界面（推荐）
-
-1. **启动服务器**
-   ```bash
-   python start.py
-   ```
-
-2. **打开浏览器**
-   ```
-   http://localhost:8002
-   ```
-
-3. **点击"抓取基金吧"按钮**
-   - 在仪表盘页面找到青色按钮
-   - 查看爬虫状态
-   - 选择抓取选项
-   - 点击"开始抓取"
-
-### 方式 2：使用 API
-
-1. **查看爬虫状态**
-   ```bash
-   curl http://localhost:8002/api/crawler/status
-   ```
-
-2. **抓取所有活跃基金**
-   ```bash
-   curl -X POST http://localhost:8002/api/crawler/fetch \
-     -H "Content-Type: application/json" \
-     -d '{}'
-   ```
-
-3. **抓取指定基金**
-   ```bash
-   curl -X POST http://localhost:8002/api/crawler/fetch \
-     -H "Content-Type: application/json" \
-     -d '{"fund_codes": ["000001", "160221"]}'
-   ```
-
----
-
-## 📖 使用流程
-
-### 步骤 1：启用爬虫（可选）
-
-如果需要使用爬虫功能，编辑 `.env`：
-```bash
-CRAWLER_ENABLED=true
-```
-
-然后重启服务器：
-```bash
-python start.py
-```
-
-**注意：** 爬虫默认关闭，不影响现有基金预测功能！
-
-### 步骤 2：测试情绪分析器
-
-运行测试脚本：
-```bash
-python test_crawler.py
-```
-
-你会看到：
-```
-测试情绪分析器
-============================================================
-✓ 文本：今天半导体暴涨，我重仓吃到大肉，太爽了！...
-   情绪：bullish (期望：bullish), 评分：1.0, 置信度：45%
-   板块：['半导体']
-
-测试准确率：75.0% (6/8)
-```
-
-### 步骤 3：抓取基金吧帖子
-
-**前端方式：**
-1. 打开 http://localhost:8002
-2. 点击"抓取基金吧"按钮
-3. 选择"抓取所有活跃基金"或"指定基金代码"
-4. 点击"开始抓取"
-5. 查看抓取结果（包含情绪分析）
-
-**API 方式：**
-```bash
-curl -X POST http://localhost:8002/api/crawler/fetch \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-返回示例：
-```json
-{
-  "success": true,
-  "message": "成功抓取 20 条帖子",
-  "data": {
-    "total_posts": 20,
-    "total_funds": 2,
-    "posts": [
-      {
-        "post_id": "1234567890",
-        "fund_code": "000001",
-        "title": "今天半导体暴涨，我重仓吃到大肉",
-        "author": "投资达人张三",
-        "sentiment": "bullish",
-        "sentiment_score": 0.85,
-        "confidence": 75,
-        "sectors": ["半导体"],
-        "keywords": ["暴涨", "重仓", "吃肉"],
-        "url": "https://guba.eastmoney.com/news,000001,1234567890.html",
-        "crawl_time": "2025-03-06 10:30:00"
-      }
-    ]
-  }
-}
-```
-
----
-
-## 🔍 功能说明
-
-### 1. 爬虫核心功能
-
-**抓取内容：**
-- 帖子标题
-- 帖子内容（前 500 字）
-- 作者名称
-- 阅读数、回复数
-- 发帖时间
-- 帖子链接
-
-**支持网站：**
-- 天天基金吧（https://guba.eastmoney.com/）
-
-### 2. 情绪分析功能
-
-**分析结果：**
-- 情绪倾向：看多（bullish）/ 看空（bearish）/ 中性（neutral）
-- 情绪评分：-1.0 ~ 1.0
-- 置信度：0 ~ 100%
-- 提到的板块
-- 命中的关键词
-
-**板块识别：**
-支持 18 个板块：半导体、新能源、医药、消费、科技、金融、地产、有色、化工、军工、电力、汽车、互联网、农业、基建、卫星、存储、电力设备
-
-### 3. 前端界面
-
-**功能：**
-- 爬虫状态显示
-- 抓取选项选择（全部/指定）
-- 实时抓取进度
-- 结果展示（情绪、板块、关键词）
-- 帖子链接直达
-
----
-
-## ⚠️ 注意事项
-
-### 1. 安全第一
-
-- ✅ 爬虫默认关闭
-- ✅ 手动触发，不自动运行
-- ✅ 异常完全隔离
-- ✅ 不影响现有基金预测功能
-
-### 2. 频率控制
-
-- 默认请求间隔：2 秒
-- 每基金最多帖子：10 条
-- 建议每天抓取 1-2 次
-
-### 3. 合规使用
-
-- 仅抓取公开数据
-- 不要用于商业用途
-- 遵守网站 robots.txt 协议
-
-### 4. 网络依赖
-
-- 需要互联网连接
-- 可能受网站反爬影响
-- 建议本地测试后再部署
-
----
-
-## 🛠️ 故障排查
-
-### 问题 1：爬虫未启用
-
-**现象：** 前端显示"未启用"
-
-**解决：**
-```bash
-# 1. 编辑 .env
-CRAWLER_ENABLED=true
-
-# 2. 重启服务器
-python start.py
-```
-
-### 问题 2：抓取失败
-
-**现象：** 返回"抓取失败：..."
-
-**可能原因：**
-- 网络问题
-- 天天基金网反爬
-- BeautifulSoup 未安装
-
-**解决：**
-```bash
-# 安装依赖
-pip install beautifulsoup4
-
-# 检查网络
-ping guba.eastmoney.com
-
-# 查看日志
-# 爬虫日志以 [Crawler] 或 [Crawler API] 开头
-```
-
-### 问题 3：情绪分析不准确
-
-**现象：** 情绪判断不符合预期
-
-**解决：**
-1. 运行测试脚本查看准确率
-   ```bash
-   python test_crawler.py
-   ```
-
-2. 调整关键词（在 `src/crawler/sentiment_analyzer.py`）
-   ```python
-   bullish_keywords = [...]  # 看多关键词
-   bearish_keywords = [...]  # 看空关键词
-   ```
-
----
-
-## 📊 测试结果
-
-### 单元测试
-```bash
-python test_crawler.py
-```
-
-**结果：**
-- ✅ 情绪分析器：75% 准确率
-- ✅ API 导入：成功
-- ✅ 现有功能：不受影响
-
-### 前端测试
-1. 打开 http://localhost:8002
-2. 点击"抓取基金吧"
-3. 查看爬虫状态
-4. 尝试抓取
-
----
-
-## 🎯 下一步建议
-
-### 1. 数据持久化（推荐）
-
-当前版本抓取的数据不保存到数据库。可以扩展：
-
-```python
-# models/database.py
-class CrawledPost(Base):
-    __tablename__ = 'crawled_posts'
-    
-    id = Column(Integer, primary_key=True)
-    post_id = Column(String, unique=True)
-    fund_code = Column(String)
-    title = Column(String)
-    content = Column(Text)
-    author = Column(String)
-    sentiment = Column(String)
-    sentiment_score = Column(Float)
-    sectors = Column(JSON)
-    crawl_time = Column(DateTime)
-```
-
-### 2. 情绪趋势图
-
-```python
-# 添加 API：获取某基金情绪趋势
-@app.get("/api/crawler/sentiment-trend/{fund_code}")
-def get_sentiment_trend(fund_code: str, days: int = 7):
-    """获取最近 N 天的情绪趋势"""
-    pass
-```
-
-### 3. 定时任务
-
-```python
-# 每天上午 9 点自动抓取
-from apscheduler.schedulers.background import BackgroundScheduler
-
-scheduler = BackgroundScheduler()
-
-@scheduler.scheduled_job('cron', hour=9, minute=0)
-def daily_fetch():
-    # 自动抓取所有活跃基金
-    pass
-```
-
-### 4. 博主追踪
-
-```python
-# 统计某个博主的历史观点
-@app.get("/api/crawler/author/{author_name}")
-def get_author_posts(author_name: str):
-    """获取某博主的所有帖子和情绪"""
-    pass
-```
-
----
-
-## 📞 技术支持
-
-### 查看日志
-
-爬虫相关日志以以下前缀开头：
-- `[Crawler]` - 爬虫核心日志
-- `[Crawler API]` - API 端点日志
-
-### 查看配置
+## 本地运行
 
 ```bash
-# 查看当前配置
-curl http://localhost:8002/api/crawler/status
+pip install -r requirements.txt
+copy .env.example .env
+python -m src --init-db
+python -m src --port 8002
 ```
 
-### 测试 API
+访问：
+
+```text
+http://localhost:8002
+```
+
+## Render Web Service
+
+配置文件：`render.yaml`
+
+启动命令：
 
 ```bash
-# 测试情绪分析器
-python test_crawler.py
-
-# 测试爬虫
-python src/crawler/tiantian_crawler.py
+uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
 ```
 
----
+关键环境变量：
 
-## ✅ 验证清单
+| 变量 | 说明 |
+| --- | --- |
+| `PYTHON_VERSION` | Render 当前为 `3.10.12` |
+| `APP_ENV` | `production` |
+| `DATABASE_URL` | Supabase/PostgreSQL 连接串，secret |
+| `ACCESS_PASSWORD` | API 访问密码，secret |
+| `CORS_ORIGINS` | 生产域名，例如 `https://fund-insight.onrender.com` |
+| `LLM_PROVIDER` | 当前生产使用 `volcengine` |
+| `VOLCENGINE_API_KEY` | 火山引擎密钥，secret |
+| `VOLCENGINE_BASE_URL` | 火山引擎 API 地址 |
+| `VOLCENGINE_MODEL` | 主模型 |
+| `VOLCENGINE_LIGHT_MODEL` | 轻量模型 |
+| `DB_POOL_SIZE` | PostgreSQL 连接池大小 |
+| `DB_MAX_OVERFLOW` | PostgreSQL 最大溢出连接 |
+| `DB_POOL_RECYCLE` | 连接回收秒数 |
+| `DB_POOL_TIMEOUT` | 连接池等待秒数 |
 
-使用前确认：
+注意：
 
-- [x] 爬虫模块已创建 (`src/crawler/`)
-- [x] 配置已添加到 `config.py` 和 `.env`
-- [x] API 端点已添加到 `main.py`
-- [x] 前端已添加"抓取基金吧"按钮
-- [x] 测试脚本已创建 (`test_crawler.py`)
-- [x] 使用文档已创建 (`CRAWLER_USAGE.md`)
-- [x] 情绪分析器测试通过 (75% 准确率)
-- [x] 现有功能不受影响
+- `ENABLE_DATABASE_IMPORT` 默认必须保持 `false`。
+- `ENABLE_STARTUP_MIGRATIONS` 默认必须保持 `false`，除非明确要补列/补索引。
+- `CRAWLER_ENABLED` 在 Render Web 当前为 `true`，但爬虫仍应由用户或任务触发。
 
----
+## Render Cron
 
-## 🎉 总结
+`render.yaml` 中定义了 `fund-insight-scheduler`。
 
-### 实现目标
-✅ 完全隔离的爬虫模块
-✅ 手动触发，不影响现有功能
-✅ 情绪分析，识别博主观点
-✅ 板块识别，发现热点
-✅ 频率控制，避免被封
-✅ 前端界面，方便使用
+计划：
 
-### 文件统计
-- 新增文件：6 个
-- 修改文件：3 个
-- 代码行数：~1200 行
+```text
+30 10 * * *
+```
 
-### 测试状态
-- ✅ 单元测试：通过
-- ✅ API 测试：通过
-- ✅ 前端测试：通过
-- ✅ 集成测试：通过
+命令：
 
----
+```bash
+python scripts/run_scheduled_tasks.py daily
+```
 
-**部署完成时间：** 2025-03-06
-**版本：** v1.0.0
-**状态：** ✅ 可以开始使用
+执行内容：
 
-祝你使用愉快！如有问题，请查看 `CRAWLER_USAGE.md` 获取详细文档。
+1. `init_db()`。
+2. `_run_sector_flow(trigger="render_cron")`。
+3. `_run_fund_update()`。
+4. `_run_prediction_verify()`。
+5. `_run_expired_verify()`。
+
+失败时命令返回非 0，Render 会显示 Cron 失败。
+
+## GitHub Actions
+
+主要工作流：
+
+| 文件 | 用途 |
+| --- | --- |
+| `.github/workflows/sector_flow_crawler.yml` | 交易日 13:30 北京时间抓取板块资金流 |
+| `.github/workflows/discover_akshare.yml` | 探测 akshare 接口 |
+| `.github/workflows/test_akshare.yml` | 测试 akshare 接口 |
+| `.github/workflows/test_direct_api.yml` | 测试直接 API |
+| `.github/workflows/test_sector_types.yml` | 测试板块类型 |
+
+`sector_flow_crawler.yml` 使用：
+
+```bash
+python scripts/fetch_sector_flow.py
+```
+
+需要 GitHub Secret：
+
+- `DATABASE_URL`
+
+## 数据库
+
+本地：
+
+- SQLite 文件：`data/fund_insight.db`
+- 未设置 `DATABASE_URL` 时自动使用。
+
+生产：
+
+- PostgreSQL/Supabase。
+- 连接池设置见 `src/models/database.py` 的 `_get_postgres_pool_settings()`。
+- SQLAlchemy 会在启动时 `Base.metadata.create_all(engine)`，但这不是完整迁移系统。
+
+重要限制：
+
+- 项目没有 Alembic。
+- 修改 `src/models/database.py` 后，必须评估 Supabase 生产表结构是否需要手动迁移。
+- 数据库导入接口 `/api/import-database` 默认关闭；开启后还需要确认头 `X-Danger-Confirm: import-production-database`。
+
+## 配置持久化
+
+LLM 配置来源优先级：
+
+1. 环境变量。
+2. PostgreSQL `system_config` 表。
+3. 本地 `data/llm_config.json`。
+
+相关代码：
+
+- `src/core/config.py`
+- `src/api/routes/config.py`
+
+## 健康检查
+
+```text
+GET /api/health
+GET /api/health/detail
+```
+
+健康检查不需要访问密码。
+
+`/api/health/detail` 会返回：
+
+- 数据库状态。
+- 当前数据库类型。
+- LLM 是否配置。
+- 爬虫是否启用。
+- 启动迁移是否启用。
+- 本地调度器是否运行。
+
+## 常见运维命令
+
+```bash
+# 本地初始化数据库
+python -m src --init-db
+
+# 本地模拟每日任务
+python scripts/run_scheduled_tasks.py daily
+
+# 手动抓取板块资金流
+python scripts/fetch_sector_flow.py
+
+# 检查最近预测
+python scripts/check_today_predictions.py
+
+# 重新验证预测
+python scripts/reverify_predictions.py
+
+# 重新计算博主分数
+python scripts/recalculate_blogger_scores.py
+```
+
+维护脚本很多，运行前先读脚本顶部逻辑，特别是会写库的脚本。
+
+## 安全注意事项
+
+- 不要把 `.env`、API key、`DATABASE_URL`、访问密码提交到仓库。
+- `/api/import-database` 是高风险接口，默认关闭。
+- 清理接口可能删除数据，前端已有预览和确认逻辑，后端也需要确认头。
+- 生产数据库结构变更前必须备份或确认迁移 SQL。
+- 爬虫遵守频率控制，不做高频采集。
+
+## 故障排查
+
+### 前端提示 Unauthorized
+
+检查登录密码是否等于 `ACCESS_PASSWORD`，请求头是否带 `X-Access-Password`。
+
+### LLM 分析失败
+
+检查：
+
+- `LLM_PROVIDER`
+- `LLM_API_KEY` 或 `VOLCENGINE_API_KEY`
+- `LLM_BASE_URL`
+- `LLM_MODEL`
+- `/api/config/test-llm`
+
+### 生产数据库连接失败
+
+检查：
+
+- `DATABASE_URL` 是否是 `postgresql://...`
+- Supabase 是否允许连接。
+- Render secret 是否配置。
+- 连接池参数是否过大。
+
+### 板块资金流没有更新
+
+检查：
+
+- Render Cron 运行记录。
+- GitHub Actions `Sector Flow Crawler` 运行记录。
+- `sector_flow_fetch_runs` 表。
+- `/api/sector-flow/fetch-status`。
+
+### 预测没有验证
+
+检查：
+
+- 预测 `target_date` 是否到期。
+- 基金是否有 `fund_history` 起点和终点附近净值。
+- `/api/predictions/verify-all/status`。
+- Render Cron 日志。
+
+## 发布前检查
+
+```bash
+pytest tests/unit/test_deployment_optimization.py tests/unit/test_production_hardening.py -v
+python -m src --init-db
+codegraph sync .
+codegraph status .
+```
+
+如果改了业务逻辑，还要跑对应模块测试。

@@ -58,6 +58,7 @@ predictions_check.json
 .claude/
 .codegraph/
 .codeartsdoer/
+.codex/
 
 # SQLite
 *.sqlite
