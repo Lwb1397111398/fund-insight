@@ -31,7 +31,6 @@
 | `sector_flow_service.py` | 板块资金流抓取、计算、写库、状态 |
 | `sector_flow_calculator.py` | 板块资金流指标计算 |
 | `sector_fund_service.py` | 板块-基金映射和审核 |
-| `market_data_service.py` | 市场、政策、情绪辅助数据 |
 | `stats_service.py` | 总体统计 |
 | `test_data_cleanup_service.py` | 测试数据识别和清理 |
 

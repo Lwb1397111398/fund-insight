@@ -4,6 +4,7 @@ Fund Insight API - FastAPI 主应用
 """
 from fastapi import FastAPI, Response, Request, status, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
@@ -117,12 +118,6 @@ def _run_startup_migrations() -> None:
                 logger.warning(f"[Startup] 跳过未授权的表 {table} 的索引创建")
                 indexes.remove((idx_name, table, columns))
 
-        # 验证所有表名都在白名单中（防御性编程）
-        for idx_name, table, columns in indexes:
-            if table not in ALLOWED_INDEX_TABLES:
-                logger.warning(f"[Startup] 跳过未授权的表 {table} 的索引创建")
-                indexes.remove((idx_name, table, columns))
-
         db_url = str(engine.url)
         if db_url.startswith("sqlite"):
             db_path = db_url.replace("sqlite:///", "")
@@ -188,7 +183,7 @@ async def password_auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     # 放行健康检查接口
-    if request.url.path in ("/api/health", "/api/health/detail"):
+    if request.url.path == "/api/health":
         return await call_next(request)
     
     # 从环境变量获取密码
@@ -217,6 +212,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZip 压缩：index.html(254KB)+vue(162KB)+axios 明文传输，免费层带宽敏感
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 static_dir = Path(project_root) / "static"
 if static_dir.exists():
@@ -296,83 +294,6 @@ async def favicon():
     return Response(status_code=204)
 
 
-@app.get("/api/market-sentiment")
-def get_market_sentiment():
-    """获取市场情绪"""
-    from sqlalchemy import func
-    from src.models.database import SessionLocal, Viewpoint
-    from datetime import date, timedelta
-    
-    db = SessionLocal()
-    try:
-        start_date = date.today() - timedelta(days=7)
-        direction_rows = db.query(
-            Viewpoint.market_direction,
-            func.count(Viewpoint.id)
-        ).filter(
-            Viewpoint.viewpoint_date >= start_date
-        ).group_by(Viewpoint.market_direction).all()
-        direction_counts = {direction: count for direction, count in direction_rows}
-
-        bullish_count = direction_counts.get('bullish', 0)
-        bearish_count = direction_counts.get('bearish', 0)
-        neutral_count = direction_counts.get('neutral', 0)
-        total = sum(direction_counts.values())
-
-        if total == 0:
-            return {
-                "success": True,
-                "data": {
-                    "overall_sentiment": "neutral",
-                    "confidence": 50,
-                    "bullish_count": 0,
-                    "bearish_count": 0,
-                    "neutral_count": 0,
-                    "hot_sectors": [],
-                    "analysis": "暂无近期观点数据"
-                }
-            }
-        if bullish_count > bearish_count and bullish_count > neutral_count:
-            overall = "bullish"
-            confidence = int(bullish_count / total * 100)
-        elif bearish_count > bullish_count and bearish_count > neutral_count:
-            overall = "bearish"
-            confidence = int(bearish_count / total * 100)
-        else:
-            overall = "neutral"
-            confidence = int(neutral_count / total * 100) if neutral_count > 0 else 50
-        
-        sector_counts = {}
-        sector_rows = db.query(
-            Viewpoint.sectors_bullish,
-            Viewpoint.sectors_bearish
-        ).filter(
-            Viewpoint.viewpoint_date >= start_date
-        ).all()
-        for sectors_bullish, sectors_bearish in sector_rows:
-            for sector in (sectors_bullish or []):
-                sector_counts[sector] = sector_counts.get(sector, 0) + 1
-            for sector in (sectors_bearish or []):
-                sector_counts[sector] = sector_counts.get(sector, 0) + 1
-        
-        hot_sectors = sorted(sector_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        return {
-            "success": True,
-            "data": {
-                "overall_sentiment": overall,
-                "confidence": confidence,
-                "bullish_count": bullish_count,
-                "bearish_count": bearish_count,
-                "neutral_count": neutral_count,
-                "hot_sectors": [{"sector": s, "count": c} for s, c in hot_sectors],
-                "analysis": f"近7天共{total}条观点，看多{bullish_count}条，看空{bearish_count}条，中性{neutral_count}条"
-            }
-        }
-    finally:
-        db.close()
-
-
 @app.get("/")
 async def serve_index():
     """服务首页"""
@@ -389,69 +310,6 @@ async def serve_index_html():
     if index_file.exists():
         return FileResponse(str(index_file), media_type="text/html")
     return {"error": "index.html not found"}
-
-
-@app.get("/viewpoint-manager.html")
-async def serve_viewpoint_manager():
-    """服务观点管理页面"""
-    html_file = web_dir / "viewpoint-manager.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "viewpoint-manager.html not found"}
-
-
-@app.get("/article-crawler.html")
-async def serve_article_crawler():
-    """服务文章爬虫页面"""
-    html_file = web_dir / "article-crawler.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "article-crawler.html not found"}
-
-
-@app.get("/cleanup-manager.html")
-async def serve_cleanup_manager():
-    """服务清理管理页面"""
-    html_file = web_dir / "cleanup-manager.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "cleanup-manager.html not found"}
-
-
-@app.get("/diagnostic.html")
-async def serve_diagnostic():
-    """服务诊断页面"""
-    html_file = web_dir / "diagnostic.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "diagnostic.html not found"}
-
-
-@app.get("/test.html")
-async def serve_test():
-    """服务测试页面"""
-    html_file = web_dir / "test.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "test.html not found"}
-
-
-@app.get("/simple.html")
-async def serve_simple():
-    """服务简化页面"""
-    html_file = web_dir / "simple.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "simple.html not found"}
-
-
-@app.get("/vue-test.html")
-async def serve_vue_test():
-    """服务 Vue 测试页面"""
-    html_file = web_dir / "vue-test.html"
-    if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
-    return {"error": "vue-test.html not found"}
 
 
 @app.get("/import-data.html")
@@ -528,15 +386,6 @@ def import_database(file: UploadFile = File(...), request: Request = None):
                 'policy_data', 'sentiment_data', 'sector_fund_flow'
             }
 
-            # 允许导入的表名白名单（防止 SQL 注入）
-            ALLOWED_IMPORT_TABLES = {
-                'bloggers', 'posts', 'predictions', 'viewpoints', 'fund_info',
-                'fund_history', 'sector_fund_mapping', 'investment_advice',
-                'crawler_article_records', 'prediction_groups', 'batch_analysis_tasks',
-                'user_fund_bindings', 'sync_logs', 'fund_holdings', 'market_data',
-                'policy_data', 'sentiment_data', 'sector_fund_flow'
-            }
-
             orm_map = [
                 ('bloggers', Blogger),
                 ('posts', Post),
@@ -563,11 +412,6 @@ def import_database(file: UploadFile = File(...), request: Request = None):
                 if table_name not in ALLOWED_IMPORT_TABLES:
                     raise HTTPException(status_code=400, detail=f"未授权的表名: {table_name}")
 
-            # 验证所有表名都在白名单中（防御性编程）
-            for table_name, _ in orm_map:
-                if table_name not in ALLOWED_IMPORT_TABLES:
-                    raise HTTPException(status_code=400, detail=f"未授权的表名: {table_name}")
-            
             tables_to_delete = [name for name, _ in reversed(orm_map)]
             
             imported_counts = {}

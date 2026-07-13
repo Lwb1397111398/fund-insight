@@ -2137,7 +2137,7 @@
                     <button class="action-btn primary" @click="loadView('viewpoints')"><i class="ri-lightbulb-line"></i> 管理观点</button>
                     <button class="action-btn success" @click="loadView('advice')"><i class="ri-line-chart-line"></i> 投资建议</button>
                     <button class="action-btn" @click="loadView('sector-flow')" style="background: #fef2f2; color: #dc2626; border-color: #fca5a5;"><i class="ri-funds-line"></i> 板块资金</button>
-                    <button class="action-btn danger" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理' }}</button>
+                    <button v-if="cleanupEnabled" class="action-btn danger" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理' }}</button>
                 </div>
                 <!-- 博主视图 -->
                 <div v-if="currentView === 'bloggers'">
@@ -2403,10 +2403,10 @@
                 <div v-if="currentView === 'cleanup'">
                     <div class="section-title">待清理数据</div>
                     <div class="cleanup-actions">
-                        <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理过期数据' }}</button>
-                        <button class="action-btn small" @click="cleanupOldestBatch(7)" :disabled="analyzing" style="background: #fa8c16; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（7天前）' }}</button>
-                        <button class="action-btn small" @click="cleanupOldestBatch(14)" :disabled="analyzing" style="background: #722ed1; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（14天前）' }}</button>
-                        <button class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
+                        <button v-if="cleanupEnabled" class="action-btn danger small" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理过期数据' }}</button>
+                        <button v-if="cleanupEnabled" class="action-btn small" @click="cleanupOldestBatch(7)" :disabled="analyzing" style="background: #fa8c16; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（7天前）' }}</button>
+                        <button v-if="cleanupEnabled" class="action-btn small" @click="cleanupOldestBatch(14)" :disabled="analyzing" style="background: #722ed1; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（14天前）' }}</button>
+                        <button v-if="testData && testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                     </div>
                     <div style="margin-bottom: 15px; padding: 10px 15px; background: #f6ffed; border-radius: 6px; border: 1px solid #b7eb8f; font-size: 13px; color: #389e0d;">
                         <i class="ri-information-line"></i> 温和清理只清理过期最久的数据（每批最多100条），对博主统计影响最小。适合日常维护使用。
@@ -2571,7 +2571,7 @@
                         <h4 style="color: #ff9800; margin-bottom: 10px;">🧪 测试数据 ({{ testData.summary.total }})</h4>
                         <div class="sub-actions" style="margin-bottom: 15px;">
                             <button class="action-btn warning small" @click="previewTestData">👁️ 预览测试数据</button>
-                            <button class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
+                            <button v-if="testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                         </div>
                         <div class="test-data-summary"
                             style="background: #fff3e0; padding: 15px; border-radius: 6px; margin-bottom: 15px;">
@@ -3664,6 +3664,15 @@
                                 <div v-for="(count, table) in importResult.data.imported" :key="table">
                                     <span v-if="count > 0">✅ {{ table }}: 导入 {{ count }} 条</span>
                                 </div>
+                                <div v-for="(count, table) in importResult.data.skipped" :key="'skipped-' + table">
+                                    <span v-if="count > 0">↪ {{ table }}: 跳过 {{ count }} 条已存在记录</span>
+                                </div>
+                                <div v-for="(count, table) in importResult.data.failed" :key="'failed-' + table">
+                                    <span v-if="count > 0" style="color: #ff4d4f;">❌ {{ table }}: 失败 {{ count }} 条</span>
+                                </div>
+                                <div v-if="importResult.data.warnings && importResult.data.warnings.length" style="margin-top: 6px; color: #d46b08;">
+                                    <div v-for="warning in importResult.data.warnings" :key="warning">⚠️ {{ warning }}</div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -4013,14 +4022,14 @@ const fetchWeChatBatch = async () => {
                         return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
                     } catch { return isoStr; }
                 };
-                const postDetail = ref(null), viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null);
+                const postDetail = ref(null), viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null), cleanupEnabled = ref(false);
                 const fetchStats = async () => { try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
                 const fetchBloggers = async () => { const res = await axios.get('/api/bloggers'); if (res.data.success) bloggers.value = res.data.data.sort((a, b) => (b.accuracy_rate || 0) - (a.accuracy_rate || 0)); };
                 const fetchPosts = async () => { const res = await axios.get('/api/posts'); if (res.data.success) posts.value = res.data.data; };
                 const fetchPredictions = async () => { const res = await axios.get('/api/predictions'); if (res.data.success) predictions.value = res.data.data; };
                 const fetchViewpoints = async () => { const res = await axios.get('/api/viewpoints'); if (res.data.success) viewpoints.value = res.data.data; };
                 const fetchFunds = async () => { const res = await axios.get('/api/funds?group_by_sector=false'); if (res.data.success) funds.value = res.data.data.sort((a, b) => (b.day_growth || 0) - (a.day_growth || 0)); };
-                const fetchCleanupPreview = async () => { try { const res = await axios.get('/api/config/cleanup/preview'); if (res.data.success) cleanupPreview.value = res.data.data; } catch (e) { console.error(e); } };
+                const fetchCleanupPreview = async () => { try { const res = await axios.get('/api/config/cleanup/preview'); if (res.data.success) { cleanupPreview.value = res.data.data; cleanupEnabled.value = Boolean(res.data.data?.cleanup_enabled); } } catch (e) { cleanupEnabled.value = false; console.error(e); } };
                 const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await fetchViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } else if (view === 'advice') { await loadAdviceHistory(); } else if (view === 'sector-flow') { await fetchSectorRanking(); await fetchSectorStats(); await fetchSectorFlowStatus(); } };
                 // 板块资金分析 - 数据获取
                 const fetchSectorFlowStatus = async () => { sectorFlowStatusLoading.value = true; try { const res = await axios.get('/api/sector-flow/fetch-status'); if (res.data.success) sectorFlowStatus.value = res.data.data; } catch (e) { console.error('fetchSectorFlowStatus error:', e); } sectorFlowStatusLoading.value = false; };
@@ -4139,7 +4148,7 @@ const fetchWeChatBatch = async () => {
                 const cleanupLowQuality = async (dryRun) => {
                     analyzing.value = true;
                     try {
-                        const res = await axios.post(`/api/posts/cleanup-low-quality?dry_run=${dryRun}`);
+                        const res = await axios.post(`/api/posts/cleanup-low-quality?dry_run=${dryRun}`, null, dryRun ? undefined : { headers: { 'X-Danger-Confirm': 'cleanup-data' } });
                         const data = res.data.data;
                         if (dryRun) {
                             if (data.count === 0) {
@@ -4278,8 +4287,8 @@ const fetchWeChatBatch = async () => {
                 const loadConfig = async () => { try { const res = await axios.get('/api/config'); if (res.data.success) configData.value = res.data.data; } catch (e) { console.error(e); } };
                 const openConfig = async () => { showConfig.value = true; configTab.value = 'llm'; await loadConfig(); await loadTestData(); };
                 const updateConfig = async () => { try { const res = await axios.post('/api/config', configData.value); alert(res.data.message); showConfig.value = false; } catch (e) { alert('保存失败'); } };
-                const cleanupData = async () => { if (!confirm('确定要清理过期数据吗？')) return; analyzing.value = true; try { const res = await axios.post('/api/config/cleanup'); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
-                const cleanupOldestBatch = async (days) => { if (!confirm(`确定要清理最老的 ${days} 天过期数据吗？\n\n这只清理过期最久的数据，不影响近期过期数据，对博主统计影响最小。`)) return; analyzing.value = true; try { const res = await axios.post(`/api/config/cleanup/oldest?days=${days}&limit=100`); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('温和清理失败：' + res.data.message); } } catch (e) { alert('温和清理失败: ' + e.message); } analyzing.value = false; };
+                const cleanupData = async () => { if (!confirm('确定要清理过期数据吗？')) return; analyzing.value = true; try { const res = await axios.post('/api/config/cleanup', null, { headers: { 'X-Danger-Confirm': 'cleanup-data' } }); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
+                const cleanupOldestBatch = async (days) => { if (!confirm(`确定要清理最老的 ${days} 天过期数据吗？\n\n这只清理过期最久的数据，不影响近期过期数据，对博主统计影响最小。`)) return; analyzing.value = true; try { const res = await axios.post(`/api/config/cleanup/oldest?days=${days}&limit=100`, null, { headers: { 'X-Danger-Confirm': 'cleanup-data' } }); if (res.data.success) { alert(res.data.message); await fetchStats(); await fetchCleanupPreview(); } else { alert('温和清理失败：' + res.data.message); } } catch (e) { alert('温和清理失败: ' + e.message); } analyzing.value = false; };
                 const testData = ref(null);
                 const llmTesting = ref(false);
                 const visionTesting = ref(false);
@@ -4415,7 +4424,7 @@ const fetchWeChatBatch = async () => {
                     importLoading.value = false;
                 };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
-                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData, sectorFlowData, sectorFlowSortBy, sectorFlowBehavior, sectorFlowLoading, sectorFlowStats, sectorFlowStatus, sectorFlowStatusLoading, filteredSectorFlow, formatFlow, formatFetchedTime, fetchSectorFlowData, fetchSectorRanking, fetchSectorStats, fetchSectorFlowStatus, changeSortBy, filterByBehavior, showFundLink, showFundLinkModal, fundLinkData, selectedSectorForFundLink };
+                return { theme, toggleTheme, loading, currentView, stats, bloggers, posts, predictions, predictionFilter, filteredPredictions, viewpoints, funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds, advice, adviceGenerating, adviceIsNew, analyzing, summarizing, summaryStats, showSummaryConfirmModal, showAddBlogger, showAddPost, showAddFund, showPostDetail, showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction, editingPrediction, showTopBloggersModal, showAdviceHistory, showConfig, showCrawlerResult, crawlerLoading, crawlerResult, showWeChatFetch, wechatFetching, wechatUrls, wechatUrlCount, wechatBatchResults, wechatBatchSummary, wechatBatchProgress, wechatBatchPercent, wechatPostDate, wechatFailedUrls, copyFailedUrls, retryFailedUrls, newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail, predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, cleanupEnabled, expiredPredictionsList, expiredViewpointsList, expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting, testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError, authReady, submitPassword, loadView, addBlogger, addPost, addFund, deleteBlogger, deletePost, deletePrediction, deleteViewpoint, viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund, viewPredictionDetail, editPrediction, savePrediction, showTopBloggers, batchAnalyzePosts, resetFailedAnalyses, fixSectorMismatch, batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications, syncSectorMapping, batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary, updateAllFunds, crawlEastmoneyBlog, crawlEastmoneyGuide, crawlSinaFinance, crawlSinaBlog, fetchWeChatBatch, generateAdvice, loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData, cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData, parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias, loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter, mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping, loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, deleteMapping, batchReviewAll, exportLoading, exportConfigLoading, exportResult, importFile, importLoading, importResult, importFileInput, exportAllData, exportConfig, onImportFileChange, importData, sectorFlowData, sectorFlowSortBy, sectorFlowBehavior, sectorFlowLoading, sectorFlowStats, sectorFlowStatus, sectorFlowStatusLoading, filteredSectorFlow, formatFlow, formatFetchedTime, fetchSectorFlowData, fetchSectorRanking, fetchSectorStats, fetchSectorFlowStatus, changeSortBy, filterByBehavior, showFundLink, showFundLinkModal, fundLinkData, selectedSectorForFundLink };
             }
         }).mount('#app');
     </script>

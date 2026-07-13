@@ -540,7 +540,8 @@ class LLMAnalyzer:
         3. 支持更多周期粒度
         4. 两阶段时间判断：规则预处理 + AI二次确认
         """
-        cache_key = f"{title}:{content[:200]}:{post_date}"
+        content_hash = hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+        cache_key = f"{title}:{content_hash}:{post_date}"
         if use_cache:
             cached = self.result_cache.get(cache_key, 'analyze_post')
             if cached:
@@ -1216,6 +1217,25 @@ class LLMAnalyzer:
             if db is None:
                 db = SessionLocal()
             try:
+                existing = db.query(SectorFundMapping).filter(
+                    SectorFundMapping.sector_name == sector,
+                    SectorFundMapping.is_active == True,
+                ).order_by(
+                    SectorFundMapping.reviewed.desc(),
+                    SectorFundMapping.id.asc(),
+                ).first()
+                if existing:
+                    if reviewed and existing.fund_code == fund_code and not existing.reviewed:
+                        existing.reviewed = True
+                        if fund_name:
+                            existing.fund_name = fund_name
+                        db.commit()
+                    logger.info(
+                        f"[基金匹配] 映射已存在，跳过自动新增: {sector} → "
+                        f"{existing.fund_name} ({existing.fund_code}) [reviewed={existing.reviewed}]"
+                    )
+                    return existing
+
                 mapping = SectorFundMapping(
                     sector_name=sector,
                     fund_code=fund_code,

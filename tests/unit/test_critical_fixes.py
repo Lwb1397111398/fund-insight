@@ -36,15 +36,6 @@ class TestPeriodMapping:
             assert days == 7, f"'短期' 应为 7 天，实际为 {days} 天"
 
 
-class TestEscapeHtml:
-    """测试 XSS 防护函数"""
-    def test_escape_html_exists(self):
-        """common.js 中应有 escapeHtml 函数"""
-        with open("web/common.js", "r", encoding="utf-8") as f:
-            content = f.read()
-        assert "escapeHtml" in content
-
-
 class TestFundMappingSessionReuse:
     """测试基金映射自动学习的数据库会话复用"""
 

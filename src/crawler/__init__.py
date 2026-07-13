@@ -16,8 +16,14 @@ posts = tiantian_crawler.fetch_fund_posts('000001')
 from .tiantian_crawler import TiantianCrawler, crawler
 from .article_crawler import EastMoneyArticleCrawler, article_crawler
 from .sentiment_analyzer import SentimentAnalyzer, analyzer
-from .ai_analyzer import AIPostAnalyzer, ai_analyzer
 
 __all__ = ['TiantianCrawler', 'EastMoneyArticleCrawler', 
            'SentimentAnalyzer', 'AIPostAnalyzer',
            'crawler', 'article_crawler', 'analyzer', 'ai_analyzer']
+
+
+def __getattr__(name):
+    if name in {"AIPostAnalyzer", "ai_analyzer"}:
+        from .ai_analyzer import AIPostAnalyzer, ai_analyzer
+        return {"AIPostAnalyzer": AIPostAnalyzer, "ai_analyzer": ai_analyzer}[name]
+    raise AttributeError(f"module 'src.crawler' has no attribute {name!r}")

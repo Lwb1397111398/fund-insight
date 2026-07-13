@@ -4,8 +4,8 @@
 from pathlib import Path
 
 
-def test_cleanup_view_has_four_cleanup_buttons_together():
-    """待清理页应把四个清理选项放在同一组"""
+def test_cleanup_view_guards_all_hard_delete_buttons():
+    """待清理页默认只预览；硬删除按钮必须由运行时安全开关控制。"""
     content = Path("web/index.html").read_text(encoding="utf-8")
     cleanup_actions = content.split('<div class="cleanup-actions">', 1)[1].split('</div>', 1)[0]
 
@@ -17,6 +17,17 @@ def test_cleanup_view_has_four_cleanup_buttons_together():
     assert "温和清理（7天前）" in cleanup_actions
     assert "温和清理（14天前）" in cleanup_actions
     assert "一键清理测试数据" in cleanup_actions
+    assert cleanup_actions.count('v-if="cleanupEnabled"') == 3
+    assert 'v-if="testData && testData.cleanup_enabled"' in cleanup_actions
+
+
+def test_cleanup_requests_send_the_danger_confirmation_header():
+    """维护环境开启后，前端也必须发送统一确认头。"""
+    content = Path("web/index.html").read_text(encoding="utf-8")
+
+    assert "cleanupEnabled = ref(false)" in content
+    assert "cleanupEnabled.value = Boolean(res.data.data?.cleanup_enabled)" in content
+    assert "'X-Danger-Confirm': 'cleanup-data'" in content
 
 
 def test_cleanup_actions_are_responsive_grid():

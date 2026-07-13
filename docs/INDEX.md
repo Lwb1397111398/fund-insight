@@ -12,6 +12,7 @@
 
 - `docs/superpowers/specs/`：功能设计文档。
 - `docs/superpowers/plans/`：实施计划文档。
+- `docs/REFACTOR_HANDOFF_2026-07-10.md`：本轮重构改动、验证结果和后续接手建议。
 
 ## 历史报告
 

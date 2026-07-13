@@ -162,7 +162,7 @@ class PredictionService(BaseService[Prediction]):
 
         row = self.db.query(
             func.count(case((base_filter, 1))).label('total'),
-            func.count(case((and_(base_filter, Prediction.status == 'success'), 1))).label('verified'),
+            func.count(case((and_(base_filter, Prediction.status.in_(("success", "failed"))), 1))).label('verified'),
             func.count(case((and_(base_filter, Prediction.is_correct == True), 1))).label('correct'),
             func.count(case((and_(base_filter, Prediction.status == 'pending'), 1))).label('pending'),
         ).first()

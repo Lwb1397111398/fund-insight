@@ -11,15 +11,6 @@ from .viewpoint_service import ViewpointService
 from .advice_service import AdviceService
 from .crawler_service import CrawlerService
 
-from .market_data_service import (
-    MarketDataFetcher,
-    PolicyDataFetcher,
-    MarketStateDetector,
-    WeightAdjuster,
-    DataQualityValidator,
-    MarketState,
-)
-
 from .viewpoint_stats_service import (
     ViewpointStatsService,
     ViewpointAlertService,
@@ -36,12 +27,6 @@ __all__ = [
     'ViewpointService',
     'AdviceService',
     'CrawlerService',
-    'MarketDataFetcher',
-    'PolicyDataFetcher',
-    'MarketStateDetector',
-    'WeightAdjuster',
-    'DataQualityValidator',
-    'MarketState',
     'ViewpointStatsService',
     'ViewpointAlertService',
     'ViewpointWeightService',

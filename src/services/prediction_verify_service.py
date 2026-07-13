@@ -1034,26 +1034,29 @@ class PredictionVerifyService:
                     verified_delta=-1
                 )
     
-    def update_blogger_on_prediction_delete(self, blogger_id: int, verify_score: int, is_correct: bool):
+    def update_blogger_on_prediction_delete(self, blogger_id: int, verify_score: int, is_correct: bool, commit: bool = True):
         """
         删除预测时更新博主数据
-        
+
         Args:
             blogger_id: 博主 ID
             verify_score: 被删除预测的分数
             is_correct: 被删除预测是否正确
+            commit: 是否在内部提交。批量清理循环应传 False，由调用方统一提交，
+                    避免"博主扣分已提交但预测删除被回滚"的不一致。
         """
         if not blogger_id:
             return
-        
+
         from src.utils.blogger_stats import update_blogger_stats_incremental
-        
+
         score_change = -(verify_score if verify_score is not None else (100 if is_correct else 0))
         update_blogger_stats_incremental(
             self.db, blogger_id,
             score_delta=score_change,
             correct_delta=-1 if is_correct else 0,
-            verified_delta=-1 if verify_score is not None else 0
+            verified_delta=-1 if verify_score is not None else 0,
+            commit=commit
         )
     
     def _get_prediction_score(self, prediction: Prediction) -> int:

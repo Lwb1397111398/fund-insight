@@ -147,13 +147,14 @@ def update_blogger_stats_incremental(
         blogger.accuracy_rate = 0.0
     
     blogger.grade = calculate_blogger_rating(
-        blogger.accuracy_rate, 
+        blogger.accuracy_rate,
         blogger.total_predictions
     )
-    
-    db.commit()
-    db.refresh(blogger)
-    
+
+    if commit:
+        db.commit()
+        db.refresh(blogger)
+
     return {
         'total_predictions': blogger.total_predictions,
         'correct_predictions': blogger.correct_predictions,

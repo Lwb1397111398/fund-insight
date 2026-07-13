@@ -329,7 +329,8 @@ class FundSyncManager:
                         try:
                             fund.nav_date = datetime.strptime(nav_date_str, '%Y-%m-%d').date()
                         except (ValueError, TypeError):
-                            fund.nav_date = date.today()
+                            if not fund.nav_date:
+                                fund.nav_date = date.today()
                     else:
                         fund.nav_date = date.today()
 

@@ -47,6 +47,64 @@ def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
     assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify", "expired_verify"]
 
 
+def test_scheduled_task_runner_reports_sector_flow_failure(monkeypatch):
+    """Cron should fail visibly when sector-flow fetch reports a failure."""
+    from scripts import run_scheduled_tasks
+
+    calls = []
+
+    class DummyScheduler:
+        def _run_sector_flow(self, trigger="scheduler"):
+            calls.append(f"sector_flow:{trigger}")
+            return {"success": False, "error_message": "fetch failed"}
+
+        def _run_fund_update(self):
+            calls.append("fund_update")
+            return {"success": True}
+
+        def _run_prediction_verify(self):
+            calls.append("prediction_verify")
+            return {"success": True}
+
+        def _run_expired_verify(self):
+            calls.append("expired_verify")
+            return {"success": True}
+
+    monkeypatch.setattr(run_scheduled_tasks, "TaskScheduler", DummyScheduler)
+
+    result = run_scheduled_tasks.run_daily_tasks()
+
+    assert result["success"] is False
+    assert "sector_flow" in result["failed_tasks"]
+    assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify", "expired_verify"]
+
+
+def test_scheduled_task_runner_reports_followup_task_failure(monkeypatch):
+    """Cron should fail visibly when a later scheduler step reports failure."""
+    from scripts import run_scheduled_tasks
+
+    class DummyScheduler:
+        def _run_sector_flow(self, trigger="scheduler"):
+            return {"success": True}
+
+        def _run_fund_update(self):
+            return {"success": False, "error": "fund update failed"}
+
+        def _run_prediction_verify(self):
+            return {"success": True}
+
+        def _run_expired_verify(self):
+            return {"success": True}
+
+    monkeypatch.setattr(run_scheduled_tasks, "TaskScheduler", DummyScheduler)
+
+    result = run_scheduled_tasks.run_daily_tasks()
+
+    assert result["success"] is False
+    assert "fund_update" in result["failed_tasks"]
+    assert result["tasks"]["fund_update"]["error"] == "fund update failed"
+
+
 def test_startup_migrations_are_disabled_by_default(monkeypatch):
     """启动阶段 DDL 默认关闭，避免生产冷启动时自动改表"""
     from src.api import main

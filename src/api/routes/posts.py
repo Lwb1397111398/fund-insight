@@ -2,13 +2,14 @@
 帖子路由
 处理帖子相关的 API 请求
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
 
 from src.api.deps import get_db
+from src.core.safety import destructive_cleanup_enabled
 from src.services.post_service import PostService
 
 router = APIRouter(prefix="/posts", tags=["帖子"])
@@ -85,7 +86,7 @@ async def create_post(post: PostCreate, db: Session = Depends(get_db)):
         )
         
         return {
-            "success": True,
+            "success": result.get("success", True),
             "message": result.get("message", "帖子添加成功"),
             "data": result
         }
@@ -314,13 +315,26 @@ async def get_batch_analyze_status():
 
 
 @router.post("/cleanup-low-quality")
-async def cleanup_low_quality_posts(dry_run: bool = True, db: Session = Depends(get_db)):
+async def cleanup_low_quality_posts(
+    request: Request,
+    dry_run: bool = True,
+    db: Session = Depends(get_db),
+):
     """
     清理低质量帖子（太短、广告、闲聊）
 
     Args:
         dry_run: True=试运行（只检查不删除），False=正式执行删除
     """
+    if not dry_run:
+        if not destructive_cleanup_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail="低质量帖子清理已禁用。请在隔离维护环境显式设置 ENABLE_DATA_CLEANUP=true 后再使用",
+            )
+        if request.headers.get("X-Danger-Confirm") != "cleanup-data":
+            raise HTTPException(status_code=403, detail="缺少数据清理确认头")
+
     from src.models.database import Post
 
     service = PostService(db)

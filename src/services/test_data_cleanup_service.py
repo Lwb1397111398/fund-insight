@@ -12,6 +12,7 @@ from src.models.database import Blogger, Post, Prediction, Viewpoint, FundInfo
 
 class TestDataCleanupService:
     """测试数据清理服务类"""
+    __test__ = False
     
     TEST_PATTERNS = [
         r'^测试',

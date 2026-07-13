@@ -111,12 +111,15 @@ class TestSchedulerFixes:
             mock_dm.update_fund_history.return_value = None
 
             with patch('src.models.database.SessionLocal', return_value=mock_db):
-                scheduler._run_fund_update()
+                result = scheduler._run_fund_update()
 
         # 验证：逐个提交模式——成功的基金已提交，失败的回滚
         mock_db.commit.assert_called_once()  # 第一个基金成功，提交
         mock_db.rollback.assert_called_once()  # 第二个基金失败，回滚
         mock_db.close.assert_called()
+        assert result["success"] is False
+        assert result["updated_count"] == 1
+        assert result["failed_count"] == 1
 
     def test_fund_update_transaction_commit_on_success(self):
         """测试基金更新事务：全部成功时提交"""
@@ -143,12 +146,15 @@ class TestSchedulerFixes:
             mock_dm.update_fund_history.return_value = None
 
             with patch('src.models.database.SessionLocal', return_value=mock_db):
-                scheduler._run_fund_update()
+                result = scheduler._run_fund_update()
 
         # 验证：逐个提交模式——每个基金成功后单独提交
         assert mock_db.commit.call_count == 2  # 每个基金各提交一次
         mock_db.rollback.assert_not_called()
         mock_db.close.assert_called()
+        assert result["success"] is True
+        assert result["updated_count"] == 2
+        assert result["failed_count"] == 0
 
     def test_session_close_on_exception(self):
         """测试异常时数据库会话正确关闭"""
@@ -164,9 +170,45 @@ class TestSchedulerFixes:
             mock_service.verify_all_pending.side_effect = RuntimeError("测试异常")
 
             with patch('src.models.database.SessionLocal', return_value=mock_db):
-                scheduler._run_prediction_verify()
+                result = scheduler._run_prediction_verify()
 
         # 验证：即使发生异常，数据库连接也会被关闭
+        mock_db.close.assert_called()
+        assert result["success"] is False
+        assert "error" in result
+
+    def test_prediction_verify_returns_service_failure_result(self):
+        """Prediction verification should return service failure to the caller."""
+        scheduler = TaskScheduler()
+        mock_db = Mock()
+        mock_db.close = Mock()
+
+        with patch('src.services.prediction_verify_service.PredictionVerifyService') as MockService:
+            mock_service = MockService.return_value
+            mock_service.verify_all_pending.return_value = {"success": False, "error": "verify failed"}
+
+            with patch('src.models.database.SessionLocal', return_value=mock_db):
+                result = scheduler._run_prediction_verify()
+
+        assert result["success"] is False
+        assert result["error"] == "verify failed"
+        mock_db.close.assert_called()
+
+    def test_expired_verify_returns_service_failure_result(self):
+        """Expired verification should return service failure to the caller."""
+        scheduler = TaskScheduler()
+        mock_db = Mock()
+        mock_db.close = Mock()
+
+        with patch('src.services.prediction_verify_service.PredictionVerifyService') as MockService:
+            mock_service = MockService.return_value
+            mock_service.verify_expired_pending.return_value = {"success": False, "error": "expired failed"}
+
+            with patch('src.models.database.SessionLocal', return_value=mock_db):
+                result = scheduler._run_expired_verify()
+
+        assert result["success"] is False
+        assert result["error"] == "expired failed"
         mock_db.close.assert_called()
 
     def test_run_sector_flow_invokes_service(self):
@@ -183,6 +225,17 @@ class TestSchedulerFixes:
         service.run_fetch.assert_called_once_with(trigger="render_cron")
         assert result["success"] is True
         mock_db.close.assert_called()
+
+    def test_cleanup_is_skipped_when_not_explicitly_enabled(self, monkeypatch):
+        """定时任务默认不得删除任何业务数据。"""
+        monkeypatch.delenv("ENABLE_DATA_CLEANUP", raising=False)
+        scheduler = TaskScheduler()
+
+        with patch("src.tasks.cleanup_tasks.run_cleanup_task") as cleanup_task:
+            result = scheduler._run_cleanup()
+
+        assert result["skipped"] is True
+        cleanup_task.assert_not_called()
 
     def test_stop_scheduler_resets_global(self):
         """测试 stop_scheduler 重置全局变量"""

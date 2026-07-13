@@ -136,6 +136,50 @@ class TestPredictionService:
         assert "total" in stats
         assert "accuracy" in stats
 
+    def test_get_stats_counts_failed_predictions_as_verified(self, db_session):
+        """错误预测也必须计入准确率分母。"""
+        from datetime import date
+        from src.models.database import Blogger, Post, Prediction
+        from src.services import PredictionService
+
+        blogger = Blogger(name="准确率统计博主", platform="wechat")
+        db_session.add(blogger)
+        db_session.flush()
+        post = Post(
+            blogger_id=blogger.id,
+            content="用于准确率统计的帖子",
+            post_date=date(2026, 7, 10),
+        )
+        db_session.add(post)
+        db_session.flush()
+        db_session.add_all([
+            Prediction(
+                post_id=post.id,
+                blogger_id=blogger.id,
+                fund_code="STAT001",
+                prediction_type="up",
+                prediction_date=date(2026, 7, 10),
+                status="success",
+                is_correct=True,
+            ),
+            Prediction(
+                post_id=post.id,
+                blogger_id=blogger.id,
+                fund_code="STAT002",
+                prediction_type="down",
+                prediction_date=date(2026, 7, 10),
+                status="failed",
+                is_correct=False,
+            ),
+        ])
+        db_session.commit()
+
+        stats = PredictionService(db_session).get_stats(blogger.id)
+
+        assert stats["verified"] == 2
+        assert stats["correct"] == 1
+        assert stats["accuracy"] == 0.5
+
 
 class TestFundService:
     """基金服务测试"""

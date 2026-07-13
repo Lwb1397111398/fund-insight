@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timedelta, timezone
 import logging
 
+from src.core.safety import destructive_cleanup_enabled
+
 logger = logging.getLogger(__name__)
 
 # 北京时区（UTC+8），天天基金数据使用北京时间
@@ -124,6 +126,9 @@ class TaskScheduler:
     
     def _run_cleanup(self):
         """执行清理任务"""
+        if not destructive_cleanup_enabled():
+            logger.info("定时清理任务已禁用（ENABLE_DATA_CLEANUP=false）")
+            return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
         try:
             from src.tasks.cleanup_tasks import run_cleanup_task
             
@@ -131,8 +136,13 @@ class TaskScheduler:
             result = run_cleanup_task()
             
             if result.get("success"):
-                logger.info(f"清理任务完成: 删除预测 {result['predictions'].get('deleted_predictions', 0)} 个, "
-                          f"删除观点 {result['viewpoints'].get('deleted_viewpoints', 0)} 个")
+                pred_deleted = (result.get("predictions") or {}).get("deleted", 0)
+                vp_deleted = (result.get("viewpoints") or {}).get("deleted", 0)
+                if result.get("skipped"):
+                    logger.info("清理任务已跳过（未启用或无数据）")
+                else:
+                    logger.info(f"清理任务完成: 删除预测 {pred_deleted} 个, "
+                              f"删除观点 {vp_deleted} 个")
             else:
                 logger.error(f"清理任务失败: {result}")
                 
@@ -156,6 +166,7 @@ class TaskScheduler:
                     logger.info(f"预测验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
                 else:
                     logger.error(f"预测验证失败: {result}")
+                return result
             finally:
                 db.close()
         except Exception as e:
@@ -165,6 +176,7 @@ class TaskScheduler:
                 db.close()
             except Exception:
                 pass
+            return {"success": False, "error": str(e)}
     
     def _run_expired_verify(self):
         """执行已过期待验证预测的补救验证"""
@@ -183,6 +195,7 @@ class TaskScheduler:
                     logger.info(f"补救验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
                 else:
                     logger.error(f"补救验证失败: {result}")
+                return result
             finally:
                 db.close()
         except Exception as e:
@@ -192,6 +205,7 @@ class TaskScheduler:
                 db.close()
             except Exception:
                 pass
+            return {"success": False, "error": str(e)}
     
     def _run_sector_flow(self, trigger: str = "scheduler"):
         """执行抢筹板块资金流向抓取"""
@@ -246,6 +260,12 @@ class TaskScheduler:
                     logger.info(f"基金数据更新完成: 成功 {updated} 个")
                 else:
                     logger.warning(f"基金数据更新完成: 成功 {updated} 个, 失败 {failed} 个（{', '.join(failed_codes[:5])}{'...' if len(failed_codes) > 5 else ''}）")
+                return {
+                    "success": failed == 0,
+                    "updated_count": updated,
+                    "failed_count": failed,
+                    "failed_codes": failed_codes,
+                }
             finally:
                 db.close()
         except Exception as e:
@@ -254,6 +274,7 @@ class TaskScheduler:
                 db.close()
             except Exception:
                 pass
+            return {"success": False, "error": str(e)}
 
 
 # 全局调度器实例（带线程保护）

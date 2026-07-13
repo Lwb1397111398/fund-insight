@@ -250,11 +250,14 @@ class FundDataManager:
                     day_growth=day_growth
                 )
                 db.add(fund)
-            
-            db.commit()
+
+            # 仅当自建会话时提交；外部传入的 db 由调用方控制事务边界，
+            # 避免提前提交调用方 session 上的其它 pending 改动（与 update_fund_history 一致）
+            if close_db:
+                db.commit()
             db.refresh(fund)
             return fund
-            
+
         except Exception as e:
             logger.error(f"更新基金信息失败: {e}")
             db.rollback()
@@ -282,18 +285,30 @@ class FundDataManager:
                 ).all()
             )
 
+            # 批量查询已存在的日期，避免逐条查询
+            existing_dates = set(
+                r[0] for r in db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code
+                ).all()
+            )
+
             # 获取基金信息（只查询一次）
             fund_info = db.query(FundInfo).filter(FundInfo.fund_code == fund_code).first()
             fund_name = fund_info.fund_name if fund_info else ''
 
+            # 一次性把已存在记录载入内存映射，消除循环内逐条查询的 N+1
+            existing_map = {
+                r.nav_date: r for r in db.query(FundHistory).filter(
+                    FundHistory.fund_code == fund_code,
+                    FundHistory.nav_date.in_([it['date'] for it in history if it['date'] in existing_dates])
+                ).all()
+            } if existing_dates else {}
+
             count = 0
             for item in history:
                 if item['date'] in existing_dates:
-                    # 更新已存在的记录
-                    existing = db.query(FundHistory).filter(
-                        FundHistory.fund_code == fund_code,
-                        FundHistory.nav_date == item['date']
-                    ).first()
+                    # 更新已存在的记录（内存查找，无额外查询）
+                    existing = existing_map.get(item['date'])
                     if existing:
                         existing.nav = item['nav']
                         existing.day_growth = item['growth']

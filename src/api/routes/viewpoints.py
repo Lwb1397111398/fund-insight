@@ -2,7 +2,7 @@
 观点路由
 处理观点相关的 API 请求
 """
-from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import date, datetime, timedelta
@@ -12,6 +12,7 @@ import logging
 from pydantic import BaseModel
 
 from src.api.deps import get_db
+from src.core.safety import destructive_cleanup_enabled
 from src.services.viewpoint_service import ViewpointService
 from src.models.database import Viewpoint, BatchAnalysisTask
 
@@ -415,6 +416,7 @@ async def update_viewpoint_summaries(db: Session = Depends(get_db)):
 
 @router.post("/cleanup")
 async def cleanup_old_viewpoints(
+    request: Request,
     data: ViewpointCleanupRequest = Body(...),
     db: Session = Depends(get_db)
 ):
@@ -431,6 +433,14 @@ async def cleanup_old_viewpoints(
     - 建议保留10天，给用户一定的缓冲时间
     - 删除后无法恢复，请谨慎操作
     """
+    if not destructive_cleanup_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="观点批量清理已禁用。请在隔离维护环境显式设置 ENABLE_DATA_CLEANUP=true 后再使用",
+        )
+    if request.headers.get("X-Danger-Confirm") != "cleanup-data":
+        raise HTTPException(status_code=403, detail="缺少数据清理确认头")
+
     try:
         days = data.days
         

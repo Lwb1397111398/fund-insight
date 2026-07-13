@@ -69,6 +69,8 @@ uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
 注意：
 
 - `ENABLE_DATABASE_IMPORT` 默认必须保持 `false`。
+- `ENABLE_TEST_DATA_CLEANUP` 默认必须保持 `false`；它按关键词硬删除数据，仅能在隔离维护环境短时开启。
+- `ENABLE_DATA_CLEANUP` 默认必须保持 `false`；它控制过期数据、孤儿基金和定时批量清理。
 - `ENABLE_STARTUP_MIGRATIONS` 默认必须保持 `false`，除非明确要补列/补索引。
 - `CRAWLER_ENABLED` 在 Render Web 当前为 `true`，但爬虫仍应由用户或任务触发。
 

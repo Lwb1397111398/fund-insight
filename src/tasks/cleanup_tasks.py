@@ -12,6 +12,7 @@ from src.models.database import (
     SectorFundMapping, SessionLocal
 )
 from src.services.prediction_verify_service import PredictionVerifyService
+from src.core.safety import destructive_cleanup_enabled
 import logging
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,8 @@ class CleanupManager:
                     verify_service.update_blogger_on_prediction_delete(
                         blogger_id=data['blogger_id'],
                         verify_score=data['verify_score'],
-                        is_correct=data['is_correct']
+                        is_correct=data['is_correct'],
+                        commit=False  # 循环内不提交，由循环末尾 db.commit() 统一提交，保证删除+博主扣分原子
                     )
 
                 # 先删除关联的验证任务（FK: verification_tasks.prediction_id）
@@ -563,7 +565,8 @@ class CleanupManager:
                     verify_service.update_blogger_on_prediction_delete(
                         blogger_id=data['blogger_id'],
                         verify_score=data['verify_score'],
-                        is_correct=data['is_correct']
+                        is_correct=data['is_correct'],
+                        commit=False  # 循环内不提交，由循环末尾 db.commit() 统一提交，保证删除+博主扣分原子
                     )
 
                 # 先删除关联的验证任务（FK: verification_tasks.prediction_id）
@@ -817,6 +820,9 @@ def get_cleanup_manager() -> CleanupManager:
 
 def run_cleanup_task():
     """运行清理任务（供定时任务调用）"""
+    if not destructive_cleanup_enabled():
+        logger.info("清理任务已禁用（ENABLE_DATA_CLEANUP=false）")
+        return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
     manager = get_cleanup_manager()
     return manager.run_full_cleanup()
 

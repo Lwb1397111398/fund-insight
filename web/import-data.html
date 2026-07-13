@@ -151,9 +151,9 @@
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
             <div class="upload-text">点击或拖拽上传数据库文件</div>
-            <div class="upload-hint">支持 .db 和 .sqlite 文件</div>
+            <div class="upload-hint">仅支持 .db 文件</div>
         </div>
-        <input type="file" id="fileInput" accept=".db,.sqlite">
+        <input type="file" id="fileInput" accept=".db">
 
         <button class="btn" id="uploadBtn" disabled>开始导入</button>
 
@@ -222,7 +222,7 @@
         });
 
         function handleFile(file) {
-            if (file.name.endsWith('.db') || file.name.endsWith('.sqlite')) {
+            if (file.name.endsWith('.db')) {
                 selectedFile = file;
                 uploadArea.innerHTML = `
                     <div class="upload-icon">✅</div>
@@ -231,7 +231,7 @@
                 `;
                 uploadBtn.disabled = false;
             } else {
-                alert('请选择 .db 或 .sqlite 格式的数据库文件');
+                alert('请选择 .db 格式的数据库文件');
             }
         }
 
@@ -275,7 +275,8 @@
                 const response = await fetch('/api/import-database', {
                     method: 'POST',
                     headers: {
-                        'X-Access-Password': password
+                        'X-Access-Password': password,
+                        'X-Danger-Confirm': 'import-production-database'
                     },
                     body: formData,
                     signal: controller.signal

@@ -23,13 +23,11 @@
 | `sina_blog_crawler.py` | 新浪博客 |
 | `wechat_fetcher.py` | 微信文章获取 |
 | `article_crawler.py` | 通用文章抓取 |
-| `enhanced_crawler.py` | 增强抓取流程 |
 | `ai_analyzer.py` | 旧 AI 筛选入口，已有迁移提示 |
 | `filters/quality_filter.py` | 质量过滤 |
 | `filters/ai_filter.py` | AI 过滤 |
-| `sentiment_analyzer.py`、`sentiment.py` | 情绪分析 |
+| `sentiment_analyzer.py` | 情绪分析 |
 | `sector_flow_crawler.py` | 东方财富板块资金流抓取 |
-| `sector_flow_fetcher.py` | 板块资金流抓取辅助 |
 
 ## 数据流
 

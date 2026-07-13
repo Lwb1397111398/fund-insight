@@ -12,7 +12,7 @@ from src.utils.time_parser import TimeExpressionParser, parse_time_expression, s
 from src.utils.prediction_utils import parse_period_to_days, days_to_standard_period, normalize_period
 
 
-def test_time_parser():
+def _run_time_parser_cases():
     """测试时间表达式解析器"""
     parser = TimeExpressionParser()
     
@@ -29,7 +29,7 @@ def test_time_parser():
         ("半年", date(2026, 3, 8), 180, "6个月"),
         ("一年", date(2026, 3, 8), 365, "1年"),
         ("短线", date(2026, 3, 8), 3, "3天"),
-        ("短期", date(2026, 3, 8), 3, "3天"),
+        ("短期", date(2026, 3, 8), 7, "1周"),
         ("中线", date(2026, 3, 8), 30, "1个月"),
         ("中期", date(2026, 3, 8), 30, "1个月"),
         ("长线", date(2026, 3, 8), 90, "3个月"),
@@ -73,7 +73,12 @@ def test_time_parser():
     return passed, failed
 
 
-def test_period_utils():
+def test_time_parser():
+    passed, failed = _run_time_parser_cases()
+    assert failed == 0
+
+
+def _run_period_utils_cases():
     """测试周期工具函数"""
     print("\n" + "=" * 60)
     print("周期工具函数测试")
@@ -120,7 +125,12 @@ def test_period_utils():
     return passed, failed
 
 
-def test_text_suggestion():
+def test_period_utils():
+    passed, failed = _run_period_utils_cases()
+    assert failed == 0
+
+
+def _run_text_suggestion_cases():
     """测试从文本建议周期"""
     print("\n" + "=" * 60)
     print("文本周期建议测试")
@@ -163,6 +173,11 @@ def test_text_suggestion():
     return passed, failed
 
 
+def test_text_suggestion():
+    passed, failed = _run_text_suggestion_cases()
+    assert failed == 0
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("时间解析改进功能测试")
@@ -171,15 +186,15 @@ if __name__ == "__main__":
     total_passed = 0
     total_failed = 0
     
-    p, f = test_time_parser()
+    p, f = _run_time_parser_cases()
     total_passed += p
     total_failed += f
     
-    p, f = test_period_utils()
+    p, f = _run_period_utils_cases()
     total_passed += p
     total_failed += f
     
-    p, f = test_text_suggestion()
+    p, f = _run_text_suggestion_cases()
     total_passed += p
     total_failed += f
     

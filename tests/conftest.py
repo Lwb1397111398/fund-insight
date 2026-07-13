@@ -3,6 +3,8 @@ Pytest 配置文件
 """
 import sys
 import os
+import tempfile
+from pathlib import Path
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,7 +13,19 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# 必须在导入应用配置前覆盖 DATABASE_URL，避免集成测试写入 Supabase。
+_test_db_path = Path(tempfile.gettempdir()) / f"fund-insight-pytest-{os.getpid()}.db"
+os.environ["DATABASE_URL"] = f"sqlite:///{_test_db_path.as_posix()}"
+
 from src.models.database import Base
+
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_application_database():
+    """让 API 集成测试在独立数据库中也拥有完整表结构。"""
+    from src.models.database import init_db
+
+    init_db()
 
 
 @pytest.fixture

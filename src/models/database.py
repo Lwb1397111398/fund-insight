@@ -35,6 +35,19 @@ def _get_postgres_pool_settings() -> Dict[str, int]:
     }
 
 
+def _create_sqlite_engine(database_url: str):
+    """创建 SQLite 引擎，并统一开启外键约束。"""
+    sqlite_engine = create_engine(database_url, echo=False)
+
+    @event.listens_for(sqlite_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.close()
+
+    return sqlite_engine
+
+
 if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
     # PostgreSQL 数据库
     try:
@@ -56,29 +69,22 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
         )
         DB_TYPE = "postgresql"
         logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: {pool_settings['pool_size']}+{pool_settings['max_overflow']}）")
-    except ImportError:
-        logger.warning(f"[数据库] psycopg2 未安装，回退到 SQLite")
-        DB_PATH = Path(config.DB_PATH)
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
-        # CRITICAL FIX: 启用 SQLite 外键约束
-        @event.listens_for(engine, "connect")
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA foreign_keys = ON")
-            cursor.close()
-        logger.info("[数据库] SQLite 外键约束已启用")
+    except ImportError as exc:
+        raise RuntimeError(
+            "DATABASE_URL is PostgreSQL, but psycopg2 is not installed; refusing to fall back to SQLite."
+        ) from exc
+elif DATABASE_URL and DATABASE_URL.startswith("sqlite"):
+    # 测试、恢复验收和本地隔离环境必须尊重显式 SQLite 连接串。
+    engine = _create_sqlite_engine(DATABASE_URL)
+    logger.info("[数据库] 使用显式 SQLite 引擎")
+elif DATABASE_URL:
+    scheme = DATABASE_URL.split(":", 1)[0]
+    raise RuntimeError(f"Unsupported DATABASE_URL scheme '{scheme}'; refusing to fall back to SQLite.")
 else:
     # 回退到 SQLite
     DB_PATH = Path(config.DB_PATH)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
-    # CRITICAL FIX: 启用 SQLite 外键约束
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys = ON")
-        cursor.close()
+    engine = _create_sqlite_engine(f'sqlite:///{DB_PATH}')
     logger.info("[数据库] SQLite 外键约束已启用")
 
 Base = declarative_base()
@@ -1229,7 +1235,7 @@ def init_db():
             if DB_TYPE == "postgresql":
                 logger.info(f"[数据库] 已初始化: PostgreSQL")
             else:
-                logger.info(f"[数据库] 已初始化: SQLite: {DB_PATH}")
+                logger.info(f"[数据库] 已初始化: SQLite: {engine.url}")
             return
         except Exception as e:
             if attempt < max_retries - 1:

@@ -18,18 +18,44 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
+def _normalize_task_result(result) -> dict:
+    if result is None:
+        return {"success": True}
+    if isinstance(result, dict):
+        normalized = dict(result)
+        normalized.setdefault("success", True)
+        return normalized
+    return {"success": bool(result), "result": result}
+
+
 def run_daily_tasks() -> dict:
     started_at = datetime.now()
     init_db()
     scheduler = TaskScheduler()
-    sector_flow_result = scheduler._run_sector_flow(trigger="render_cron")
+    tasks = {}
+    failed_tasks = []
+
+    def run_step(name: str, func, *args, **kwargs):
+        try:
+            result = _normalize_task_result(func(*args, **kwargs))
+        except Exception as e:
+            logger.exception("Scheduled subtask failed: %s", name)
+            result = {"success": False, "error": str(e)}
+        tasks[name] = result
+        if not result.get("success", True):
+            failed_tasks.append(name)
+        return result
+
+    sector_flow_result = run_step("sector_flow", scheduler._run_sector_flow, trigger="render_cron")
     try:
-        scheduler._run_fund_update()
-        scheduler._run_prediction_verify()
-        scheduler._run_expired_verify()
+        run_step("fund_update", scheduler._run_fund_update)
+        run_step("prediction_verify", scheduler._run_prediction_verify)
+        run_step("expired_verify", scheduler._run_expired_verify)
         return {
-            "success": True,
+            "success": not failed_tasks,
             "sector_flow": sector_flow_result,
+            "tasks": tasks,
+            "failed_tasks": failed_tasks,
             "started_at": started_at.isoformat(),
             "finished_at": datetime.now().isoformat(),
         }

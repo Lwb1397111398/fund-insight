@@ -134,3 +134,27 @@ class TestFundSyncManager:
         assert isinstance(mock_fund.updated_at, datetime)
         assert mock_fund.nav_date is not None
         assert isinstance(mock_fund.nav_date, date)
+
+    @patch('src.fund.fund_sync_manager.fund_api')
+    def test_update_all_funds_info_keeps_existing_nav_date_when_api_date_invalid(self, mock_fund_api):
+        """外部接口返回非法净值日期时，不用今天覆盖已有可信日期"""
+        mock_db = Mock()
+        mock_fund = Mock()
+        mock_fund.fund_code = '161725'
+        mock_fund.fund_name = '测试基金'
+        mock_fund.latest_nav = 1.0
+        mock_fund.day_growth = 0.0
+        mock_fund.nav_date = date(2026, 7, 1)
+
+        mock_db.query.return_value.all.return_value = [mock_fund]
+        mock_fund_api.get_fund_info.return_value = {
+            'nav': 1.234,
+            'day_growth': 2.5,
+            'nav_date': 'bad-date'
+        }
+
+        result = self.manager.update_all_funds_info(mock_db)
+
+        assert result['updated'] == 1
+        assert result['failed'] == 0
+        assert mock_fund.nav_date == date(2026, 7, 1)

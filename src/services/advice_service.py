@@ -50,7 +50,11 @@ class AdviceService(BaseService[InvestmentAdvice]):
         viewpoint_stats = self.db.query(
             func.count(Viewpoint.id).label('total'),
             func.max(Viewpoint.created_at).label('last_update')
-        ).filter(Viewpoint.viewpoint_date >= date.today() - timedelta(days=7)).first()
+        ).filter(
+            Viewpoint.viewpoint_date >= date.today() - timedelta(days=7),
+            Viewpoint.is_deleted == False,
+            Viewpoint.is_expired == False
+        ).first()
         
         data_str = "|".join([
             f"bloggers:{blogger_stats.total}:{float(blogger_stats.avg_accuracy or 0):.2f}:{float(blogger_stats.max_accuracy or 0):.2f}:{blogger_stats.last_update or ''}",

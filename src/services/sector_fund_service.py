@@ -271,14 +271,9 @@ class SectorFundService:
 
     def cascade_cleanup_conflicts(self, sector_name: str, fund_code: str, fund_name: str) -> Dict:
         """
-        级联清理：用户编辑板块→基金映射后，删除低优先级层中同板块不同基金的冲突条目。
+        级联整理：用户编辑板块→基金映射后，停用冲突映射。
 
-        清理范围：
-        - SectorFundMapping 表：删除同板块但不同基金的其他记录（is_active=False）
-        - FundInfo 表：删除 sector_type 匹配但 fund_code 不同的记录
-
-        不清理：
-        - 硬编码表（代码里写死的，无法删除，但优先级低于用户编辑）
+        只处理可恢复的映射状态；基金与历史净值属于业务资料，必须保留。
         """
         db = self._get_db()
         cleanup_log = {"sector_fund_mapping": 0, "fund_info": 0}
@@ -294,15 +289,17 @@ class SectorFundService:
                 cleanup_log["sector_fund_mapping"] += 1
                 logger.info(f"[级联清理] SectorFundMapping: {sector_name} → {c.fund_name}({c.fund_code}) 标记为不活跃")
 
-            # 2. FundInfo：删除 sector_type 匹配但 fund_code 不同的记录
+            # 2. FundInfo 可能包含同板块的有效历史基金，绝不能因映射调整删除。
             fund_info_conflicts = db.query(FundInfo).filter(
                 FundInfo.sector_type == sector_name,
                 FundInfo.fund_code != fund_code
             ).all()
-            for f in fund_info_conflicts:
-                db.delete(f)
-                cleanup_log["fund_info"] += 1
-                logger.info(f"[级联清理] FundInfo: {sector_name} → {f.fund_name}({f.fund_code}) 已删除")
+            if fund_info_conflicts:
+                logger.info(
+                    "[级联整理] 保留 %s 条同板块基金资料: %s",
+                    len(fund_info_conflicts),
+                    sector_name,
+                )
 
             if any(v > 0 for v in cleanup_log.values()):
                 db.commit()

@@ -47,9 +47,9 @@ def test_database_import_requires_confirmation_header_when_enabled(monkeypatch):
 
 
 def test_test_data_preview_route_is_available_by_default(monkeypatch):
-    """测试数据预览接口默认可用，避免前端清理入口失效"""
+    """测试数据预览接口默认可用，但不开放硬删除。"""
     monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
-    monkeypatch.delenv("ENABLE_TEST_DATA_ROUTES", raising=False)
+    monkeypatch.delenv("ENABLE_TEST_DATA_CLEANUP", raising=False)
 
     from src.api.main import app
 
@@ -58,17 +58,67 @@ def test_test_data_preview_route_is_available_by_default(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["success"] is True
+    assert response.json()["data"]["cleanup_enabled"] is False
 
 
-def test_test_data_cleanup_requires_confirmation_header(monkeypatch):
-    """测试数据硬删除必须提供二次确认头，避免生产误删"""
+def test_test_data_cleanup_is_disabled_by_default(monkeypatch):
+    """关键词匹配的硬删除默认禁用，避免误删真实数据。"""
     monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
-    monkeypatch.delenv("ENABLE_TEST_DATA_ROUTES", raising=False)
+    monkeypatch.delenv("ENABLE_TEST_DATA_CLEANUP", raising=False)
 
     from src.api.main import app
 
     client = TestClient(app)
     response = client.post("/api/test-data/cleanup", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert "已禁用" in response.json()["detail"]
+
+
+def test_test_data_cleanup_requires_confirmation_when_explicitly_enabled(monkeypatch):
+    """隔离维护环境开启后，硬删除仍要求二次确认。"""
+    monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
+    monkeypatch.setenv("ENABLE_TEST_DATA_CLEANUP", "true")
+
+    from src.api.main import app
+
+    client = TestClient(app)
+    response = client.post("/api/test-data/cleanup", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert "确认" in response.json()["detail"]
+
+
+def test_destructive_data_cleanup_routes_are_disabled_by_default(monkeypatch):
+    """常规过期数据和观点批量清理不能在默认环境删除资料。"""
+    monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
+    monkeypatch.delenv("ENABLE_DATA_CLEANUP", raising=False)
+
+    from src.api.main import app
+
+    client = TestClient(app)
+    requests = [
+        ("/api/config/cleanup", None),
+        ("/api/config/cleanup/oldest", None),
+        ("/api/config/cleanup/orphan-funds", None),
+        ("/api/posts/cleanup-low-quality?dry_run=false", None),
+        ("/api/viewpoints/cleanup", {"days": 10}),
+    ]
+    for path, payload in requests:
+        response = client.post(path, headers=AUTH_HEADERS, json=payload)
+        assert response.status_code == 403, path
+        assert "已禁用" in response.json()["detail"]
+
+
+def test_destructive_data_cleanup_requires_confirmation_when_enabled(monkeypatch):
+    """维护环境即使显式开启，仍必须提供统一确认头。"""
+    monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+
+    from src.api.main import app
+
+    client = TestClient(app)
+    response = client.post("/api/config/cleanup", headers=AUTH_HEADERS)
 
     assert response.status_code == 403
     assert "确认" in response.json()["detail"]
