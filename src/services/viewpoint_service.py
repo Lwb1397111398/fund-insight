@@ -14,6 +14,7 @@ from src.models.database import Viewpoint
 SOURCE_AUTHORITY_MAP = {
     'eastmoney_blog': 0.8,
     'eastmoney_guide': 0.85,
+    'eastmoney_news': 0.8,
     'sina_finance': 0.75,
     'sina_blog': 0.7,
     'xueqiu': 0.65,

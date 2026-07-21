@@ -25,6 +25,13 @@ class EastmoneyBlogRequest(BaseModel):
     max_workers: int = 5
 
 
+class EastmoneyNewsRequest(BaseModel):
+    max_articles: int = 20
+    fetch_content: bool = False
+    concurrent: bool = True
+    max_workers: int = 5
+
+
 class SinaFinanceRequest(BaseModel):
     category: str = 'finance'
     max_articles: int = 20
@@ -79,6 +86,24 @@ async def auto_adopt_eastmoney_guide(data: EastmoneyGuideRequest, db: Session = 
     try:
         result = service.crawl_eastmoney_guide(
             max_articles=data.max_articles,
+            concurrent=data.concurrent,
+            max_workers=min(data.max_workers, 5)
+        )
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        return {"success": False, "message": f"自动采纳失败: {e}"}
+
+
+@router.post("/eastmoney-news/auto-adopt")
+async def auto_adopt_eastmoney_news(data: EastmoneyNewsRequest, db: Session = Depends(get_db)):
+    """抓取东方财富7x24快讯并自动采纳符合标准的文章"""
+    service = CrawlerService(db)
+
+    try:
+        result = service.crawl_eastmoney_news(
+            max_articles=data.max_articles,
+            fetch_content=data.fetch_content,
             concurrent=data.concurrent,
             max_workers=min(data.max_workers, 5)
         )

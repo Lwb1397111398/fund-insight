@@ -101,7 +101,7 @@ class ViewpointStatsService:
             'bearish_ratio': bearish / total if total > 0 else 0,
             'avg_confidence': round(avg_confidence, 1),
             'by_source': dict(source_counts),
-            'crawler_count': sum(source_counts.get(s, 0) for s in ['eastmoney_blog', 'eastmoney_guide', 'sina_finance', 'sina_blog']),
+            'crawler_count': sum(source_counts.get(s, 0) for s in ['eastmoney_blog', 'eastmoney_guide', 'eastmoney_news', 'sina_finance', 'sina_blog']),
             'manual_count': source_counts.get('manual', 0)
         }
     
@@ -346,6 +346,7 @@ class ViewpointWeightService:
     SOURCE_AUTHORITY = {
         'eastmoney_blog': 0.8,
         'eastmoney_guide': 0.7,
+        'eastmoney_news': 0.75,
         'sina_finance': 0.6,
         'sina_blog': 0.5,
         'manual': 1.0

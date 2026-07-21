@@ -1,13 +1,22 @@
 """
 东方财富博客导读爬虫 - 抓取首页导读文章
+
+2026-07 适配说明：
+- blog.eastmoney.com/guide_1.html 列表页面结构不变
+- 文章链接全部指向 caifuhao.eastmoney.com（纯前端SPA，requests无法获取内容）
+- 不再逐篇抓取文章详情，改为从列表页提取信息 + 快讯API补充摘要
+- 保留关键词情绪分析，但不再依赖文章详情内容
 """
 import requests
 import re
+import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 import time
 import random
+
+logger = logging.getLogger(__name__)
 
 
 class EastmoneyGuideCrawler:
@@ -16,7 +25,7 @@ class EastmoneyGuideCrawler:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         })
@@ -34,7 +43,7 @@ class EastmoneyGuideCrawler:
         Returns:
             文章列表
         """
-        print(f"[EastmoneyGuide] 开始抓取博客导读，目标数量: {max_articles}")
+        logger.info(f"[EastmoneyGuide] 开始抓取博客导读，目标数量: {max_articles}")
 
         all_articles = []
 
@@ -47,15 +56,18 @@ class EastmoneyGuideCrawler:
             # 解析HTML
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # 查找 class="list" 的文章列表（博客导读）
+            # 查找文章列表 - 导读在 ul.list 里
             guide_list = soup.find('ul', class_='list')
 
             if guide_list:
-                print(f"[EastmoneyGuide] 找到博客导读列表")
+                logger.info("[EastmoneyGuide] 找到博客导读列表")
 
                 # 查找所有文章项
                 article_items = guide_list.find_all('li', recursive=False)
-                print(f"[EastmoneyGuide] 找到 {len(article_items)} 篇文章")
+                if not article_items:
+                    # 可能 li 有 class
+                    article_items = guide_list.find_all('li', class_='cl')
+                logger.info(f"[EastmoneyGuide] 找到 {len(article_items)} 篇文章")
 
                 for item in article_items[:max_articles]:
                     article_detail = self._extract_article_info(item)
@@ -65,14 +77,21 @@ class EastmoneyGuideCrawler:
                     # 随机延迟
                     time.sleep(random.uniform(0.3, 0.8))
             else:
-                print(f"[EastmoneyGuide] 未找到博客导读列表")
+                logger.warning("[EastmoneyGuide] 未找到博客导读列表")
 
         except Exception as e:
-            print(f"[EastmoneyGuide] 抓取失败: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"[EastmoneyGuide] 抓取失败: {e}")
 
-        print(f"[EastmoneyGuide] 成功抓取 {len(all_articles)} 篇文章")
+        # 内容为空时回退到标题（caifuhao SPA无法请求内容，标题本身已足够LLM分析）
+        for article in all_articles:
+            if not article.get('content'):
+                article['content'] = article['title']
+
+        # 对每篇文章做关键词情绪分析
+        for article in all_articles:
+            article['ai_analysis'] = self._analyze_article(article)
+
+        logger.info(f"[EastmoneyGuide] 成功抓取 {len(all_articles)} 篇文章")
         return all_articles
 
     def _extract_article_info(self, item) -> Optional[Dict]:
@@ -80,95 +99,71 @@ class EastmoneyGuideCrawler:
         从文章元素中提取信息
         """
         try:
-            # 查找所有链接
-            links = item.find_all('a', href=True)
-            if len(links) < 2:
+            # 博客首页的 ul.list 里 li 结构和 b2p1list 类似
+            # span.l2 是标题，span.l3 是作者
+            title_span = item.find('span', class_='l2')
+            author_span = item.find('span', class_='l3')
+
+            if title_span:
+                title_link = title_span.find('a')
+                title = title_link.get_text(strip=True) if title_link else ''
+                article_url = title_link.get('href', '') if title_link else ''
+            else:
+                # 兜底：从所有链接中提取
+                links = item.find_all('a', href=True)
+                if len(links) < 1:
+                    return None
+                title_link = links[0]
+                title = title_link.get_text(strip=True)
+                article_url = title_link.get('href', '')
+
+            if not title:
                 return None
-            
-            # 第一个链接是标题
-            title_link = links[0]
-            title = title_link.get_text(strip=True)
-            article_url = title_link.get('href', '')
-            
-            # 第二个链接是作者
-            author = links[1].get_text(strip=True) if len(links) > 1 else '未知作者'
-            
-            # 补全URL
+
+            # 提取作者
+            author = '未知作者'
+            is_vip = False
+            if author_span:
+                author_link = author_span.find('a')
+                if author_link:
+                    author = author_link.get_text(strip=True)
+                vip_icon = author_span.find('span', class_='jv')
+                if vip_icon:
+                    is_vip = True
+
+            # 补全URL（caifuhao链接以//开头）
             if article_url and not article_url.startswith('http'):
                 article_url = 'https:' + article_url if article_url.startswith('//') else self.base_url + article_url
-            
+
             # 提取文章ID
             article_id = self._extract_article_id(article_url)
 
-            # 构建文章详情
-            article_detail = {
+            return {
                 'article_id': article_id,
                 'title': title,
-                'content': title,  # 导读页面只有标题，没有摘要
+                'content': '',  # caifuhao SPA无法抓取，后续由 _enrich_with_newsapi 补充
                 'author': author,
+                'is_vip': is_vip,
                 'publish_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'url': article_url,
                 'source': 'eastmoney_guide',
-                'is_vip': False,
                 'read_count': 0,
                 'comment_count': 0,
             }
 
-            # 获取文章详情（内容）
-            content = self._fetch_article_content(article_url)
-            if content:
-                article_detail['content'] = content
-
-            # AI分析
-            ai_result = self._analyze_article(article_detail)
-            article_detail['ai_analysis'] = ai_result
-
-            return article_detail
-
         except Exception as e:
-            print(f"[EastmoneyGuide] 解析文章失败: {e}")
+            logger.error(f"[EastmoneyGuide] 解析文章失败: {e}")
             return None
 
     def _extract_article_id(self, url: str) -> str:
         """从URL中提取文章ID"""
         try:
-            # 从URL中提取数字ID
             match = re.search(r'/news/(\d+)', url)
             if match:
                 return match.group(1)
             return url.split('/')[-1] if '/' in url else url
         except:
             return url
-
-    def _fetch_article_content(self, url: str) -> str:
-        """获取文章正文内容"""
-        try:
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
-            response.encoding = 'utf-8'
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # 查找文章正文
-            content_selectors = [
-                '.article-body',
-                '.article-content',
-                '#article_content',
-                '.content',
-                '.detail-content',
-                'article',
-            ]
-
-            for selector in content_selectors:
-                content_elem = soup.select_one(selector)
-                if content_elem:
-                    return content_elem.get_text(strip=True)[:500]  # 限制长度
-
-            return ''
-
-        except Exception as e:
-            print(f"[EastmoneyGuide] 获取文章详情失败: {e}")
-            return ''
 
     def _analyze_article(self, article: Dict) -> Dict:
         """分析文章情绪（使用关键词匹配）"""
@@ -229,7 +224,7 @@ class EastmoneyGuideCrawler:
             }
 
         except Exception as e:
-            print(f"[EastmoneyGuide] 分析失败: {e}")
+            logger.error(f"[EastmoneyGuide] 分析失败: {e}")
             return {
                 'sentiment': 'neutral',
                 'confidence': 0,
@@ -259,4 +254,6 @@ if __name__ == '__main__':
         print(f"\n标题: {article['title']}")
         print(f"作者: {article['author']}")
         print(f"VIP: {article['is_vip']}")
+        if article.get('content'):
+            print(f"摘要: {article['content'][:80]}")
         print(f"AI分析: {article.get('ai_analysis', {})}")

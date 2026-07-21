@@ -147,6 +147,7 @@ SECTOR_ALIAS_MAP = {
 SOURCE_AUTHORITY_SCORES = {
     "eastmoney_blog": 0.8,
     "eastmoney_guide": 0.7,
+    "eastmoney_news": 0.75,
     "sina_finance": 0.6,
     "sina_blog": 0.5,
     "manual": 1.0,
