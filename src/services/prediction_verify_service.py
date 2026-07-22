@@ -1080,7 +1080,7 @@ class PredictionVerifyService:
         else:
             return 0
     
-    def rollback_invalid_verifications(self, min_data_points: int = 2) -> Dict:
+    def rollback_invalid_verifications(self, min_data_points: int = 2, dry_run: bool = True) -> Dict:
         """
         回溯已验证但数据不足的预测
         
@@ -1114,9 +1114,11 @@ class PredictionVerifyService:
         
         total_checked = len(predictions)
         rolled_back = 0
+        would_rollback = 0
         kept = 0
         errors = 0
         rollback_details = []
+        affected_bloggers = set()
         
         for prediction in predictions:
             try:
@@ -1145,33 +1147,29 @@ class PredictionVerifyService:
                 )
                 
                 if not data_check['available']:
+                    would_rollback += 1
                     old_status = prediction.status
                     old_verify_score = prediction.verify_score
                     old_is_correct = prediction.is_correct
-                    
-                    prediction.status = 'pending'
-                    prediction.is_expired = False
-                    prediction.verify_history = []
-                    prediction.verify_count = 0
-                    prediction.verify_score = None
-                    prediction.actual_change = None
-                    prediction.is_correct = None
-                    prediction.current_nav = None
-                    prediction.current_nav_date = None
-                    prediction.end_nav = None
-                    prediction.end_nav_date = None
-                    prediction.start_nav = None
-                    prediction.start_nav_date = None
-                    
-                    if prediction.blogger_id and old_verify_score is not None:
-                        self._update_blogger_accuracy(
-                            prediction.blogger_id,
-                            score_change=-old_verify_score,
-                            is_new_verify=False,
-                            was_correct=old_is_correct
-                        )
-                    
-                    rolled_back += 1
+
+                    if not dry_run:
+                        prediction.status = 'pending'
+                        prediction.is_expired = False
+                        prediction.has_active_prediction = True
+                        prediction.verify_count = 0
+                        prediction.verify_score = None
+                        prediction.actual_change = None
+                        prediction.is_correct = None
+                        prediction.current_nav = None
+                        prediction.current_nav_date = None
+                        prediction.end_nav = None
+                        prediction.end_nav_date = None
+                        prediction.start_nav = None
+                        prediction.start_nav_date = None
+                        prediction.verified_at = None
+                        prediction.last_verify_date = None
+                        affected_bloggers.add(prediction.blogger_id)
+                        rolled_back += 1
                     rollback_details.append({
                         'prediction_id': prediction.id,
                         'fund_code': fund_code,
@@ -1188,15 +1186,28 @@ class PredictionVerifyService:
                     
             except Exception as e:
                 errors += 1
+                self.db.rollback()
                 logger.error(f"[Rollback] 检查预测 {prediction.id} 时出错: {e}")
-        
-        self.db.commit()
+                return {
+                    'success': False,
+                    'message': f"回溯检查失败，未保存任何修改: {e}",
+                    'data': {'total_checked': total_checked, 'errors': errors},
+                }
+
+        if not dry_run:
+            from src.utils.blogger_stats import recalculate_blogger_stats
+            for blogger_id in affected_bloggers:
+                if blogger_id:
+                    recalculate_blogger_stats(self.db, blogger_id, commit=False)
+            self.db.commit()
         
         return {
             'success': True,
-            'message': f"回溯完成：检查 {total_checked} 个预测，回溯 {rolled_back} 个，保留 {kept} 个，错误 {errors} 个",
+            'message': f"{'预览' if dry_run else '回溯'}完成：检查 {total_checked} 个预测，{'将回溯' if dry_run else '已回溯'} {would_rollback if dry_run else rolled_back} 个，保留 {kept} 个，错误 {errors} 个",
             'data': {
+                'dry_run': dry_run,
                 'total_checked': total_checked,
+                'would_rollback': would_rollback,
                 'rolled_back': rolled_back,
                 'kept': kept,
                 'errors': errors,

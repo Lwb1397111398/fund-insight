@@ -2,7 +2,7 @@
 预测路由
 处理预测相关的 API 请求
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -15,6 +15,7 @@ from src.services.prediction_service import PredictionService
 from src.services.prediction_verify_service import PredictionVerifyService
 from src.services.prediction_verify_task import prediction_verify_task
 from src.api.schemas.prediction import PredictionUpdate
+from src.services.prediction_maintenance_service import PredictionMaintenanceService
 
 router = APIRouter(prefix="/predictions", tags=["预测"])
 logger = logging.getLogger(__name__)
@@ -179,20 +180,37 @@ async def get_prediction_verify_status(
 
 
 @router.post("/rollback-invalid")
-async def rollback_invalid_verifications(db: Session = Depends(get_db)):
-    """回溯数据不足的已验证预测"""
+async def rollback_invalid_verifications(
+    request: Request,
+    dry_run: bool = Query(True),
+    db: Session = Depends(get_db),
+):
+    """预览或回溯数据不足的已验证预测。"""
+    if not dry_run and request.headers.get("X-Danger-Confirm") != "rollback-predictions":
+        raise HTTPException(
+            status_code=403,
+            detail="执行回溯需要确认头 X-Danger-Confirm: rollback-predictions",
+        )
     service = PredictionVerifyService(db)
-    result = service.rollback_invalid_verifications(min_data_points=2)
+    result = service.rollback_invalid_verifications(min_data_points=2, dry_run=dry_run)
 
     return result
 
 
 @router.post("/sync-sector-mapping")
-async def sync_sector_mapping(db: Session = Depends(get_db)):
-    """根据板块-基金映射同步预测关联和基金数据"""
+async def sync_sector_mapping(
+    request: Request,
+    dry_run: bool = Query(True),
+    db: Session = Depends(get_db),
+):
+    """使用已审核映射预览或同步预测基金关联。"""
+    if not dry_run and request.headers.get("X-Danger-Confirm") != "sync-prediction-mapping":
+        raise HTTPException(
+            status_code=403,
+            detail="执行同步需要确认头 X-Danger-Confirm: sync-prediction-mapping",
+        )
     try:
-        from src.fund.fund_sync_manager import fund_sync_manager
-        result = fund_sync_manager.sync_predictions_by_sector_mapping(db)
+        result = PredictionMaintenanceService(db).sync_sector_mappings(dry_run=dry_run)
 
         # 构建详细消息
         parts = []
@@ -206,9 +224,13 @@ async def sync_sector_mapping(db: Session = Depends(get_db)):
             parts.append(f"更新 {result['funds_sector_updated']} 个基金板块")
 
         if parts:
-            message = "同步完成：" + "，".join(parts)
+            message = f"{'预览' if dry_run else '同步'}完成：" + "，".join(parts)
         else:
-            message = f"同步完成：无需更新（{result['predictions_unchanged']} 个预测未变，{result['predictions_no_mapping']} 个无映射）"
+            pending = result.get("would_update", 0)
+            if dry_run and pending:
+                message = f"预览完成：将更新 {pending} 个预测"
+            else:
+                message = f"{'预览' if dry_run else '同步'}完成：无需更新（{result['predictions_unchanged']} 个预测未变，{result['predictions_no_mapping']} 个无映射）"
 
         return {
             "success": True,
@@ -571,85 +593,12 @@ async def get_predictions_by_sector(
 
 @router.post("/merge-similar")
 async def merge_similar_predictions(db: Session = Depends(get_db)):
-    """合并同类预测（相同基金、相同判断、相同目标日期，不同博主也可合并）
-    
-    合并规则：
-    1. 相同 fund_code + prediction_type + target_date 的预测会被合并
-    2. 保留置信度最高的预测
-    3. 删除其他预测时，会正确更新博主的统计数据
-    """
-    from src.models.database import Prediction, Blogger
-    from src.services.prediction_verify_service import PredictionVerifyService
-    from src.utils.blogger_stats import update_blogger_stats_incremental
-    from collections import defaultdict
-    
-    verify_service = PredictionVerifyService(db)
-    
-    predictions = db.query(Prediction).filter(
-        Prediction.is_deleted == False
-    ).all()
-    
-    logger.info(f"总预测数: {len(predictions)}")
-    
-    groups = defaultdict(list)
-    for p in predictions:
-        target_date_str = p.target_date.isoformat() if isinstance(p.target_date, (date, datetime)) else str(p.target_date)
-        key = (p.fund_code, p.prediction_type, target_date_str)
-        groups[key].append(p)
-    
-    logger.info(f"分组数: {len(groups)}")
-    
-    merged_count = 0
-    deleted_count = 0
-    blogger_updates = defaultdict(lambda: {"score": 0, "correct": 0, "verified": 0})
-    
-    for key, group in groups.items():
-        if len(group) > 1:
-            avg_confidence = sum(p.confidence for p in group) / len(group)
-            
-            main_prediction = max(group, key=lambda p: p.confidence)
-            main_prediction.confidence = int(round(avg_confidence))
-            
-            for p in group:
-                if p.id != main_prediction.id:
-                    if p.verify_count and p.verify_count > 0:
-                        score_to_deduct = p.verify_score if p.verify_score is not None else (100 if p.is_correct else 0)
-                        blogger_updates[p.blogger_id]["score"] -= score_to_deduct
-                        blogger_updates[p.blogger_id]["verified"] -= 1
-                        if p.is_correct:
-                            blogger_updates[p.blogger_id]["correct"] -= 1
-                    
-                    p.is_deleted = True
-                    p.deleted_at = datetime.now()
-                    p.delete_reason = f"合并到预测ID {main_prediction.id}（置信度最高）"
-                    p.restore_before = (datetime.now() + timedelta(days=7)).date()
-                    deleted_count += 1
-            
-            merged_count += 1
-            logger.info(f"已合并: {key}, 保留ID: {main_prediction.id}, 删除: {len(group)-1}条")
-    
-    for blogger_id, updates in blogger_updates.items():
-        if blogger_id:
-            update_blogger_stats_incremental(
-                db, blogger_id,
-                score_delta=updates["score"],
-                correct_delta=updates["correct"],
-                verified_delta=updates["verified"]
-            )
-            blogger = db.query(Blogger).filter(Blogger.id == blogger_id).first()
-            if blogger:
-                logger.info(f"更新博主 {blogger.name}: 分数变化{updates['score']}, 正确数变化{updates['correct']}, 已验证数变化{updates['verified']}")
-    
-    db.commit()
-    
+    """兼容旧入口：只扫描重复候选，不再删除原始预测。"""
+    result = PredictionMaintenanceService(db).scan_duplicate_groups()
     return {
         "success": True,
-        "message": f"合并完成：合并了 {merged_count} 组预测，删除了 {deleted_count} 条重复预测",
-        "data": {
-            "merged_groups": merged_count,
-            "deleted_predictions": deleted_count,
-            "bloggers_updated": len(blogger_updates)
-        }
+        "message": f"重复检查完成：发现 {result['duplicate_groups']} 组候选，未修改任何预测",
+        "data": result,
     }
 
 
