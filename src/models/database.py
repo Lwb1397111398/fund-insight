@@ -247,6 +247,30 @@ class Prediction(Base):
     )
 
 
+class PredictionChangeLog(Base):
+    """预测关键字段的不可变变更记录。"""
+    __tablename__ = 'prediction_change_logs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    prediction_id = Column(
+        Integer,
+        ForeignKey('predictions.id', ondelete='RESTRICT'),
+        nullable=False,
+    )
+    action = Column(String(32), nullable=False)
+    source = Column(String(50), nullable=False, default='application')
+    changed_fields = Column(JSON, nullable=False, default=list)
+    before_state = Column(JSON, nullable=False)
+    after_state = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_prediction_change_logs_prediction_id', 'prediction_id'),
+        Index('ix_prediction_change_logs_created_at', 'created_at'),
+        Index('ix_prediction_change_logs_action', 'action'),
+    )
+
+
 class Viewpoint(Base):
     """博主观点表 - 支持爬虫来源、生命周期管理、标签体系"""
     __tablename__ = 'viewpoints'

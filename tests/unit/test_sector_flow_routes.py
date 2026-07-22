@@ -1,3 +1,4 @@
+import os
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -5,7 +6,9 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 
 
-AUTH_HEADERS = {"X-Access-Password": "Lwb1397111398"}
+AUTH_HEADERS = {
+    "X-Access-Password": os.getenv("ACCESS_PASSWORD", "Lwb1397111398")
+}
 client = TestClient(app)
 
 

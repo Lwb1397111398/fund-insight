@@ -15,6 +15,10 @@ from src.fund.fund_api import FundAPI
 from src.utils.prediction_utils import PERIOD_MAP, ULTRA_SHORT_PERIODS, parse_period_to_days
 from src.analyzer.local_trend_analyzer import get_local_trend_analyzer
 from src.core.config import config
+from src.services.prediction_change_log_service import (
+    add_prediction_change_log,
+    snapshot_prediction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -759,6 +763,7 @@ class PredictionVerifyService:
                     score = llm_score
                     analysis = llm_result.get("analysis", analysis)
         
+        before_state = snapshot_prediction(prediction)
         prediction.current_nav = end_nav
         prediction.current_nav_date = window_end
         prediction.actual_change = actual_change
@@ -810,6 +815,13 @@ class PredictionVerifyService:
                 commit=False,
             )
 
+        add_prediction_change_log(
+            self.db,
+            prediction,
+            action="verified",
+            source="automatic",
+            before_state=before_state,
+        )
         self.db.commit()
         
         return {
@@ -1085,6 +1097,7 @@ class PredictionVerifyService:
                     old_is_correct = prediction.is_correct
 
                     if not dry_run:
+                        before_state = snapshot_prediction(prediction)
                         prediction.status = 'pending'
                         prediction.is_expired = False
                         prediction.has_active_prediction = True
@@ -1100,6 +1113,13 @@ class PredictionVerifyService:
                         prediction.start_nav_date = None
                         prediction.verified_at = None
                         prediction.last_verify_date = None
+                        add_prediction_change_log(
+                            self.db,
+                            prediction,
+                            action="verification_rollback",
+                            source="maintenance",
+                            before_state=before_state,
+                        )
                         affected_bloggers.add(prediction.blogger_id)
                         rolled_back += 1
                     rollback_details.append({

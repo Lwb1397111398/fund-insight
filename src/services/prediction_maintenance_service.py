@@ -7,6 +7,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.models.database import Blogger, FundInfo, Prediction, SectorFundMapping
+from src.services.prediction_change_log_service import (
+    add_prediction_change_log,
+    snapshot_prediction,
+)
 from src.utils.blogger_stats import recalculate_blogger_stats
 
 
@@ -121,6 +125,7 @@ class PredictionMaintenanceService:
         try:
             for candidate in candidates:
                 prediction = candidate["prediction"]
+                before_state = snapshot_prediction(prediction)
                 affected_bloggers.add(prediction.blogger_id)
                 affected_funds.update(filter(None, [
                     candidate["old_fund_code"],
@@ -131,6 +136,13 @@ class PredictionMaintenanceService:
                 if candidate["reset_verified"]:
                     self._reset_verification(prediction)
                     result["verified_reset"] += 1
+                add_prediction_change_log(
+                    self.db,
+                    prediction,
+                    action="maintenance_sync",
+                    source="sector_mapping",
+                    before_state=before_state,
+                )
                 result["predictions_updated"] += 1
 
             self.db.flush()

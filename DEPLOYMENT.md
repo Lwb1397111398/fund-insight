@@ -134,13 +134,42 @@ python scripts/fetch_sector_flow.py
 
 - PostgreSQL/Supabase。
 - 连接池设置见 `src/models/database.py` 的 `_get_postgres_pool_settings()`。
-- SQLAlchemy 会在启动时 `Base.metadata.create_all(engine)`，但这不是完整迁移系统。
+- SQLAlchemy 会在启动时 `Base.metadata.create_all(engine)`；它只负责补建缺失表，不能替代 Alembic 迁移。
 
 重要限制：
 
-- 项目没有 Alembic。
-- 修改 `src/models/database.py` 后，必须评估 Supabase 生产表结构是否需要手动迁移。
+- 项目已建立 Alembic 既有结构基线，首个增量迁移只新增 `prediction_change_logs`。
+- Alembic 不自动读取 `DATABASE_URL`；生产迁移必须显式、安全地提供 `ALEMBIC_DATABASE_URL`。
+- 修改 `src/models/database.py` 后，必须同时提供并验证只增量的迁移文件。
 - 数据库导入接口 `/api/import-database` 默认关闭；开启后还需要确认头 `X-Danger-Confirm: import-production-database`。
+
+### Alembic 基线与本地预检
+
+现有数据库第一次纳入 Alembic 时，必须先完成备份和结构盘点，然后执行：
+
+```bash
+alembic current
+alembic stamp prediction_schema_baseline
+alembic upgrade head
+alembic current
+```
+
+`stamp` 只登记版本，不创建旧业务表，因此只能用于已经具有 Fund Insight 既有表结构的数据库。全新本地数据库应先运行 `python -m src --init-db` 创建当前完整结构，再执行 `alembic stamp head`。
+
+迁移前可生成离线 SQL 供人工检查：
+
+```bash
+alembic upgrade head --sql
+```
+
+本地迁移回滚演练必须针对数据库副本，不得直接操作日常开发数据库：
+
+```bash
+alembic downgrade prediction_schema_baseline
+alembic upgrade head
+```
+
+生产环境只在完成 `pg_dump`、隔离恢复和迁移预检后，才在受控维护窗口显式设置 `ALEMBIC_DATABASE_URL`。本仓库的测试、启动命令和 Render Web 启动均不会自动执行 Alembic。
 
 ## 数据备份与恢复演练
 
@@ -170,7 +199,7 @@ python scripts/backup_database.py --sqlite-path data/fund_insight.db --output-di
    pg_dump --service=fund_insight_prod --format=custom --no-owner --no-acl --file=fund_insight_before_change.dump
    ```
 
-3. 通过应用导出功能额外保存业务 JSON，用于抽样比对；它不是恢复源。
+3. 通过应用导出功能额外保存业务 JSON，用于抽样比对；格式 `1.3` 包含预测变更日志，但它仍不是 PostgreSQL 恢复源。
 4. 新建与生产隔离的临时 PostgreSQL 数据库，先查看备份目录，再执行恢复：
 
    ```bash

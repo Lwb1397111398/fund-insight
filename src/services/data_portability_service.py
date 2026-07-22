@@ -23,6 +23,7 @@ from src.models.database import (
     InvestmentAdvice,
     Post,
     Prediction,
+    PredictionChangeLog,
     PredictionGroup,
     SectorAlias,
     SectorFundMapping,
@@ -39,7 +40,7 @@ class TableSpec:
     exclude_fields: Sequence[str] = ()
 
 
-EXPORT_VERSION = "1.2"
+EXPORT_VERSION = "1.3"
 
 
 TABLE_SPECS: Sequence[TableSpec] = (
@@ -47,6 +48,7 @@ TABLE_SPECS: Sequence[TableSpec] = (
     TableSpec("fund_info", FundInfo, ("fund_code",)),
     TableSpec("posts", Post, ("id",)),
     TableSpec("predictions", Prediction, ("id",), exclude_fields=("llm_raw_response",)),
+    TableSpec("prediction_change_logs", PredictionChangeLog, ("id",)),
     TableSpec("batch_analysis_tasks", BatchAnalysisTask, ("id",)),
     TableSpec("analysis_logs", AnalysisLog, ("id",)),
     TableSpec("verification_tasks", VerificationTask, ("id",)),

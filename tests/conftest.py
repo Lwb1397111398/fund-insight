@@ -16,6 +16,8 @@ if project_root not in sys.path:
 # 必须在导入应用配置前覆盖 DATABASE_URL，避免集成测试写入 Supabase。
 _test_db_path = Path(tempfile.gettempdir()) / f"fund-insight-pytest-{os.getpid()}.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db_path.as_posix()}"
+os.environ.pop("ALEMBIC_DATABASE_URL", None)
+os.environ.setdefault("LLM_API_KEY", "test-key")
 
 from src.models.database import Base
 

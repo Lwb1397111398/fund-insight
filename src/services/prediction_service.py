@@ -10,6 +10,10 @@ import re
 
 from .base import BaseService
 from src.models.database import Prediction, Post, Blogger, FundInfo
+from src.services.prediction_change_log_service import (
+    add_prediction_change_log,
+    snapshot_prediction,
+)
 from src.utils.prediction_utils import calculate_target_date
 from src.utils.blogger_stats import recalculate_blogger_stats
 
@@ -137,13 +141,33 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             更新后的预测实例
         """
-        return self.update(prediction_id, {
-            "status": "verified",
-            "actual_change": actual_change,
-            "is_correct": is_correct,
-            "ai_judgment": ai_judgment,
-            "verified_at": datetime.now()
-        })
+        prediction = self.db.query(Prediction).filter(
+            Prediction.id == prediction_id,
+            Prediction.is_deleted == False,
+        ).first()
+        if not prediction:
+            return None
+
+        before_state = snapshot_prediction(prediction)
+        prediction.status = "verified"
+        prediction.actual_change = actual_change
+        prediction.is_correct = is_correct
+        prediction.ai_judgment = ai_judgment
+        prediction.verified_at = datetime.now()
+        add_prediction_change_log(
+            self.db,
+            prediction,
+            action="verified",
+            source="manual",
+            before_state=before_state,
+        )
+        try:
+            self.db.commit()
+            self.db.refresh(prediction)
+            return prediction
+        except Exception:
+            self.db.rollback()
+            raise
     
     def get_stats(self, blogger_id: int = None) -> Dict:
         """
@@ -380,6 +404,8 @@ class PredictionService(BaseService[Prediction]):
         if is_verified and changed_inputs:
             raise ValueError("已验证预测不能直接修改验证依据，请先通过纠正流程重新验证")
 
+        before_state = snapshot_prediction(prediction)
+
         from src.constants.sector_fund_map import (
             get_category_for_sector,
             get_fund_for_sector,
@@ -420,6 +446,13 @@ class PredictionService(BaseService[Prediction]):
             )
 
         try:
+            add_prediction_change_log(
+                self.db,
+                prediction,
+                action="updated",
+                source="user",
+                before_state=before_state,
+            )
             self.db.commit()
             self.db.refresh(prediction)
             return prediction
@@ -467,6 +500,7 @@ class PredictionService(BaseService[Prediction]):
         if not prediction:
             return False
 
+        before_state = snapshot_prediction(prediction)
         prediction.is_deleted = True
         prediction.deleted_at = datetime.now()
         prediction.deleted_by = "user"
@@ -475,6 +509,13 @@ class PredictionService(BaseService[Prediction]):
         try:
             self.db.flush()
             self._recalculate_related_stats(prediction)
+            add_prediction_change_log(
+                self.db,
+                prediction,
+                action="archived",
+                source="user",
+                before_state=before_state,
+            )
             self.db.commit()
             return True
         except Exception:
@@ -490,6 +531,7 @@ class PredictionService(BaseService[Prediction]):
         if not prediction:
             return False
 
+        before_state = snapshot_prediction(prediction)
         prediction.is_deleted = False
         prediction.deleted_at = None
         prediction.deleted_by = None
@@ -498,6 +540,13 @@ class PredictionService(BaseService[Prediction]):
         try:
             self.db.flush()
             self._recalculate_related_stats(prediction)
+            add_prediction_change_log(
+                self.db,
+                prediction,
+                action="restored",
+                source="user",
+                before_state=before_state,
+            )
             self.db.commit()
             return True
         except Exception:

@@ -45,7 +45,7 @@ def test_export_and_restore_crawler_article_records(test_db):
     test_db.commit()
 
     exported = DataPortabilityService(test_db).export_data()
-    assert exported["export_version"] == "1.2"
+    assert exported["export_version"] == "1.3"
     assert exported["summary"]["crawler_article_records"] == 1
 
     test_db.query(CrawlerArticleRecord).delete()
@@ -365,7 +365,7 @@ def test_import_export_v11_restores_task_and_prediction_dependencies(test_db):
     assert test_db.query(AnalysisLog).count() == 1
     assert test_db.query(VerificationTask).count() == 1
     assert test_db.query(PredictionGroup).count() == 1
-    assert exported["export_version"] == "1.2"
+    assert exported["export_version"] == "1.3"
     assert exported["summary"]["analysis_logs"] == 1
 
 
@@ -450,7 +450,7 @@ def test_config_import_export_routes_preserve_v1_contract(monkeypatch):
         assert exported.status_code == 200
         assert exported.headers["content-type"].startswith("application/json")
         exported_payload = exported.json()
-        assert exported_payload["export_version"] == "1.2"
+        assert exported_payload["export_version"] == "1.3"
         assert len(exported_payload["fund_history"]) == 1
         assert len(exported_payload["investment_advice"]) == 1
     finally:

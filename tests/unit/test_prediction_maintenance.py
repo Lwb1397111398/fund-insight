@@ -6,7 +6,14 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from src.api.routes import predictions as prediction_routes
-from src.models.database import Blogger, FundInfo, Post, Prediction, SectorFundMapping
+from src.models.database import (
+    Blogger,
+    FundInfo,
+    Post,
+    Prediction,
+    PredictionChangeLog,
+    SectorFundMapping,
+)
 from src.services.prediction_maintenance_service import PredictionMaintenanceService
 from src.services.prediction_verify_service import PredictionVerifyService
 
@@ -102,6 +109,42 @@ def test_sector_mapping_preview_uses_only_reviewed_mapping_and_does_not_write(te
     test_db.refresh(ignored_prediction)
     assert reviewed_prediction.fund_code == "OLD01"
     assert ignored_prediction.fund_code == "OLD01"
+    assert test_db.query(PredictionChangeLog).count() == 0
+
+
+def test_sector_mapping_execution_records_prediction_change(test_db):
+    test_db.add_all([
+        FundInfo(fund_code="OLD01", fund_name="旧基金"),
+        FundInfo(fund_code="NEW01", fund_name="已审核基金"),
+    ])
+    blogger, post = _blogger_post(test_db, "正式映射博主")
+    prediction = _prediction(
+        test_db,
+        blogger,
+        post,
+        fund_code="OLD01",
+        sector="白酒",
+        verified=True,
+    )
+    test_db.add(SectorFundMapping(
+        sector_name="白酒",
+        fund_code="NEW01",
+        fund_name="已审核基金",
+        reviewed=True,
+        is_active=True,
+    ))
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=False)
+
+    assert result["predictions_updated"] == 1
+    log = test_db.query(PredictionChangeLog).one()
+    assert log.action == "maintenance_sync"
+    assert log.source == "sector_mapping"
+    assert log.before_state["fund_code"] == "OLD01"
+    assert log.after_state["fund_code"] == "NEW01"
+    assert log.before_state["status"] == "success"
+    assert log.after_state["status"] == "pending"
 
 
 def test_rollback_invalid_dry_run_preserves_verification(monkeypatch, test_db):
@@ -124,6 +167,32 @@ def test_rollback_invalid_dry_run_preserves_verification(monkeypatch, test_db):
     assert prediction.status == "success"
     assert prediction.verify_count == 1
     assert prediction.verify_history == [{"date": "2026-07-08", "score": 80}]
+
+
+def test_rollback_invalid_execution_records_prediction_change(monkeypatch, test_db):
+    blogger, post = _blogger_post(test_db, "正式回溯博主")
+    prediction = _prediction(test_db, blogger, post, verified=True)
+    test_db.commit()
+    service = PredictionVerifyService(test_db)
+    monkeypatch.setattr(
+        service,
+        "match_fund_for_prediction",
+        lambda value: ("DUP01", "重复测试基金"),
+    )
+    monkeypatch.setattr(service, "_check_fund_data_availability", lambda **kwargs: {
+        "available": False,
+        "message": "净值数据不足",
+        "data_points": 1,
+    })
+
+    result = service.rollback_invalid_verifications(min_data_points=2, dry_run=False)
+
+    assert result["data"]["rolled_back"] == 1
+    log = test_db.query(PredictionChangeLog).one()
+    assert log.action == "verification_rollback"
+    assert log.source == "maintenance"
+    assert log.before_state["status"] == "success"
+    assert log.after_state["status"] == "pending"
 
 
 def _request(headers=None):
