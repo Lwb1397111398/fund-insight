@@ -1598,6 +1598,10 @@
             color: var(--color-text);
         }
 
+        .post-filter-bar.prediction-filter-bar {
+            grid-template-columns: minmax(200px, 2fr) repeat(4, minmax(120px, 1fr));
+        }
+
         .pagination-bar {
             display: flex;
             justify-content: center;
@@ -1607,11 +1611,32 @@
             color: var(--color-text-secondary);
         }
 
+        .prediction-maintenance-band {
+            margin-bottom: var(--space-4);
+            padding: var(--space-3);
+            border: 1px solid var(--color-border);
+            border-left: 3px solid var(--color-warning);
+            background: var(--color-bg-muted);
+        }
+
+        .maintenance-result {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: var(--space-3);
+            padding-top: var(--space-2);
+            color: var(--color-text-secondary);
+        }
+
         /* ===== 响应式设计 ===== */
 
         /* 平板设备 (768px 以下) */
         @media (max-width: 768px) {
             .post-filter-bar {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .post-filter-bar.prediction-filter-bar {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
@@ -2324,34 +2349,59 @@
                 </div>
                 <!-- 预测视图 -->
                 <div v-if="currentView === 'predictions'">
-                    <div class="section-title">管理预测</div>
+                    <div class="section-title">预测管理</div>
                     <div class="sub-actions">
                         <button class="action-btn small" :class="predictionFilter === 'all' ? 'primary' : 'default'"
-                            @click="predictionFilter = 'all'">全部 ({{ predictions.filter(p => p.prediction_type !== 'flat').length }})</button>
+                            @click="setPredictionFilter('all')">全部 ({{ predictionMeta.facets.all }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
-                            @click="predictionFilter = 'pending'">待验证 ({{ predictions.filter(p => p.prediction_type !== 'flat' && !p.is_expired).length
-                            }})</button>
+                            @click="setPredictionFilter('pending')">待验证 ({{ predictionMeta.facets.pending }})</button>
                         <button class="action-btn small"
                             :class="predictionFilter === 'verified' ? 'success' : 'default'"
-                            @click="predictionFilter = 'verified'">已验证 ({{ predictions.filter(p => p.prediction_type !== 'flat' && p.is_expired).length
-                            }})</button>
+                            @click="setPredictionFilter('verified')">已验证 ({{ predictionMeta.facets.verified }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'correct' ? 'success' : 'default'"
-                            @click="predictionFilter = 'correct'">正确 ({{ predictions.filter(p => p.prediction_type !== 'flat' && p.is_expired &&
-                            p.is_correct).length }})</button>
+                            @click="setPredictionFilter('correct')">正确 ({{ predictionMeta.facets.correct }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'wrong' ? 'danger' : 'default'"
-                            @click="predictionFilter = 'wrong'">错误 ({{ predictions.filter(p => p.prediction_type !== 'flat' && p.is_expired &&
-                            !p.is_correct).length }})</button>
+                            @click="setPredictionFilter('wrong')">错误 ({{ predictionMeta.facets.wrong }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'flat' ? 'warning' : 'default'"
+                            @click="setPredictionFilter('flat')">观望 ({{ predictionMeta.facets.flat }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'archived' ? 'danger' : 'default'"
+                            @click="setPredictionFilter('archived')"><i class="ri-archive-line"></i> 回收站 ({{ predictionMeta.facets.archived }})</button>
+                    </div>
+                    <div class="post-filter-bar prediction-filter-bar">
+                        <input v-model="predictionFilters.keyword" @keyup.enter="applyPredictionFilters" placeholder="搜索博主、基金、板块或内容">
+                        <select v-model="predictionFilters.blogger_id"><option value="">全部博主</option><option v-for="b in bloggers" :key="b.id" :value="b.id">{{ b.name }}</option></select>
+                        <input v-model="predictionFilters.fund_code" placeholder="基金代码">
+                        <input v-model="predictionFilters.sector" placeholder="板块">
+                        <select v-model="predictionFilters.direction"><option value="">全部方向</option><option value="up">看涨</option><option value="down">看跌</option><option value="flat">观望</option></select>
+                        <input type="date" v-model="predictionFilters.start_date" title="开始日期">
+                        <input type="date" v-model="predictionFilters.end_date" title="结束日期">
+                        <button class="row-btn primary" @click="applyPredictionFilters">筛选</button>
+                        <button class="row-btn" @click="resetPredictionFilters">重置</button>
                     </div>
                     <div class="sub-actions">
                         <button class="action-btn warning small" @click="batchAnalyzePredictions"
-                            :disabled="analyzing">{{ analyzing ? '验证中...' : '🚀 一键验证预测' }}</button>
-                        <button class="action-btn info small" @click="mergeSimilarPredictions" :disabled="analyzing">{{
-                            analyzing ? '处理中...' : '🔀 合并同类预测' }}</button>
-                        <button class="action-btn danger small" @click="rollbackInvalidVerifications"
-                            :disabled="analyzing">{{
-                            analyzing ? '处理中...' : '🔄 回溯无效验证' }}</button>
-                        <button class="action-btn success small" @click="syncSectorMapping" :disabled="analyzing">{{
-                            analyzing ? '同步中...' : '🔗 同步板块映射' }}</button>
+                            :disabled="analyzing"><i class="ri-checkbox-circle-line"></i> {{ analyzing ? '验证中' : '验证到期预测' }}</button>
+                        <button class="action-btn small" @click="showPredictionMaintenance = !showPredictionMaintenance">
+                            <i class="ri-tools-line"></i> 维护工具
+                        </button>
+                    </div>
+                    <div v-if="verifyTask?.in_progress" class="viewpoint-task-band task-running">
+                        <div><strong>批量验证中</strong><span>{{ verifyTask.processed_count || 0 }} / {{ verifyTask.total || 0 }}</span></div>
+                        <div class="viewpoint-task-progress"><span :style="{ width: (verifyTask.progress || 0) + '%' }"></span></div>
+                    </div>
+                    <div v-if="showPredictionMaintenance" class="prediction-maintenance-band">
+                        <div class="sub-actions">
+                            <button class="row-btn" @click="previewPredictionMaintenance('duplicates')" :disabled="analyzing"><i class="ri-file-search-line"></i> 扫描重复候选</button>
+                            <button class="row-btn" @click="previewPredictionMaintenance('mapping')" :disabled="analyzing"><i class="ri-links-line"></i> 预览映射同步</button>
+                            <button class="row-btn" @click="previewPredictionMaintenance('rollback')" :disabled="analyzing"><i class="ri-history-line"></i> 预览验证回溯</button>
+                        </div>
+                        <div v-if="maintenancePreview" class="maintenance-result">
+                            <strong>{{ maintenancePreview.message }}</strong>
+                            <span v-if="maintenancePreview.type === 'duplicates'">候选组 {{ maintenancePreview.data.duplicate_groups || 0 }}，涉及 {{ maintenancePreview.data.candidate_predictions || 0 }} 条</span>
+                            <span v-if="maintenancePreview.type === 'mapping'">预计更新 {{ maintenancePreview.data.would_update || 0 }} 条</span>
+                            <span v-if="maintenancePreview.type === 'rollback'">预计回溯 {{ maintenancePreview.data.would_rollback || 0 }} 条</span>
+                            <button v-if="maintenancePreview.type === 'mapping' || maintenancePreview.type === 'rollback'" class="row-btn danger" @click="executePredictionMaintenance" :disabled="analyzing">确认执行</button>
+                        </div>
                     </div>
                     <div class="data-table" v-if="filteredPredictions.length > 0">
                         <table>
@@ -2374,22 +2424,29 @@
                                     <td>{{ p.blogger_name }}</td>
                                     <td>{{ p.prediction_type === 'up' ? '看涨' : p.prediction_type === 'down' ? '看跌' :
                                         '观望' }}</td>
-                                    <td>{{ p.confidence }}%</td>
-                                    <td>{{ p.target_date }}</td>
+                                    <td>{{ p.confidence !== null && p.confidence !== undefined ? p.confidence + '%' : '-' }}</td>
+                                    <td>{{ p.target_date || '-' }}</td>
                                     <td><span class="status-badge"
-                                            :class="p.prediction_type === 'flat' ? 'status-pending' : 'status-' + (p.is_expired ? (p.is_correct ? 'success' : 'failed') : 'pending')">{{
-                                            p.prediction_type === 'flat' ? '不计准确率' : (p.is_expired ? (p.is_correct ? '正确' : '错误') : '待验证') }}</span></td>
+                                            :class="p.lifecycle_status === 'archived' ? 'status-failed' : p.verification_result === 'correct' ? 'status-success' : p.verification_result === 'wrong' ? 'status-failed' : 'status-pending'">{{
+                                            p.lifecycle_status === 'archived' ? '已归档' : p.prediction_type === 'flat' ? '观望' : p.verification_result === 'correct' ? '正确' : p.verification_result === 'wrong' ? '错误' : '待验证' }}</span></td>
                                     <td>
-                                        <div class="row-actions"><button class="row-btn primary"
-                                                @click="editPrediction(p)">编辑</button><button v-if="p.is_expired"
-                                                class="row-btn primary" @click="viewPredictionDetail(p.id)">详情</button><button
-                                                class="row-btn danger" @click="deletePrediction(p.id)">删除</button></div>
+                                        <div class="row-actions">
+                                            <button class="row-btn primary" @click="viewPredictionDetail(p.id)">详情</button>
+                                            <button v-if="p.lifecycle_status === 'pending'" class="row-btn" @click="editPrediction(p)">编辑</button>
+                                            <button v-if="p.lifecycle_status === 'archived'" class="row-btn primary" @click="restorePrediction(p.id)"><i class="ri-arrow-go-back-line"></i> 恢复</button>
+                                            <button v-else class="row-btn danger" @click="archivePrediction(p.id)"><i class="ri-archive-line"></i> 归档</button>
+                                        </div>
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                     <div v-else class="empty-state">暂无预测数据</div>
+                    <div class="pagination-bar">
+                        <button class="row-btn" @click="predictionPrevPage" :disabled="predictionFilters.page <= 1">上一页</button>
+                        <span>第 {{ predictionFilters.page }} 页 · 共 {{ predictionMeta.total || 0 }} 条</span>
+                        <button class="row-btn" @click="predictionNextPage" :disabled="!predictionMeta.has_more">下一页</button>
+                    </div>
                 </div>
                 <!-- 观点视图 -->
                 <div v-if="currentView === 'viewpoints'">
@@ -2530,7 +2587,7 @@
                                     <td>{{ f.latest_nav || '-' }}</td>
                                     <td :style="{ color: (f.day_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
                                         f.day_growth ? f.day_growth.toFixed(2) + '%' : '-' }}</td>
-                                    <td>{{ predictions.filter(p => p.fund_code === f.fund_code && !p.is_deleted).length || 0 }}</td>
+                                    <td>{{ f.active_predictions || 0 }}</td>
                                     <td>
                                         <div class="row-actions">
                                             <button class="row-btn primary" @click="viewFundDetail(f.fund_code)">详情</button>
@@ -3234,12 +3291,13 @@
                                 :class="'status-' + (predictionDetail.prediction_type === 'up' ? 'success' : predictionDetail.prediction_type === 'down' ? 'failed' : 'pending')">{{
                                 predictionDetail.prediction_type === 'up' ? '看涨' : predictionDetail.prediction_type ===
                                 'down' ? '看跌' : '观望' }}</span><span v-if="predictionDetail.prediction_type === 'flat'" style="color: #999; font-size: 12px; margin-left: 8px;">观望类预测不参与准确率计算</span></div>
-                        <div class="detail-item"><label>置信度：</label><span>{{ predictionDetail.confidence }}%</span>
+                        <div class="detail-item"><label>置信度：</label><span>{{ predictionDetail.confidence !== null && predictionDetail.confidence !== undefined ? predictionDetail.confidence + '%' : '-' }}</span>
                         </div>
                         <div class="detail-item"><label>预测日期：</label><span>{{ predictionDetail.prediction_date }}</span>
                         </div>
                         <div class="detail-item"><label>目标日期：</label><span>{{ predictionDetail.target_date }}</span>
                         </div>
+                        <div class="detail-item"><label>来源帖子：</label><span><a v-if="predictionDetail.post_source_url" :href="predictionDetail.post_source_url" target="_blank" rel="noopener">{{ predictionDetail.post_title || '打开原文' }}</a><template v-else>{{ predictionDetail.post_title || '-' }}</template></span></div>
                         <div class="detail-item"><label>预测周期：</label><span>{{ predictionDetail.prediction_period || '-'
                                 }}</span></div>
                         <div class="detail-item"><label>验证次数：</label><span>{{ predictionDetail.verify_count || 0
@@ -3250,7 +3308,7 @@
                                 }}</span></div>
                         <div class="detail-item"><label>实际涨跌：</label><span
                                 :style="{ color: (predictionDetail.actual_change || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
-                                predictionDetail.actual_change ? predictionDetail.actual_change.toFixed(2) + '%' : '-'
+                                predictionDetail.actual_change !== null && predictionDetail.actual_change !== undefined ? predictionDetail.actual_change.toFixed(2) + '%' : '-'
                                 }}</span></div>
                     </div>
                     <div v-if="predictionDetail.prediction_content" class="detail-section" style="margin-top: 16px;">
@@ -3904,6 +3962,7 @@
     </div>
     <script src="/web/post-manager.js"></script>
     <script src="/web/viewpoint-manager.js"></script>
+    <script src="/web/prediction-manager.js"></script>
     <script>
         // axios 密码配置 - 在 createApp 之前设置
         (function() {
@@ -3951,6 +4010,7 @@
                             authReady.value = true;
                             // 密码有效，加载数据
                             fetchStats(); fetchBloggers();
+                            window.setTimeout(() => restorePredictionVerifyTask(), 0);
                             return;
                         } catch (e) {
                             // 密码失效，清除并弹出输入框
@@ -3973,6 +4033,7 @@
                             authReady.value = true;
                             // 密码验证成功，加载数据
                             fetchStats(); fetchBloggers();
+                            window.setTimeout(() => restorePredictionVerifyTask(), 0);
                         } else {
                             const errMsg = res.data?.error || '未知错误';
                             passwordError.value = '服务器内部错误: ' + errMsg;
@@ -4005,7 +4066,6 @@
                     window.setTimeout(() => restoreViewpointTask(), 0);
                     window.addEventListener('auth-required', () => { showPasswordModal.value = true; passwordError.value = '密码已失效，请重新输入'; authReady.value = false; });
                 });
-                const predictionFilter = ref('all');
                 const fundFilter = ref('has_prediction');
                 const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false);
                 const showAddBlogger = ref(false), showAddFund = ref(false), showViewpointDetail = ref(false), showFundDetail = ref(false), showPredictionDetail = ref(false);
@@ -4078,12 +4138,10 @@ const fetchWeChatBatch = async () => {
                 const expiredPredictions = computed(() => expiredPredictionsList.value.length), expiredViewpoints = computed(() => expiredViewpointsList.value.length);
                 
                 const fundsWithPredictions = computed(() => {
-                    const fundCodes = new Set(predictions.value.filter(p => !p.is_deleted).map(p => p.fund_code));
-                    return funds.value.filter(f => fundCodes.has(f.fund_code));
+                    return funds.value.filter(f => (f.active_predictions || 0) > 0);
                 });
                 const fundsWithoutPredictions = computed(() => {
-                    const fundCodes = new Set(predictions.value.filter(p => !p.is_deleted).map(p => p.fund_code));
-                    return funds.value.filter(f => !fundCodes.has(f.fund_code));
+                    return funds.value.filter(f => (f.active_predictions || 0) === 0);
                 });
                 const filteredFunds = computed(() => {
                     if (fundFilter.value === 'has_prediction') {
@@ -4094,27 +4152,6 @@ const fetchWeChatBatch = async () => {
                     return funds.value;
                 });
                 
-                const filteredPredictions = computed(() => {
-                    let filtered = predictions.value.filter(p => p.prediction_type !== 'flat');
-                    if (predictionFilter.value === 'pending') {
-                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && !p.is_expired);
-                    } else if (predictionFilter.value === 'verified') {
-                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && p.is_expired);
-                    } else if (predictionFilter.value === 'correct') {
-                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && p.is_expired && p.is_correct);
-                    } else if (predictionFilter.value === 'wrong') {
-                        filtered = predictions.value.filter(p => p.prediction_type !== 'flat' && p.is_expired && !p.is_correct);
-                    }
-                    return filtered.sort((a, b) => {
-                        if (a.is_expired !== b.is_expired) {
-                            return a.is_expired ? 1 : -1;
-                        }
-                        if (!a.is_expired) {
-                            return new Date(a.target_date) - new Date(b.target_date);
-                        }
-                        return new Date(b.target_date) - new Date(a.target_date);
-                    });
-                });
                 // 板块资金数据筛选
                 const filteredSectorFlow = computed(() => {
                     let data = sectorFlowData.value;
@@ -4163,12 +4200,25 @@ const fetchWeChatBatch = async () => {
                     viewViewpointDetail, deleteViewpoint, restoreViewpointTask, sourceLabel,
                     directionLabel, taskStatusLabel,
                 } = viewpointManager;
+                const predictionManager = window.createPredictionManager({
+                    axios, ref, reactive, computed, alert, confirm, analyzing,
+                    predictions, predictionDetail, showPredictionDetail, showEditPrediction, editingPrediction,
+                    onStatsChanged: () => fetchStats(),
+                });
+                const {
+                    predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
+                    showPredictionMaintenance, maintenancePreview,
+                    fetchPredictions, applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
+                    predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,
+                    viewPredictionDetail, editPrediction, savePrediction, batchAnalyzePredictions,
+                    restorePredictionVerifyTask, previewPredictionMaintenance, executePredictionMaintenance,
+                } = predictionManager;
+                const deletePrediction = archivePrediction;
                 const fetchStats = async () => { try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
                 const fetchBloggers = async () => { const res = await axios.get('/api/bloggers'); if (res.data.success) bloggers.value = res.data.data.sort((a, b) => (b.accuracy_rate || 0) - (a.accuracy_rate || 0)); };
-                const fetchPredictions = async () => { const res = await axios.get('/api/predictions'); if (res.data.success) predictions.value = res.data.data; };
                 const fetchFunds = async () => { const res = await axios.get('/api/funds?group_by_sector=false'); if (res.data.success) funds.value = res.data.data.sort((a, b) => (b.day_growth || 0) - (a.day_growth || 0)); };
                 const fetchCleanupPreview = async () => { try { const res = await axios.get('/api/config/cleanup/preview'); if (res.data.success) { cleanupPreview.value = res.data.data; cleanupEnabled.value = Boolean(res.data.data?.cleanup_enabled); } } catch (e) { cleanupEnabled.value = false; console.error(e); } };
-                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await loadViewpoints(); else if (view === 'funds') { await Promise.all([fetchFunds(), fetchPredictions()]); } else if (view === 'cleanup') { await fetchCleanupPreview(); } else if (view === 'advice') { await loadAdviceHistory(); } else if (view === 'sector-flow') { await fetchSectorRanking(); await fetchSectorStats(); await fetchSectorFlowStatus(); } };
+                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await loadViewpoints(); else if (view === 'funds') await fetchFunds(); else if (view === 'cleanup') { await fetchCleanupPreview(); } else if (view === 'advice') { await loadAdviceHistory(); } else if (view === 'sector-flow') { await fetchSectorRanking(); await fetchSectorStats(); await fetchSectorFlowStatus(); } };
                 // 板块资金分析 - 数据获取
                 const fetchSectorFlowStatus = async () => { sectorFlowStatusLoading.value = true; try { const res = await axios.get('/api/sector-flow/fetch-status'); if (res.data.success) sectorFlowStatus.value = res.data.data; } catch (e) { console.error('fetchSectorFlowStatus error:', e); } sectorFlowStatusLoading.value = false; };
                 const fetchSectorFlowData = async () => { sectorFlowLoading.value = true; try { const res = await axios.post('/api/sector-flow/fetch'); if (res.data.success) { alert(res.data.message); await fetchSectorRanking(); await fetchSectorStats(); await fetchSectorFlowStatus(); } else { alert('抓取失败: ' + (res.data.message || res.data.error || '未知错误')); await fetchSectorFlowStatus(); } } catch (e) { alert('抓取失败: ' + (e.response?.data?.detail || e.message)); } sectorFlowLoading.value = false; };
@@ -4180,7 +4230,6 @@ const fetchWeChatBatch = async () => {
                 const addBlogger = async () => { try { await axios.post('/api/bloggers', newBlogger); showAddBlogger.value = false; newBlogger.name = ''; await fetchBloggers(); await fetchStats(); } catch (e) { alert('添加失败'); } };
                 const addFund = async () => { try { const res = await axios.post('/api/funds', newFund); if (res.data.success) { showAddFund.value = false; newFund.fund_code = ''; await fetchFunds(); await fetchStats(); alert('添加成功'); } else { alert(res.data.message || '添加失败'); } } catch (e) { alert('添加失败: ' + e.message); } };
                 const deleteBlogger = async (id) => { if (!confirm('确定删除该博主？')) return; try { await axios.delete(`/api/bloggers/${id}`); await fetchBloggers(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
-                const deletePrediction = async (id) => { if (!confirm('确定删除该预测？')) return; try { await axios.delete(`/api/predictions/${id}`); await fetchPredictions(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败'); } };
                 const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
                 const deleteFund = async (fundCode, fundName) => {
                     if (!confirm(`确定要删除基金 ${fundName}（${fundCode}）吗？\n\n注意：如果有预测关联此基金，删除可能失败。`)) return;
@@ -4197,90 +4246,7 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
-                const viewPredictionDetail = async (id) => { try { const res = await axios.get(`/api/predictions/${id}`); if (res.data.success) { predictionDetail.value = res.data.data; showPredictionDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
-                const editPrediction = (pred) => {
-                    editingPrediction.value = {
-                        id: pred.id,
-                        sector: pred.sector || '',
-                        fund_code: pred.fund_code || '',
-                        fund_name: pred.fund_name || '',
-                        prediction_type: pred.prediction_type || 'up',
-                        confidence: pred.confidence || 50,
-                        prediction_period: pred.prediction_period || '1周'
-                    };
-                    showEditPrediction.value = true;
-                };
-                const savePrediction = async () => {
-                    if (!editingPrediction.value) return;
-                    const pred = editingPrediction.value;
-                    try {
-                        const res = await axios.put(`/api/predictions/${pred.id}`, {
-                            sector: pred.sector,
-                            fund_code: pred.fund_code,
-                            fund_name: pred.fund_name,
-                            prediction_type: pred.prediction_type,
-                            confidence: pred.confidence,
-                            prediction_period: pred.prediction_period
-                        });
-                        if (res.data.success) {
-                            alert('保存成功！');
-                            showEditPrediction.value = false;
-                            await fetchPredictions();
-                        } else {
-                            alert('保存失败：' + res.data.message);
-                        }
-                    } catch (e) {
-                        alert('保存失败: ' + (e.response?.data?.detail || e.message));
-                    }
-                };
                 const showTopBloggers = async () => { try { const res = await axios.get('/api/bloggers/top?limit=10'); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('获取失败'); } };
-                const batchAnalyzePredictions = async () => {
-                    analyzing.value = true;
-                    try {
-                        const res = await axios.post('/api/predictions/verify-all');
-                        alert(res.data.message);
-                        if (res.data.data?.in_progress) {
-                            let checkCount = 0;
-                            const maxChecks = 120;
-                            const checkInterval = setInterval(async () => {
-                                checkCount++;
-                                try {
-                                    const statusRes = await axios.get('/api/predictions/verify-all/status');
-                                    const status = statusRes.data.data || {};
-                                    if (!status.in_progress || checkCount >= maxChecks) {
-                                        clearInterval(checkInterval);
-                                        analyzing.value = false;
-                                        await fetchPredictions();
-                                        await fetchStats();
-                                        if (!status.in_progress) {
-                                            alert(status.last_result?.message || '批量验证已完成！');
-                                        } else {
-                                            alert('批量验证耗时较长，请稍后刷新页面查看结果');
-                                        }
-                                    }
-                                } catch (e) {
-                                    if (checkCount >= maxChecks) {
-                                        clearInterval(checkInterval);
-                                        analyzing.value = false;
-                                        await fetchPredictions();
-                                        await fetchStats();
-                                        alert('无法获取验证进度，请稍后刷新页面查看结果');
-                                    }
-                                }
-                            }, 5000);
-                        } else {
-                            analyzing.value = false;
-                            await fetchPredictions();
-                            await fetchStats();
-                        }
-                    } catch (e) {
-                        alert('验证失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message));
-                        analyzing.value = false;
-                    }
-                };
-                const mergeSimilarPredictions = async () => { if (!confirm('确定要合并同类预测吗？\n\n合并规则：相同博主、相同基金、相同判断、相同目标日期的预测将被合并，置信度取平均值。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/merge-similar'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '合并失败'); } } catch (e) { alert('合并失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
-                const rollbackInvalidVerifications = async () => { if (!confirm('确定要回溯无效验证吗？\n\n将检查所有已验证的预测，如果基金数据不足（少于2个数据点），则重置验证状态，等数据充足后重新验证。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/rollback-invalid'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '回溯失败'); } } catch (e) { alert('回溯失败: ' + (e.response?.data?.message || e.message)); } analyzing.value = false; };
-                const syncSectorMapping = async () => { if (!confirm('确定要同步板块映射吗？\n\n将根据板块-基金映射表更新所有预测的基金关联。')) return; analyzing.value = true; try { const res = await axios.post('/api/predictions/sync-sector-mapping'); if (res.data.success) { alert(res.data.message); await fetchPredictions(); await fetchStats(); } else { alert(res.data.message || '同步失败'); } } catch (e) { alert('同步失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message)); } analyzing.value = false; };
                 const pollFundUpdateStatus = async () => {
                     const timer = setInterval(async () => {
                         try {
@@ -4481,7 +4447,8 @@ const fetchWeChatBatch = async () => {
                 return {
                     theme, toggleTheme, loading, currentView, stats, bloggers,
                     posts, postMeta, postFilters, analysisJob,
-                    predictions, predictionFilter, filteredPredictions,
+                    predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
+                    verifyTask, showPredictionMaintenance, maintenancePreview,
                     viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
                     sourceMenuOpen, selectedSources, sourceOptions, taskRunning,
                     funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds,
@@ -4506,8 +4473,10 @@ const fetchWeChatBatch = async () => {
                     fetchViewpoints, applyViewpointFilters, resetViewpointFilters,
                     viewpointPrevPage, viewpointNextPage, fetchLatestViewpoints, retryViewpointTask,
                     sourceLabel, directionLabel, taskStatusLabel,
-                    batchAnalyzePredictions, mergeSimilarPredictions, rollbackInvalidVerifications,
-                    syncSectorMapping, updateAllFunds, fetchWeChatBatch, generateAdvice,
+                    applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
+                    predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,
+                    batchAnalyzePredictions, previewPredictionMaintenance, executePredictionMaintenance,
+                    updateAllFunds, fetchWeChatBatch, generateAdvice,
                     loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData,
                     cleanupOldestBatch, loadTestData, previewTestData, cleanupTestData,
                     parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias,
