@@ -53,7 +53,10 @@ class AdviceService(BaseService[InvestmentAdvice]):
         ).filter(
             Viewpoint.viewpoint_date >= date.today() - timedelta(days=7),
             Viewpoint.is_deleted == False,
-            Viewpoint.is_expired == False
+            (Viewpoint.valid_until == None) | (Viewpoint.valid_until >= date.today()),
+            (Viewpoint.is_summary == True) | (
+                (Viewpoint.reasoning.isnot(None)) & (Viewpoint.summary.isnot(None))
+            )
         ).first()
         
         data_str = "|".join([
@@ -210,10 +213,19 @@ class AdviceService(BaseService[InvestmentAdvice]):
                 "term": "near" if days_to_target <= 7 else "mid"
             })
         
+        summary_dates = self.db.query(Viewpoint.viewpoint_date).filter(
+            Viewpoint.is_summary == True,
+            Viewpoint.is_deleted == False,
+        )
         recent_viewpoints = self.db.query(Viewpoint).filter(
             Viewpoint.viewpoint_date >= date.today() - timedelta(days=recent_viewpoints_days),
             Viewpoint.is_deleted == False,
-            Viewpoint.is_expired == False
+            (Viewpoint.valid_until == None) | (Viewpoint.valid_until >= date.today()),
+            (Viewpoint.is_summary == True) | (
+                (Viewpoint.reasoning.isnot(None)) &
+                (Viewpoint.summary.isnot(None)) &
+                (~Viewpoint.viewpoint_date.in_(summary_dates))
+            )
         ).order_by(Viewpoint.viewpoint_date.desc()).limit(top_viewpoints).all()
         
         viewpoint_list = [

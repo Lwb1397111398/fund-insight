@@ -56,7 +56,7 @@ def test_create_post_with_analysis_prefers_database_mapping_over_builtin_sector_
 
     result = PostService(test_db).create_post_with_analysis(
         blogger_id=blogger.id,
-        content="我继续看好人工智能板块，接下来一周可能继续上涨。",
+        content="我继续看好人工智能板块，接下来一周可能继续上涨，资金流和市场趋势都比较积极。",
         post_date=date(2026, 7, 10),
         async_mode=False,
     )
@@ -97,3 +97,76 @@ def test_batch_analysis_skips_low_quality_post_without_deleting_it(monkeypatch, 
     assert preserved.analyzed is False
     assert result["deleted"] == 0
     assert result["skipped"] == 1
+
+
+def test_fund_auto_manager_does_not_commit_an_external_session(monkeypatch, test_db):
+    from src.fund.fund_auto_manager import FundAutoManager
+    from src.fund.fund_api import fund_data_manager
+
+    manager = FundAutoManager()
+    monkeypatch.setattr(
+        manager,
+        "auto_fetch_fund_for_sector",
+        lambda sector: {"code": "999998", "name": "事务测试基金"},
+    )
+    monkeypatch.setattr(
+        "src.fund.fund_auto_manager.fund_api.get_fund_info",
+        lambda code: {
+            "fund_name": "事务测试基金",
+            "fund_type": "指数型",
+            "nav": 1.0,
+            "nav_date": "2026-07-10",
+            "day_growth": 0.1,
+        },
+    )
+    monkeypatch.setattr(fund_data_manager, "update_fund_history", lambda fund_code, days, db: 0)
+
+    commit_calls = []
+
+    def forbidden_commit():
+        commit_calls.append(True)
+        raise AssertionError("外部事务不能由基金匹配提前提交")
+
+    monkeypatch.setattr(test_db, "commit", forbidden_commit)
+
+    success, _, fund = manager.auto_add_fund_for_prediction("人工智能", db=test_db)
+
+    assert success is True
+    assert fund.fund_code == "999998"
+    assert commit_calls == []
+
+
+def test_post_service_sync_creation_delegates_to_unified_analysis(monkeypatch, test_db):
+    from src.services.post_analysis_service import PostAnalysisService
+
+    blogger = Blogger(name="统一分析博主", platform="wechat")
+    test_db.add(blogger)
+    test_db.commit()
+    analyzed_post_ids = []
+
+    monkeypatch.setattr(
+        PostAnalysisService,
+        "analyze_post",
+        lambda self, post_id, task_id=None: analyzed_post_ids.append(post_id) or {
+            "success": True,
+            "status": "succeeded",
+            "message": "统一分析完成",
+            "predictions_created": 2,
+        },
+    )
+    monkeypatch.setattr(
+        post_service_module,
+        "get_analyzer",
+        lambda: (_ for _ in ()).throw(AssertionError("不应再调用旧分析实现")),
+    )
+
+    result = PostService(test_db).create_post_with_analysis(
+        blogger_id=blogger.id,
+        content="我看好人工智能和半导体未来一周继续上涨，市场和资金趋势比较积极。",
+        post_date=date(2026, 7, 10),
+        async_mode=False,
+    )
+
+    assert analyzed_post_ids == [result["id"]]
+    assert result["message"] == "统一分析完成"
+    assert result["predictions_created"] == 2

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 import traceback
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from src.api.deps import get_db
 from src.services.crawler_service import CrawlerService
@@ -17,6 +18,29 @@ router = APIRouter(prefix="/crawler", tags=["爬虫"])
 class WeChatArticleRequest(BaseModel):
     url: str
     post_date: Optional[str] = None
+    enqueue: bool = True
+
+
+_TRACKING_QUERY_KEYS = {
+    "ascene", "clicktime", "enterid", "from", "scene", "sessionid",
+}
+
+
+def _normalize_article_url(url: str) -> str:
+    """生成稳定来源链接，保留文章标识参数并移除分享追踪参数。"""
+    parsed = urlsplit(url.strip())
+    scheme = "https" if parsed.hostname else parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    netloc = hostname
+    if parsed.port and parsed.port not in (80, 443):
+        netloc = f"{hostname}:{parsed.port}"
+    query = urlencode(sorted(
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_QUERY_KEYS
+    ))
+    path = parsed.path.rstrip("/") or "/"
+    return urlunsplit((scheme, netloc, path, query, ""))
 
 
 class EastmoneyBlogRequest(BaseModel):
@@ -149,19 +173,23 @@ async def auto_adopt_sina_blog(data: SinaBlogRequest, db: Session = Depends(get_
 
 
 @router.post("/wechat/fetch")
-async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends(get_db)):
+async def fetch_wechat_article(
+    data: WeChatArticleRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """
     抓取微信公众号文章并自动添加博主和帖子
     
     流程：
     1. 抓取文章内容
     2. 自动创建/匹配博主
-    3. 创建帖子并分析
+    3. 保存帖子，并按请求加入持久化分析队列
     """
     from src.crawler.wechat_fetcher import wechat_fetcher
     from src.models.database import Blogger, Post
     from src.services.post_service import PostService
-    from src.analyzer.llm_analyzer import get_analyzer
+    from src.services.post_analysis_service import PostAnalysisService
     from datetime import datetime as dt
     
     try:
@@ -170,7 +198,8 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
         if not article:
             return {"success": False, "message": "抓取失败：微信反爬拦截或URL无效。建议在浏览器打开文章后复制内容，通过「添加帖子」手动粘贴。"}
         
-        author_name = article.get('author', '未知博主')
+        source_url = _normalize_article_url(data.url)
+        author_name = article.get('author') or '未知博主'
         
         blogger = db.query(Blogger).filter(Blogger.name == author_name).first()
         if not blogger:
@@ -180,10 +209,9 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
                 description=f'来自微信公众号'
             )
             db.add(blogger)
-            db.commit()
-            db.refresh(blogger)
+            db.flush()
         
-        existing_post = db.query(Post).filter(Post.source_url == data.url).first()
+        existing_post = db.query(Post).filter(Post.source_url == source_url).first()
         if existing_post:
             return {
                 "success": True,
@@ -218,22 +246,35 @@ async def fetch_wechat_article(data: WeChatArticleRequest, db: Session = Depends
         post_service = PostService(db)
         result = post_service.create_post_with_analysis(
             blogger_id=blogger.id,
+            title=article.get('title') or None,
             content=article['content'],
             post_date=post_date,
-            source_url=data.url,
+            source_url=source_url,
             async_mode=True
         )
+
+        queued = False
+        task_id = None
+        if data.enqueue:
+            task, created = PostAnalysisService.create_job(db, post_ids=[result['id']], limit=1)
+            queued_ids = set((task.task_params or {}).get("post_ids") or [])
+            queued = result['id'] in queued_ids
+            task_id = task.id if queued else None
+            if queued and task.status == "pending":
+                background_tasks.add_task(PostAnalysisService.run_job, task.id)
         
         return {
             "success": True,
-            "message": "文章抓取并分析成功",
+            "message": "文章已抓取并加入分析队列" if queued else "文章已抓取，等待加入分析队列",
             "data": {
                 "post_id": result['id'],
-                "title": article['title'],
+                "title": result['title'],
                 "blogger_name": author_name,
                 "blogger_id": blogger.id,
                 "analyzed": result['analyzed'],
                 "predictions_created": result['predictions_created'],
+                "queued": queued,
+                "task_id": task_id,
                 "already_exists": False
             }
         }

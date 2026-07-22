@@ -2,14 +2,14 @@
 自动清理任务模块
 定期清理过期的预测和观点
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from src.models.database import (
     Prediction, Viewpoint, Post, FundInfo, FundHistory,
     InvestmentAdvice, VerificationTask,
     AdviceReasoning, AdvicePerformance, AdviceFeedback,
-    SectorFundMapping, SessionLocal
+    SectorFundMapping, CrawlerArticleRecord, SessionLocal
 )
 from src.services.prediction_verify_service import PredictionVerifyService
 from src.core.safety import destructive_cleanup_enabled
@@ -115,7 +115,8 @@ class CleanupManager:
             deleted_count = 0
             
             old_viewpoints = db.query(Viewpoint).filter(
-                Viewpoint.viewpoint_date < cutoff
+                Viewpoint.viewpoint_date < cutoff,
+                Viewpoint.is_summary.is_(False),
             ).all()
             
             for viewpoint in old_viewpoints:
@@ -142,6 +143,26 @@ class CleanupManager:
             }
         finally:
             db.close()
+
+    def cleanup_crawler_article_records(self) -> dict:
+        """已采纳记录保留 180 天，跳过记录保留 30 天。"""
+        db = self._get_db()
+        try:
+            now = datetime.now()
+            deleted = db.query(CrawlerArticleRecord).filter(
+                ((CrawlerArticleRecord.is_adopted == True) &
+                 (CrawlerArticleRecord.fetched_at < now - timedelta(days=180))) |
+                ((CrawlerArticleRecord.is_adopted == False) &
+                 (CrawlerArticleRecord.fetched_at < now - timedelta(days=30)))
+            ).delete(synchronize_session=False)
+            db.commit()
+            return {"success": True, "deleted_crawler_records": deleted}
+        except Exception as exc:
+            db.rollback()
+            logger.error("清理观点抓取元数据失败: %s", exc)
+            return {"success": False, "error": str(exc), "deleted_crawler_records": 0}
+        finally:
+            db.close()
     
     def manual_cleanup_viewpoints(self, days: int = 10) -> dict:
         """
@@ -157,7 +178,8 @@ class CleanupManager:
             cutoff_date = date.today() - timedelta(days=days)
             
             old_viewpoints = db.query(Viewpoint).filter(
-                Viewpoint.viewpoint_date < cutoff_date
+                Viewpoint.viewpoint_date < cutoff_date,
+                Viewpoint.is_summary.is_(False),
             ).all()
             
             deleted_count = 0
@@ -601,7 +623,8 @@ class CleanupManager:
             cutoff_date = date.today() - timedelta(days=7 + batch_days)
 
             old_viewpoints = db.query(Viewpoint).filter(
-                Viewpoint.viewpoint_date < cutoff_date
+                Viewpoint.viewpoint_date < cutoff_date,
+                Viewpoint.is_summary.is_(False),
             ).order_by(Viewpoint.viewpoint_date.asc()).limit(limit).all()
 
             deleted_count = 0
@@ -752,6 +775,7 @@ class CleanupManager:
         orphan_funds_result = self.cleanup_orphan_funds(preview_only=False)
         sector_flow_result = self.cleanup_old_sector_flow(keep_days=90)
         sector_flow_runs_result = self.cleanup_old_sector_flow_runs(keep_days=180)
+        crawler_records_result = self.cleanup_crawler_article_records()
 
         total_deleted = (
             prediction_result.get("deleted_predictions", 0) +
@@ -761,7 +785,8 @@ class CleanupManager:
             advice_result.get("deleted_advice", 0) +
             orphan_funds_result.get("deleted_count", 0) +
             sector_flow_result.get("deleted_sector_flow", 0) +
-            sector_flow_runs_result.get("deleted_sector_flow_runs", 0)
+            sector_flow_runs_result.get("deleted_sector_flow_runs", 0) +
+            crawler_records_result.get("deleted_crawler_records", 0)
         )
 
         result = {
@@ -773,7 +798,8 @@ class CleanupManager:
                 advice_result.get("success", False),
                 orphan_funds_result.get("success", False),
                 sector_flow_result.get("success", False),
-                sector_flow_runs_result.get("success", False)
+                sector_flow_runs_result.get("success", False),
+                crawler_records_result.get("success", False)
             ]),
             "predictions": {
                 "deleted": prediction_result.get("deleted_predictions", 0)
@@ -798,6 +824,9 @@ class CleanupManager:
             },
             "sector_flow_runs": {
                 "deleted": sector_flow_runs_result.get("deleted_sector_flow_runs", 0)
+            },
+            "crawler_article_records": {
+                "deleted": crawler_records_result.get("deleted_crawler_records", 0)
             },
             "total_deleted": total_deleted,
             "timestamp": date.today().isoformat()

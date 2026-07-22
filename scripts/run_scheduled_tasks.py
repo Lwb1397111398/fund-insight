@@ -13,6 +13,7 @@ if project_root not in sys.path:
 
 from src.models.database import init_db
 from src.tasks.scheduler import TaskScheduler
+from src.services.viewpoint_workflow_service import ViewpointWorkflowService
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -51,6 +52,14 @@ def run_daily_tasks() -> dict:
         run_step("fund_update", scheduler._run_fund_update)
         run_step("prediction_verify", scheduler._run_prediction_verify)
         run_step("expired_verify", scheduler._run_expired_verify)
+        if os.getenv("VIEWPOINT_AUTO_SUMMARY_ENABLED", "false").lower() in ("1", "true", "yes", "on"):
+            run_step("viewpoint_summary", ViewpointWorkflowService.run_daily_summary_task)
+        else:
+            tasks["viewpoint_summary"] = {
+                "success": True,
+                "skipped": True,
+                "reason": "VIEWPOINT_AUTO_SUMMARY_ENABLED=false",
+            }
         return {
             "success": not failed_tasks,
             "sector_flow": sector_flow_result,

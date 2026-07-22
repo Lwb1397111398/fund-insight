@@ -4,47 +4,22 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from typing import Optional
 from datetime import date
 
 from src.api.deps import get_db
+from src.api.schemas.post import PostAnalysisJobRequest, PostCreate, PostUpdate
 from src.core.safety import destructive_cleanup_enabled
+from src.models.database import BatchAnalysisTask
+from src.services.post_analysis_service import PostAnalysisService
 from src.services.post_service import PostService
 
 router = APIRouter(prefix="/posts", tags=["帖子"])
 
 
-class PostCreate(BaseModel):
-    blogger_id: int
-    title: Optional[str] = None
-    content: str
-    post_date: date
-    source_url: Optional[str] = None
-    async_mode: bool = True
-
-
-_batch_analyzing = False  # 注意：全局变量在多进程部署时无效（每个进程有独立内存），生产环境应使用 Redis 等共享状态
-
-
-def _batch_analyze_background():
-    """后台批量分析任务（batch_analyze_posts内部自行管理会话）"""
-    global _batch_analyzing
-    try:
-        from src.models.database import SessionLocal
-        db = SessionLocal()
-        try:
-            service = PostService(db)
-            result = service.batch_analyze_posts()
-            print(f"[Batch Analyze] 后台批量分析完成: {result['message']}")
-        finally:
-            db.close()
-    except Exception as e:
-        print(f"[Batch Analyze] 后台批量分析失败: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        _batch_analyzing = False  # 注意：全局变量在多进程部署时无效（每个进程有独立内存），生产环境应使用 Redis 等共享状态
+def _batch_analyze_background(task_id: int):
+    """使用独立短会话运行持久化任务。"""
+    PostAnalysisService.run_job(task_id)
 
 
 @router.get("")
@@ -53,20 +28,29 @@ async def get_posts(
     limit: int = 1000,
     blogger_id: Optional[int] = None,
     analyzed: Optional[bool] = None,
+    keyword: Optional[str] = None,
+    analysis_status: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    quality: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """获取帖子列表"""
-    service = PostService(db)
-    posts = service.get_posts_with_blogger_info(
+    page = PostService(db).get_posts_page(
         skip=skip,
         limit=limit,
         blogger_id=blogger_id,
-        analyzed=analyzed
+        analyzed=analyzed,
+        keyword=keyword,
+        analysis_status=analysis_status,
+        start_date=start_date,
+        end_date=end_date,
+        quality=quality,
     )
-    
     return {
         "success": True,
-        "data": posts
+        "data": page["data"],
+        "meta": page["meta"],
     }
 
 
@@ -304,14 +288,82 @@ async def fix_sector_mismatch(dry_run: bool = True, db: Session = Depends(get_db
 
 
 @router.get("/batch-analyze/status")
-async def get_batch_analyze_status():
-    """获取批量分析状态"""
+async def get_batch_analyze_status(db: Session = Depends(get_db)):
+    """兼容入口：从数据库读取最近一次帖子分析任务。"""
+    task = db.query(BatchAnalysisTask).filter(
+        BatchAnalysisTask.task_type == "posts"
+    ).order_by(BatchAnalysisTask.created_at.desc()).first()
+    if not task:
+        return {
+            "success": True,
+            "data": {"in_progress": False, "status": "idle"},
+        }
+
+    data = PostAnalysisService.serialize_job(task)
+    data["in_progress"] = task.status in ("pending", "running")
     return {
         "success": True,
-        "data": {
-            "in_progress": _batch_analyzing
-        }
+        "data": data,
     }
+
+
+@router.post("/analysis-jobs")
+async def start_analysis_job(
+    payload: PostAnalysisJobRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """创建可恢复的帖子分析任务。"""
+    task, created = PostAnalysisService.create_job(
+        db,
+        post_ids=payload.post_ids,
+        limit=payload.limit,
+    )
+    task_post_ids = set((task.task_params or {}).get("post_ids") or [])
+    requested_post_ids = set(payload.post_ids or [])
+    if not created and requested_post_ids and not requested_post_ids.issubset(task_post_ids):
+        raise HTTPException(status_code=409, detail="已有其他帖子分析任务，请完成后重试")
+    if task.status == "pending":
+        background_tasks.add_task(_batch_analyze_background, task.id)
+    return {
+        "success": True,
+        "message": "帖子分析任务已创建" if created else "已有帖子分析任务",
+        "data": PostAnalysisService.serialize_job(task),
+    }
+
+
+@router.get("/analysis-jobs/{task_id}")
+async def get_analysis_job(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(BatchAnalysisTask).filter(
+        BatchAnalysisTask.id == task_id,
+        BatchAnalysisTask.task_type == "posts",
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"success": True, "data": PostAnalysisService.serialize_job(task)}
+
+
+@router.post("/analysis-jobs/{task_id}/resume")
+async def resume_analysis_job(
+    task_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    try:
+        task = PostAnalysisService.resume_job(db, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background_tasks.add_task(_batch_analyze_background, task.id)
+    return {"success": True, "message": "任务已恢复", "data": PostAnalysisService.serialize_job(task)}
+
+
+@router.post("/analysis-jobs/{task_id}/cancel")
+async def cancel_analysis_job(task_id: int, db: Session = Depends(get_db)):
+    try:
+        task = PostAnalysisService.cancel_job(db, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"success": True, "message": "任务已取消", "data": PostAnalysisService.serialize_job(task)}
 
 
 @router.post("/cleanup-low-quality")
@@ -334,6 +386,10 @@ async def cleanup_low_quality_posts(
             )
         if request.headers.get("X-Danger-Confirm") != "cleanup-data":
             raise HTTPException(status_code=403, detail="缺少数据清理确认头")
+        raise HTTPException(
+            status_code=409,
+            detail="低质量帖子自动删除已停用。请使用 quality=low 筛选后逐条查看删除预览并确认",
+        )
 
     from src.models.database import Post
 
@@ -351,20 +407,13 @@ async def cleanup_low_quality_posts(
                 "reason": reason
             })
 
-    if not dry_run:
-        for item in to_delete:
-            post = db.query(Post).filter(Post.id == item["id"]).first()
-            if post:
-                db.delete(post)
-        db.commit()
-
     return {
         "success": True,
-        "message": f"{'试运行' if dry_run else '已清理'}: 发现 {len(to_delete)} 个低质量帖子",
+        "message": f"候选检查完成：发现 {len(to_delete)} 个低质量帖子，请逐条确认",
         "data": {
-            "dry_run": dry_run,
+            "dry_run": True,
             "count": len(to_delete),
-            "deleted": len(to_delete) if not dry_run else 0,
+            "deleted": 0,
             "details": to_delete[:50]
         }
     }
@@ -375,36 +424,75 @@ async def batch_analyze_posts(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """
-    批量分析帖子（异步模式，立即返回，后台逐个分析）
-    避免同步分析超时导致重复触发
-    """
-    global _batch_analyzing
-    
-    if _batch_analyzing:
-        return {
-            "success": True,
-            "message": "批量分析正在进行中，请稍候...",
-            "data": {"analyzed": 0, "failed": 0, "in_progress": True}
-        }
-    
-    service = PostService(db)
-    unanalyzed_count = len(service.get_unanalyzed(limit=100))
-    
-    if unanalyzed_count == 0:
-        return {
-            "success": True,
-            "message": "没有需要分析的帖子",
-            "data": {"analyzed": 0, "failed": 0}
-        }
-    
-    _batch_analyzing = True
-    background_tasks.add_task(_batch_analyze_background)
-    
+    """兼容入口：创建数据库持久化任务并立即返回。"""
+    task, created = PostAnalysisService.create_job(db, limit=100)
+    if task.status == "pending":
+        background_tasks.add_task(_batch_analyze_background, task.id)
+    data = PostAnalysisService.serialize_job(task)
+    data.update({
+        "analyzed": task.success_count or 0,
+        "failed": task.failed_count or 0,
+        "in_progress": task.status in ("pending", "running"),
+        "total": task.total_count or 0,
+    })
     return {
         "success": True,
-        "message": f"已开始后台分析 {unanalyzed_count} 个帖子，请稍后刷新查看结果",
-        "data": {"analyzed": 0, "failed": 0, "in_progress": True, "total": unanalyzed_count}
+        "message": (
+            f"已开始后台分析 {task.total_count or 0} 个帖子，请稍后查看进度"
+            if created else "批量分析任务已存在，请查看当前进度"
+        ),
+        "data": data,
+    }
+
+
+@router.post("/{post_id}/analyze")
+async def analyze_post(
+    post_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """将单条帖子加入持久化分析任务。"""
+    task, created = PostAnalysisService.create_job(db, post_ids=[post_id], limit=1)
+    task_post_ids = list((task.task_params or {}).get("post_ids") or [])
+    if not created and post_id not in task_post_ids:
+        raise HTTPException(status_code=409, detail="已有其他帖子分析任务，请完成后重试")
+    if task.status == "pending":
+        background_tasks.add_task(_batch_analyze_background, task.id)
+    return {
+        "success": True,
+        "message": "帖子已加入分析任务" if created else "帖子已在分析任务中",
+        "data": PostAnalysisService.serialize_job(task),
+    }
+
+
+@router.get("/{post_id}/delete-preview")
+async def get_post_delete_preview(post_id: int, db: Session = Depends(get_db)):
+    preview = PostService(db).get_delete_preview(post_id)
+    if not preview:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+    return {"success": True, "data": preview}
+
+
+@router.patch("/{post_id}")
+async def update_post(
+    post_id: int,
+    update: PostUpdate,
+    db: Session = Depends(get_db),
+):
+    service = PostService(db)
+    try:
+        post = service.update_post_fields(
+            post_id,
+            update.model_dump(exclude_unset=True),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not post:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+    return {
+        "success": True,
+        "message": "帖子已更新",
+        "data": service.get_post_detail(post_id),
     }
 
 
@@ -424,15 +512,18 @@ async def get_post(post_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{post_id}")
-async def delete_post(post_id: int, db: Session = Depends(get_db)):
-    """删除帖子"""
-    service = PostService(db)
+async def delete_post(
+    post_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """经明确确认后彻底删除帖子和关联运行资料。"""
+    if request.headers.get("X-Danger-Confirm") != "delete-post":
+        raise HTTPException(status_code=403, detail="缺少帖子彻底删除确认头")
     try:
-        success = service.delete_post(post_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if not success:
+        result = PostService(db).delete_post_permanently(post_id)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=f"帖子删除失败: {exc}") from exc
+    if result is None:
         raise HTTPException(status_code=404, detail="帖子不存在")
-
-    return {"success": True, "message": "帖子删除成功"}
+    return {"success": True, "message": "帖子及关联资料已彻底删除", "data": result}

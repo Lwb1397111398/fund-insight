@@ -271,20 +271,25 @@ class FundAutoManager:
             )
             
             db.add(new_fund)
-            db.commit()
+            if close_db:
+                db.commit()
+            else:
+                db.flush()
             db.refresh(new_fund)
             
             try:
                 from src.fund.fund_api import fund_data_manager
                 fund_data_manager.update_fund_history(fund_code, days=30, db=db)
-                db.commit()
+                if close_db:
+                    db.commit()
             except ImportError:
                 pass
             
             return True, f"成功添加基金 {new_fund.fund_name} 到板块 '{sector}'（分类：{category}）", new_fund
             
         except Exception as e:
-            db.rollback()
+            if close_db:
+                db.rollback()
             return False, f"添加基金失败: {str(e)}", None
         finally:
             if close_db:

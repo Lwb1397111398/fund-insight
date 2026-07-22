@@ -45,7 +45,7 @@ def calculate_blogger_rating(accuracy: float, total_predictions: int) -> str:
     return 'D'
 
 
-def recalculate_blogger_stats(db: Session, blogger_id: int) -> Dict:
+def recalculate_blogger_stats(db: Session, blogger_id: int, commit: bool = True) -> Dict:
     """
     重新计算博主的统计数据（从预测记录重新统计）
     
@@ -94,8 +94,9 @@ def recalculate_blogger_stats(db: Session, blogger_id: int) -> Dict:
     blogger.accuracy_rate = accuracy
     blogger.grade = grade
     
-    db.commit()
-    db.refresh(blogger)
+    if commit:
+        db.commit()
+        db.refresh(blogger)
     
     return {
         'total_predictions': verified_count,
@@ -111,7 +112,8 @@ def update_blogger_stats_incremental(
     blogger_id: int,
     score_delta: float = 0,
     correct_delta: int = 0,
-    verified_delta: int = 0
+    verified_delta: int = 0,
+    commit: bool = True,
 ) -> Dict:
     """
     增量更新博主统计数据
