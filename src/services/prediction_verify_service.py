@@ -27,13 +27,20 @@ class PredictionVerifyService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.llm_analyzer = get_analyzer()
+        self._llm_analyzer = None
         self.fund_api = FundAPI()
         # 实例级净值缓存，用于批量验证时避免 N+1 查询
         # 结构: {(fund_code, date_str): nav, '_history': {fund_code: [FundHistory,...]}}
         # 注意：使用 LRU 机制限制大小，防止内存溢出
         self._nav_cache: Dict = {}
         self._cache_order: list = []  # 记录缓存插入顺序，用于 LRU 淘汰
+
+    @property
+    def llm_analyzer(self):
+        """只在边界评分需要 AI 辅助时初始化 LLM 客户端。"""
+        if self._llm_analyzer is None:
+            self._llm_analyzer = get_analyzer()
+        return self._llm_analyzer
     
     def get_verify_config(self, period_days: int) -> Dict:
         """

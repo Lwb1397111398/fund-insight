@@ -14,6 +14,7 @@ from src.models.database import Prediction
 from src.services.prediction_service import PredictionService
 from src.services.prediction_verify_service import PredictionVerifyService
 from src.services.prediction_verify_task import prediction_verify_task
+from src.api.schemas.prediction import PredictionUpdate
 
 router = APIRouter(prefix="/predictions", tags=["预测"])
 logger = logging.getLogger(__name__)
@@ -65,88 +66,23 @@ async def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db
     }
 
 
-class PredictionUpdate(BaseModel):
-    sector: Optional[str] = None
-    fund_code: Optional[str] = None
-    fund_name: Optional[str] = None
-    prediction_type: Optional[str] = None
-    confidence: Optional[int] = None
-    prediction_period: Optional[str] = None
-
-
 @router.put("/{prediction_id}")
 async def update_prediction(
     prediction_id: int,
     update_data: PredictionUpdate,
     db: Session = Depends(get_db)
 ):
-    """更新预测（人工干预板块和基金）"""
-    from src.models.database import Prediction as PredictionModel
-    from src.constants.sector_fund_map import get_fund_for_sector, get_category_for_sector, normalize_sector_name
-    from src.services.sector_fund_service import get_sector_fund_service
-
-    prediction = db.query(PredictionModel).filter(PredictionModel.id == prediction_id).first()
+    """安全更新待验证预测。"""
+    service = PredictionService(db)
+    try:
+        prediction = service.update_prediction_fields(
+            prediction_id,
+            update_data.model_dump(exclude_unset=True),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not prediction:
         raise HTTPException(status_code=404, detail="预测不存在")
-
-    # 更新板块（自动标准化：黑话/别名 → 标准名称）
-    sector_changed = False
-    if update_data.sector is not None and update_data.sector != prediction.sector:
-        # 标准化板块名称（如 "酒" → "白酒"，"药" → "创新药"）
-        standard_sector = normalize_sector_name(update_data.sector)
-        prediction.sector = standard_sector
-        prediction.sector_type = get_category_for_sector(standard_sector)
-        sector_changed = True
-        if standard_sector != update_data.sector:
-            logger.info(f"[人工干预] 板块标准化: '{update_data.sector}' → '{standard_sector}'")
-
-    # 更新基金
-    fund_changed = False
-    if update_data.fund_code is not None and update_data.fund_code != prediction.fund_code:
-        prediction.fund_code = update_data.fund_code
-        fund_changed = True
-    if update_data.fund_name is not None and update_data.fund_name != prediction.fund_name:
-        prediction.fund_name = update_data.fund_name
-        fund_changed = True
-
-    # 如果只修改了板块，自动匹配基金
-    if sector_changed and not fund_changed:
-        correct_fund = get_fund_for_sector(prediction.sector)
-        if correct_fund:
-            prediction.fund_code = correct_fund.get("code", "")
-            prediction.fund_name = correct_fund.get("name", "")
-            fund_changed = True
-
-    # 【关键】如果基金修改了（且板块有值），保存到映射表并级联清理冲突
-    if fund_changed and prediction.sector and prediction.fund_code:
-        try:
-            service = get_sector_fund_service(db)
-            service.add_mapping(
-                sector_name=prediction.sector,
-                fund_code=prediction.fund_code,
-                fund_name=prediction.fund_name
-            )
-            # 级联清理：删除低优先级层中同板块不同基金的冲突数据
-            cleanup = service.cascade_cleanup_conflicts(
-                sector_name=prediction.sector,
-                fund_code=prediction.fund_code,
-                fund_name=prediction.fund_name
-            )
-            if any(v > 0 for v in cleanup.values()):
-                logger.info(f"[人工干预] 已清理冲突数据: {cleanup}")
-            logger.info(f"[人工干预] 已保存板块映射: {prediction.sector} → {prediction.fund_name} ({prediction.fund_code})")
-        except Exception as e:
-            logger.warning(f"[人工干预] 保存板块映射失败: {e}")
-
-    # 更新其他字段
-    if update_data.prediction_type is not None:
-        prediction.prediction_type = update_data.prediction_type
-    if update_data.confidence is not None:
-        prediction.confidence = max(0, min(100, update_data.confidence))
-    if update_data.prediction_period is not None:
-        prediction.prediction_period = update_data.prediction_period
-
-    db.commit()
 
     return {
         "success": True,
@@ -155,7 +91,11 @@ async def update_prediction(
             "id": prediction.id,
             "sector": prediction.sector,
             "fund_code": prediction.fund_code,
-            "fund_name": prediction.fund_name
+            "fund_name": prediction.fund_name,
+            "prediction_type": prediction.prediction_type,
+            "confidence": prediction.confidence,
+            "prediction_period": prediction.prediction_period,
+            "target_date": prediction.target_date.isoformat() if prediction.target_date else None,
         }
     }
 
@@ -169,7 +109,15 @@ async def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=404, detail="预测不存在")
 
-    return {"success": True, "message": "预测删除成功"}
+    return {"success": True, "message": "预测已归档，可在回收站恢复"}
+
+
+@router.post("/{prediction_id}/restore")
+async def restore_prediction(prediction_id: int, db: Session = Depends(get_db)):
+    """恢复归档预测。"""
+    if not PredictionService(db).restore_prediction(prediction_id):
+        raise HTTPException(status_code=404, detail="未找到可恢复的预测")
+    return {"success": True, "message": "预测已恢复"}
 
 
 @router.post("/{prediction_id}/verify")
