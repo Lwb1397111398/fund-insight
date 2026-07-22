@@ -256,7 +256,7 @@ def _count_due_predictions(db: Session, today: date) -> int:
     ).count()
 
 
-def _verify_all_background():
+def _verify_all_background(task_id: int):
     """后台验证所有待验证预测"""
     from src.models.database import SessionLocal
     db = SessionLocal()
@@ -271,14 +271,16 @@ def _verify_all_background():
         import traceback
         traceback.print_exc()
     finally:
-        db.close()
-        prediction_verify_task.finish(result)
+        try:
+            prediction_verify_task.finish(result, db=db, task_id=task_id)
+        finally:
+            db.close()
 
 
 @router.post("/verify-all")
 async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """验证所有待验证的预测（异步模式，跳过通道未开放的）"""
-    status = prediction_verify_task.status()
+    status = prediction_verify_task.status(db=db)
     if status["in_progress"]:
         return {"success": True, "message": "验证正在进行中，请稍候...", "data": status}
 
@@ -288,21 +290,22 @@ async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session 
     if pending_count == 0:
         return {"success": True, "message": "没有需要验证的预测", "data": {"total": 0}}
     
-    start_result = prediction_verify_task.start(pending_count)
+    start_result = prediction_verify_task.start(pending_count, db=db)
     if not start_result["success"]:
         return start_result
 
-    background_tasks.add_task(_verify_all_background)
+    task_id = start_result["data"]["task_id"]
+    background_tasks.add_task(_verify_all_background, task_id)
     
-    return {"success": True, "message": f"已开始后台验证 {pending_count} 个预测，请稍后等待完成", "data": prediction_verify_task.status()}
+    return {"success": True, "message": f"已开始后台验证 {pending_count} 个预测，请稍后等待完成", "data": start_result["data"]}
 
 
 @router.get("/verify-all/status")
-async def get_verify_all_status():
+async def get_verify_all_status(db: Session = Depends(get_db)):
     """获取批量预测验证后台任务状态"""
     return {
         "success": True,
-        "data": prediction_verify_task.status()
+        "data": prediction_verify_task.status(db=db)
     }
 
 

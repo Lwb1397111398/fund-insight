@@ -801,10 +801,16 @@ class PredictionVerifyService:
                 is_newly_completed = True
             prediction.status = "success" if is_correct else "failed"
         
-        self.db.commit()
-        
         if is_newly_completed:
-            self._update_blogger_accuracy(prediction.blogger_id, score_change=score, is_new_verify=True, is_correct=is_correct)
+            self._update_blogger_accuracy(
+                prediction.blogger_id,
+                score_change=score,
+                is_new_verify=True,
+                is_correct=is_correct,
+                commit=False,
+            )
+
+        self.db.commit()
         
         return {
             "success": True,
@@ -1009,7 +1015,7 @@ class PredictionVerifyService:
             }
         }
     
-    def _update_blogger_accuracy(self, blogger_id: int, score_change: int = None, is_new_verify: bool = False, was_correct: bool = None, is_correct: bool = None):
+    def _update_blogger_accuracy(self, blogger_id: int, score_change: int = None, is_new_verify: bool = False, was_correct: bool = None, is_correct: bool = None, commit: bool = True):
         """
         更新博主准确率（使用统一的统计模块）
         
@@ -1031,14 +1037,16 @@ class PredictionVerifyService:
                     self.db, blogger_id,
                     score_delta=score_change,
                     correct_delta=1 if is_correct else 0,
-                    verified_delta=1
+                    verified_delta=1,
+                    commit=commit,
                 )
             else:
                 update_blogger_stats_incremental(
                     self.db, blogger_id,
                     score_delta=score_change,
                     correct_delta=-1 if was_correct else 0,
-                    verified_delta=-1
+                    verified_delta=-1,
+                    commit=commit,
                 )
     
     def update_blogger_on_prediction_delete(self, blogger_id: int, verify_score: int, is_correct: bool, commit: bool = True):

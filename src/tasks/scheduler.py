@@ -184,14 +184,31 @@ class TaskScheduler:
     def _run_prediction_verify(self):
         """执行预测验证任务"""
         from src.services.prediction_verify_service import PredictionVerifyService
+        from src.services.prediction_verify_task import prediction_verify_task
         from src.models.database import SessionLocal
+        from sqlalchemy.orm import Session
 
         logger.info("开始执行预测验证任务...")
         db = SessionLocal()
+        task_db = db if isinstance(db, Session) else None
+        task_started = False
+        task_id = None
+        task_result = None
         try:
             try:
+                start_result = prediction_verify_task.start(total=0, db=task_db)
+                if not start_result["success"]:
+                    return {
+                        "success": True,
+                        "skipped": True,
+                        "message": start_result["message"],
+                        "data": start_result["data"],
+                    }
+                task_id = start_result["data"]["task_id"]
+                task_started = True
                 service = PredictionVerifyService(db)
                 result = service.verify_all_pending()
+                task_result = result
 
                 if result.get("success"):
                     data = result.get("data", {})
@@ -200,6 +217,12 @@ class TaskScheduler:
                     logger.error(f"预测验证失败: {result}")
                 return result
             finally:
+                if task_started:
+                    prediction_verify_task.finish(
+                        task_result or {"success": False, "message": "定时验证异常终止"},
+                        db=task_db,
+                        task_id=task_id,
+                    )
                 db.close()
         except Exception as e:
             logger.error(f"执行预测验证任务失败: {e}", exc_info=True)
