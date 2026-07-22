@@ -236,6 +236,23 @@ def test_verify_all_pending_uses_force_for_old_pending_predictions(test_db, monk
     assert calls[due_prediction.id] is False
 
 
+def test_expired_verification_entry_delegates_to_unified_scan():
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    expected = {"success": True, "data": {"total": 2}}
+    service = PredictionVerifyService.__new__(PredictionVerifyService)
+    calls = []
+
+    def fake_verify_all_pending():
+        calls.append("verify_all_pending")
+        return expected
+
+    service.verify_all_pending = fake_verify_all_pending
+
+    assert service.verify_expired_pending() is expected
+    assert calls == ["verify_all_pending"]
+
+
 def test_prediction_and_blogger_stats_commit_atomically(test_db, monkeypatch):
     from src.services import prediction_verify_service
     from src.services.prediction_verify_service import PredictionVerifyService

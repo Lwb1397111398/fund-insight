@@ -70,7 +70,6 @@ class TaskScheduler:
         # 启动时先更新基金数据，再执行验证
         self._run_fund_update()
         self._run_prediction_verify()
-        self._run_expired_verify()
 
         # 初始化状态变量
         with self._state_lock:
@@ -93,7 +92,6 @@ class TaskScheduler:
                     if should_run:
                         self._run_fund_update()
                         self._run_prediction_verify()
-                        self._run_expired_verify()
                         with self._state_lock:
                             self._last_verify_date = current_date
 
@@ -234,33 +232,8 @@ class TaskScheduler:
             return {"success": False, "error": str(e)}
     
     def _run_expired_verify(self):
-        """执行已过期待验证预测的补救验证"""
-        from src.services.prediction_verify_service import PredictionVerifyService
-        from src.models.database import SessionLocal
-
-        logger.info("开始执行补救验证任务...")
-        db = SessionLocal()
-        try:
-            try:
-                service = PredictionVerifyService(db)
-                result = service.verify_expired_pending()
-
-                if result.get("success"):
-                    data = result.get("data", {})
-                    logger.info(f"补救验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
-                else:
-                    logger.error(f"补救验证失败: {result}")
-                return result
-            finally:
-                db.close()
-        except Exception as e:
-            logger.error(f"执行补救验证任务失败: {e}", exc_info=True)
-            # 确保异常时也能关闭数据库连接
-            try:
-                db.close()
-            except Exception:
-                pass
-            return {"success": False, "error": str(e)}
+        """兼容旧调度入口；复用带持久化任务锁的统一验证任务。"""
+        return self._run_prediction_verify()
     
     def _run_sector_flow(self, trigger: str = "scheduler"):
         """执行抢筹板块资金流向抓取"""

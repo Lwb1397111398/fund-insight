@@ -51,7 +51,6 @@ def run_daily_tasks() -> dict:
     try:
         run_step("fund_update", scheduler._run_fund_update)
         run_step("prediction_verify", scheduler._run_prediction_verify)
-        run_step("expired_verify", scheduler._run_expired_verify)
         if os.getenv("VIEWPOINT_AUTO_SUMMARY_ENABLED", "false").lower() in ("1", "true", "yes", "on"):
             run_step("viewpoint_summary", ViewpointWorkflowService.run_daily_summary_task)
         else:

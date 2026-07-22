@@ -1,6 +1,6 @@
 # Fund Insight 部署与运维指南
 
-最后更新：2026-07-04
+最后更新：2026-07-22
 
 ## 当前部署形态
 
@@ -96,7 +96,8 @@ python scripts/run_scheduled_tasks.py daily
 2. `_run_sector_flow(trigger="render_cron")`。
 3. `_run_fund_update()`。
 4. `_run_prediction_verify()`。
-5. `_run_expired_verify()`。
+
+统一预测验证会同时处理普通到期预测和超过 30 天的旧待验证预测；旧补救入口只保留为兼容代理，不再由 Cron 重复调用。
 
 失败时命令返回非 0，Render 会显示 Cron 失败。
 
@@ -140,6 +141,48 @@ python scripts/fetch_sector_flow.py
 - 项目没有 Alembic。
 - 修改 `src/models/database.py` 后，必须评估 Supabase 生产表结构是否需要手动迁移。
 - 数据库导入接口 `/api/import-database` 默认关闭；开启后还需要确认头 `X-Danger-Confirm: import-production-database`。
+
+## 数据备份与恢复演练
+
+### 本地 SQLite
+
+修改预测逻辑或执行本地维护脚本前，先创建一致性快照：
+
+```bash
+python scripts/backup_database.py --sqlite-path data/fund_insight.db --output-dir backup
+```
+
+脚本只读取命令行指定的 SQLite 文件，不读取 `DATABASE_URL`，输出到已被 Git 忽略的 `backup/` 目录。每次备份包含：
+
+- `fund_insight_<UTC时间>.sqlite3`：SQLite 快照。
+- `fund_insight_<UTC时间>.manifest.json`：SHA-256、文件大小、完整性检查结果和各表行数。
+
+恢复前先核对清单中的 `integrity_check` 为 `ok`，重新计算快照 SHA-256，并在副本上执行 `PRAGMA integrity_check`。不要直接覆盖正在运行的本地数据库。
+
+### Supabase/PostgreSQL
+
+应用的 JSON 导出只能补充业务数据检查，不能替代 PostgreSQL 完整备份。任何生产结构变更前按以下顺序执行：
+
+1. 只读盘点当前表结构、关键表行数、预测状态统计和数据库版本。
+2. 使用受保护的 PostgreSQL service/密码文件创建自定义格式备份，不把连接串写入命令历史或备份清单：
+
+   ```bash
+   pg_dump --service=fund_insight_prod --format=custom --no-owner --no-acl --file=fund_insight_before_change.dump
+   ```
+
+3. 通过应用导出功能额外保存业务 JSON，用于抽样比对；它不是恢复源。
+4. 新建与生产隔离的临时 PostgreSQL 数据库，先查看备份目录，再执行恢复：
+
+   ```bash
+   pg_restore --list fund_insight_before_change.dump
+   pg_restore --service=fund_insight_restore --clean --if-exists --no-owner --no-acl fund_insight_before_change.dump
+   ```
+
+5. 在隔离库核对表结构、外键、索引、关键表行数以及预测的待验证/正确/错误/观望数量。
+6. 只在隔离库运行迁移预检和应用启动检查，确认旧数据可读、归档预测可恢复、批量验证状态可读取。
+7. 保存迁移前后比对结果和回滚命令，人工确认后才允许安排生产迁移。
+
+生产 Web 启动必须保持 `ENABLE_STARTUP_MIGRATIONS=false`。不得把结构迁移绑定到 Render 启动命令，也不得在未完成隔离恢复演练时对 Supabase 执行迁移。
 
 ## 配置持久化
 
@@ -199,6 +242,7 @@ python scripts/recalculate_blogger_scores.py
 ## 安全注意事项
 
 - 不要把 `.env`、API key、`DATABASE_URL`、访问密码提交到仓库。
+- 不要把数据库连接串写入命令历史、备份文件名或 manifest；生产备份使用受保护的 PostgreSQL service/密码文件。
 - `/api/import-database` 是高风险接口，默认关闭。
 - 清理接口可能删除数据，前端已有预览和确认逻辑，后端也需要确认头。
 - 生产数据库结构变更前必须备份或确认迁移 SQL。

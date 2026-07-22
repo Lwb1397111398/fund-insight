@@ -36,15 +36,12 @@ def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
         def _run_prediction_verify(self):
             calls.append("prediction_verify")
 
-        def _run_expired_verify(self):
-            calls.append("expired_verify")
-
     monkeypatch.setattr(run_scheduled_tasks, "TaskScheduler", DummyScheduler)
 
     result = run_scheduled_tasks.run_daily_tasks()
 
     assert result["success"] is True
-    assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify", "expired_verify"]
+    assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify"]
 
 
 def test_scheduled_task_runner_reports_sector_flow_failure(monkeypatch):
@@ -66,17 +63,13 @@ def test_scheduled_task_runner_reports_sector_flow_failure(monkeypatch):
             calls.append("prediction_verify")
             return {"success": True}
 
-        def _run_expired_verify(self):
-            calls.append("expired_verify")
-            return {"success": True}
-
     monkeypatch.setattr(run_scheduled_tasks, "TaskScheduler", DummyScheduler)
 
     result = run_scheduled_tasks.run_daily_tasks()
 
     assert result["success"] is False
     assert "sector_flow" in result["failed_tasks"]
-    assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify", "expired_verify"]
+    assert calls == ["sector_flow:render_cron", "fund_update", "prediction_verify"]
 
 
 def test_scheduled_task_runner_reports_followup_task_failure(monkeypatch):
@@ -91,9 +84,6 @@ def test_scheduled_task_runner_reports_followup_task_failure(monkeypatch):
             return {"success": False, "error": "fund update failed"}
 
         def _run_prediction_verify(self):
-            return {"success": True}
-
-        def _run_expired_verify(self):
             return {"success": True}
 
     monkeypatch.setattr(run_scheduled_tasks, "TaskScheduler", DummyScheduler)

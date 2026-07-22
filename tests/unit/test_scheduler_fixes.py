@@ -194,22 +194,19 @@ class TestSchedulerFixes:
         assert result["error"] == "verify failed"
         mock_db.close.assert_called()
 
-    def test_expired_verify_returns_service_failure_result(self):
-        """Expired verification should return service failure to the caller."""
+    def test_expired_verify_delegates_to_unified_verification(self):
+        """旧补救入口应复用带任务锁的统一验证流程。"""
         scheduler = TaskScheduler()
-        mock_db = Mock()
-        mock_db.close = Mock()
+        with patch.object(
+            scheduler,
+            '_run_prediction_verify',
+            return_value={"success": False, "error": "unified failed"},
+        ) as unified_verify:
+            result = scheduler._run_expired_verify()
 
-        with patch('src.services.prediction_verify_service.PredictionVerifyService') as MockService:
-            mock_service = MockService.return_value
-            mock_service.verify_expired_pending.return_value = {"success": False, "error": "expired failed"}
-
-            with patch('src.models.database.SessionLocal', return_value=mock_db):
-                result = scheduler._run_expired_verify()
-
+        unified_verify.assert_called_once_with()
         assert result["success"] is False
-        assert result["error"] == "expired failed"
-        mock_db.close.assert_called()
+        assert result["error"] == "unified failed"
 
     def test_run_sector_flow_invokes_service(self):
         """测试抢筹抓取调度调用服务层"""

@@ -936,84 +936,8 @@ class PredictionVerifyService:
         logger.info(f"[Verify] 预热完成：{len(all_records)} 条记录，{len(history_cache)} 个基金")
     
     def verify_expired_pending(self) -> Dict:
-        """验证所有超过30天补救期的待验证预测（补救验证，与 verify_all_pending 互补）
-
-        verify_all_pending 验证 target_date <= today 的预测，
-        verify_expired_pending 验证 target_date < grace_cutoff (30天前) 的预测。
-        """
-        today = date.today()
-        grace_cutoff = today - timedelta(days=30)
-
-        # 查询超过30天补救期的预测（这些预测不会被 verify_all_pending 处理）
-        expired_pending = self.db.query(Prediction).filter(
-            Prediction.status == 'pending',
-            Prediction.is_deleted == False,
-            Prediction.prediction_type != 'flat',
-            Prediction.target_date < grace_cutoff
-        ).all()
-
-        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个超过30天补救期的待验证预测")
-
-        if not expired_pending:
-            return {
-                "success": True,
-                "message": "没有需要补救验证的预测",
-                "data": {
-                    "total": 0,
-                    "success_count": 0,
-                    "failed_count": 0,
-                    "results": []
-                }
-            }
-
-        # 预热缓存
-        self._warm_cache(expired_pending, today)
-
-        results = []
-        success_count = 0
-        failed_count = 0
-
-        for prediction in expired_pending:
-
-            fund_code, fund_name = self.match_fund_for_prediction(prediction)
-            if not fund_code:
-                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 无法匹配基金，跳过")
-                failed_count += 1
-                results.append({
-                    "prediction_id": prediction.id,
-                    "success": False,
-                    "message": f"无法匹配基金：{prediction.sector}"
-                })
-                continue
-
-            # 直接调用 verify_prediction，由它内部处理数据可用性检查
-            result = self.verify_prediction(prediction.id, force=True)
-            results.append({
-                "prediction_id": prediction.id,
-                "success": result.get("success"),
-                "message": result.get("message")
-            })
-
-            if result.get("success"):
-                success_count += 1
-            else:
-                failed_count += 1
-                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 验证失败: {result.get('message')}")
-
-        # 清理缓存
-        self._nav_cache.clear()
-        self._cache_order.clear()
-
-        return {
-            "success": True,
-            "message": f"补救验证完成：成功 {success_count} 个，失败 {failed_count} 个",
-            "data": {
-                "total": len(expired_pending),
-                "success_count": success_count,
-                "failed_count": failed_count,
-                "results": results
-            }
-        }
+        """兼容旧补救入口；统一扫描已包含超过 30 天的待验证预测。"""
+        return self.verify_all_pending()
     
     def _update_blogger_accuracy(self, blogger_id: int, score_change: int = None, is_new_verify: bool = False, was_correct: bool = None, is_correct: bool = None, commit: bool = True):
         """
