@@ -314,3 +314,26 @@ class _NonClosingSession:
 
     def close(self):
         pass
+
+
+def test_default_capture_analyzer_uses_real_crawler_service_db(test_db, monkeypatch):
+    """默认 capture_analyzer 必须持有有效的 CrawlerService.db，避免 AttributeError。"""
+    from src.analyzer.post_analyzer import PostAnalyzer, PostAnalysisResult
+
+    monkeypatch.setattr(
+        PostAnalyzer,
+        "should_capture",
+        lambda self, post, source="manual": PostAnalysisResult(should_capture=True, score=8.0),
+    )
+    monkeypatch.setattr(
+        PostAnalyzer,
+        "analyze_post_simple",
+        lambda self, post: {"sentiment": "bullish", "sentiment_score": 0.7, "sectors": ["半导体"]},
+    )
+
+    should_capture, analysis = ViewpointWorkflowService._default_capture_analyzer(
+        {"title": "半导体景气改善", "content": "看好半导体板块"}, "eastmoney_blog"
+    )
+    assert should_capture is True
+    assert analysis["score"] == 8.0
+    assert analysis["sentiment"] == "bullish"

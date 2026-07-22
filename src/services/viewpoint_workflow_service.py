@@ -130,17 +130,21 @@ class ViewpointWorkflowService:
 
     @staticmethod
     def _default_capture_analyzer(article: Dict[str, Any], source: str) -> Tuple[bool, Dict[str, Any]]:
-        from src.crawler.enhanced_ai_analyzer import EnhancedAIAnalyzer
+        from src.analyzer.post_analyzer import PostAnalyzer as EnhancedAIAnalyzer
         from src.services.crawler_service import CrawlerService
 
         analyzer = EnhancedAIAnalyzer()
-        helper = object.__new__(CrawlerService)
-        return helper._analyze_article(
-            analyzer,
-            str(article.get("title") or ""),
-            str(article.get("content") or ""),
-            source=source,
-        )
+        db = SessionLocal()
+        try:
+            helper = CrawlerService(db)
+            return helper._analyze_article(
+                analyzer,
+                str(article.get("title") or ""),
+                str(article.get("content") or ""),
+                source=source,
+            )
+        finally:
+            db.close()
 
     @staticmethod
     def _default_deep_analyzer(article: Dict[str, Any], source: str) -> Dict[str, Any]:

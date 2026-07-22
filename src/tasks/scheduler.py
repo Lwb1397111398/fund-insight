@@ -28,6 +28,7 @@ class TaskScheduler:
         self._last_cleanup_date = None
         self._last_verify_date = None
         self._last_fund_update_date = None
+        self._last_viewpoint_summary_date = None
 
     @property
     def running(self) -> bool:
@@ -77,6 +78,7 @@ class TaskScheduler:
             self._last_cleanup_date = now.date()
             self._last_verify_date = now.date()
             self._last_fund_update_date = now.date()
+            self._last_viewpoint_summary_date = now.date()
 
         while self.running:
             try:
@@ -94,6 +96,15 @@ class TaskScheduler:
                         self._run_expired_verify()
                         with self._state_lock:
                             self._last_verify_date = current_date
+
+                # 每天上午 11:00-11:59 执行观点每日汇总（在观点抓取分析完成后）
+                if 660 <= current_minute < 720:
+                    with self._state_lock:
+                        should_run = self._last_viewpoint_summary_date != current_date
+                    if should_run:
+                        self._run_viewpoint_summary()
+                        with self._state_lock:
+                            self._last_viewpoint_summary_date = current_date
 
                 # 每天凌晨 2:00-2:59 执行清理任务
                 if 120 <= current_minute < 180:
@@ -124,6 +135,27 @@ class TaskScheduler:
                 logger.error(f"调度器异常: {e}", exc_info=True)
                 time.sleep(300)  # 异常后等待5分钟再试
     
+    def _run_viewpoint_summary(self):
+        """执行观点每日汇总任务"""
+        import os
+        from src.services.viewpoint_workflow_service import ViewpointWorkflowService
+
+        if os.getenv("VIEWPOINT_AUTO_SUMMARY_ENABLED", "false").lower() not in ("1", "true", "yes", "on"):
+            logger.info("观点每日汇总已禁用（VIEWPOINT_AUTO_SUMMARY_ENABLED=false）")
+            return {"success": True, "skipped": True, "reason": "viewpoint_summary_disabled"}
+
+        logger.info("开始执行观点每日汇总任务...")
+        try:
+            result = ViewpointWorkflowService.run_daily_summary_task()
+            if result.get("success"):
+                logger.info(f"观点每日汇总完成: task_id={result.get('task_id')}")
+            else:
+                logger.error(f"观点每日汇总失败: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"执行观点每日汇总任务失败: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
     def _run_cleanup(self):
         """执行清理任务"""
         if not destructive_cleanup_enabled():
@@ -131,7 +163,7 @@ class TaskScheduler:
             return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
         try:
             from src.tasks.cleanup_tasks import run_cleanup_task
-            
+
             logger.info("开始执行定时清理任务...")
             result = run_cleanup_task()
             
