@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Annotated, Optional, List
 from datetime import date, datetime, timedelta
 import logging
 
@@ -16,6 +16,7 @@ from src.services.prediction_verify_service import PredictionVerifyService
 from src.services.prediction_verify_task import prediction_verify_task
 from src.api.schemas.prediction import PredictionUpdate
 from src.services.prediction_maintenance_service import PredictionMaintenanceService
+from src.services.prediction_query_service import PredictionQueryService
 
 router = APIRouter(prefix="/predictions", tags=["预测"])
 logger = logging.getLogger(__name__)
@@ -29,34 +30,56 @@ class PredictionVerify(BaseModel):
 
 @router.get("")
 async def get_predictions(
-    skip: int = 0,
-    limit: int = 1000,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    search: Optional[str] = None,
     blogger_id: Optional[int] = None,
+    fund_code: Optional[str] = None,
+    sector: Optional[str] = None,
+    prediction_type: Optional[str] = None,
     status: Optional[str] = None,
+    result: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    archive: str = "active",
     is_expired: Optional[bool] = None,
+    skip: Annotated[Optional[int], Query(ge=0)] = None,
+    limit: Annotated[Optional[int], Query(ge=1)] = None,
     db: Session = Depends(get_db)
 ):
-    """获取预测列表"""
-    service = PredictionService(db)
-    predictions = service.get_predictions_with_filters(
-        skip=skip,
-        limit=limit,
+    """分页查询预测列表；保留 skip/limit 作为兼容参数。"""
+    if limit is not None:
+        page_size = min(limit, 200)
+    if skip is not None:
+        page = skip // page_size + 1
+
+    result_page = PredictionQueryService(db).search(
+        page=page,
+        page_size=page_size,
+        search=search,
         blogger_id=blogger_id,
+        fund_code=fund_code,
+        sector=sector,
+        prediction_type=prediction_type,
         status=status,
-        is_expired=is_expired
+        result=result,
+        start_date=start_date,
+        end_date=end_date,
+        archive=archive,
+        is_expired=is_expired,
     )
     
     return {
         "success": True,
-        "data": predictions
+        "data": result_page["data"],
+        "meta": result_page["meta"],
     }
 
 
 @router.get("/{prediction_id}")
 async def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db)):
     """获取预测详情"""
-    service = PredictionService(db)
-    prediction = service.get_prediction_detail(prediction_id)
+    prediction = PredictionQueryService(db).get_detail(prediction_id)
     
     if not prediction:
         raise HTTPException(status_code=404, detail="预测不存在")
