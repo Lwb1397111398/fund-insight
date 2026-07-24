@@ -581,8 +581,13 @@ class ViewpointWorkflowService:
                 BatchAnalysisTask.task_type == "viewpoint_summary",
             ).order_by(BatchAnalysisTask.created_at.desc()).first()
             if latest and latest.created_at and latest.created_at.date() == today and latest.status == "succeeded":
-                return {"success": True, "already_completed": True, "task_id": latest.id, **(latest.result_summary or {})}
-            task = latest if latest and latest.created_at and latest.created_at.date() == today else None
+                # 仅当上次实际汇总过(completed 非空)才视为"已完成"; 全被跳过则允许重试
+                prev_completed = (latest.result_summary or {}).get("completed") or []
+                if prev_completed:
+                    return {"success": True, "already_completed": True, "task_id": latest.id, **(latest.result_summary or {})}
+                task = latest
+            else:
+                task = latest if latest and latest.created_at and latest.created_at.date() == today else None
             if task is None:
                 task = BatchAnalysisTask(
                     task_type="viewpoint_summary",
