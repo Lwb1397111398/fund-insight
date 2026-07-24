@@ -183,42 +183,6 @@ class ViewpointService(BaseService[Viewpoint]):
             "manual": manual
         }
     
-    def adopt_from_crawler(self, article_data: Dict, analysis: Dict) -> Viewpoint:
-        """
-        从爬虫文章采纳观点
-        
-        Args:
-            article_data: 文章数据
-            analysis: 分析结果
-            
-        Returns:
-            创建的观点实例
-        """
-        validity_period = analysis.get('time_horizon', 'medium')
-        valid_days = {
-            'short': 7,
-            'medium': 30,
-            'long': 90
-        }.get(validity_period, 30)
-        
-        return self.create({
-            "blogger_id": None,
-            "fund_code": article_data.get('fund_code'),
-            "fund_name": article_data.get('fund_name'),
-            "content": article_data.get('content', ''),
-            "author": article_data.get('author', '网友'),
-            "source": article_data.get('source', 'crawler'),
-            "market_direction": analysis.get('market_direction', 'neutral'),
-            "confidence": analysis.get('confidence', 50),
-            "sectors_bullish": analysis.get('sectors_bullish', []),
-            "sectors_bearish": analysis.get('sectors_bearish', []),
-            "reasoning": analysis.get('reasoning', ''),
-            "time_horizon": validity_period,
-            "validity_period": f"{valid_days}天",
-            "valid_until": date.today() + timedelta(days=valid_days),
-            "viewpoint_date": date.today()
-        })
-    
     def search(self, keyword: str, skip: int = 0, limit: int = 20) -> List[Viewpoint]:
         """
         搜索观点

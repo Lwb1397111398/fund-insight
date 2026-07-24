@@ -63,3 +63,5 @@ predictions_check.json
 
 # SQLite
 *.sqlite
+.worktrees/
+.codegraph/

@@ -11,13 +11,6 @@ from .viewpoint_service import ViewpointService
 from .advice_service import AdviceService
 from .crawler_service import CrawlerService
 
-from .viewpoint_stats_service import (
-    ViewpointStatsService,
-    ViewpointAlertService,
-    ViewpointWeightService,
-    ViewpointLinkService,
-)
-
 __all__ = [
     'BaseService',
     'BloggerService',
@@ -27,8 +20,4 @@ __all__ = [
     'ViewpointService',
     'AdviceService',
     'CrawlerService',
-    'ViewpointStatsService',
-    'ViewpointAlertService',
-    'ViewpointWeightService',
-    'ViewpointLinkService',
 ]
