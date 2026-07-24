@@ -1,7 +1,10 @@
+import asyncio
 from datetime import date, datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 
+from src.api.routes import viewpoints as viewpoint_routes
 from src.models.database import CrawlerArticleRecord, Viewpoint
 from src.services.viewpoint_workflow_service import ViewpointWorkflowService
 
@@ -212,3 +215,73 @@ def test_default_capture_analyzer_uses_real_crawler_service_db(test_db, monkeypa
     assert should_capture is True
     assert analysis["score"] == 8.0
     assert analysis["sentiment"] == "bullish"
+
+
+class _Request:
+    def __init__(self, headers):
+        self.headers = headers
+
+def test_viewpoint_list_is_paginated_filtered_and_uses_dynamic_expiry(test_db):
+    _add_viewpoint(test_db, content="匹配关键词但已经过期", valid_until=date.today() - timedelta(days=1))
+    _add_viewpoint(test_db, content="匹配关键词且有效", source="sina_finance")
+    _add_viewpoint(test_db, content="不应出现", is_deleted=True)
+
+    response = asyncio.run(viewpoint_routes.get_viewpoints(
+        page=1,
+        page_size=1,
+        keyword="匹配关键词",
+        source=None,
+        market_direction=None,
+        analysis_status=None,
+        date_from=None,
+        date_to=None,
+        viewpoint_type=None,
+        db=test_db,
+    ))
+
+    assert response["meta"] == {"page": 1, "page_size": 1, "total": 2, "pages": 2}
+    assert len(response["data"]) == 1
+    assert "content" not in response["data"][0]
+    assert response["data"][0]["is_expired"] is False
+    assert "is_summary" in response["data"][0]
+
+def test_viewpoint_detail_excludes_soft_deleted_rows(test_db):
+    viewpoint = _add_viewpoint(test_db, is_deleted=True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(viewpoint_routes.get_viewpoint_detail(viewpoint.id, db=test_db))
+
+    assert exc_info.value.status_code == 404
+
+def test_permanent_delete_requires_confirmation_and_detaches_crawler_record(test_db):
+    viewpoint = _add_viewpoint(test_db)
+    record = CrawlerArticleRecord(
+        article_id="eastmoney_blog:delete-test",
+        source="eastmoney_blog",
+        title="待删除文章",
+        is_adopted=True,
+        viewpoint_id=viewpoint.id,
+    )
+    test_db.add(record)
+    test_db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(viewpoint_routes.delete_viewpoint(viewpoint.id, request=_Request({}), db=test_db))
+    assert exc_info.value.status_code == 403
+
+    response = asyncio.run(viewpoint_routes.delete_viewpoint(
+        viewpoint.id,
+        request=_Request({"x-danger-confirm": "delete-viewpoint"}),
+        db=test_db,
+    ))
+
+    assert response["success"] is True
+    assert test_db.get(Viewpoint, viewpoint.id) is None
+    test_db.refresh(record)
+    assert record.viewpoint_id is None
+    assert record.is_adopted is False
+
+def test_static_task_routes_are_not_shadowed_by_viewpoint_id_route():
+    paths = [route.path for route in viewpoint_routes.router.routes]
+
+    assert paths.index("/viewpoints/tasks/latest") < paths.index("/viewpoints/{viewpoint_id}")

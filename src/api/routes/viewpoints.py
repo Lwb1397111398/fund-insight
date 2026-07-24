@@ -1,736 +1,423 @@
-"""
-观点路由
-处理观点相关的 API 请求
-"""
-from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks, Request
-from sqlalchemy.orm import Session
-from typing import Optional, List
-from datetime import date, datetime, timedelta
-import traceback
-import asyncio
+"""观点管理 API：抓取、分析、查询和每日汇总。"""
+from __future__ import annotations
+
 import logging
-from pydantic import BaseModel
+from datetime import date, datetime, timedelta
+from typing import List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session
 
 from src.api.deps import get_db
 from src.core.safety import destructive_cleanup_enabled
-from src.services.viewpoint_service import ViewpointService
-from src.models.database import Viewpoint, BatchAnalysisTask
+from src.models.database import BatchAnalysisTask, CrawlerArticleRecord, Viewpoint
+from src.services.viewpoint_workflow_service import (
+    ALLOWED_SOURCES,
+    DEFAULT_SOURCES,
+    ViewpointWorkflowService,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class ViewpointBatchRequest(BaseModel):
-    """批量分析请求模型"""
-    limit: Optional[int] = 10
-    source: Optional[str] = "all"
-
-
-class ViewpointCleanupRequest(BaseModel):
-    """清理过期观点请求模型"""
-    days: Optional[int] = 10
-
-
-class SummaryPreviewRequest(BaseModel):
-    """汇总预览请求模型"""
-    date: str
-
-
-class SummaryExecuteRequest(BaseModel):
-    """执行汇总请求模型"""
-    dates: Optional[List[str]] = None
-
-
-def _viewpoint_batch_analyze_background(task_id: int, limit: int, source: str):
-    """后台批量分析观点任务 - 复用数据库连接，减少连接创建/关闭开销"""
-    from src.models.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        service = ViewpointService(db)
-        viewpoint_ids = [v.id for v in service.get_viewpoints_for_batch_analyze(
-            limit=limit, source=source, days=7
-        )]
-
-        if not viewpoint_ids:
-            logger.info("[Viewpoint Batch Analyze] 没有需要分析的观点")
-            _update_task_status(task_id, 'completed', db=db)
-            return
-
-        logger.info(f"[Viewpoint Batch Analyze] 后台开始分析 {len(viewpoint_ids)} 个观点")
-
-        from src.analyzer.viewpoint_analyzer import get_viewpoint_analyzer
-        from src.analyzer.llm_analyzer import get_analyzer as get_llm_analyzer
-
-        analyzer = get_viewpoint_analyzer()
-        llm_analyzer = get_llm_analyzer()
-
-        analyzed_count = 0
-        failed_count = 0
-
-        for vp_id in viewpoint_ids:
-            try:
-                vp = db.query(Viewpoint).filter(Viewpoint.id == vp_id).first()
-                if not vp:
-                    continue
-                vp_content = vp.content or ""
-                vp_author = vp.author or ""
-                vp_source = vp.source or ""
-
-                result = analyzer.analyze_viewpoint(
-                    title=vp_content[:100],
-                    content=vp_content,
-                    author=vp_author,
-                    source=vp_source
-                )
-
-                time_horizon = result.get('time_horizon', 'medium')
-                validity_map = {'short': '1周', 'medium': '1个月', 'long': '3个月'}
-                validity_period = validity_map.get(time_horizon, '1个月')
-                valid_until = llm_analyzer.calculate_target_date(date.today(), validity_period)
-                reasoning = f"【AI深度分析】{result.get('analysis', '')}\n\n【判断理由】{result.get('reasoning', '')}"
-
-                service.update_viewpoint_analysis(
-                    viewpoint_id=vp_id,
-                    market_direction=result.get('market_direction', 'neutral'),
-                    confidence=result.get('confidence', 50),
-                    sectors_bullish=result.get('sectors_bullish', []),
-                    sectors_bearish=result.get('sectors_bearish', []),
-                    reasoning=reasoning,
-                    time_horizon=time_horizon,
-                    validity_period=validity_period,
-                    valid_until=valid_until,
-                    summary=result.get('summary', ''),
-                    credibility=result.get('credibility', 50),
-                    key_points=result.get('key_points', []),
-                    action_suggestion=result.get('action_suggestion', '观望'),
-                    risk_level=result.get('risk_level', 'medium'),
-                    sentiment_score=result.get('sentiment_score', 0.5),
-                    db=db
-                )
-                analyzed_count += 1
-
-                # 使用异步友好的方式释放控制权（如果在异步上下文中）
-                # time.sleep(0.5)  # 已移除同步阻塞调用
-
-            except Exception as e:
-                logger.error(f"[Viewpoint Batch Analyze] 分析观点 {vp_id} 失败: {e}")
-                failed_count += 1
-                continue
-
-        db.commit()
-        logger.info(f"[Viewpoint Batch Analyze] 后台分析完成: 成功={analyzed_count}, 失败={failed_count}")
-        _update_task_status(task_id, 'completed', db=db)
-
-    except Exception as e:
-        logger.error(f"[Viewpoint Batch Analyze] 后台分析失败: {e}")
-        _update_task_status(task_id, 'failed', str(e), db=db)
-        db.rollback()
-    finally:
-        db.close()
-
-
-def _update_task_status(task_id: int, status: str, error_message: str = None, db: Session = None):
-    """更新批量分析任务状态"""
-    from src.models.database import SessionLocal
-
-    # 复用传入的数据库会话，避免重复创建连接
-    should_close = False
-    if db is None:
-        db = SessionLocal()
-        should_close = True
-
-    try:
-        task = db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
-        if task:
-            task.status = status
-            if status == 'completed':
-                task.completed_at = datetime.now()
-            if error_message:
-                task.error_message = error_message
-            db.commit()
-    except Exception as e:
-        logger.error(f"[Viewpoint Batch Analyze] 更新任务状态失败: {e}")
-        db.rollback()
-    finally:
-        if should_close:
-            db.close()
-
-
 router = APIRouter(prefix="/viewpoints", tags=["观点"])
+
+
+class ViewpointFetchRequest(BaseModel):
+    sources: List[str] = Field(default_factory=lambda: list(DEFAULT_SOURCES))
+    limit_per_source: int = Field(default=15, ge=1, le=50)
+
+
+def _is_analyzed(row: Viewpoint) -> bool:
+    return bool(row.is_summary or (row.reasoning and row.summary and row.market_direction))
+
+
+def _analysis_status(row: Viewpoint) -> str:
+    if row.is_summary or _is_analyzed(row):
+        return "succeeded"
+    if (row.analysis_summary or "").startswith("failed:"):
+        return "failed"
+    return "pending"
+
+
+def _serialize_list(row: Viewpoint) -> dict:
+    expired = bool(row.valid_until and row.valid_until < date.today())
+    return {
+        "id": row.id,
+        "author": row.author or "未知",
+        "source": row.source,
+        "summary": row.summary or ((row.content or "")[:160] if row.is_summary else ""),
+        "market_direction": row.market_direction or "neutral",
+        "confidence": row.confidence or 50,
+        "valid_until": row.valid_until.isoformat() if row.valid_until else None,
+        "viewpoint_date": row.viewpoint_date.isoformat() if row.viewpoint_date else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "is_expired": expired,
+        "is_summary": bool(row.is_summary),
+        "analysis_status": _analysis_status(row),
+        "sectors": list(dict.fromkeys((row.sectors_bullish or []) + (row.sectors_bearish or []))),
+        "article_url": row.article_url,
+    }
+
+
+def _serialize_detail(row: Viewpoint) -> dict:
+    data = _serialize_list(row)
+    data.update({
+        "blogger_id": row.blogger_id,
+        "post_id": row.post_id,
+        "fund_code": row.fund_code,
+        "fund_name": row.fund_name,
+        "content": row.content or "",
+        "reasoning": row.reasoning or "",
+        "credibility_score": row.credibility_score or 50,
+        "weight": row.weight or 1.0,
+        "risk_level": row.risk_level or "medium",
+        "action_suggestion": row.action_suggestion or "观望",
+        "sectors_bullish": row.sectors_bullish or [],
+        "sectors_bearish": row.sectors_bearish or [],
+        "time_horizon": row.time_horizon,
+        "validity_period": row.validity_period,
+        "original_count": row.original_count or 0,
+        "original_ids": row.original_ids or [],
+        "topics": row.topics or [],
+        "article_id": row.article_id,
+        "content_hash": row.content_hash,
+        "is_deleted": bool(row.is_deleted),
+    })
+    return data
 
 
 @router.get("")
 async def get_viewpoints(
-    skip: int = 0,
-    limit: int = 1000,
+    page: int = 1,
+    page_size: int = 20,
+    keyword: Optional[str] = None,
     source: Optional[str] = None,
     market_direction: Optional[str] = None,
-    db: Session = Depends(get_db)
+    analysis_status: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    viewpoint_type: Optional[str] = None,
+    db: Session = Depends(get_db),
 ):
-    """获取观点列表"""
-    service = ViewpointService(db)
-    viewpoints = service.get_viewpoints_with_filters(
-        skip=skip,
-        limit=limit,
-        source=source,
-        market_direction=market_direction
-    )
-    
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    query = db.query(Viewpoint).filter(Viewpoint.is_deleted.is_(False))
+    if keyword:
+        term = f"%{keyword.strip()}%"
+        query = query.filter(or_(Viewpoint.content.ilike(term), Viewpoint.summary.ilike(term), Viewpoint.author.ilike(term)))
+    if source:
+        query = query.filter(Viewpoint.source == source)
+    if market_direction:
+        query = query.filter(Viewpoint.market_direction == market_direction)
+    if date_from:
+        query = query.filter(Viewpoint.viewpoint_date >= date_from)
+    if date_to:
+        query = query.filter(Viewpoint.viewpoint_date <= date_to)
+    if viewpoint_type:
+        if viewpoint_type == "summary":
+            query = query.filter(Viewpoint.is_summary.is_(True))
+        elif viewpoint_type == "original":
+            query = query.filter(Viewpoint.is_summary.is_(False))
+    if analysis_status == "succeeded":
+        query = query.filter(or_(
+            Viewpoint.is_summary.is_(True),
+            and_(Viewpoint.reasoning.isnot(None), Viewpoint.summary.isnot(None), Viewpoint.market_direction.isnot(None)),
+        ))
+    elif analysis_status == "failed":
+        query = query.filter(Viewpoint.is_summary.is_(False), Viewpoint.analysis_summary.like("failed:%"))
+    elif analysis_status == "pending":
+        query = query.filter(
+            Viewpoint.is_summary.is_(False),
+            Viewpoint.reasoning.is_(None),
+            or_(Viewpoint.analysis_summary.is_(None), ~Viewpoint.analysis_summary.like("failed:%")),
+        )
+
+    total = query.with_entities(func.count(Viewpoint.id)).scalar() or 0
+    rows = query.order_by(Viewpoint.viewpoint_date.desc(), Viewpoint.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    pages = (total + page_size - 1) // page_size if total else 0
     return {
         "success": True,
-        "data": [
-            {
-                "id": v.id,
-                "blogger_id": v.blogger_id,
-                "post_id": v.post_id,
-                "fund_code": v.fund_code,
-                "fund_name": v.fund_name,
-                "content": v.content or "",
-                "summary": v.summary or "",
-                "author": v.author or "未知",
-                "source": v.source,
-                "market_direction": v.market_direction,
-                "confidence": v.confidence,
-                "sectors_bullish": v.sectors_bullish or [],
-                "sectors_bearish": v.sectors_bearish or [],
-                "time_horizon": v.time_horizon or 'medium',
-                "validity_period": v.validity_period or '1个月',
-                "valid_until": v.valid_until.isoformat() if v.valid_until else None,
-                "is_expired": v.valid_until < date.today() if v.valid_until else False,
-                "viewpoint_date": v.viewpoint_date.isoformat() if v.viewpoint_date else None,
-                "created_at": v.created_at.isoformat() if v.created_at else None
-            }
-            for v in viewpoints
-        ]
+        "data": [_serialize_list(row) for row in rows],
+        "meta": {"page": page, "page_size": page_size, "total": total, "pages": pages},
     }
 
 
-@router.get("/{viewpoint_id}")
-async def get_viewpoint_detail(viewpoint_id: int, db: Session = Depends(get_db)):
-    """获取观点详情"""
-    service = ViewpointService(db)
-    viewpoint = service.get_viewpoint_by_id(viewpoint_id)
-    
-    if not viewpoint:
-        raise HTTPException(status_code=404, detail="观点不存在")
-    
+def _run_fetch_task(task_id: int):
+    ViewpointWorkflowService.run_fetch_task(task_id)
+
+
+@router.post("/fetch")
+async def fetch_viewpoints(
+    payload: ViewpointFetchRequest = Body(default=ViewpointFetchRequest()),
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        task, created = ViewpointWorkflowService.create_fetch_task(
+            db, sources=payload.sources, limit_per_source=payload.limit_per_source
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if (created or task.status == "pending") and background_tasks is not None:
+        background_tasks.add_task(_run_fetch_task, task.id)
+    return {
+        "success": True,
+        "message": "已创建观点抓取任务" if created else "已有观点抓取任务，已恢复其进度",
+        "data": ViewpointWorkflowService.serialize_task(task),
+    }
+
+
+@router.get("/tasks/latest")
+async def latest_viewpoint_task(db: Session = Depends(get_db)):
+    task = db.query(BatchAnalysisTask).filter(
+        BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary")),
+    ).order_by(BatchAnalysisTask.created_at.desc()).first()
+    return {"success": True, "data": ViewpointWorkflowService.serialize_task(task) if task else None}
+
+
+@router.post("/tasks/{task_id}/retry")
+async def retry_viewpoint_task(
+    task_id: int,
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        task = ViewpointWorkflowService.retry_task(db, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if background_tasks is not None:
+        background_tasks.add_task(_run_fetch_task, task.id)
+    return {"success": True, "data": ViewpointWorkflowService.serialize_task(task)}
+
+
+@router.get("/insights")
+async def viewpoint_insights(db: Session = Depends(get_db)):
+    today = date.today()
+    active = db.query(Viewpoint).filter(
+        Viewpoint.is_deleted.is_(False),
+        Viewpoint.is_summary.is_(False),
+        Viewpoint.reasoning.isnot(None),
+        or_(Viewpoint.valid_until.is_(None), Viewpoint.valid_until >= today),
+        Viewpoint.viewpoint_date >= today - timedelta(days=30),
+    ).all()
+    directions = {"bullish": 0, "bearish": 0, "neutral": 0}
+    sectors = {}
+    sources = {}
+    for row in active:
+        direction = row.market_direction if row.market_direction in directions else "neutral"
+        directions[direction] += 1
+        source = row.source or "unknown"
+        sources.setdefault(source, {"count": 0, "analyzed": 0})
+        sources[source]["count"] += 1
+        sources[source]["analyzed"] += int(_is_analyzed(row))
+        for sector in (row.sectors_bullish or []) + (row.sectors_bearish or []):
+            sectors[sector] = sectors.get(sector, 0) + 1
+    pending = db.query(Viewpoint.viewpoint_date, func.count(Viewpoint.id)).filter(
+        Viewpoint.is_deleted.is_(False),
+        Viewpoint.is_summary.is_(False),
+        Viewpoint.viewpoint_date < today,
+    ).group_by(Viewpoint.viewpoint_date).order_by(Viewpoint.viewpoint_date.desc()).all()
     return {
         "success": True,
         "data": {
-            "id": viewpoint.id,
-            "blogger_id": viewpoint.blogger_id,
-            "post_id": viewpoint.post_id,
-            "fund_code": viewpoint.fund_code,
-            "fund_name": viewpoint.fund_name,
-            "content": viewpoint.content,
-            "summary": viewpoint.summary or "",
-            "author": viewpoint.author,
-            "source": viewpoint.source,
-            "market_direction": viewpoint.market_direction,
-            "confidence": viewpoint.confidence,
-            "credibility_score": viewpoint.credibility_score or 50,
-            "weight": viewpoint.weight or 1.0,
-            "risk_level": viewpoint.risk_level or "medium",
-            "action_suggestion": viewpoint.action_suggestion or "观望",
-            "sectors_bullish": viewpoint.sectors_bullish,
-            "sectors_bearish": viewpoint.sectors_bearish,
-            "reasoning": viewpoint.reasoning,
-            "is_summary": viewpoint.is_summary or False,
-            "original_count": viewpoint.original_count or 0,
-            "viewpoint_date": viewpoint.viewpoint_date.isoformat() if viewpoint.viewpoint_date else None,
-            "created_at": viewpoint.created_at.isoformat() if viewpoint.created_at else None
-        }
+            "directions": directions,
+            "direction_total": len(active),
+            "sector_consensus": sorted(
+                ({"sector": key, "count": value} for key, value in sectors.items()),
+                key=lambda item: item["count"], reverse=True,
+            )[:10],
+            "source_quality": sources,
+            "pending_summary": [{"date": day.isoformat(), "count": count} for day, count in pending],
+        },
     }
 
 
-@router.delete("/{viewpoint_id}")
-async def delete_viewpoint(viewpoint_id: int, db: Session = Depends(get_db)):
-    """删除观点"""
-    service = ViewpointService(db)
-    success = service.delete_viewpoint(viewpoint_id)
-    
-    if not success:
-        raise HTTPException(status_code=404, detail="观点不存在")
-    
-    return {"success": True, "message": "观点删除成功"}
+class ViewpointBatchRequest(BaseModel):
+    """批量分析请求模型 - 对存量未分析观点补深度分析"""
+    limit: Optional[int] = 10
+    source: Optional[str] = "all"
+
+
+def _viewpoint_batch_analyze_background(task_id: int, viewpoint_ids: List[int]):
+    """后台批量补分析：复用工作流的 _run_deep_retries，确保与新抓取行为一致"""
+    from src.models.database import SessionLocal
+    from src.services.viewpoint_workflow_service import ViewpointWorkflowService
+
+    db = SessionLocal()
+    try:
+        task = db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
+        if not task:
+            return
+        task.status = "running"
+        task.started_at = task.started_at or datetime.now()
+        task.completed_at = None
+        task.error_message = None
+        db.commit()
+
+        ViewpointWorkflowService._run_deep_retries(
+            db,
+            task,
+            viewpoint_ids,
+            ViewpointWorkflowService._default_deep_analyzer,
+        )
+        db.refresh(task)
+        # _run_deep_retries 已设置 task.status/completed_at
+    except Exception as exc:
+        logger.error("[Viewpoint Batch Analyze] 后台分析失败: %s", exc)
+        db.rollback()
+        task = db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error_message = str(exc)
+            task.completed_at = datetime.now()
+            db.commit()
+    finally:
+        db.close()
 
 
 @router.post("/batch-analyze")
 async def batch_analyze_viewpoints(
     background_tasks: BackgroundTasks,
-    data: ViewpointBatchRequest = Body(...),
-    db: Session = Depends(get_db)
+    data: ViewpointBatchRequest = Body(default=ViewpointBatchRequest()),
+    db: Session = Depends(get_db),
 ):
     """
-    批量分析观点（异步模式，立即返回，后台逐个分析）
-    避免同步分析超时导致重复触发
-
-    请求体:
-    {
-        "limit": 30,
-        "source": "all"
-    }
+    批量分析观点（异步模式，立即返回，后台逐个补深度分析）
+    复用 ViewpointWorkflowService._run_deep_retries，避免与抓取流程行为分叉。
     """
-    # 检查是否已有运行中的任务
-    existing_task = db.query(BatchAnalysisTask).filter(
-        BatchAnalysisTask.task_type == 'viewpoint_batch',
-        BatchAnalysisTask.status == 'running'
+    existing = db.query(BatchAnalysisTask).filter(
+        BatchAnalysisTask.task_type == "viewpoint_batch",
+        BatchAnalysisTask.status.in_(("running", "pending")),
     ).first()
-    if existing_task:
+    if existing:
         return {
             "success": True,
             "message": "观点批量分析正在进行中，请稍候...",
-            "data": {"analyzed_count": 0, "total": 0, "in_progress": True}
+            "data": {"analyzed_count": 0, "total": 0, "in_progress": True},
         }
 
-    try:
-        limit = data.limit
-        source = data.source
-        
-        service = ViewpointService(db)
-        viewpoints_to_analyze = service.get_viewpoints_for_batch_analyze(
-            limit=limit,
-            source=source,
-            days=7
-        )
-        
-        total = len(viewpoints_to_analyze)
-        
-        if total == 0:
-            return {
-                "success": True,
-                "message": "没有需要分析的观点",
-                "data": {"analyzed_count": 0, "total": 0}
-            }
+    # 取最近7天未完成深度分析的观点
+    from src.services.viewpoint_service import ViewpointService as _VS
+    candidates = _VS(db).get_viewpoints_for_batch_analyze(
+        limit=data.limit, source=data.source or "all", days=7
+    )
+    viewpoint_ids = [v.id for v in candidates]
+    total = len(viewpoint_ids)
 
-        # 创建任务记录
-        task = BatchAnalysisTask(
-            task_type='viewpoint_batch',
-            status='running',
-            total_count=total,
-            task_params={'limit': limit, 'source': source}
-        )
-        db.add(task)
-        db.commit()
-        db.refresh(task)
-
-        background_tasks.add_task(_viewpoint_batch_analyze_background, task.id, limit, source)
-        
+    if total == 0:
         return {
             "success": True,
-            "message": f"已开始后台分析 {total} 个观点，请稍后刷新查看结果",
-            "data": {"analyzed_count": 0, "total": total, "in_progress": True}
-        }
-        
-    except Exception as e:
-        logger.error(f"[Viewpoint Batch Analyze API] 批量分析失败: {e}")
-        traceback.print_exc()
-        return {
-            "success": False,
-            "message": f"批量分析失败: {str(e)}",
-            "data": None
+            "message": "没有需要分析的观点",
+            "data": {"analyzed_count": 0, "total": 0},
         }
 
+    task = BatchAnalysisTask(
+        task_type="viewpoint_batch",
+        status="pending",
+        total_count=total,
+        task_params={"limit": data.limit, "source": data.source},
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
 
-@router.post("/update-summaries")
-async def update_viewpoint_summaries(db: Session = Depends(get_db)):
-    """批量更新所有观点的一句话摘要"""
-    try:
-        from src.analyzer.llm_analyzer import get_analyzer
-        
-        viewpoints = db.query(Viewpoint).filter(
-            Viewpoint.is_deleted == False
-        ).all()
-        
-        logger.info(f"[Update Summaries] 找到 {len(viewpoints)} 个观点需要更新")
-        
-        if not viewpoints:
-            return {
-                "success": True,
-                "message": "没有需要更新的观点",
-                "data": {"updated_count": 0}
-            }
-        
-        llm_analyzer = get_analyzer()
-        updated_count = 0
-        failed_count = 0
-        
-        for viewpoint in viewpoints:
-            try:
-                if not viewpoint.content or len(viewpoint.content.strip()) < 10:
-                    continue
-                
-                prompt = f"""请将以下观点内容浓缩成一句话摘要（不超过50字）：
-
-【观点内容】
-{viewpoint.content[:500]}
-
-要求：
-1. 提取核心观点和判断
-2. 包含关键板块或基金
-3. 保持客观中立
-4. 不超过50字
-
-请直接输出摘要内容，不要包含其他说明。"""
-                
-                summary = llm_analyzer._call_llm(prompt, task_type='summary', max_tokens=100, temperature=0.3)
-                summary = summary.strip()[:200]
-                
-                viewpoint.summary = summary
-                updated_count += 1
-                
-                if updated_count % 10 == 0:
-                    logger.info(f"[Update Summaries] 已更新 {updated_count} 个观点")
-                    db.commit()
-                
-                await asyncio.sleep(0.3)
-                
-            except Exception as e:
-                logger.error(f"[Update Summaries] 更新观点 {viewpoint.id} 失败: {e}")
-                failed_count += 1
-                continue
-        
-        db.commit()
-        
-        logger.info(f"[Update Summaries] 批量更新完成: 成功={updated_count}, 失败={failed_count}")
-        
-        return {
-            "success": True,
-            "message": f"批量更新完成: 成功 {updated_count} 个, 失败 {failed_count} 个",
-            "data": {
-                "updated_count": updated_count,
-                "failed_count": failed_count,
-                "total": len(viewpoints)
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"[Update Summaries] 批量更新失败: {e}")
-        traceback.print_exc()
-        return {
-            "success": False,
-            "message": f"批量更新失败: {str(e)}",
-            "data": None
-        }
-
-
-@router.post("/cleanup")
-async def cleanup_old_viewpoints(
-    request: Request,
-    data: ViewpointCleanupRequest = Body(...),
-    db: Session = Depends(get_db)
-):
-    """
-    手动清理过期观点
-
-    请求体:
-    {
-        "days": 10  // 保留天数，默认10天。超过此天数的观点将被删除
+    background_tasks.add_task(_viewpoint_batch_analyze_background, task.id, viewpoint_ids)
+    return {
+        "success": True,
+        "message": f"已开始后台分析 {total} 个观点，请稍后刷新查看结果",
+        "data": {"analyzed_count": 0, "total": total, "in_progress": True},
     }
-
-    说明:
-    - 观点只有近7天才会被投资建议采纳
-    - 建议保留10天，给用户一定的缓冲时间
-    - 删除后无法恢复，请谨慎操作
-    """
-    if not destructive_cleanup_enabled():
-        raise HTTPException(
-            status_code=403,
-            detail="观点批量清理已禁用。请在隔离维护环境显式设置 ENABLE_DATA_CLEANUP=true 后再使用",
-        )
-    if request.headers.get("X-Danger-Confirm") != "cleanup-data":
-        raise HTTPException(status_code=403, detail="缺少数据清理确认头")
-
-    try:
-        days = data.days
-        
-        if days < 7:
-            return {
-                "success": False,
-                "message": "保留天数不能少于7天，因为观点需要保留用于投资建议分析"
-            }
-        
-        from src.tasks.cleanup_tasks import get_cleanup_manager
-        
-        manager = get_cleanup_manager()
-        result = manager.manual_cleanup_viewpoints(days=days)
-        
-        if result["success"]:
-            return {
-                "success": True,
-                "message": result["message"],
-                "data": {
-                    "deleted_count": result["deleted_viewpoints"],
-                    "cutoff_date": result["cutoff_date"]
-                }
-            }
-        else:
-            return {
-                "success": False,
-                "message": f"清理失败: {result.get('error', '未知错误')}"
-            }
-        
-    except Exception as e:
-        logger.error(f"[Cleanup Viewpoints] 清理失败: {e}")
-        traceback.print_exc()
-        return {
-            "success": False,
-            "message": f"清理失败: {str(e)}"
-        }
-
-
-@router.get("/cleanup/preview")
-async def preview_cleanup(
-    days: int = 10,
-    db: Session = Depends(get_db)
-):
-    """
-    预览将被清理的观点
-    
-    参数:
-    - days: 保留天数，默认10天
-    
-    返回将被删除的观点数量和部分示例
-    """
-    try:
-        from datetime import date, timedelta
-        
-        cutoff_date = date.today() - timedelta(days=days)
-        
-        viewpoints = db.query(Viewpoint).filter(
-            Viewpoint.viewpoint_date < cutoff_date
-        ).all()
-        
-        total_count = len(viewpoints)
-        
-        sample_viewpoints = [
-            {
-                "id": v.id,
-                "author": v.author,
-                "source": v.source,
-                "viewpoint_date": v.viewpoint_date.isoformat() if v.viewpoint_date else None,
-                "summary": (v.summary[:50] + "...") if v.summary and len(v.summary) > 50 else v.summary
-            }
-            for v in viewpoints[:5]
-        ]
-        
-        return {
-            "success": True,
-            "data": {
-                "total_count": total_count,
-                "cutoff_date": cutoff_date.isoformat(),
-                "sample_viewpoints": sample_viewpoints,
-                "message": f"将有 {total_count} 条观点被删除（{cutoff_date} 之前的观点）"
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"[Preview Cleanup] 预览失败: {e}")
-        traceback.print_exc()
-        return {
-            "success": False,
-            "message": f"预览失败: {str(e)}"
-        }
 
 
 @router.get("/summary/stats")
 async def get_summary_stats(db: Session = Depends(get_db)):
-    """获取汇总统计信息"""
-    service = ViewpointService(db)
-    stats = service.get_summary_stats()
-    
+    """获取汇总统计信息（待汇总日期 / 待汇总数 / 已汇总数）"""
+    today = date.today()
+    pending = db.query(
+        Viewpoint.viewpoint_date,
+        func.count(Viewpoint.id).label("count"),
+    ).filter(
+        Viewpoint.viewpoint_date < today,
+        Viewpoint.is_deleted.is_(False),
+        Viewpoint.is_summary.is_(False),
+    ).group_by(Viewpoint.viewpoint_date).order_by(Viewpoint.viewpoint_date.desc()).all()
+
+    pending_dates = [{"date": row.viewpoint_date.isoformat(), "count": row.count} for row in pending]
+    total_pending = sum(d["count"] for d in pending_dates)
+    total_summaries = db.query(func.count(Viewpoint.id)).filter(
+        Viewpoint.is_summary.is_(True),
+        Viewpoint.is_deleted.is_(False),
+    ).scalar() or 0
+
     return {
         "success": True,
-        "data": stats
+        "data": {
+            "pending_dates": pending_dates,
+            "total_pending_viewpoints": total_pending,
+            "total_summaries": total_summaries,
+        },
     }
-
-
-@router.post("/summary/preview")
-async def preview_summary(
-    data: SummaryPreviewRequest = Body(...),
-    db: Session = Depends(get_db)
-):
-    """
-    预览汇总结果（不保存）
-
-    请求体:
-    {
-        "date": "2026-03-07"  // 要预览的日期
-    }
-    """
-    try:
-        target_date_str = data.date
-        if not target_date_str:
-            return {
-                "success": False,
-                "message": "请指定日期"
-            }
-        
-        from datetime import datetime
-        target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
-        
-        service = ViewpointService(db)
-        viewpoints = service.get_viewpoints_by_date(target_date)
-        
-        if not viewpoints:
-            return {
-                "success": False,
-                "message": f"{target_date_str} 没有待汇总的观点"
-            }
-        
-        return {
-            "success": True,
-            "data": {
-                "date": target_date_str,
-                "viewpoint_count": len(viewpoints),
-                "viewpoints": [
-                    {
-                        "id": v.id,
-                        "summary": v.summary or "",
-                        "market_direction": v.market_direction,
-                        "confidence": v.confidence,
-                        "author": v.author,
-                        "source": v.source
-                    }
-                    for v in viewpoints
-                ]
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"[Preview Summary] 预览失败: {e}")
-        traceback.print_exc()
-        return {
-            "success": False,
-            "message": f"预览失败: {str(e)}"
-        }
 
 
 @router.post("/summary/execute")
 async def execute_summary(
-    data: SummaryExecuteRequest = Body(...),
-    db: Session = Depends(get_db)
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
 ):
     """
-    执行汇总（一键汇总所有待汇总日期的观点）
-
-    请求体:
-    {
-        "dates": ["2026-03-07", "2026-03-06"]  // 可选，不传则汇总所有待汇总日期
-    }
+    执行汇总（同步触发每日汇总任务，硬删除原观点 + relink 爬虫记录）。
+    复用 ViewpointWorkflowService.run_daily_summary_task，幂等（当天已成功则跳过）。
     """
-    try:
-        from src.analyzer.llm_analyzer import summarize_viewpoints_by_date
+    result = ViewpointWorkflowService.run_daily_summary_task()
+    return {
+        "success": result.get("success", False),
+        "message": (
+            "汇总完成" if result.get("success") else f"汇总失败: {result.get('error', '未知错误')}"
+        ),
+        "data": {
+            "completed": len(result.get("completed", [])) if result.get("completed") else 0,
+            "skipped": len(result.get("skipped", [])) if result.get("skipped") else 0,
+            "already_completed": result.get("already_completed", False),
+            "task_id": result.get("task_id"),
+        },
+    }
 
-        service = ViewpointService(db)
 
-        if data.dates:
-            from datetime import datetime
-            dates_to_summarize = [
-                datetime.strptime(d, '%Y-%m-%d').date()
-                for d in data.dates
-            ]
-        else:
-            pending_dates = service.get_pending_summary_dates()
-            dates_to_summarize = [
-                date.fromisoformat(d['date'])
-                for d in pending_dates
-            ]
-        
-        if not dates_to_summarize:
-            return {
-                "success": True,
-                "message": "没有待汇总的观点",
-                "data": {
-                    "summarized_count": 0,
-                    "total_viewpoints": 0
-                }
-            }
-        
-        summarized_count = 0
-        total_viewpoints = 0
-        failed_dates = []
-        
-        for target_date in dates_to_summarize:
-            try:
-                viewpoints = service.get_viewpoints_by_date(target_date)
-                
-                if not viewpoints:
-                    continue
-                
-                viewpoints_data = [
-                    {
-                        "summary": v.summary if v.summary else (v.content[:300] if v.content else ""),
-                        "market_direction": v.market_direction or "neutral",
-                        "confidence": v.confidence or 50,
-                        "sectors_bullish": v.sectors_bullish or [],
-                        "sectors_bearish": v.sectors_bearish or []
-                    }
-                    for v in viewpoints
-                ]
-                
-                summary_result = summarize_viewpoints_by_date(
-                    viewpoints_data,
-                    target_date.isoformat()
-                )
-                
-                if not summary_result.get("success"):
-                    failed_dates.append({
-                        "date": target_date.isoformat(),
-                        "error": summary_result.get("error", "汇总失败")
-                    })
-                    continue
-                
-                original_ids = [v.id for v in viewpoints]
-                
-                summary_viewpoint = service.create_summary_viewpoint(
-                    viewpoint_date=target_date,
-                    content=summary_result.get("content", ""),
-                    market_direction=summary_result.get("market_direction", "neutral"),
-                    confidence=summary_result.get("confidence", 50),
-                    topics=summary_result.get("topics", []),
-                    sectors_bullish=summary_result.get("sectors_bullish", []),
-                    sectors_bearish=summary_result.get("sectors_bearish", []),
-                    reasoning=summary_result.get("reasoning", ""),
-                    original_count=len(viewpoints),
-                    original_ids=original_ids
-                )
-                
-                service.delete_viewpoints_by_ids(original_ids)
-                
-                summarized_count += 1
-                total_viewpoints += len(viewpoints)
-                
-                logger.info(f"[Execute Summary] 已汇总 {target_date}: {len(viewpoints)} 条观点")
-                
-                await asyncio.sleep(1)
-                
-            except Exception as e:
-                logger.error(f"[Execute Summary] 汇总 {target_date} 失败: {e}")
-                failed_dates.append({
-                    "date": target_date.isoformat(),
-                    "error": str(e)
-                })
-                continue
-        
-        message = f"汇总完成: {summarized_count} 天, 共 {total_viewpoints} 条观点"
-        if failed_dates:
-            message += f", {len(failed_dates)} 天失败"
-        
-        return {
-            "success": True,
-            "message": message,
-            "data": {
-                "summarized_count": summarized_count,
-                "total_viewpoints": total_viewpoints,
-                "failed_dates": failed_dates
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"[Execute Summary] 执行失败: {e}")
-        traceback.print_exc()
-        return {
-            "success": False,
-            "message": f"执行失败: {str(e)}"
-        }
+@router.get("/{viewpoint_id}")
+async def get_viewpoint_detail(viewpoint_id: int, db: Session = Depends(get_db)):
+    viewpoint = db.query(Viewpoint).filter(
+        Viewpoint.id == viewpoint_id,
+        Viewpoint.is_deleted.is_(False),
+    ).first()
+    if not viewpoint:
+        raise HTTPException(status_code=404, detail="观点不存在")
+    return {"success": True, "data": _serialize_detail(viewpoint)}
+
+
+@router.delete("/{viewpoint_id}")
+async def delete_viewpoint(viewpoint_id: int, request: Request, db: Session = Depends(get_db)):
+    confirmation = request.headers.get("X-Danger-Confirm") or request.headers.get("x-danger-confirm")
+    if confirmation != "delete-viewpoint":
+        raise HTTPException(status_code=403, detail="永久删除观点需要确认头 X-Danger-Confirm: delete-viewpoint")
+    viewpoint = db.query(Viewpoint).filter(
+        Viewpoint.id == viewpoint_id,
+        Viewpoint.is_deleted.is_(False),
+    ).first()
+    if not viewpoint:
+        raise HTTPException(status_code=404, detail="观点不存在")
+    db.query(CrawlerArticleRecord).filter(CrawlerArticleRecord.viewpoint_id == viewpoint_id).update(
+        {CrawlerArticleRecord.viewpoint_id: None, CrawlerArticleRecord.is_adopted: False},
+        synchronize_session=False,
+    )
+    db.delete(viewpoint)
+    db.commit()
+    return {"success": True, "message": "观点已永久删除"}
+
+
+# 保留隐藏的兼容入口，避免旧前端误调用时绕过安全开关；新页面不再展示它。
+@router.post("/cleanup", include_in_schema=False)
+async def deprecated_viewpoint_cleanup(db: Session = Depends(get_db)):
+    if not destructive_cleanup_enabled():
+        raise HTTPException(status_code=403, detail="数据清理功能已禁用")
+    raise HTTPException(status_code=410, detail="观点专用清理接口已停用")
