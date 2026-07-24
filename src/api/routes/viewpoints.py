@@ -370,15 +370,37 @@ async def execute_summary(
     复用 ViewpointWorkflowService.run_daily_summary_task，幂等（当天已成功则跳过）。
     """
     result = ViewpointWorkflowService.run_daily_summary_task()
+    success = result.get("success", False)
+    already_completed = result.get("already_completed", False)
+    completed = list(result.get("completed") or [])
+    skipped = list(result.get("skipped") or [])
+
+    if not success:
+        message = f"汇总失败: {result.get('error', '未知错误')}"
+    elif already_completed:
+        message = "今日已汇总完成，无需重复执行"
+    elif completed:
+        total_viewpoints = sum(
+            (item.get("deleted_originals", 0) for item in completed if isinstance(item, dict)),
+            0,
+        )
+        message = f"汇总完成: {len(completed)} 天, 共 {total_viewpoints} 条观点"
+    elif skipped:
+        not_ready = sum(1 for s in skipped if "尚未完成深度分析" in (s.get("reason") or ""))
+        if not_ready:
+            message = f"暂无可汇总日期：{not_ready} 个日期的观点尚未完成深度分析，请先点击「一键AI分析」"
+        else:
+            message = "暂无可汇总日期"
+    else:
+        message = "没有待汇总的观点"
+
     return {
-        "success": result.get("success", False),
-        "message": (
-            "汇总完成" if result.get("success") else f"汇总失败: {result.get('error', '未知错误')}"
-        ),
+        "success": success,
+        "message": message,
         "data": {
-            "completed": len(result.get("completed", [])) if result.get("completed") else 0,
-            "skipped": len(result.get("skipped", [])) if result.get("skipped") else 0,
-            "already_completed": result.get("already_completed", False),
+            "completed": len(completed),
+            "skipped": len(skipped),
+            "already_completed": already_completed,
             "task_id": result.get("task_id"),
         },
     }
