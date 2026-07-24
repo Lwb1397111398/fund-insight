@@ -78,6 +78,7 @@ class ViewpointWorkflowService:
         *,
         sources: Optional[Iterable[str]] = None,
         limit_per_source: int = 15,
+        mode: str = "fetch",
     ) -> Tuple[BatchAnalysisTask, bool]:
         selected = cls._normalize_sources(sources)
         limit_per_source = max(1, min(int(limit_per_source or 15), 50))
@@ -106,7 +107,7 @@ class ViewpointWorkflowService:
             failed_count=0,
             processed_ids=[],
             failed_ids=[],
-            task_params={"sources": selected, "limit_per_source": limit_per_source},
+            task_params={"sources": selected, "limit_per_source": limit_per_source, "mode": mode},
             result_summary={"sources": source_stats, "adopted": 0, "duplicates": 0, "skipped": 0},
         )
         db.add(task)
@@ -189,11 +190,22 @@ class ViewpointWorkflowService:
         fetchers: Optional[Dict[str, Callable[[int], List[Dict[str, Any]]]]] = None,
         capture_analyzer: Optional[Callable[[Dict[str, Any], str], Tuple[bool, Dict[str, Any]]]] = None,
         deep_analyzer: Optional[Callable[[Dict[str, Any], str], Dict[str, Any]]] = None,
+        mode: str = "fetch",
     ) -> None:
+        """执行抓取任务。
+
+        mode="fetch": 仅抓取入库, 不调 LLM, viewpoint.analysis_summary 保持 pending。
+        mode="fetch_and_analyze": 抓取并逐条深度分析(旧行为)。
+        """
         fetchers = fetchers or cls._default_fetchers()
         capture_analyzer = capture_analyzer or cls._default_capture_analyzer
         deep_analyzer = deep_analyzer or cls._default_deep_analyzer
         db = session_factory()
+        # 优先用参数传入的 mode, 否则从任务参数读取(默认 fetch)
+        if mode == "fetch":
+            _tp = db.query(BatchAnalysisTask.task_params).filter(BatchAnalysisTask.id == task_id).scalar()
+            mode = (_tp or {}).get("mode", "fetch")
+        analyze = mode == "fetch_and_analyze"
         try:
             task = db.query(BatchAnalysisTask).filter(
                 BatchAnalysisTask.id == task_id,
@@ -215,6 +227,12 @@ class ViewpointWorkflowService:
 
             sources = cls._normalize_sources(params.get("sources"))
             limit = max(1, min(int(params.get("limit_per_source") or 15), 50))
+
+            # ===== 阶段 1: 抓取 =====
+            # 先从各源拉取文章到内存, 记录抓取进度(阶段耗时在进度栏显示)
+            fetch_started = datetime.now()
+            source_articles: Dict[str, List[Dict[str, Any]]] = {}
+            total_to_fetch = 0
             for source in sources:
                 task = db.get(BatchAnalysisTask, task_id)
                 if not task or task.status == "cancelled":
@@ -223,11 +241,15 @@ class ViewpointWorkflowService:
                 source_stats = dict((summary.get("sources") or {}).get(source) or {})
                 try:
                     articles = list(fetchers[source](limit) or [])
+                    source_articles[source] = articles
                     source_stats["fetched"] = len(articles)
-                    task.total_count = (task.total_count or 0) + len(articles)
+                    total_to_fetch += len(articles)
+                    task.total_count = total_to_fetch
                     cls._save_source_stats(task, summary, source, source_stats)
                     db.commit()
                 except Exception as exc:
+                    source_articles[source] = []
+                    source_stats["fetched"] = 0
                     source_stats["failed"] = (source_stats.get("failed") or 0) + 1
                     source_stats["error"] = str(exc)
                     failures = list(task.failed_ids or [])
@@ -236,17 +258,60 @@ class ViewpointWorkflowService:
                     task.failed_count = len(failures)
                     cls._save_source_stats(task, summary, source, source_stats)
                     db.commit()
-                    continue
 
+            # 记录抓取阶段耗时与总数
+            task = db.get(BatchAnalysisTask, task_id)
+            if task:
+                summary = dict(task.result_summary or {})
+                summary["fetch_duration_seconds"] = round((datetime.now() - fetch_started).total_seconds(), 1)
+                summary["fetched_total"] = total_to_fetch
+                task.result_summary = summary
+                db.commit()
+
+            # 抓取模式到此结束: 仅入库, 不调 LLM
+            if not analyze:
+                for source, articles in source_articles.items():
+                    task = db.get(BatchAnalysisTask, task_id)
+                    if not task or task.status == "cancelled":
+                        return
+                    summary = dict(task.result_summary or {})
+                    source_stats = dict((summary.get("sources") or {}).get(source) or {})
+                    for article in articles:
+                        try:
+                            cls._process_article(
+                                db, task_id, source, article,
+                                capture_analyzer, deep_analyzer, analyze=False,
+                            )
+                        except Exception as exc:
+                            db.rollback()
+                            task = db.get(BatchAnalysisTask, task_id)
+                            summary = dict(task.result_summary or {})
+                            source_stats = dict((summary.get("sources") or {}).get(source) or {})
+                            source_stats["failed"] = (source_stats.get("failed") or 0) + 1
+                            failures = list(task.failed_ids or [])
+                            failures.append({"article_id": cls._stable_article_id(source, article), "source": source, "error": str(exc)})
+                            task.failed_ids = failures
+                            task.failed_count = len(failures)
+                            task.processed_count = (task.processed_count or 0) + 1
+                            cls._save_source_stats(task, summary, source, source_stats)
+                            db.commit()
+                task = db.get(BatchAnalysisTask, task_id)
+                if task and task.status != "cancelled":
+                    task.status = "failed" if task.failed_count else "succeeded"
+                    task.completed_at = datetime.now()
+                    db.commit()
+                return
+
+            # ===== 阶段 2: 抓取 + 分析 (旧行为) =====
+            for source, articles in source_articles.items():
+                task = db.get(BatchAnalysisTask, task_id)
+                if not task or task.status == "cancelled":
+                    return
                 for article in articles:
                     try:
                         cls._process_article(
-                            db,
-                            task_id,
-                            source,
-                            article,
-                            capture_analyzer,
-                            deep_analyzer,
+                            db, task_id, source, article,
+                            capture_analyzer, deep_analyzer, analyze=True,
                         )
                     except Exception as exc:
                         db.rollback()
@@ -255,11 +320,7 @@ class ViewpointWorkflowService:
                         source_stats = dict((summary.get("sources") or {}).get(source) or {})
                         source_stats["failed"] = (source_stats.get("failed") or 0) + 1
                         failures = list(task.failed_ids or [])
-                        failures.append({
-                            "article_id": cls._stable_article_id(source, article),
-                            "source": source,
-                            "error": str(exc),
-                        })
+                        failures.append({"article_id": cls._stable_article_id(source, article), "source": source, "error": str(exc)})
                         task.failed_ids = failures
                         task.failed_count = len(failures)
                         task.processed_count = (task.processed_count or 0) + 1
@@ -292,7 +353,7 @@ class ViewpointWorkflowService:
         task.result_summary = summary
 
     @classmethod
-    def _process_article(cls, db, task_id, source, article, capture_analyzer, deep_analyzer):
+    def _process_article(cls, db, task_id, source, article, capture_analyzer, deep_analyzer, analyze: bool = True):
         task = db.get(BatchAnalysisTask, task_id)
         article_id = cls._stable_article_id(source, article)
         summary = dict(task.result_summary or {})
@@ -351,56 +412,37 @@ class ViewpointWorkflowService:
         record.viewpoint_id = viewpoint.id
         db.commit()
 
+        # 仅分析模式调 LLM; 抓取模式保持 pending, 由"一键AI分析"处理
+        if not analyze:
+            source_stats["adopted"] = source_stats.get("adopted", 0) + 1
+            summary["adopted"] = summary.get("adopted", 0) + 1
+            task.success_count = (task.success_count or 0) + 1
+            processed = list(task.processed_ids or [])
+            processed.append(article_id)
+            task.processed_ids = processed
+            task.processed_count = (task.processed_count or 0) + 1
+            cls._save_source_stats(task, summary, source, source_stats)
+            db.commit()
+            return
+
         try:
             analysis = deep_analyzer(article, source)
             cls._apply_deep_analysis(viewpoint, analysis)
-            source_stats["adopted"] = (source_stats.get("adopted") or 0) + 1
-            summary["adopted"] = (summary.get("adopted") or 0) + 1
+            source_stats["adopted"] = source_stats.get("adopted", 0) + 1
+            summary["adopted"] = summary.get("adopted", 0) + 1
             task.success_count = (task.success_count or 0) + 1
             processed = list(task.processed_ids or [])
             processed.append(article_id)
             task.processed_ids = processed
         except Exception as exc:
             viewpoint.analysis_summary = f"failed:{str(exc)[:180]}"
-            source_stats["failed"] = (source_stats.get("failed") or 0) + 1
+            source_stats["failed"] = source_stats.get("failed", 0) + 1
             failures = list(task.failed_ids or [])
             failures.append({"article_id": article_id, "viewpoint_id": viewpoint.id, "source": source, "error": str(exc)})
             task.failed_ids = failures
             task.failed_count = len(failures)
         task.processed_count = (task.processed_count or 0) + 1
         cls._save_source_stats(task, summary, source, source_stats)
-        db.commit()
-
-    @classmethod
-    def _run_deep_retries(cls, db, task, viewpoint_ids, deep_analyzer):
-        failures = []
-        for viewpoint_id in viewpoint_ids:
-            viewpoint = db.get(Viewpoint, viewpoint_id)
-            if not viewpoint:
-                continue
-            article = {
-                "title": (viewpoint.summary or viewpoint.content or "")[:100],
-                "content": viewpoint.content,
-                "author": viewpoint.author,
-                "publish_time": viewpoint.viewpoint_date,
-                "url": viewpoint.article_url,
-            }
-            try:
-                viewpoint.analysis_summary = "pending"
-                cls._apply_deep_analysis(viewpoint, deep_analyzer(article, viewpoint.source))
-                task.success_count = (task.success_count or 0) + 1
-            except Exception as exc:
-                viewpoint.analysis_summary = f"failed:{str(exc)[:180]}"
-                failures.append({"viewpoint_id": viewpoint.id, "source": viewpoint.source, "error": str(exc)})
-            task.processed_count = (task.processed_count or 0) + 1
-            db.commit()
-        task.failed_ids = failures
-        task.failed_count = len(failures)
-        task.status = "failed" if failures else "succeeded"
-        task.completed_at = datetime.now()
-        params = dict(task.task_params or {})
-        params.pop("retry_viewpoint_ids", None)
-        task.task_params = params
         db.commit()
 
     @staticmethod
@@ -435,6 +477,23 @@ class ViewpointWorkflowService:
     def serialize_task(task: BatchAnalysisTask) -> Dict[str, Any]:
         total = task.total_count or 0
         processed = task.processed_count or 0
+        summary = dict(task.result_summary or {})
+
+        # 耗时与 ETA
+        now = datetime.now()
+        started = task.started_at or task.created_at or now
+        completed = task.completed_at
+        end_time = completed or now
+        elapsed_seconds = round((end_time - started).total_seconds(), 1)
+        eta_seconds = None
+        if not completed and processed > 0 and total > 0:
+            rate = processed / max(elapsed_seconds, 0.1)  # 项/秒
+            remaining = max(total - processed, 0)
+            eta_seconds = round(remaining / rate, 1)
+
+        # 抓取阶段耗时(抓取模式/混合模式均记录)
+        fetch_duration = summary.get("fetch_duration_seconds")
+
         return {
             "task_id": task.id,
             "task_type": task.task_type,
@@ -444,7 +503,10 @@ class ViewpointWorkflowService:
             "success_count": task.success_count or 0,
             "failed_count": task.failed_count or 0,
             "progress": round(processed / total * 100, 1) if total else 0,
-            "result_summary": dict(task.result_summary or {}),
+            "elapsed_seconds": elapsed_seconds,
+            "eta_seconds": eta_seconds,
+            "fetch_duration_seconds": fetch_duration,
+            "result_summary": summary,
             "error_message": task.error_message,
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "started_at": task.started_at.isoformat() if task.started_at else None,

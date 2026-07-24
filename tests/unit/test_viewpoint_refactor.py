@@ -95,6 +95,7 @@ def test_fetch_job_keeps_raw_viewpoint_when_deep_analysis_fails_and_can_retry(te
         fetchers={"sina_finance": lambda limit: [article]},
         capture_analyzer=lambda item, source: (True, {"score": 80}),
         deep_analyzer=lambda item, source: (_ for _ in ()).throw(RuntimeError("LLM unavailable")),
+        mode="fetch_and_analyze",
     )
 
     test_db.refresh(task)

@@ -26,6 +26,7 @@ router = APIRouter(prefix="/viewpoints", tags=["观点"])
 class ViewpointFetchRequest(BaseModel):
     sources: List[str] = Field(default_factory=lambda: list(DEFAULT_SOURCES))
     limit_per_source: int = Field(default=15, ge=1, le=50)
+    mode: str = Field(default="fetch", description="fetch=仅抓取, fetch_and_analyze=抓取+分析")
 
 
 def _is_analyzed(row: Viewpoint) -> bool:
@@ -144,7 +145,15 @@ async def get_viewpoints(
 
 
 def _run_fetch_task(task_id: int):
-    ViewpointWorkflowService.run_fetch_task(task_id)
+    # 从任务参数读取 mode, 默认 fetch
+    from src.models.database import SessionLocal
+    _db = SessionLocal()
+    try:
+        _task = _db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
+        _mode = (_task.task_params or {}).get("mode", "fetch") if _task else "fetch"
+    finally:
+        _db.close()
+    ViewpointWorkflowService.run_fetch_task(task_id, mode=_mode)
 
 
 @router.post("/fetch")
@@ -155,7 +164,7 @@ async def fetch_viewpoints(
 ):
     try:
         task, created = ViewpointWorkflowService.create_fetch_task(
-            db, sources=payload.sources, limit_per_source=payload.limit_per_source
+            db, sources=payload.sources, limit_per_source=payload.limit_per_source, mode=payload.mode
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -171,7 +180,7 @@ async def fetch_viewpoints(
 @router.get("/tasks/latest")
 async def latest_viewpoint_task(db: Session = Depends(get_db)):
     task = db.query(BatchAnalysisTask).filter(
-        BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary")),
+        BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary", "viewpoint_batch")),
     ).order_by(BatchAnalysisTask.created_at.desc()).first()
     return {"success": True, "data": ViewpointWorkflowService.serialize_task(task) if task else None}
 
