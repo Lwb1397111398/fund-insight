@@ -2,7 +2,7 @@
 爬虫路由
 处理爬虫相关的 API 请求
 """
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -54,73 +54,28 @@ async def get_crawler_status(db: Session = Depends(get_db)):
     }
 
 
-@router.post("/eastmoney-blog/auto-adopt")
+@router.post("/eastmoney-blog/auto-adopt", include_in_schema=False)
 async def auto_adopt_eastmoney_blog(data: EastmoneyBlogRequest, db: Session = Depends(get_db)):
-    """抓取东方财富博客并自动采纳符合标准的文章"""
-    service = CrawlerService(db)
-
-    try:
-        result = service.crawl_eastmoney_blog(
-            max_articles=data.max_articles,
-            concurrent=data.concurrent,
-            max_workers=min(data.max_workers, 5)
-        )
-        return result
-    except Exception as e:
-        traceback.print_exc()
-        return {"success": False, "message": f"自动采纳失败: {e}"}
+    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线（可恢复、去重、可重试）"""
+    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
 
 
-@router.post("/eastmoney-guide/auto-adopt")
+@router.post("/eastmoney-guide/auto-adopt", include_in_schema=False)
 async def auto_adopt_eastmoney_guide(data: EastmoneyGuideRequest, db: Session = Depends(get_db)):
-    """抓取东财博客导读并自动采纳符合标准的文章"""
-    service = CrawlerService(db)
-
-    try:
-        result = service.crawl_eastmoney_guide(
-            max_articles=data.max_articles,
-            concurrent=data.concurrent,
-            max_workers=min(data.max_workers, 5)
-        )
-        return result
-    except Exception as e:
-        traceback.print_exc()
-        return {"success": False, "message": f"自动采纳失败: {e}"}
+    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线"""
+    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
 
 
-@router.post("/sina-finance/auto-adopt")
+@router.post("/sina-finance/auto-adopt", include_in_schema=False)
 async def auto_adopt_sina_finance(data: SinaFinanceRequest, db: Session = Depends(get_db)):
-    """抓取新浪财经并自动采纳符合标准的文章"""
-    service = CrawlerService(db)
-
-    try:
-        result = service.crawl_sina_finance(
-            category=data.category,
-            max_articles=data.max_articles,
-            concurrent=data.concurrent,
-            max_workers=min(data.max_workers, 5)
-        )
-        return result
-    except Exception as e:
-        traceback.print_exc()
-        return {"success": False, "message": f"自动采纳失败: {e}"}
+    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线"""
+    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
 
 
-@router.post("/sina-blog/auto-adopt")
+@router.post("/sina-blog/auto-adopt", include_in_schema=False)
 async def auto_adopt_sina_blog(data: SinaBlogRequest, db: Session = Depends(get_db)):
-    """抓取新浪博客并自动采纳符合标准的文章"""
-    service = CrawlerService(db)
-
-    try:
-        result = service.crawl_sina_blog(
-            max_posts=data.max_posts,
-            concurrent=data.concurrent,
-            max_workers=min(data.max_workers, 5)
-        )
-        return result
-    except Exception as e:
-        traceback.print_exc()
-        return {"success": False, "message": f"自动采纳失败: {e}"}
+    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线"""
+    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
 
 
 @router.post("/wechat/fetch")

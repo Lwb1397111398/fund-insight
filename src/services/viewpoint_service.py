@@ -98,8 +98,7 @@ class ViewpointService(BaseService[Viewpoint]):
         today = date.today()
         return self.db.query(Viewpoint).filter(
             (Viewpoint.valid_until == None) | (Viewpoint.valid_until >= today),
-            Viewpoint.is_deleted == False,
-            Viewpoint.is_expired == False
+            Viewpoint.is_deleted == False
         ).order_by(Viewpoint.viewpoint_date.desc()).offset(skip).limit(limit).all()
     
     def get_expired(self) -> List[Viewpoint]:
@@ -156,21 +155,27 @@ class ViewpointService(BaseService[Viewpoint]):
         Returns:
             统计数据
         """
-        total = self.db.query(func.count(Viewpoint.id)).scalar()
+        active_filter = Viewpoint.is_deleted == False
+        total = self.db.query(func.count(Viewpoint.id)).filter(active_filter).scalar()
         bullish = self.db.query(func.count(Viewpoint.id)).filter(
+            active_filter,
             Viewpoint.market_direction == 'bullish'
         ).scalar()
         bearish = self.db.query(func.count(Viewpoint.id)).filter(
+            active_filter,
             Viewpoint.market_direction == 'bearish'
         ).scalar()
         neutral = self.db.query(func.count(Viewpoint.id)).filter(
+            active_filter,
             Viewpoint.market_direction == 'neutral'
         ).scalar()
-        
+
         crawler = self.db.query(func.count(Viewpoint.id)).filter(
+            active_filter,
             Viewpoint.source == 'crawler'
         ).scalar()
         manual = self.db.query(func.count(Viewpoint.id)).filter(
+            active_filter,
             Viewpoint.source == 'manual'
         ).scalar()
         
@@ -238,7 +243,10 @@ class ViewpointService(BaseService[Viewpoint]):
         Returns:
             观点实例或 None
         """
-        return self.db.query(Viewpoint).filter(Viewpoint.id == viewpoint_id).first()
+        return self.db.query(Viewpoint).filter(
+            Viewpoint.id == viewpoint_id,
+            Viewpoint.is_deleted == False,
+        ).first()
     
     def delete_viewpoint(self, viewpoint_id: int) -> bool:
         """
