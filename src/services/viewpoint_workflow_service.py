@@ -16,8 +16,11 @@ from src.services.viewpoint_service import get_source_authority
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_SOURCES = ("eastmoney_blog", "eastmoney_guide", "sina_finance")
-OPTIONAL_SOURCES = ("sina_blog",)
+DEFAULT_SOURCES = ("sina_finance",)
+# eastmoney_blog/eastmoney_guide 列表页抓到的文章url指向 caifuhao.eastmoney.com,
+# 是JS渲染页, requests 抓不到正文(实测HTTP200 body为空)。已从默认源下线,
+# 代码保留但移到 OPTIONAL, 允许手动指定(会抓到标题但内容为空)。
+OPTIONAL_SOURCES = ("sina_blog", "eastmoney_blog", "eastmoney_guide")
 ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES + OPTIONAL_SOURCES)
 
 
@@ -374,6 +377,19 @@ class ViewpointWorkflowService:
         if analyze:
             should_capture, capture = capture_analyzer(article, source)
         else:
+            # fetch 模式正文门槛: 正文过短(只有标题那种)记 skipped 不入库,
+            # 避免垃圾观点污染库; 仅 fetch 模式生效, fetch_and_analyze 由 capture_analyzer 过滤。
+            content_len = len(str(article.get("content") or "").strip())
+            if content_len < 30:
+                source_stats["skipped"] = (source_stats.get("skipped") or 0) + 1
+                summary["skipped"] = (summary.get("skipped") or 0) + 1
+                task.processed_count = (task.processed_count or 0) + 1
+                processed = list(task.processed_ids or [])
+                processed.append(article_id)
+                task.processed_ids = processed
+                cls._save_source_stats(task, summary, source, source_stats)
+                db.commit()
+                return
             should_capture, capture = True, {"score": 0.0, "reason": "fetch模式直接采纳"}
         record = CrawlerArticleRecord(
             article_id=article_id,

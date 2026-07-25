@@ -48,7 +48,7 @@ class _NonClosingSession:
 def test_fetch_job_deduplicates_stable_articles_and_persists_progress(test_db):
     article = {
         "title": "同一篇文章",
-        "content": "看好半导体板块，订单和资金面均有改善。",
+        "content": "看好半导体板块，订单和资金面均有改善，短期景气度持续回升，资金流入明显放大，建议重点关注相关产业链龙头标的。",
         "author": "分析师",
         "url": "https://example.test/article/1",
         "publish_time": date.today().isoformat(),
@@ -119,7 +119,7 @@ def test_fetch_job_continues_when_one_source_fails(test_db):
         session_factory=lambda: _NonClosingSession(test_db),
         fetchers={
             "eastmoney_blog": lambda limit: (_ for _ in ()).throw(RuntimeError("source down")),
-            "sina_finance": lambda limit: [{"title": "正常来源", "content": "正常正文"}],
+            "sina_finance": lambda limit: [{"title": "正常来源", "content": "正常来源正文：半导体板块景气持续改善，订单与资金面共振，短期趋势偏强，建议关注。"}],
         },
         capture_analyzer=lambda item, source: (True, {"score": 80}),
         deep_analyzer=lambda item, source: {
@@ -292,7 +292,7 @@ def test_fetch_mode_does_not_invoke_llm_capture_or_deep_analyzer(test_db):
     """fetch 模式契约: 不调 capture_analyzer(LLM) 也不调 deep_analyzer, 全部非重复文章直接入库 pending。"""
     article = {
         "title": "fetch模式文章",
-        "content": "看好半导体。",
+        "content": "看好半导体板块景气持续改善，订单与资金面共振，短期趋势偏强，建议关注相关产业链龙头标的。",
         "author": "分析师",
         "url": "https://example.test/fetch/1",
         "publish_time": date.today().isoformat(),
@@ -433,3 +433,91 @@ def test_retry_path_runs_deep_retries_end_to_end(test_db):
     assert retried.status == "succeeded"
     assert raw.analysis_summary == "succeeded"
     assert raw.market_direction == "neutral"
+
+
+def test_fetch_mode_skips_short_content_below_threshold(test_db):
+    """fetch 模式正文<30字记 skipped, 不入库, 不调 LLM。"""
+    article = {"title": "只有标题", "content": "看好半导体。", "url": "https://example.test/short"}
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_finance"], limit_per_source=5
+    )
+    capture_calls = {"n": 0}
+
+    def capture(item, source):
+        capture_calls["n"] += 1
+        return True, {"score": 90}
+
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_finance": lambda limit: [article]},
+        capture_analyzer=capture,
+        deep_analyzer=lambda item, source: (_ for _ in ()).throw(AssertionError("不应调deep")),
+        mode="fetch",
+    )
+
+    test_db.refresh(task)
+    assert test_db.query(Viewpoint).count() == 0
+    assert test_db.query(CrawlerArticleRecord).count() == 0
+    assert task.result_summary["skipped"] == 1
+    assert task.success_count == 0
+    assert task.processed_count == 1
+    assert task.status == "succeeded"
+    assert capture_calls["n"] == 0
+
+
+def test_fetch_mode_adopts_content_at_threshold_boundary(test_db):
+    """正文恰好30字进入采纳流程(fetch模式不调LLM直接入库pending)。"""
+    content_30 = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十"  # 30字
+    assert len(content_30) >= 30
+    article = {"title": "边界", "content": content_30, "url": "https://example.test/boundary"}
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_finance"], limit_per_source=5
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_finance": lambda limit: [article]},
+        capture_analyzer=lambda item, source: (_ for _ in ()).throw(AssertionError("fetch不应调capture")),
+        deep_analyzer=lambda item, source: (_ for _ in ()).throw(AssertionError("fetch不应调deep")),
+        mode="fetch",
+    )
+    test_db.refresh(task)
+    vp = test_db.query(Viewpoint).one()
+    assert vp.analysis_summary == "pending"
+    assert task.success_count == 1
+    assert task.result_summary["skipped"] == 0
+
+
+def test_fetch_and_analyze_does_not_apply_content_threshold(test_db):
+    """fetch_and_analyze 模式不加正文门槛, 短内容由 capture_analyzer 决定。"""
+    article = {"title": "短", "content": "短", "url": "https://example.test/short2"}
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_finance"], limit_per_source=5, mode="fetch_and_analyze"
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_finance": lambda limit: [article]},
+        capture_analyzer=lambda item, source: (True, {"score": 90}),
+        deep_analyzer=lambda item, source: {
+            "market_direction": "neutral", "confidence": 60, "summary": "s",
+            "reasoning": "r", "sectors_bullish": [], "sectors_bearish": [], "analysis": "a",
+        },
+        mode="fetch_and_analyze",
+    )
+    test_db.refresh(task)
+    # 短内容未被门槛拦截, 走 capture+deep 流程入库
+    assert test_db.query(Viewpoint).count() == 1
+    assert task.result_summary["skipped"] == 0
+
+
+def test_default_sources_only_contains_sina_finance():
+    """东方财富已从默认源下线, 仅 sina_finance 默认抓取; 但仍允许手动指定。"""
+    from src.services.viewpoint_workflow_service import (
+        DEFAULT_SOURCES, ALLOWED_SOURCES,
+    )
+    assert DEFAULT_SOURCES == ("sina_finance",)
+    assert "eastmoney_blog" in ALLOWED_SOURCES
+    assert "eastmoney_guide" in ALLOWED_SOURCES
+    assert "sina_blog" in ALLOWED_SOURCES

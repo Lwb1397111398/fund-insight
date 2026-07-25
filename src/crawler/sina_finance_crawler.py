@@ -5,17 +5,9 @@
 import requests
 import json
 import time
+import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-try:
-    from src.core.ai_analyzer import get_analyzer
-except ImportError:
-    try:
-        # 如果在爬虫模块内部，使用相对导入
-        from .ai_analyzer import get_analyzer
-    except ImportError:
-        # 直接导入analyzer
-        from src.analyzer.llm_analyzer import get_analyzer
 
 class SinaFinanceCrawler:
     """新浪财经爬虫"""
@@ -34,7 +26,6 @@ class SinaFinanceCrawler:
             'Accept': '*/*',
             'Referer': 'https://finance.sina.com.cn',
         }
-        self.llm_analyzer = get_analyzer()
     
     def fetch_articles(self, category: str = 'finance', num: int = 20, page: int = 1) -> List[Dict[str, Any]]:
         """
@@ -88,7 +79,18 @@ class SinaFinanceCrawler:
                     'source': 'sina_finance',
                     'category': self._get_category_name(article.get('lids', '')),
                 }
-                
+
+                # 抓取正文页(#artibody, SSR可抓), 覆盖 intro 摘要; 失败回退 intro
+                article_url = parsed_article.get('url') or ''
+                if article_url:
+                    try:
+                        detail = self.fetch_article_detail(article_url)
+                        if detail and len(detail.strip()) >= 30:
+                            parsed_article['content'] = detail
+                    except Exception as detail_exc:
+                        print(f"正文抓取失败,保留摘要: {detail_exc}")
+                    time.sleep(random.uniform(0.3, 0.8))
+
                 # AI分析
                 ai_result = self._analyze_article(parsed_article)
                 parsed_article['ai_analysis'] = ai_result
