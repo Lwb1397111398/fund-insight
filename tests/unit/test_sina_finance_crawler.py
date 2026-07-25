@@ -79,6 +79,25 @@ def test_parse_articles_keeps_intro_when_detail_too_short(monkeypatch):
     assert articles[0]["content"] == "原始摘要"
 
 
+def test_fetch_article_detail_sets_encoding_before_reading_text(monkeypatch):
+    """fetch_article_detail 必须先设 response.encoding 再读 text, 否则UTF-8正文会被ISO-8859-1解码成乱码。"""
+    crawler = SinaFinanceCrawler()
+    # 模拟: 响应头缺charset, requests默认encoding=ISO-8859-1, 但body是UTF-8
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.headers = {"content-type": "text/html"}  # 无charset
+    resp.encoding = "ISO-8859-1"                 # requests默认(会致乱码)
+    resp.apparent_encoding = "utf-8"              # 真实编码
+    resp.raise_for_status = MagicMock()
+    html = '<div id="artibody"><p>韩国总统政策室长金容范周六表示，这是正确的中文正文内容。</p></div>'
+    resp.text = html
+    crawler.session.get = MagicMock(return_value=resp)
+
+    crawler.fetch_article_detail("https://finance.sina.com.cn/x/1.shtml")
+    # 关键断言: 必须在读text前把encoding设为apparent_encoding(utf-8), 否则中文乱码
+    assert resp.encoding == "utf-8"
+
+
 def test_init_does_not_load_llm_analyzer():
     """__init__ 不再加载 LLM analyzer(死代码已移除)。"""
     crawler = SinaFinanceCrawler()

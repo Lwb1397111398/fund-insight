@@ -187,7 +187,9 @@ class SinaFinanceCrawler:
         try:
             response = self.session.get(url, headers=self.headers, timeout=15)
             response.raise_for_status()
-            
+            # 新浪文章页是UTF-8, 但Content-Type常缺charset, requests默认ISO-8859-1会乱码
+            response.encoding = response.apparent_encoding or "utf-8"
+
             # 简单提取正文（实际可能需要更复杂的解析）
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(response.text, 'html.parser')
