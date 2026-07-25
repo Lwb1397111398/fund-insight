@@ -286,3 +286,150 @@ def test_static_task_routes_are_not_shadowed_by_viewpoint_id_route():
     paths = [route.path for route in viewpoint_routes.router.routes]
 
     assert paths.index("/viewpoints/tasks/latest") < paths.index("/viewpoints/{viewpoint_id}")
+
+
+def test_fetch_mode_does_not_invoke_llm_capture_or_deep_analyzer(test_db):
+    """fetch 模式契约: 不调 capture_analyzer(LLM) 也不调 deep_analyzer, 全部非重复文章直接入库 pending。"""
+    article = {
+        "title": "fetch模式文章",
+        "content": "看好半导体。",
+        "author": "分析师",
+        "url": "https://example.test/fetch/1",
+        "publish_time": date.today().isoformat(),
+    }
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["eastmoney_blog"], limit_per_source=5
+    )
+
+    capture_calls = {"n": 0}
+    deep_calls = {"n": 0}
+
+    def capture(item, source):
+        capture_calls["n"] += 1
+        return True, {"score": 90}
+
+    def deep(item, source):
+        deep_calls["n"] += 1
+        return {"market_direction": "bullish", "confidence": 80, "summary": "x", "reasoning": "y"}
+
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"eastmoney_blog": lambda limit: [article]},
+        capture_analyzer=capture,
+        deep_analyzer=deep,
+        mode="fetch",
+    )
+
+    test_db.refresh(task)
+    vp = test_db.query(Viewpoint).one()
+    assert capture_calls["n"] == 0          # fetch 模式不调 capture(走LLM)
+    assert deep_calls["n"] == 0             # fetch 模式不调 deep analysis
+    assert vp.analysis_summary == "pending"  # 仅入库, 等一键AI分析
+    assert task.status == "succeeded"
+    assert task.success_count == 1
+
+
+def test_deep_retries_analyzes_pending_viewpoints_and_marks_succeeded(test_db):
+    """_run_deep_retries 应对 pending 观点逐个补深度分析并置 succeeded。"""
+    raw = _add_viewpoint(
+        test_db,
+        reasoning=None,
+        summary=None,
+        market_direction=None,
+        analysis_summary="pending",
+    )
+    task = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_finance"], limit_per_source=1
+    )[0]
+    # 手动改成 batch 任务并清空计数, 模拟 batch-analyze 后台入口
+    task.task_type = "viewpoint_batch"
+    task.total_count = 0
+    task.processed_count = 0
+    task.success_count = 0
+    test_db.commit()
+
+    def deep(item, source):
+        return {
+            "market_direction": "bullish",
+            "confidence": 70,
+            "summary": "AI补分析",
+            "reasoning": "理由",
+            "time_horizon": "medium",
+            "sectors_bullish": ["半导体"],
+            "sectors_bearish": [],
+            "analysis": "深度结论",
+        }
+
+    ViewpointWorkflowService._run_deep_retries(test_db, task, [raw.id], deep)
+
+    test_db.refresh(raw)
+    test_db.refresh(task)
+    assert raw.analysis_summary == "succeeded"
+    assert raw.market_direction == "bullish"
+    assert "AI深度分析" in (raw.reasoning or "")
+    assert task.status == "succeeded"
+    assert task.success_count == 1
+    assert task.processed_count == 1
+
+
+def test_deep_retries_records_failure_without_crashing(test_db):
+    """deep_analyzer 抛异常时单个观点标 failed, 任务整体 failed 但不崩。"""
+    raw = _add_viewpoint(
+        test_db, reasoning=None, summary=None, market_direction=None, analysis_summary="pending"
+    )
+    task = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_finance"], limit_per_source=1
+    )[0]
+    task.task_type = "viewpoint_batch"
+    task.total_count = 0
+    task.processed_count = 0
+    test_db.commit()
+
+    def deep(item, source):
+        raise RuntimeError("LLM down")
+
+    ViewpointWorkflowService._run_deep_retries(test_db, task, [raw.id], deep)
+
+    test_db.refresh(raw)
+    test_db.refresh(task)
+    assert (raw.analysis_summary or "").startswith("failed:")
+    assert task.status == "failed"
+    assert task.failed_count == 1
+
+
+def test_retry_path_runs_deep_retries_end_to_end(test_db):
+    """retry_task→run_fetch_task 经 _run_deep_retries 对失败观点补分析, 整条链路不再断。"""
+    article = {"title": "待重试", "content": "正文", "url": "https://example.test/retry2"}
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_finance"], limit_per_source=5
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_finance": lambda limit: [article]},
+        capture_analyzer=lambda item, source: (True, {"score": 80}),
+        deep_analyzer=lambda item, source: (_ for _ in ()).throw(RuntimeError("LLM unavailable")),
+        mode="fetch_and_analyze",
+    )
+    test_db.refresh(task)
+    raw = test_db.query(Viewpoint).one()
+    assert task.status == "failed"
+
+    retried = ViewpointWorkflowService.retry_task(test_db, task.id)
+    assert retried.task_params["retry_viewpoint_ids"] == [raw.id]
+
+    ViewpointWorkflowService.run_fetch_task(
+        retried.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        capture_analyzer=lambda item, source: (True, {"score": 80}),
+        deep_analyzer=lambda item, source: {
+            "market_direction": "neutral", "confidence": 60, "summary": "补完",
+            "reasoning": "理由", "sectors_bullish": [], "sectors_bearish": [], "analysis": "c",
+        },
+    )
+    test_db.refresh(retried)
+    test_db.refresh(raw)
+    assert retried.status == "succeeded"
+    assert raw.analysis_summary == "succeeded"
+    assert raw.market_direction == "neutral"

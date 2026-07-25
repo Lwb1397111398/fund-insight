@@ -369,7 +369,12 @@ class ViewpointWorkflowService:
             db.commit()
             return
 
-        should_capture, capture = capture_analyzer(article, source)
+        # fetch 模式: 不调 LLM, 所有非重复文章直接采纳入库为 pending, 质量/方向判断交由
+        # 后续"一键AI分析"(deep_analyzer)处理; 仅 fetch_and_analyze 模式才用 capture_analyzer 过滤。
+        if analyze:
+            should_capture, capture = capture_analyzer(article, source)
+        else:
+            should_capture, capture = True, {"score": 0.0, "reason": "fetch模式直接采纳"}
         record = CrawlerArticleRecord(
             article_id=article_id,
             source=source,
@@ -445,11 +450,73 @@ class ViewpointWorkflowService:
         cls._save_source_stats(task, summary, source, source_stats)
         db.commit()
 
+    @classmethod
+    def _run_deep_retries(
+        cls,
+        db: Session,
+        task: BatchAnalysisTask,
+        viewpoint_ids: List[int],
+        deep_analyzer: Callable[[Dict[str, Any], str], Dict[str, Any]],
+    ) -> None:
+        """对已有 viewpoint 逐个补深度分析并写回，更新任务进度与状态。
+
+        被 batch-analyze 后台任务和 retry_task(带 retry_viewpoint_ids) 共用。
+        """
+        ids = list(dict.fromkeys(int(vid) for vid in viewpoint_ids if vid))
+        task.status = "running"
+        task.started_at = task.started_at or datetime.now()
+        if not task.total_count:
+            task.total_count = len(ids)
+        task.completed_at = None
+        task.error_message = None
+        task.failed_ids = list(task.failed_ids or [])
+        db.commit()
+
+        for vid in ids:
+            task = db.get(BatchAnalysisTask, task.id)
+            if not task or task.status == "cancelled":
+                return
+            viewpoint = db.get(Viewpoint, vid)
+            if not viewpoint or viewpoint.is_deleted or viewpoint.is_summary:
+                task.processed_count = (task.processed_count or 0) + 1
+                db.commit()
+                continue
+            article = {
+                "title": (viewpoint.content or "")[:200],
+                "content": viewpoint.content or "",
+                "author": viewpoint.author or "",
+            }
+            try:
+                analysis = deep_analyzer(article, viewpoint.source or "manual")
+                cls._apply_deep_analysis(viewpoint, analysis)
+                task.success_count = (task.success_count or 0) + 1
+                processed = list(task.processed_ids or [])
+                processed.append(vid)
+                task.processed_ids = processed
+            except Exception as exc:
+                db.rollback()
+                task = db.get(BatchAnalysisTask, task.id)
+                viewpoint = db.get(Viewpoint, vid)
+                if viewpoint:
+                    viewpoint.analysis_summary = f"failed:{str(exc)[:180]}"
+                failures = list(task.failed_ids or [])
+                failures.append({"viewpoint_id": vid, "source": viewpoint.source if viewpoint else None, "error": str(exc)})
+                task.failed_ids = failures
+                task.failed_count = len(failures)
+            task.processed_count = (task.processed_count or 0) + 1
+            db.commit()
+
+        task = db.get(BatchAnalysisTask, task.id)
+        if task and task.status != "cancelled":
+            task.status = "failed" if task.failed_count else "succeeded"
+            task.completed_at = datetime.now()
+            db.commit()
+
     @staticmethod
     def retry_task(db: Session, task_id: int) -> BatchAnalysisTask:
         task = db.query(BatchAnalysisTask).filter(
             BatchAnalysisTask.id == task_id,
-            BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary")),
+            BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary", "viewpoint_batch")),
         ).with_for_update().first()
         if not task:
             raise ValueError("观点任务不存在")
