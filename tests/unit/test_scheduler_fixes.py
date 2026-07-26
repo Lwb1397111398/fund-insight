@@ -211,21 +211,6 @@ class TestSchedulerFixes:
         assert result["error"] == "expired failed"
         mock_db.close.assert_called()
 
-    def test_run_sector_flow_invokes_service(self):
-        """测试抢筹抓取调度调用服务层"""
-        scheduler = TaskScheduler()
-        mock_db = Mock()
-        mock_db.close = Mock()
-        with patch('src.models.database.SessionLocal', return_value=mock_db):
-            with patch('src.services.sector_flow_service.SectorFlowService') as MockService:
-                service = MockService.return_value
-                service.run_fetch.return_value = {"success": True, "saved_count": 1}
-                result = scheduler._run_sector_flow(trigger="render_cron")
-
-        service.run_fetch.assert_called_once_with(trigger="render_cron")
-        assert result["success"] is True
-        mock_db.close.assert_called()
-
     def test_cleanup_is_skipped_when_not_explicitly_enabled(self, monkeypatch):
         """定时任务默认不得删除任何业务数据。"""
         monkeypatch.delenv("ENABLE_DATA_CLEANUP", raising=False)

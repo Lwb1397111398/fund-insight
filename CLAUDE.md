@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working in this repository.
 
 ## 项目一句话
 
-Fund Insight 是一个基金博主观点分析系统：用户录入或抓取基金相关帖子/文章，系统用 LLM 提取预测和观点，再用基金净值、板块资金流和后台任务验证预测表现，最终辅助判断哪些博主和板块观点更可靠。
+Fund Insight 是一个基金博主观点分析系统：用户录入或抓取基金相关帖子/文章，系统用 LLM 提取预测和观点，再用基金净值和后台任务验证预测表现，最终辅助判断哪些博主和板块观点更可靠。
 
 ## 当前技术栈
 
@@ -15,7 +15,7 @@ Fund Insight 是一个基金博主观点分析系统：用户录入或抓取基�
 | 数据库 | 本地 SQLite `data/fund_insight.db`；生产 PostgreSQL/Supabase，通过 `DATABASE_URL` 切换 |
 | LLM | OpenAI 兼容 SDK，支持硅基流动、DeepSeek、火山引擎 |
 | 基金/市场数据 | 天天基金、东方财富、akshare，另有多源基金 API 兜底 |
-| 部署 | Render Web Service + Render Cron + Supabase；GitHub Actions 运行板块资金流抓取 |
+| 部署 | Render Web Service + Render Cron + Supabase |
 | 测试 | pytest |
 | 代码索引 | `.codegraph/` 是本地索引产物，改代码/文档后运行 `codegraph sync .` |
 
@@ -39,7 +39,7 @@ pytest tests/integration/ -v
 
 # 计划中的关键验证
 python -m src --init-db
-pytest tests/unit/test_prediction_verify_batch_task.py tests/unit/test_sector_flow_service.py tests/unit/test_scheduler_fixes.py -v
+pytest tests/unit/test_prediction_verify_batch_task.py tests/unit/test_scheduler_fixes.py -v
 
 # CodeGraph
 codegraph status .
@@ -75,7 +75,7 @@ src/services/*  业务服务、事务、批处理、统计、验证
         |
         +--> src/analyzer/*  LLM/本地趋势/帖子价值分析
         +--> src/fund/*      基金数据、多源 API、同步、技术指标
-        +--> src/crawler/*   文章/帖子/板块资金流抓取与筛选
+        +--> src/crawler/*   文章/帖子抓取与筛选
         |
         v
 src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
@@ -83,9 +83,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 后台任务入口：
 
-- `src/tasks/scheduler.py`：本地常驻调度器，按北京时间窗口运行清理、基金更新、预测验证、板块资金流抓取。
+- `src/tasks/scheduler.py`：本地常驻调度器，按北京时间窗口运行清理、基金更新、预测验证。
 - `scripts/run_scheduled_tasks.py`：Render Cron 一次性入口，执行 `daily`。
-- `scripts/fetch_sector_flow.py`：GitHub Actions/手动抢筹数据抓取入口。
 
 ## 核心业务流
 
@@ -102,13 +101,6 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 2. `ViewpointService` 支持批量分析、汇总观点、权重和有效期。
 3. `AdviceService` 与 `LLMAnalyzer.generate_investment_advice_three_stage()` 生成投资建议。
 
-板块资金流流：
-
-1. `src/crawler/sector_flow_crawler.py` 抓东方财富板块资金数据。
-2. `src/services/sector_flow_service.py` 计算暗盘、主力强度、行为标签，幂等写入 `sector_fund_flow`。
-3. 抓取运行日志写入 `sector_flow_fetch_runs`。
-4. API：`/api/sector-flow/fetch`、`/ranking`、`/history`、`/fund-link`、`/stats`、`/fetch-status`。
-
 ## 重点文件
 
 | 文件 | 说明 |
@@ -117,7 +109,6 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 | `src/api/routes/` | 按领域拆分的 REST API |
 | `src/models/database.py` | 30+ ORM 表模型，兼容 SQLite/PostgreSQL |
 | `src/services/prediction_verify_service.py` | 预测验证核心，涉及准确率和评分，改动需谨慎 |
-| `src/services/sector_flow_service.py` | 板块资金流统一服务，负责抓取、计算、幂等写入和状态 |
 | `src/services/prediction_verify_task.py` | 批量验证后台状态对象，避免长请求卡死前端 |
 | `src/analyzer/llm_analyzer.py` | LLM 核心，包含模型选择、熔断、缓存、解析兜底、预测/建议/图像分析 |
 | `src/fund/fund_api.py` | 天天基金与基金数据管理 |
@@ -140,7 +131,6 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 - `/api/config`：LLM 配置、清理、别名、板块-基金映射、配置导入导出。
 - `/api/test-data`：测试数据扫描和清理。
 - `/api/batch-analysis`：批量分析任务。
-- `/api/sector-flow`：板块资金流抓取、排行、历史、状态。
 - `/api/prediction-groups`：相似预测组。
 
 ## 数据模型心智图
@@ -152,7 +142,6 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 - `viewpoints`、`crawler_article_records`：观点和爬虫去重记录。
 - `investment_advice`、`advice_reasoning`、`advice_performance`、`advice_feedback`：投资建议链路。
 - `sector_fund_mapping`、`sector_alias`、`user_fund_bindings`：板块与基金映射。
-- `sector_fund_flow`、`sector_flow_fetch_runs`：抢筹/板块资金流和抓取运行日志。
 - `batch_analysis_tasks`、`analysis_logs`：批量分析和日志。
 - `cleanup_*`：清理任务、规则、日志。
 - `market_data`、`policy_data`、`sentiment_data`、`market_events`：市场辅助数据。
@@ -170,7 +159,6 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 - Render Web Service：`uvicorn src.api.main:app --host 0.0.0.0 --port $PORT`。
 - Render Cron：每天 10:30 运行 `python scripts/run_scheduled_tasks.py daily`。
-- GitHub Actions：`.github/workflows/sector_flow_crawler.yml` 在交易日 13:30 北京时间运行 `scripts/fetch_sector_flow.py`。
 - Supabase/PostgreSQL：通过 `DATABASE_URL` 连接；连接池参数见 `render.yaml` 和 `src/models/database.py`。
 
 ## 修改规则
@@ -179,7 +167,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 - 不要回滚用户已有改动；当前工作树可能已有未提交文件。
 - 不要手改 `.codegraph/codegraph.db`；需要时运行 `codegraph sync .`。
 - 数据库结构变更、删除/迁移大量文件、改部署配置、改公共接口、移除依赖等高风险操作必须先确认。
-- `src/analyzer/llm_analyzer.py`、`src/models/database.py`、`src/services/prediction_verify_service.py`、`src/services/sector_flow_service.py`、`src/api/main.py`、`web/index.html` 是高风险区域，先读测试和调用方再动。
+- `src/analyzer/llm_analyzer.py`、`src/models/database.py`、`src/services/prediction_verify_service.py`、`src/api/main.py`、`web/index.html` 是高风险区域，先读测试和调用方再动。
 - 文档类改动也要跑最小验证或至少格式/链接/命令检查。
 
 ## 推荐工作流
@@ -201,7 +189,6 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ```bash
 pytest tests/unit/test_prediction_verify_batch_task.py -v
-pytest tests/unit/test_sector_flow_service.py -v
 pytest tests/unit/test_scheduler_fixes.py -v
 pytest tests/unit/test_deployment_optimization.py -v
 pytest tests/unit/test_production_hardening.py -v

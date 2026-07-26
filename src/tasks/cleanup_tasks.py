@@ -293,95 +293,6 @@ class CleanupManager:
         finally:
             db.close()
 
-    def cleanup_old_sector_flow(self, keep_days: int = 90) -> dict:
-        """
-        清理过期的板块资金流向数据
-
-        Args:
-            keep_days: 保留最近 N 天的数据，默认 90 天
-        """
-        db = self._get_db()
-        try:
-            cutoff_date = date.today() - timedelta(days=keep_days)
-
-            from src.models.database import SectorFundFlow
-
-            # 查询要删除的记录数
-            old_count = db.query(SectorFundFlow).filter(
-                SectorFundFlow.flow_date < cutoff_date
-            ).count()
-
-            if old_count == 0:
-                return {
-                    "success": True,
-                    "deleted_sector_flow": 0,
-                    "message": "没有需要清理的历史数据"
-                }
-
-            # 执行删除
-            deleted = db.query(SectorFundFlow).filter(
-                SectorFundFlow.flow_date < cutoff_date
-            ).delete(synchronize_session=False)
-            db.commit()
-
-            logger.info(f"清理板块资金流向: 删除 {deleted} 条记录（{keep_days}天前）")
-
-            return {
-                "success": True,
-                "deleted_sector_flow": deleted,
-                "cutoff_date": cutoff_date.isoformat()
-            }
-        except Exception as e:
-            db.rollback()
-            logger.error(f"清理板块资金流向失败: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "deleted_sector_flow": 0
-            }
-        finally:
-            db.close()
-
-    def cleanup_old_sector_flow_runs(self, keep_days: int = 180) -> dict:
-        """清理过期的板块资金流向抓取运行日志"""
-        db = self._get_db()
-        try:
-            cutoff_date = date.today() - timedelta(days=keep_days)
-
-            from src.models.database import SectorFlowFetchRun
-
-            old_runs = db.query(SectorFlowFetchRun).filter(
-                SectorFlowFetchRun.flow_date < cutoff_date
-            )
-            deleted = old_runs.count()
-
-            if deleted == 0:
-                return {
-                    "success": True,
-                    "deleted_sector_flow_runs": 0,
-                    "message": "没有需要清理的抓取运行日志"
-                }
-
-            old_runs.delete(synchronize_session=False)
-            db.commit()
-
-            logger.info(f"清理板块资金流向抓取日志: 删除 {deleted} 条记录（{keep_days}天前）")
-
-            return {
-                "success": True,
-                "deleted_sector_flow_runs": deleted,
-                "cutoff_date": cutoff_date.isoformat()
-            }
-        except Exception as e:
-            db.rollback()
-            logger.error(f"清理板块资金流向抓取日志失败: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "deleted_sector_flow_runs": 0
-            }
-        finally:
-            db.close()
 
     def cleanup_empty_posts(self) -> dict:
         """
@@ -750,8 +661,6 @@ class CleanupManager:
         empty_posts_result = self.cleanup_empty_posts()
         advice_result = self.cleanup_old_advice()
         orphan_funds_result = self.cleanup_orphan_funds(preview_only=False)
-        sector_flow_result = self.cleanup_old_sector_flow(keep_days=90)
-        sector_flow_runs_result = self.cleanup_old_sector_flow_runs(keep_days=180)
 
         total_deleted = (
             prediction_result.get("deleted_predictions", 0) +
@@ -759,9 +668,7 @@ class CleanupManager:
             fund_history_result.get("deleted_fund_history", 0) +
             empty_posts_result.get("deleted_empty_posts", 0) +
             advice_result.get("deleted_advice", 0) +
-            orphan_funds_result.get("deleted_count", 0) +
-            sector_flow_result.get("deleted_sector_flow", 0) +
-            sector_flow_runs_result.get("deleted_sector_flow_runs", 0)
+            orphan_funds_result.get("deleted_count", 0)
         )
 
         result = {
@@ -771,9 +678,7 @@ class CleanupManager:
                 fund_history_result.get("success", False),
                 empty_posts_result.get("success", False),
                 advice_result.get("success", False),
-                orphan_funds_result.get("success", False),
-                sector_flow_result.get("success", False),
-                sector_flow_runs_result.get("success", False)
+                orphan_funds_result.get("success", False)
             ]),
             "predictions": {
                 "deleted": prediction_result.get("deleted_predictions", 0)
@@ -792,12 +697,6 @@ class CleanupManager:
             },
             "orphan_funds": {
                 "deleted": orphan_funds_result.get("deleted_count", 0)
-            },
-            "sector_flow": {
-                "deleted": sector_flow_result.get("deleted_sector_flow", 0)
-            },
-            "sector_flow_runs": {
-                "deleted": sector_flow_runs_result.get("deleted_sector_flow_runs", 0)
             },
             "total_deleted": total_deleted,
             "timestamp": date.today().isoformat()

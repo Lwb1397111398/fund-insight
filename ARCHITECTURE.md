@@ -4,14 +4,13 @@
 
 ## 这个项目是什么
 
-Fund Insight 是一个 Python 全栈 Web 应用，用于追踪基金博主、财经文章和板块资金流。系统把非结构化文本转成结构化预测和观点，再结合基金净值、历史行情、板块资金流和后台任务做验证、统计和建议生成。
+Fund Insight 是一个 Python 全栈 Web 应用，用于追踪基金博主和财经文章观点。系统把非结构化文本转成结构化预测和观点，再结合基金净值、历史行情和后台任务做验证、统计和建议生成。
 
 核心目标不是自动交易，而是让用户能回答：
 
 - 哪些博主预测更准？
 - 某个基金或板块最近被谁看多/看空？
 - 某条预测是否已经到了验证时间？
-- 哪些板块出现主力抢筹、建仓、洗盘或卖出迹象？
 - 当前投资建议引用了哪些观点和预测？
 
 ## 总体结构
@@ -36,7 +35,7 @@ src/services/*
   |
   +--> analyzer/  LLM 分析、帖子价值判断、本地趋势
   +--> fund/      天天基金、多源基金 API、同步、技术指标
-  +--> crawler/   文章/帖子/板块资金流抓取和过滤
+  +--> crawler/   文章/帖子抓取和过滤
   +--> tasks/     调度、清理、定时验证
           |
           v
@@ -52,7 +51,7 @@ src/models/database.py
 | --- | --- | --- |
 | 前端层 | `web/` | 原生 HTML/JS SPA，Vue CDN，用户录入、列表、统计、清理、配置页面 |
 | API 层 | `src/api/` | FastAPI 应用、路由注册、请求校验、响应封装、静态页面 |
-| 服务层 | `src/services/` | 业务逻辑、事务边界、预测验证、基金同步、观点统计、板块资金流 |
+| 服务层 | `src/services/` | 业务逻辑、事务边界、预测验证、基金同步、观点统计 |
 | 分析层 | `src/analyzer/` | LLM 调用、模型选择、结果解析、帖子价值判断、本地趋势 |
 | 数据采集层 | `src/crawler/`、`src/fund/` | 外部文章、天天基金、东方财富、akshare、多源基金数据 |
 | 数据层 | `src/models/database.py` | ORM 模型、连接池、SQLite/PostgreSQL 兼容、建表 |
@@ -83,7 +82,6 @@ src/models/database.py
 | `/api/stats` | `routes/stats.py` | 总体统计 |
 | `/api/config` | `routes/config.py` | LLM 配置、清理、别名、板块基金映射、导入导出 |
 | `/api/batch-analysis` | `routes/batch_analysis.py` | 批量分析任务 |
-| `/api/sector-flow` | `routes/sector_flow.py` | 板块资金流抓取、排行、历史、状态 |
 | `/api/test-data` | `routes/test_data.py` | 测试数据查找和清理 |
 | `/api/prediction-groups` | `prediction_groups.py` | 相似预测组合并和详情 |
 
@@ -105,8 +103,6 @@ src/models/database.py
 | `sector_fund_mapping` | `SectorFundMapping` | 板块到基金的映射，可人工审核 |
 | `sector_alias` | `SectorAlias` | 板块别名和黑话映射 |
 | `investment_advice` | `InvestmentAdvice` | 投资建议主表 |
-| `sector_fund_flow` | `SectorFundFlow` | 板块资金流、暗盘、主力强度、行为标签 |
-| `sector_flow_fetch_runs` | `SectorFlowFetchRun` | 板块资金流抓取运行日志 |
 | `batch_analysis_tasks` | `BatchAnalysisTask` | 批量分析任务状态 |
 | `analysis_logs` | `AnalysisLog` | LLM 分析过程日志 |
 | `cleanup_logs` 等 | `Cleanup*` | 清理任务、规则和明细 |
@@ -165,25 +161,6 @@ src/models/database.py
 - 观点支持来源、作者、板块、置信度、权重、有效期。
 - 建议生成应带风险提示，不应给确定性收益承诺。
 
-### 板块资金流
-
-```text
-GitHub Actions/Render Cron/API 手动触发
-  -> scripts/fetch_sector_flow.py 或 /api/sector-flow/fetch
-  -> SectorFlowService.run_fetch()
-  -> SectorFlowCrawler 抓数据
-  -> 计算 dark_pool、main_intensity、behavior
-  -> 幂等写入 sector_fund_flow
-  -> 写 sector_flow_fetch_runs
-```
-
-行为标签含义：
-
-- `grab`：抢筹。
-- `build`：建仓。
-- `wash`：洗盘。
-- `sell`：卖出。
-
 ## 后台任务
 
 `src/tasks/scheduler.py` 使用北京时间：
@@ -199,9 +176,7 @@ Render Cron 不依赖常驻线程，而是运行：
 python scripts/run_scheduled_tasks.py daily
 ```
 
-该入口会初始化数据库，运行板块资金流抓取、基金更新、预测验证、过期补救验证。
-
-GitHub Actions 中 `.github/workflows/sector_flow_crawler.yml` 在交易日 13:30 北京时间运行 `scripts/fetch_sector_flow.py`。
+该入口会初始化数据库，运行基金更新、预测验证、过期补救验证。
 
 ## 前端架构
 
@@ -227,10 +202,6 @@ Render Web Service
 Render Cron
   -> python scripts/run_scheduled_tasks.py daily
   -> Supabase PostgreSQL
-
-GitHub Actions
-  -> python scripts/fetch_sector_flow.py
-  -> Supabase PostgreSQL
 ```
 
 生产注意：
@@ -247,7 +218,6 @@ GitHub Actions
 | `src/analyzer/llm_analyzer.py` | 影响所有 LLM 分析、预测提取、建议生成、解析兜底 |
 | `src/models/database.py` | 影响所有表和生产数据库兼容 |
 | `src/services/prediction_verify_service.py` | 影响准确率、评分和历史验证 |
-| `src/services/sector_flow_service.py` | 影响板块资金流写入、幂等和状态 |
 | `src/api/main.py` | 影响鉴权、路由、健康检查、危险导入接口 |
 | `web/index.html` | 主界面大文件，容易误改跨功能状态 |
 | `render.yaml` | 生产启动和定时任务配置 |
@@ -265,7 +235,6 @@ python -m src --init-db
 
 ```bash
 pytest tests/unit/test_prediction_verify_batch_task.py -v
-pytest tests/unit/test_sector_flow_service.py -v
 pytest tests/unit/test_scheduler_fixes.py -v
 pytest tests/unit/test_deployment_optimization.py -v
 pytest tests/unit/test_production_hardening.py -v

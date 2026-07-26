@@ -41,8 +41,6 @@ from src.api.routes import (
     stats_router,
     config_router,
 )
-from src.api.routes.sector_flow import router as sector_flow_router
-
 from src.api.routes.test_data import router as test_data_router
 
 
@@ -236,7 +234,6 @@ app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(test_data_router, prefix="/api")
 app.include_router(batch_analysis_router, prefix="/api")
-app.include_router(sector_flow_router, prefix="/api")
 
 
 @app.get("/api")
@@ -346,7 +343,7 @@ def import_database(file: UploadFile = File(...), request: Request = None):
             Blogger, Post, Prediction, Viewpoint, FundInfo, FundHistory,
             SectorFundMapping, InvestmentAdvice, CrawlerArticleRecord,
             PredictionGroup, BatchAnalysisTask, UserFundBinding, SyncLog,
-            FundHolding, MarketData, PolicyData, SentimentData, SectorFundFlow,
+            FundHolding, MarketData, PolicyData, SentimentData,
             Base as TargetBase
         )
         
@@ -381,7 +378,7 @@ def import_database(file: UploadFile = File(...), request: Request = None):
                 'fund_history', 'sector_fund_mapping', 'investment_advice',
                 'crawler_article_records', 'prediction_groups', 'batch_analysis_tasks',
                 'user_fund_bindings', 'sync_logs', 'fund_holdings', 'market_data',
-                'policy_data', 'sentiment_data', 'sector_fund_flow'
+                'policy_data', 'sentiment_data'
             }
 
             orm_map = [
@@ -402,7 +399,6 @@ def import_database(file: UploadFile = File(...), request: Request = None):
                 ('market_data', MarketData),
                 ('policy_data', PolicyData),
                 ('sentiment_data', SentimentData),
-                ('sector_fund_flow', SectorFundFlow),
             ]
 
             # 验证所有表名都在白名单中（防御性编程）

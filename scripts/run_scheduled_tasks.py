@@ -46,7 +46,6 @@ def run_daily_tasks() -> dict:
             failed_tasks.append(name)
         return result
 
-    sector_flow_result = run_step("sector_flow", scheduler._run_sector_flow, trigger="render_cron")
     try:
         run_step("fund_update", scheduler._run_fund_update)
         run_step("prediction_verify", scheduler._run_prediction_verify)
@@ -57,7 +56,6 @@ def run_daily_tasks() -> dict:
             run_step("viewpoint_summary", ViewpointWorkflowService.run_daily_summary_task)
         return {
             "success": not failed_tasks,
-            "sector_flow": sector_flow_result,
             "tasks": tasks,
             "failed_tasks": failed_tasks,
             "started_at": started_at.isoformat(),
@@ -67,7 +65,6 @@ def run_daily_tasks() -> dict:
         logger.exception("定时任务执行失败")
         return {
             "success": False,
-            "sector_flow": sector_flow_result,
             "error": str(e),
             "started_at": started_at.isoformat(),
         }

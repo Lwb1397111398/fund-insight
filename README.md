@@ -1,6 +1,6 @@
 # Fund Insight - 基金博主分析系统
 
-Fund Insight 用来记录基金博主和财经文章观点，通过 LLM 提取结构化预测，再用基金净值和板块资金流验证这些观点是否靠谱。
+Fund Insight 用来记录基金博主和财经文章观点，通过 LLM 提取结构化预测，再用基金净值验证这些观点是否靠谱。
 
 ## 核心功能
 
@@ -12,7 +12,6 @@ Fund Insight 用来记录基金博主和财经文章观点，通过 LLM 提取�
 | 博主评分 | 统计总准确率、短期准确率、预测数量、等级等指标 |
 | 观点库 | 接收人工观点或爬虫采纳文章，支持批量分析和汇总 |
 | 投资建议 | 汇总观点、预测和市场数据，生成带风险提示的建议 |
-| 板块资金流 | 抓取东方财富板块资金数据，计算暗盘、主力强度、行为标签 |
 | 清理工具 | 清理测试数据、旧数据、孤儿基金和抓取日志 |
 
 ## 快速启动
@@ -58,9 +57,6 @@ pytest tests/integration/ -v
 # Render Cron 同款每日任务
 python scripts/run_scheduled_tasks.py daily
 
-# 手动抓取板块资金流
-python scripts/fetch_sector_flow.py
-
 # CodeGraph 索引
 codegraph status .
 codegraph sync .
@@ -100,7 +96,7 @@ AI 分析帖子，生成预测
   ↓
 到期验证预测
   ↓
-查看博主准确率、基金表现、建议和板块资金流
+查看博主准确率、基金表现和建议
 ```
 
 ## 项目结构
@@ -108,11 +104,11 @@ AI 分析帖子，生成预测
 ```text
 src/
   api/        FastAPI 应用、路由、schemas、响应封装
-  services/   业务逻辑、验证、统计、清理、板块资金流服务
+  services/   业务逻辑、验证、统计、清理
   models/     SQLAlchemy ORM 和数据库连接
   analyzer/   LLM 分析、本地趋势分析、帖子价值分析
   fund/       基金 API、多源数据、同步、技术指标
-  crawler/    外部文章/帖子/板块资金流抓取
+  crawler/    外部文章/帖子抓取
   tasks/      本地调度器和清理任务
   utils/      时间解析、基金匹配、统计、并发工具
 web/          原生 HTML/JS 前端，无构建链
@@ -130,13 +126,12 @@ docs/         设计、计划、修复报告和功能文档
 - Render Web Service：启动 FastAPI。
 - Render Cron：每天运行 `scripts/run_scheduled_tasks.py daily`。
 - Supabase/PostgreSQL：生产数据库。
-- GitHub Actions：交易日抓取板块资金流。
 
 详见 `DEPLOYMENT.md`。
 
 ## 注意事项
 
-- `src/analyzer/llm_analyzer.py`、`src/models/database.py`、`src/services/prediction_verify_service.py`、`src/services/sector_flow_service.py`、`web/index.html` 是高风险文件。
+- `src/analyzer/llm_analyzer.py`、`src/models/database.py`、`src/services/prediction_verify_service.py`、`web/index.html` 是高风险文件。
 - 数据库模型变更后要同步考虑 Supabase 表结构，当前项目没有 Alembic 迁移体系。
 - 前端没有构建工具，直接修改 `web/` 文件即可。
 - `.codegraph/` 是本地索引产物，不要手工编辑数据库文件。
