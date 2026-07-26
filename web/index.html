@@ -15,6 +15,11 @@
             box-sizing: border-box;
         }
 
+        /* v-cloak: Vue 挂载前隐藏未编译模板，避免 {{ }} 原样闪现 */
+        [v-cloak] {
+            display: none;
+        }
+
         :root {
             /* 主色调 */
             --color-primary: oklch(53% 0.16 255);
@@ -2084,7 +2089,7 @@
 </head>
 
 <body>
-    <div id="app">
+    <div id="app" v-cloak>
         <div class="header">
             <h1><i class="ri-line-chart-line"></i> Fund Insight - 基金观点追踪系统</h1>
             <div class="header-actions">
@@ -4323,7 +4328,25 @@ const fetchWeChatBatch = async () => {
                 const fetchViewpointsSource = async (sources) => { if (!confirm(`确认抓取 ${sources.join("、")} 的观点？
 
 仅抓取入库(不调 AI), 抓取完成后再点「一键AI分析」。`)) return; analyzing.value = true; try { const res = await axios.post('/api/viewpoints/fetch', { sources, limit_per_source: 15, mode: 'fetch' }); await pollViewpointTask(); } catch (e) { alert('启动抓取失败: ' + (e.response?.data?.detail || e.message)); analyzing.value = false; } };
-                const pollViewpointTask = async () => { let checks = 0; const maxChecks = 80; const tick = async () => { try { const res = await axios.get('/api/viewpoints/tasks/latest'); const t = res.data.data; taskProgress.value = t; if (!t || ![['running','pending'].includes(t.status)] || checks >= maxChecks) { clearInterval(timer); analyzing.value = false; taskProgress.value = t; // 常驻显示分项, 不再用 alert() 阻塞 UI 线程导致进度条卡住 try { await fetchViewpoints(); await fetchViewpointInsights(); await fetchStats(); } catch (e) { console.error('刷新列表失败:', e); } } else { checks++; } } catch (e) { checks++; } }; const timer = setInterval(tick, 3000); tick(); };
+                const pollViewpointTask = async () => {
+                    let checks = 0; const maxChecks = 80;
+                    const tick = async () => {
+                        try {
+                            const res = await axios.get('/api/viewpoints/tasks/latest');
+                            const t = res.data.data;
+                            taskProgress.value = t;
+                            if (!t || !['running','pending'].includes(t.status) || checks >= maxChecks) {
+                                clearInterval(timer);
+                                analyzing.value = false;
+                                taskProgress.value = t;
+                                // 常驻显示分项, 不再用 alert() 阻塞 UI 线程导致进度条卡住
+                                try { await fetchViewpoints(); await fetchViewpointInsights(); await fetchStats(); }
+                                catch (e) { console.error('刷新列表失败:', e); }
+                            } else { checks++; }
+                        } catch (e) { checks++; }
+                    };
+                    const timer = setInterval(tick, 3000); tick();
+                };
                 const retryViewpointTask = async (taskId) => { try { await axios.post(`/api/viewpoints/tasks/${taskId}/retry`); analyzing.value = true; await pollViewpointTask(); } catch (e) { alert('重试失败: ' + (e.response?.data?.detail || e.message)); } };
                 const fetchViewpointInsights = async () => { try { const res = await axios.get('/api/viewpoints/insights'); if (res.data.success) viewpointInsights.value = res.data.data; } catch (e) { console.error('获取观点洞察失败:', e); } };
                 const generateAdvice = async (force = false) => {
