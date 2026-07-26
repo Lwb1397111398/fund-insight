@@ -149,9 +149,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 - 主界面是 `web/index.html`，使用 Vue 3 CDN 和 axios。
 - 没有构建步骤，不要引入需要打包的新依赖。
-- `web/common.js` 与 `web/common.css` 存放跨页面公共逻辑和样式。
+- `web/common.css` 存放全局样式和工具类（从 index.html 提取）。
+- 视图模块化为 `web/post-manager.js`、`web/viewpoint-manager.js`、`web/prediction-manager.js`（工厂模式，由 index.html 调用）。
 - UI 风格应偏数据工具：清晰、克制、可扫描；不要做营销 landing page、大渐变、重动画。
 - 所有 `/api/` 请求需要带 `X-Access-Password`。
+- 新增 UI 功能优先使用 common.css 中的工具类（`.mb-12`、`.text-xs`、`.flex` 等），避免内联 style。
 
 ## 部署和定时任务
 
