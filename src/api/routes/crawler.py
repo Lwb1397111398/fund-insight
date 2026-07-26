@@ -19,25 +19,6 @@ class WeChatArticleRequest(BaseModel):
     post_date: Optional[str] = None
 
 
-class EastmoneyBlogRequest(BaseModel):
-    max_articles: int = 15
-    concurrent: bool = True
-    max_workers: int = 5
-
-
-class SinaFinanceRequest(BaseModel):
-    category: str = 'finance'
-    max_articles: int = 20
-    concurrent: bool = True
-    max_workers: int = 5
-
-
-class EastmoneyGuideRequest(BaseModel):
-    max_articles: int = 20
-    concurrent: bool = True
-    max_workers: int = 5
-
-
 class SinaBlogRequest(BaseModel):
     max_posts: int = 20
     concurrent: bool = True
@@ -52,24 +33,6 @@ async def get_crawler_status(db: Session = Depends(get_db)):
         "success": True,
         "data": service.get_crawler_status()
     }
-
-
-@router.post("/eastmoney-blog/auto-adopt", include_in_schema=False)
-async def auto_adopt_eastmoney_blog(data: EastmoneyBlogRequest, db: Session = Depends(get_db)):
-    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线（可恢复、去重、可重试）"""
-    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
-
-
-@router.post("/eastmoney-guide/auto-adopt", include_in_schema=False)
-async def auto_adopt_eastmoney_guide(data: EastmoneyGuideRequest, db: Session = Depends(get_db)):
-    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线"""
-    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
-
-
-@router.post("/sina-finance/auto-adopt", include_in_schema=False)
-async def auto_adopt_sina_finance(data: SinaFinanceRequest, db: Session = Depends(get_db)):
-    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线"""
-    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
 
 
 @router.post("/sina-blog/auto-adopt", include_in_schema=False)

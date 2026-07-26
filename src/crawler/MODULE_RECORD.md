@@ -2,7 +2,7 @@
 
 ## 模块定位
 
-`src/crawler/` 负责外部内容和板块资金数据采集，包括天天基金吧、东方财富博客/导读、新浪财经/博客、微信公众号文章、板块资金流和内容筛选。
+`src/crawler/` 负责外部内容和板块资金数据采集，包括天天基金吧、新浪博客、微信公众号文章、板块资金流和内容筛选。
 
 ## 当前职责
 
@@ -17,9 +17,6 @@
 | --- | --- |
 | `base.py` | 爬虫基类和基础请求能力 |
 | `tiantian_crawler.py` | 天天基金吧帖子 |
-| `eastmoney_blog_crawler.py` | 东方财富博客 |
-| `eastmoney_guide_crawler.py` | 东方财富导读 |
-| `sina_finance_crawler.py` | 新浪财经 |
 | `sina_blog_crawler.py` | 新浪博客 |
 | `wechat_fetcher.py` | 微信文章获取 |
 | `article_crawler.py` | 通用文章抓取 |

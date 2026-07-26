@@ -100,9 +100,6 @@ class CrawlerService:
         return {
             "enabled": self.is_crawler_enabled(),
             "modules": {
-                "eastmoney_blog": True,
-                "eastmoney_guide": True,
-                "sina_finance": True,
                 "sina_blog": True
             }
         }
@@ -340,7 +337,7 @@ class CrawlerService:
         通用的爬取-分析-存储流水线
 
         Args:
-            source_name: 来源标识（如 'eastmoney_blog', 'sina_finance'）
+            source_name: 来源标识（如 'sina_blog'）
             articles: 文章列表
             default_author: 默认作者名
             concurrent: 是否使用并发分析
@@ -441,71 +438,6 @@ class CrawlerService:
             }
         }
 
-    def crawl_eastmoney_blog(self, max_articles: int = 15, concurrent: bool = True, max_workers: int = 3) -> Dict:
-        """抓取东方财富博客"""
-        if not self.is_crawler_enabled():
-            return {"success": False, "message": "爬虫模块未启用"}
-
-        logger.info(f"开始抓取东方财富博客 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-
-        try:
-            from src.crawler.eastmoney_blog_crawler import crawler as eastmoney_crawler
-            articles = eastmoney_crawler.fetch_hot_articles(max_articles=max_articles)
-            result = self._crawl_source('eastmoney_blog', articles, '东财博客', concurrent, max_workers)
-
-            adopted_count = result['data']['adopted_count']
-            skipped_count = result['data']['skipped_count']
-            logger.info(f"东方财富博客抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
-
-            return result
-        except Exception as e:
-            self.db.rollback()
-            raise e
-    
-    def crawl_eastmoney_guide(self, max_articles: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
-        """抓取东财博客导读"""
-        if not self.is_crawler_enabled():
-            return {"success": False, "message": "爬虫模块未启用"}
-
-        logger.info(f"开始抓取东方财富指南 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-
-        try:
-            from src.crawler.eastmoney_guide_crawler import get_guide_crawler
-            crawler = get_guide_crawler()
-            articles = crawler.fetch_guide_articles(max_articles=max_articles)
-            result = self._crawl_source('eastmoney_guide', articles, '东财博客', concurrent, max_workers)
-
-            adopted_count = result['data']['adopted_count']
-            skipped_count = result['data']['skipped_count']
-            logger.info(f"东方财富指南抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
-
-            return result
-        except Exception as e:
-            self.db.rollback()
-            raise e
-    
-    def crawl_sina_finance(self, category: str = 'finance', max_articles: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
-        """抓取新浪财经"""
-        if not self.is_crawler_enabled():
-            return {"success": False, "message": "爬虫模块未启用"}
-
-        logger.info(f"开始抓取新浪财经 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
-
-        try:
-            from src.crawler.sina_finance_crawler import get_sina_crawler
-            crawler = get_sina_crawler()
-            articles = crawler.fetch_articles(category=category, num=max_articles)
-            result = self._crawl_source('sina_finance', articles, '新浪财经', concurrent, max_workers)
-
-            adopted_count = result['data']['adopted_count']
-            skipped_count = result['data']['skipped_count']
-            logger.info(f"新浪财经抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
-
-            return result
-        except Exception as e:
-            self.db.rollback()
-            raise e
-    
     def crawl_sina_blog(self, max_posts: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
         """抓取新浪博客"""
         if not self.is_crawler_enabled():

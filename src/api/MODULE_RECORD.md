@@ -21,7 +21,6 @@
 | `deps.py` | 数据库和服务依赖注入 |
 | `decorators.py` | API 异常处理装饰器 |
 | `responses.py` | 统一响应辅助 |
-| `eastmoney_routes.py` | 东方财富博客抓取和文章采纳 |
 | `prediction_groups.py` | 相似预测分组 |
 | `routes/*.py` | 按业务领域拆分的 REST 路由 |
 | `schemas/*.py` | Pydantic 请求/响应模型 |
@@ -36,7 +35,7 @@
 | `/api/funds` | `routes/funds.py` | 基金列表、添加、详情、同步、历史、趋势 |
 | `/api/viewpoints` | `routes/viewpoints.py` | 观点列表、删除、批量分析、汇总、清理 |
 | `/api/crawler` | `routes/crawler.py` | 爬虫状态、自动采纳、微信抓取 |
-| `/api/crawler` | `eastmoney_routes.py` | 东方财富博客抓取和采纳 |
+| `/api/crawler` | `routes/crawler.py` | 爬虫状态和微信公众号抓取 |
 | `/api/advice` | `routes/advice.py` | 投资建议生成、历史、统计 |
 | `/api/stats` | `routes/stats.py` | 总体统计 |
 | `/api/config` | `routes/config.py` | LLM 配置、清理、别名、板块基金映射、导入导出 |

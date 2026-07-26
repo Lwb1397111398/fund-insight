@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -25,8 +25,8 @@ router = APIRouter(prefix="/viewpoints", tags=["观点"])
 
 class ViewpointFetchRequest(BaseModel):
     sources: List[str] = Field(default_factory=lambda: list(DEFAULT_SOURCES))
-    limit_per_source: int = Field(default=15, ge=1, le=50)
-    mode: str = Field(default="fetch", description="fetch=仅抓取, fetch_and_analyze=抓取+分析")
+    limit_per_source: int = Field(default=20, ge=1, le=50)
+    mode: Literal["fetch"] = Field(default="fetch", description="仅抓取新浪博客，不调用 AI")
 
 
 def _is_analyzed(row: Viewpoint) -> bool:
@@ -145,15 +145,7 @@ async def get_viewpoints(
 
 
 def _run_fetch_task(task_id: int):
-    # 从任务参数读取 mode, 默认 fetch
-    from src.models.database import SessionLocal
-    _db = SessionLocal()
-    try:
-        _task = _db.query(BatchAnalysisTask).filter(BatchAnalysisTask.id == task_id).first()
-        _mode = (_task.task_params or {}).get("mode", "fetch") if _task else "fetch"
-    finally:
-        _db.close()
-    ViewpointWorkflowService.run_fetch_task(task_id, mode=_mode)
+    ViewpointWorkflowService.run_fetch_task(task_id)
 
 
 @router.post("/fetch")

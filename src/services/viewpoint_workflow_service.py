@@ -16,12 +16,8 @@ from src.services.viewpoint_service import get_source_authority
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_SOURCES = ("sina_finance",)
-# eastmoney_blog/eastmoney_guide 列表页抓到的文章url指向 caifuhao.eastmoney.com,
-# 是JS渲染页, requests 抓不到正文(实测HTTP200 body为空)。已从默认源下线,
-# 代码保留但移到 OPTIONAL, 允许手动指定(会抓到标题但内容为空)。
-OPTIONAL_SOURCES = ("sina_blog", "eastmoney_blog", "eastmoney_guide")
-ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES + OPTIONAL_SOURCES)
+DEFAULT_SOURCES = ("sina_blog",)
+ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES)
 
 
 class ViewpointWorkflowService:
@@ -80,11 +76,13 @@ class ViewpointWorkflowService:
         db: Session,
         *,
         sources: Optional[Iterable[str]] = None,
-        limit_per_source: int = 15,
+        limit_per_source: int = 20,
         mode: str = "fetch",
     ) -> Tuple[BatchAnalysisTask, bool]:
+        if mode != "fetch":
+            raise ValueError("观点抓取仅支持 fetch 模式")
         selected = cls._normalize_sources(sources)
-        limit_per_source = max(1, min(int(limit_per_source or 15), 50))
+        limit_per_source = max(1, min(int(limit_per_source or 20), 50))
         active = db.query(BatchAnalysisTask).filter(
             BatchAnalysisTask.task_type == "viewpoint_fetch",
             BatchAnalysisTask.status.in_(("pending", "running")),
@@ -120,35 +118,11 @@ class ViewpointWorkflowService:
 
     @staticmethod
     def _default_fetchers() -> Dict[str, Callable[[int], List[Dict[str, Any]]]]:
-        from src.crawler.eastmoney_blog_crawler import crawler as eastmoney_blog
-        from src.crawler.eastmoney_guide_crawler import get_guide_crawler
-        from src.crawler.sina_finance_crawler import get_sina_crawler
         from src.crawler.sina_blog_crawler import get_blog_crawler
 
         return {
-            "eastmoney_blog": lambda limit: eastmoney_blog.fetch_hot_articles(max_articles=limit),
-            "eastmoney_guide": lambda limit: get_guide_crawler().fetch_guide_articles(max_articles=limit),
-            "sina_finance": lambda limit: get_sina_crawler().fetch_articles(category="finance", num=limit),
             "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=limit),
         }
-
-    @staticmethod
-    def _default_capture_analyzer(article: Dict[str, Any], source: str) -> Tuple[bool, Dict[str, Any]]:
-        from src.analyzer.post_analyzer import PostAnalyzer as EnhancedAIAnalyzer
-        from src.services.crawler_service import CrawlerService
-
-        analyzer = EnhancedAIAnalyzer()
-        db = SessionLocal()
-        try:
-            helper = CrawlerService(db)
-            return helper._analyze_article(
-                analyzer,
-                str(article.get("title") or ""),
-                str(article.get("content") or ""),
-                source=source,
-            )
-        finally:
-            db.close()
 
     @staticmethod
     def _default_deep_analyzer(article: Dict[str, Any], source: str) -> Dict[str, Any]:
@@ -191,24 +165,12 @@ class ViewpointWorkflowService:
         *,
         session_factory: Callable[[], Session] = SessionLocal,
         fetchers: Optional[Dict[str, Callable[[int], List[Dict[str, Any]]]]] = None,
-        capture_analyzer: Optional[Callable[[Dict[str, Any], str], Tuple[bool, Dict[str, Any]]]] = None,
         deep_analyzer: Optional[Callable[[Dict[str, Any], str], Dict[str, Any]]] = None,
-        mode: str = "fetch",
     ) -> None:
-        """执行抓取任务。
-
-        mode="fetch": 仅抓取入库, 不调 LLM, viewpoint.analysis_summary 保持 pending。
-        mode="fetch_and_analyze": 抓取并逐条深度分析(旧行为)。
-        """
+        """抓取新浪博客并直接入库，不调用 AI 筛选或深度分析。"""
         fetchers = fetchers or cls._default_fetchers()
-        capture_analyzer = capture_analyzer or cls._default_capture_analyzer
         deep_analyzer = deep_analyzer or cls._default_deep_analyzer
         db = session_factory()
-        # 优先用参数传入的 mode, 否则从任务参数读取(默认 fetch)
-        if mode == "fetch":
-            _tp = db.query(BatchAnalysisTask.task_params).filter(BatchAnalysisTask.id == task_id).scalar()
-            mode = (_tp or {}).get("mode", "fetch")
-        analyze = mode == "fetch_and_analyze"
         try:
             task = db.query(BatchAnalysisTask).filter(
                 BatchAnalysisTask.id == task_id,
@@ -229,7 +191,7 @@ class ViewpointWorkflowService:
                 return
 
             sources = cls._normalize_sources(params.get("sources"))
-            limit = max(1, min(int(params.get("limit_per_source") or 15), 50))
+            limit = max(1, min(int(params.get("limit_per_source") or 20), 50))
 
             # ===== 阶段 1: 抓取 =====
             # 先从各源拉取文章到内存, 记录抓取进度(阶段耗时在进度栏显示)
@@ -271,51 +233,13 @@ class ViewpointWorkflowService:
                 task.result_summary = summary
                 db.commit()
 
-            # 抓取模式到此结束: 仅入库, 不调 LLM
-            if not analyze:
-                for source, articles in source_articles.items():
-                    task = db.get(BatchAnalysisTask, task_id)
-                    if not task or task.status == "cancelled":
-                        return
-                    summary = dict(task.result_summary or {})
-                    source_stats = dict((summary.get("sources") or {}).get(source) or {})
-                    for article in articles:
-                        try:
-                            cls._process_article(
-                                db, task_id, source, article,
-                                capture_analyzer, deep_analyzer, analyze=False,
-                            )
-                        except Exception as exc:
-                            db.rollback()
-                            task = db.get(BatchAnalysisTask, task_id)
-                            summary = dict(task.result_summary or {})
-                            source_stats = dict((summary.get("sources") or {}).get(source) or {})
-                            source_stats["failed"] = (source_stats.get("failed") or 0) + 1
-                            failures = list(task.failed_ids or [])
-                            failures.append({"article_id": cls._stable_article_id(source, article), "source": source, "error": str(exc)})
-                            task.failed_ids = failures
-                            task.failed_count = len(failures)
-                            task.processed_count = (task.processed_count or 0) + 1
-                            cls._save_source_stats(task, summary, source, source_stats)
-                            db.commit()
-                task = db.get(BatchAnalysisTask, task_id)
-                if task and task.status != "cancelled":
-                    task.status = "failed" if task.failed_count else "succeeded"
-                    task.completed_at = datetime.now()
-                    db.commit()
-                return
-
-            # ===== 阶段 2: 抓取 + 分析 (旧行为) =====
             for source, articles in source_articles.items():
                 task = db.get(BatchAnalysisTask, task_id)
                 if not task or task.status == "cancelled":
                     return
                 for article in articles:
                     try:
-                        cls._process_article(
-                            db, task_id, source, article,
-                            capture_analyzer, deep_analyzer, analyze=True,
-                        )
+                        cls._process_article(db, task_id, source, article)
                     except Exception as exc:
                         db.rollback()
                         task = db.get(BatchAnalysisTask, task_id)
@@ -356,7 +280,7 @@ class ViewpointWorkflowService:
         task.result_summary = summary
 
     @classmethod
-    def _process_article(cls, db, task_id, source, article, capture_analyzer, deep_analyzer, analyze: bool = True):
+    def _process_article(cls, db, task_id, source, article):
         task = db.get(BatchAnalysisTask, task_id)
         article_id = cls._stable_article_id(source, article)
         summary = dict(task.result_summary or {})
@@ -372,38 +296,8 @@ class ViewpointWorkflowService:
             db.commit()
             return
 
-        # fetch 模式: 不调 LLM, 所有非重复文章直接采纳入库为 pending, 质量/方向判断交由
-        # 后续"一键AI分析"(deep_analyzer)处理; 仅 fetch_and_analyze 模式才用 capture_analyzer 过滤。
-        if analyze:
-            should_capture, capture = capture_analyzer(article, source)
-        else:
-            # fetch 模式正文门槛: 正文过短(只有标题那种)记 skipped 不入库,
-            # 避免垃圾观点污染库; 仅 fetch 模式生效, fetch_and_analyze 由 capture_analyzer 过滤。
-            content_len = len(str(article.get("content") or "").strip())
-            if content_len < 30:
-                source_stats["skipped"] = (source_stats.get("skipped") or 0) + 1
-                summary["skipped"] = (summary.get("skipped") or 0) + 1
-                task.processed_count = (task.processed_count or 0) + 1
-                processed = list(task.processed_ids or [])
-                processed.append(article_id)
-                task.processed_ids = processed
-                cls._save_source_stats(task, summary, source, source_stats)
-                db.commit()
-                return
-            should_capture, capture = True, {"score": 0.0, "reason": "fetch模式直接采纳"}
-        record = CrawlerArticleRecord(
-            article_id=article_id,
-            source=source,
-            title=str(article.get("title") or "")[:500],
-            content_hash=cls._content_hash(article),
-            url=article.get("url") or article.get("link"),
-            author=article.get("author"),
-            is_adopted=False,
-            capture_score=float(capture.get("score") or 0),
-        )
-        db.add(record)
-        if not should_capture:
-            record.skip_reason = str(capture.get("reason") or "未达到采纳阈值")[:200]
+        content_len = len(str(article.get("content") or "").strip())
+        if content_len < 30:
             source_stats["skipped"] = (source_stats.get("skipped") or 0) + 1
             summary["skipped"] = (summary.get("skipped") or 0) + 1
             task.processed_count = (task.processed_count or 0) + 1
@@ -413,6 +307,18 @@ class ViewpointWorkflowService:
             cls._save_source_stats(task, summary, source, source_stats)
             db.commit()
             return
+
+        record = CrawlerArticleRecord(
+            article_id=article_id,
+            source=source,
+            title=str(article.get("title") or "")[:500],
+            content_hash=cls._content_hash(article),
+            url=article.get("url") or article.get("link"),
+            author=article.get("author"),
+            is_adopted=False,
+            capture_score=0.0,
+        )
+        db.add(record)
 
         viewpoint = Viewpoint(
             viewpoint_date=cls._article_date(article),
@@ -433,35 +339,12 @@ class ViewpointWorkflowService:
         record.viewpoint_id = viewpoint.id
         db.commit()
 
-        # 仅分析模式调 LLM; 抓取模式保持 pending, 由"一键AI分析"处理
-        if not analyze:
-            source_stats["adopted"] = source_stats.get("adopted", 0) + 1
-            summary["adopted"] = summary.get("adopted", 0) + 1
-            task.success_count = (task.success_count or 0) + 1
-            processed = list(task.processed_ids or [])
-            processed.append(article_id)
-            task.processed_ids = processed
-            task.processed_count = (task.processed_count or 0) + 1
-            cls._save_source_stats(task, summary, source, source_stats)
-            db.commit()
-            return
-
-        try:
-            analysis = deep_analyzer(article, source)
-            cls._apply_deep_analysis(viewpoint, analysis)
-            source_stats["adopted"] = source_stats.get("adopted", 0) + 1
-            summary["adopted"] = summary.get("adopted", 0) + 1
-            task.success_count = (task.success_count or 0) + 1
-            processed = list(task.processed_ids or [])
-            processed.append(article_id)
-            task.processed_ids = processed
-        except Exception as exc:
-            viewpoint.analysis_summary = f"failed:{str(exc)[:180]}"
-            source_stats["failed"] = source_stats.get("failed", 0) + 1
-            failures = list(task.failed_ids or [])
-            failures.append({"article_id": article_id, "viewpoint_id": viewpoint.id, "source": source, "error": str(exc)})
-            task.failed_ids = failures
-            task.failed_count = len(failures)
+        source_stats["adopted"] = source_stats.get("adopted", 0) + 1
+        summary["adopted"] = summary.get("adopted", 0) + 1
+        task.success_count = (task.success_count or 0) + 1
+        processed = list(task.processed_ids or [])
+        processed.append(article_id)
+        task.processed_ids = processed
         task.processed_count = (task.processed_count or 0) + 1
         cls._save_source_stats(task, summary, source, source_stats)
         db.commit()

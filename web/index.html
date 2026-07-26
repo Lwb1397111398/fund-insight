@@ -2296,10 +2296,7 @@
                 <div v-if="currentView === 'viewpoints'">
                     <div class="section-title">管理观点</div>
                     <div class="sub-actions">
-                        <button class="action-btn success small" disabled title="该源已下线：文章正文为JS渲染，requests抓不到，仅能抓到标题。">📰 东方财富博客</button>
-                        <button class="action-btn success small" disabled title="该源已下线：文章正文为JS渲染，requests抓不到，仅能抓到标题。">📖 东方财富指南</button>
-                        <button class="action-btn success small" @click="fetchViewpointsSource(['sina_finance'])">🌐 新浪财经</button>
-                        <button class="action-btn success small" @click="fetchViewpointsSource(['sina_blog'])">🌐 新浪博客</button>
+                        <button class="action-btn success small" @click="fetchViewpointsSource">🌐 抓取新浪博客观点</button>
                         <button class="action-btn warning small" @click="batchAnalyzeViewpoints"
                             :disabled="analyzing">{{ analyzing ? '分析中...' : '🚀 一键AI分析' }}</button>
                         <button class="action-btn primary small" @click="showSummaryModal" :disabled="summarizing">{{
@@ -4325,9 +4322,9 @@ const fetchWeChatBatch = async () => {
                         alert('更新失败: ' + (e.response?.data?.message || e.message));
                     }
                 };
-                const fetchViewpointsSource = async (sources) => { if (!confirm(`确认抓取 ${sources.join("、")} 的观点？
+                const fetchViewpointsSource = async () => { if (!confirm(`确认抓取新浪博客的观点？
 
-仅抓取入库(不调 AI), 抓取完成后再点「一键AI分析」。`)) return; analyzing.value = true; try { const res = await axios.post('/api/viewpoints/fetch', { sources, limit_per_source: 15, mode: 'fetch' }); await pollViewpointTask(); } catch (e) { alert('启动抓取失败: ' + (e.response?.data?.detail || e.message)); analyzing.value = false; } };
+最多抓取20篇并直接入库（不调 AI），抓取完成后可点「一键AI分析」。`)) return; analyzing.value = true; try { await axios.post('/api/viewpoints/fetch', { sources: ['sina_blog'], limit_per_source: 20, mode: 'fetch' }); await pollViewpointTask(); } catch (e) { alert('启动抓取失败: ' + (e.response?.data?.detail || e.message)); analyzing.value = false; } };
                 const pollViewpointTask = async () => {
                     let checks = 0; const maxChecks = 80;
                     const tick = async () => {

@@ -27,7 +27,6 @@ if project_root not in sys.path:
 from src.core.config import config
 from src.models.database import init_db
 
-from src.api import eastmoney_routes
 from src.api.prediction_groups import router as prediction_groups_router
 from src.api.routes.batch_analysis import router as batch_analysis_router
 
@@ -224,7 +223,6 @@ web_dir = Path(project_root) / "web"
 if web_dir.exists():
     app.mount("/web", CachedStaticFiles(directory=str(web_dir)), name="web")
 
-app.include_router(eastmoney_routes.router)
 app.include_router(prediction_groups_router)
 
 app.include_router(bloggers_router, prefix="/api")
