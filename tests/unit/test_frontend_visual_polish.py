@@ -46,3 +46,16 @@ def test_frontend_has_keyboard_focus_and_subtle_card_motion():
     action_btn_block = _rule_block(content, ".action-btn:hover")
     assert action_btn_block, "缺少 .action-btn:hover 规则"
     assert "transform: translateY" not in action_btn_block
+
+
+def test_index_html_has_no_orphan_css_in_head():
+    """index.html 的 <head> 内不应残留未包裹在 <style> 标签里的 CSS 文本。
+    样式已提取到 common.css；若 head 里直接出现 :root/oklch 等 CSS，
+    说明提取时漏删了原 <style> 正文，浏览器会把它当文本渲染成乱码。"""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    head = html.split("</head>", 1)[0]
+
+    # 没有 <style> 标签时，head 内不得出现裸 CSS 文本
+    if "<style" not in head:
+        for marker in (":root", "oklch(", "--color-primary:"):
+            assert marker not in head, f"<head> 内出现孤立 CSS 文本: {marker}"
