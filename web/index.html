@@ -6,13 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fund Insight - 基金观点追踪系统</title>
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <link href="/web/common.css" rel="stylesheet">
     <script src="/web/vue.global.prod.js"></script>
     <script src="/web/axios.min.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
         }
 
         :root {
@@ -2157,7 +2153,6 @@
             .viewpoint-task-band { grid-template-columns: 1fr; }
             .viewpoint-task-band > button { justify-self: start; }
         }
-    </style>
 </head>
 
 <body>
@@ -2527,7 +2522,7 @@
                         <button class="action-btn warning small" @click="updateAllFunds" :disabled="analyzing">{{
                             analyzing ? '更新中...' : '🔄 更新所有基金' }}</button>
                     </div>
-                    <div class="filter-tabs" style="margin: 15px 0;">
+                    <div class="filter-tabs" class="mt-15">
                         <button :class="['filter-tab', { active: fundFilter === 'has_prediction' }]" @click="fundFilter = 'has_prediction'">有预测 ({{ fundsWithPredictions.length }})</button>
                         <button :class="['filter-tab', { active: fundFilter === 'no_prediction' }]" @click="fundFilter = 'no_prediction'">无预测 ({{ fundsWithoutPredictions.length }})</button>
                         <button :class="['filter-tab', { active: fundFilter === 'all' }]" @click="fundFilter = 'all'">全部 ({{ funds.length }})</button>
@@ -2935,7 +2930,7 @@
         <div v-if="showPasswordModal" class="modal-overlay" style="z-index: 10000;">
             <div class="modal" style="max-width: 400px;">
                 <div class="modal-header">访问验证</div>
-                <div style="padding: 16px 0;">
+                <div class="py-16">
                     <p style="color: #666; margin-bottom: 12px;">请输入访问密码以使用系统</p>
                     <div class="form-group">
                         <input type="password" v-model="passwordInput" placeholder="请输入访问密码" 
@@ -3217,7 +3212,7 @@
                                                 0).toFixed(2) }}%</div>
                                         </div>
                                     </div>
-                                    <div style="margin-bottom: 8px;">
+                                    <div class="mb-8">
                                         <strong>相对起点方向正确占比：</strong>
                                         <span
                                             :style="{ color: (predictionDetail.verify_history[0].process_metrics.peak_hit_ratio || 0) >= 0.5 ? '#52c41a' : '#faad14', fontWeight: 600 }">
@@ -3231,7 +3226,7 @@
                                             }}天）</span>
                                     </div>
                                     <div v-if="predictionDetail.verify_history[0].process_metrics.daily_direction_total_days"
-                                        style="margin-bottom: 8px;">
+                                        class="mb-8">
                                         <strong>日涨跌方向占比：</strong>
                                         <span style="color: #666; font-weight: 600;">
                                             {{
@@ -3243,7 +3238,7 @@
                                             predictionDetail.verify_history[0].process_metrics.daily_direction_total_days || 0
                                             }}天，仅作参考）</span>
                                     </div>
-                                    <div style="margin-bottom: 8px;">
+                                    <div class="mb-8">
                                         <strong>最终涨跌：</strong>
                                         <span
                                             :style="{ color: (predictionDetail.verify_history[0].change || 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }">
@@ -3681,7 +3676,7 @@
                         <h4 style="color: #d46b08; margin-bottom: 12px;">📥 导入数据</h4>
                         <p style="font-size: 13px; color: #666; margin-bottom: 12px;">从 JSON 文件导入数据。默认为合并模式（跳过已存在的记录）。</p>
 
-                        <div style="margin-bottom: 12px;">
+                        <div class="mb-12">
                             <label style="font-size: 13px; color: #333; display: block; margin-bottom: 6px;">选择导入文件：</label>
                             <input type="file" accept=".json" @change="onImportFileChange" ref="importFileInput"
                                    style="font-size: 13px; padding: 6px; border: 1px solid #d9d9d9; border-radius: 4px; width: 100%;">
