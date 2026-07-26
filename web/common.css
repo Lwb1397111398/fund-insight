@@ -2146,3 +2146,73 @@
             .viewpoint-task-band { grid-template-columns: 1fr; }
             .viewpoint-task-band > button { justify-self: start; }
         }
+
+/* ===== Utility Classes (auto-generated from inline style cleanup) ===== */
+.mt-6 { margin-top: 6px; }
+.mt-8 { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mt-15 { margin-top: 15px; }
+.mt-16 { margin-top: 16px; }
+.mb-6 { margin-bottom: 6px; }
+.mb-8 { margin-bottom: 8px; }
+.mb-10 { margin-bottom: 10px; }
+.mb-12 { margin-bottom: 12px; }
+.mb-15 { margin-bottom: 15px; }
+.mb-20 { margin-bottom: 20px; }
+.p-4 { padding: 4px; }
+.p-6 { padding: 6px; }
+.px-12 { padding-left: 12px; padding-right: 12px; }
+.py-8 { padding-top: 8px; padding-bottom: 8px; }
+.py-16 { padding-top: 16px; padding-bottom: 16px; }
+
+.text-2xs { font-size: 11px; }
+.text-xs { font-size: 12px; }
+.text-sm { font-size: 13px; }
+.text-base { font-size: 14px; }
+.text-lg { font-size: 15px; }
+
+.text-primary { color: var(--color-primary); }
+.text-secondary { color: var(--color-text-secondary); }
+.text-tertiary { color: #999; }
+.text-danger { color: #ff4d4f; }
+.text-success { color: #52c41a; }
+.text-muted { color: #666; }
+
+.font-semibold { font-weight: 600; }
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+
+.pre-wrap { white-space: pre-wrap; line-height: 1.6; }
+.flex { display: flex; }
+.flex-wrap { flex-wrap: wrap; }
+.items-center { align-items: center; }
+.gap-2 { gap: 8px; }
+.gap-4 { gap: 16px; }
+.flex-1 { flex: 1; }
+.w-full { width: 100%; }
+.min-w-150 { min-width: 150px; }
+
+.opacity-70 { opacity: 0.7; }
+.opacity-95 { opacity: 0.95; }
+
+.table-cell { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; }
+.table-cell-center { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center; }
+
+/* Additional utilities */
+.mb-14 { margin-bottom: 14px; }
+.mb-16 { margin-bottom: 16px; }
+.p-8 { padding: 8px; }
+.p-15 { padding: 15px; }
+.px-12 { padding-left: 12px; padding-right: 12px; }
+.py-6 { padding-top: 6px; padding-bottom: 6px; }
+.py-8 { padding-top: 8px; padding-bottom: 8px; }
+.rounded { border-radius: 4px; }
+.rounded-md { border-radius: 6px; }
+.rounded-lg { border-radius: 8px; }
+.bg-white { background: #fff; }
+.bg-success-light { background: #f6ffed; border: 1px solid #b7eb8f; }
+.bg-warning-light { background: #fffbe6; border: 1px solid #ffe58f; }
+.bg-orange { background: #fa8c16; }
+.bg-purple { background: #722ed1; }
+.text-white { color: #fff; }
+.text-warning { color: #d48806; }

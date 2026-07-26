@@ -2254,7 +2254,7 @@
                         <button class="action-btn warning small" @click="batchAnalyzePosts" :disabled="analyzing">{{
                             analyzing ? '分析中...' : '🔄 批量分析未分析帖子' }}</button>
                     </div>
-                    <div class="stats-mini-grid" style="margin-bottom: 14px;">
+                    <div class="stats-mini-grid" class="mb-14">
                         <div class="stat-mini"><span class="value">{{ postMeta.total || 0 }}</span><span class="label">筛选结果</span></div>
                         <div class="stat-mini"><span class="value">{{ postMeta.status_counts?.pending || 0 }}</span><span class="label">待分析</span></div>
                         <div class="stat-mini"><span class="value">{{ postMeta.status_counts?.running || 0 }}</span><span class="label">分析中</span></div>
@@ -2566,8 +2566,8 @@
                     <div class="section-title">待清理数据</div>
                     <div class="cleanup-actions">
                         <button v-if="cleanupEnabled" class="action-btn danger small" @click="cleanupData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理过期数据' }}</button>
-                        <button v-if="cleanupEnabled" class="action-btn small" @click="cleanupOldestBatch(7)" :disabled="analyzing" style="background: #fa8c16; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（7天前）' }}</button>
-                        <button v-if="cleanupEnabled" class="action-btn small" @click="cleanupOldestBatch(14)" :disabled="analyzing" style="background: #722ed1; color: white;"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（14天前）' }}</button>
+                        <button v-if="cleanupEnabled" class="action-btn small" @click="cleanupOldestBatch(7)" :disabled="analyzing" class="bg-orange text-white"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（7天前）' }}</button>
+                        <button v-if="cleanupEnabled" class="action-btn small" @click="cleanupOldestBatch(14)" :disabled="analyzing" class="bg-purple text-white"><i class="ri-delete-bin-2-line"></i> {{ analyzing ? '清理中...' : '温和清理（14天前）' }}</button>
                         <button v-if="testData && testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                     </div>
                     <div style="margin-bottom: 15px; padding: 10px 15px; background: #f6ffed; border-radius: 6px; border: 1px solid #b7eb8f; font-size: 13px; color: #389e0d;">
@@ -2575,8 +2575,8 @@
                     </div>
                     
                     <!-- 基金历史数据统计 -->
-                    <div style="margin-bottom: 20px; padding: 15px; background: #fffbe6; border-radius: 8px; border: 1px solid #ffe58f;">
-                        <h4 style="color: #d48806; margin-bottom: 10px;"><i class="ri-funds-line"></i> 基金历史净值数据</h4>
+                    <div class="mb-20 p-15 bg-warning-light rounded-lg">
+                        <h4 class="text-warning mb-10"><i class="ri-funds-line"></i> 基金历史净值数据</h4>
                         <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
                             清理规则：最近30天完整保留，30-90天每周保留1条，超过90天删除
                         </p>
@@ -2599,9 +2599,9 @@
                         </div>
                     </div>
                     
-                    <div v-if="cleanupPreview && cleanupPreview.predictions && cleanupPreview.predictions.length > 0" style="margin-bottom: 20px;">
-                        <h4 style="color: #ff4d4f; margin-bottom: 10px;">⏰ 过期预测 ({{ cleanupPreview.predictions.length }})</h4>
-                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：目标日期 < 今天-7天</p>
+                    <div v-if="cleanupPreview && cleanupPreview.predictions && cleanupPreview.predictions.length > 0" class="mb-20">
+                        <h4 class="text-danger mb-10">⏰ 过期预测 ({{ cleanupPreview.predictions.length }})</h4>
+                        <p class="text-xs text-tertiary mb-10">条件：目标日期 < 今天-7天</p>
                         <div class="data-table">
                             <table>
                                 <thead>
@@ -2630,9 +2630,9 @@
                             </table>
                         </div>
                     </div>
-                    <div v-if="cleanupPreview && cleanupPreview.viewpoints && cleanupPreview.viewpoints.length > 0" style="margin-bottom: 20px;">
-                        <h4 style="color: #ff4d4f; margin-bottom: 10px;">⏰ 过期观点 ({{ cleanupPreview.viewpoints.length }})</h4>
-                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：观点日期 < 今天-10天</p>
+                    <div v-if="cleanupPreview && cleanupPreview.viewpoints && cleanupPreview.viewpoints.length > 0" class="mb-20">
+                        <h4 class="text-danger mb-10">⏰ 过期观点 ({{ cleanupPreview.viewpoints.length }})</h4>
+                        <p class="text-xs text-tertiary mb-10">条件：观点日期 < 今天-10天</p>
                         <div class="data-table">
                             <table>
                                 <thead>
@@ -2657,9 +2657,9 @@
                             </table>
                         </div>
                     </div>
-                    <div v-if="cleanupPreview && cleanupPreview.posts && cleanupPreview.posts.length > 0" style="margin-bottom: 20px;">
+                    <div v-if="cleanupPreview && cleanupPreview.posts && cleanupPreview.posts.length > 0" class="mb-20">
                         <h4 style="color: #fa8c16; margin-bottom: 10px;">📭 空帖子 ({{ cleanupPreview.posts.length }})</h4>
-                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：帖子没有任何预测</p>
+                        <p class="text-xs text-tertiary mb-10">条件：帖子没有任何预测</p>
                         <div class="data-table">
                             <table>
                                 <thead>
@@ -2681,9 +2681,9 @@
                             </table>
                         </div>
                     </div>
-                    <div v-if="cleanupPreview && cleanupPreview.funds && cleanupPreview.funds.length > 0" style="margin-bottom: 20px;">
+                    <div v-if="cleanupPreview && cleanupPreview.funds && cleanupPreview.funds.length > 0" class="mb-20">
                         <h4 style="color: #722ed1; margin-bottom: 10px;"><i class="ri-funds-line"></i> 无用基金 ({{ cleanupPreview.funds.length }})</h4>
-                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：基金没有预测关联</p>
+                        <p class="text-xs text-tertiary mb-10">条件：基金没有预测关联</p>
                         <div class="data-table">
                             <table>
                                 <thead>
@@ -2703,9 +2703,9 @@
                             </table>
                         </div>
                     </div>
-                    <div v-if="cleanupPreview && cleanupPreview.bloggers && cleanupPreview.bloggers.length > 0" style="margin-bottom: 20px;">
+                    <div v-if="cleanupPreview && cleanupPreview.bloggers && cleanupPreview.bloggers.length > 0" class="mb-20">
                         <h4 style="color: #13c2c2; margin-bottom: 10px;">👤 无用博主 ({{ cleanupPreview.bloggers.length }})</h4>
-                        <p style="font-size: 12px; color: #999; margin-bottom: 10px;">条件：博主没有任何预测</p>
+                        <p class="text-xs text-tertiary mb-10">条件：博主没有任何预测</p>
                         <div class="data-table">
                             <table>
                                 <thead>
@@ -2729,7 +2729,7 @@
                     <!-- 测试数据区域 -->
                     <div v-if="testData && testData.summary && testData.summary.total > 0" style="margin-top: 30px;">
                         <h4 style="color: #ff9800; margin-bottom: 10px;">🧪 测试数据 ({{ testData.summary.total }})</h4>
-                        <div class="sub-actions" style="margin-bottom: 15px;">
+                        <div class="sub-actions" class="mb-15">
                             <button class="action-btn warning small" @click="previewTestData">👁️ 预览测试数据</button>
                             <button v-if="testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                         </div>
@@ -2805,10 +2805,10 @@
                         </div>
 
                         <div v-if="advice.short_term_advice && Object.keys(advice.short_term_advice).length > 0" 
-                            class="advice-term-section" style="margin-bottom: 20px;">
+                            class="advice-term-section" class="mb-20">
                             <h4 style="font-size: 15px; opacity: 0.95; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                                 <span>⚡ 短期建议</span>
-                                <span style="font-size: 12px; opacity: 0.7;">(1-3天)</span>
+                                <span class="text-xs opacity-70">(1-3天)</span>
                                 <span v-if="advice.short_term_advice.risk_level" 
                                     :class="'risk-badge risk-' + advice.short_term_advice.risk_level">
                                     {{ advice.short_term_advice.risk_level === 'high' ? '高风险' : 
@@ -2839,10 +2839,10 @@
                         </div>
 
                         <div v-if="advice.mid_term_advice && Object.keys(advice.mid_term_advice).length > 0" 
-                            class="advice-term-section" style="margin-bottom: 20px;">
+                            class="advice-term-section" class="mb-20">
                             <h4 style="font-size: 15px; opacity: 0.95; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                                 <span>📅 中期建议</span>
-                                <span style="font-size: 12px; opacity: 0.7;">(1-2周)</span>
+                                <span class="text-xs opacity-70">(1-2周)</span>
                                 <span v-if="advice.mid_term_advice.risk_level" 
                                     :class="'risk-badge risk-' + advice.mid_term_advice.risk_level">
                                     {{ advice.mid_term_advice.risk_level === 'high' ? '高风险' : 
@@ -2873,8 +2873,8 @@
                         </div>
 
                         <div v-if="advice.suggested_sectors && advice.suggested_sectors.length > 0"
-                            style="margin-bottom: 20px;">
-                            <h4 style="font-size: 14px; opacity: 0.9; margin-bottom: 12px;">✅ 建议关注板块</h4>
+                            class="mb-20">
+                            <h4 class="text-base mb-12">✅ 建议关注板块</h4>
                             <div class="advice-sectors">
                                 <span v-for="s in advice.suggested_sectors" :key="s"
                                     class="advice-sector-tag sector-bullish">{{ s }}</span>
@@ -2882,8 +2882,8 @@
                         </div>
 
                         <div v-if="advice.avoid_sectors && advice.avoid_sectors.length > 0"
-                            style="margin-bottom: 20px;">
-                            <h4 style="font-size: 14px; opacity: 0.9; margin-bottom: 12px;">⚠️ 建议规避板块</h4>
+                            class="mb-20">
+                            <h4 class="text-base mb-12">⚠️ 建议规避板块</h4>
                             <div class="advice-sectors">
                                 <span v-for="s in advice.avoid_sectors" :key="s"
                                     class="advice-sector-tag sector-bearish">{{ s }}</span>
@@ -2940,7 +2940,7 @@
                 </div>
                 <div class="modal-footer">
                     <button class="modal-btn primary" @click="submitPassword" :disabled="passwordVerifying" 
-                        style="width: 100%;">{{ passwordVerifying ? '验证中...' : '确认' }}</button>
+                        class="w-full">{{ passwordVerifying ? '验证中...' : '确认' }}</button>
                 </div>
             </div>
         </div>
@@ -3016,25 +3016,25 @@
                     <div v-if="postDetail.predictions && postDetail.predictions.length > 0"
                         class="detail-section"
                         style="margin-top: 16px; background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%); padding: 16px; border-radius: 8px;">
-                        <h4 style="color: #1890ff;"><i class="ri-bar-chart-line"></i> 分析结果</h4>
+                        <h4 class="text-primary"><i class="ri-bar-chart-line"></i> 分析结果</h4>
                         <div v-for="(pred, idx) in postDetail.predictions" :key="pred.id || idx"
                             style="background: #fff; padding: 12px; border-radius: 6px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                            <div style="margin-bottom: 6px;"><strong>板块：</strong>{{ pred.sector || '-' }} <span
-                                    v-if="pred.sector_type" style="color: #666;">({{ pred.sector_type }})</span></div>
-                            <div style="margin-bottom: 6px;"><strong>方向：</strong><span
+                            <div class="mb-6"><strong>板块：</strong>{{ pred.sector || '-' }} <span
+                                    v-if="pred.sector_type" class="text-muted">({{ pred.sector_type }})</span></div>
+                            <div class="mb-6"><strong>方向：</strong><span
                                     :style="{ color: pred.prediction_type === 'up' ? '#52c41a' : pred.prediction_type === 'down' ? '#ff4d4f' : '#666' }">{{
                                     pred.prediction_type === 'up' ? '看涨' : pred.prediction_type === 'down' ? '看跌' : '观望'
                                     }}</span><span v-if="pred.prediction_type === 'flat'" style="color: #999; font-size: 12px; margin-left: 6px;">(不计准确率)</span></div>
-                            <div style="margin-bottom: 6px;"><strong>预测：</strong>{{ pred.prediction_content || '-' }}
+                            <div class="mb-6"><strong>预测：</strong>{{ pred.prediction_content || '-' }}
                             </div>
-                            <div style="margin-bottom: 6px;"><strong>周期：</strong>{{ pred.prediction_period || '-' }} |
+                            <div class="mb-6"><strong>周期：</strong>{{ pred.prediction_period || '-' }} |
                                 <strong>置信度：</strong>{{ pred.confidence || 0 }}%
                             </div>
                             <div v-if="pred.fund_name"><strong>关联基金：</strong>{{ pred.fund_name }} ({{ pred.fund_code ||
                                 '自动匹配' }})</div>
                         </div>
                     </div>
-                    <div class="detail-section" style="margin-top: 16px;">
+                    <div class="detail-section" class="mt-16">
                         <h4><i class="ri-file-text-line"></i> 帖子内容</h4>
                         <p style="white-space: pre-wrap; line-height: 1.6; max-height: 400px; overflow-y: auto;">{{
                             postDetail.content }}</p>
@@ -3068,22 +3068,22 @@
                         <div class="detail-item"><label>日期：</label><span>{{ viewpointDetail.viewpoint_date }}</span>
                         </div>
                     </div>
-                    <div v-if="viewpointDetail.summary && !viewpointDetail.is_summary" class="detail-section" style="margin-top: 16px;">
+                    <div v-if="viewpointDetail.summary && !viewpointDetail.is_summary" class="detail-section" class="mt-16">
                         <h4>一句话摘要</h4>
                         <p style="font-size: 16px; color: #1890ff; font-weight: 500; line-height: 1.6;">{{
                             viewpointDetail.summary }}</p>
                     </div>
                     <div v-if="viewpointDetail.is_summary" class="detail-section" style="margin-top: 16px; background: #e6f7ff; padding: 10px; border-radius: 6px;">
-                        <h4 style="color: #1890ff;"><i class="ri-bar-chart-line"></i> 汇总观点</h4>
-                        <p style="font-size: 13px; color: #666;">此观点由系统自动汇总 {{ viewpointDetail.original_count || 0 }} 条原始观点生成</p>
+                        <h4 class="text-primary"><i class="ri-bar-chart-line"></i> 汇总观点</h4>
+                        <p class="text-sm text-muted">此观点由系统自动汇总 {{ viewpointDetail.original_count || 0 }} 条原始观点生成</p>
                     </div>
-                    <div class="detail-section" style="margin-top: 16px;">
+                    <div class="detail-section" class="mt-16">
                         <h4>内容</h4>
-                        <p style="white-space: pre-wrap; line-height: 1.6;">{{ viewpointDetail.content }}</p>
+                        <p class="pre-wrap">{{ viewpointDetail.content }}</p>
                     </div>
                     <div v-if="viewpointDetail.reasoning" class="detail-section">
                         <h4>分析理由</h4>
-                        <p style="white-space: pre-wrap; line-height: 1.6;">{{ viewpointDetail.reasoning }}</p>
+                        <p class="pre-wrap">{{ viewpointDetail.reasoning }}</p>
                     </div>
                 </div>
             </div>
@@ -3126,15 +3126,15 @@
                                 predictionDetail.actual_change !== null && predictionDetail.actual_change !== undefined ? predictionDetail.actual_change.toFixed(2) + '%' : '-'
                                 }}</span></div>
                     </div>
-                    <div v-if="predictionDetail.prediction_content" class="detail-section" style="margin-top: 16px;">
+                    <div v-if="predictionDetail.prediction_content" class="detail-section" class="mt-16">
                         <h4>预测内容</h4>
-                        <p style="white-space: pre-wrap; line-height: 1.6;">{{ predictionDetail.prediction_content }}
+                        <p class="pre-wrap">{{ predictionDetail.prediction_content }}
                         </p>
                     </div>
                     <div v-if="predictionDetail.is_expired && predictionDetail.verify_score !== null"
                         class="detail-section"
                         style="background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%); padding: 16px; border-radius: 8px; margin-top: 16px;">
-                        <h4 style="color: #1890ff;"><i class="ri-bar-chart-line"></i> 验证分数详情</h4>
+                        <h4 class="text-primary"><i class="ri-bar-chart-line"></i> 验证分数详情</h4>
                         <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 16px;">
                             <div style="font-size: 48px; font-weight: 700;"
                                 :style="{ color: (predictionDetail.verify_score || 0) >= 60 ? '#52c41a' : '#ff4d4f' }">
@@ -3151,62 +3151,62 @@
                             </div>
                         </div>
                         <div style="background: #fff; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
-                            <h5 style="margin-bottom: 8px; color: #333;">📐 分数计算规则</h5>
-                            <table style="width: 100%; font-size: 12px;">
+                            <h5 class="mb-8 text-secondary">📐 分数计算规则</h5>
+                            <table class="w-full text-xs">
                                 <thead>
                                     <tr style="background: #fafafa;">
-                                        <th style="padding: 6px; text-align: left;">验证类型</th>
-                                        <th style="padding: 6px; text-align: center;">分数范围</th>
-                                        <th style="padding: 6px; text-align: left;">判断条件</th>
+                                        <th class="p-6 text-left">验证类型</th>
+                                        <th class="p-6 text-center">分数范围</th>
+                                        <th class="p-6 text-left">判断条件</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr
                                         :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'final' ? '#f6ffed' : '' }">
-                                        <td style="padding: 6px;">✅ 最终正确</td>
-                                        <td style="padding: 6px; text-align: center; font-weight: 600; color: #52c41a;">
+                                        <td class="p-6">✅ 最终正确</td>
+                                        <td class="p-6 text-center font-semibold text-success">
                                             100分</td>
-                                        <td style="padding: 6px;">最终涨跌方向与预测一致</td>
+                                        <td class="p-6">最终涨跌方向与预测一致</td>
                                     </tr>
                                     <tr
                                         :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'process' ? '#f6ffed' : '' }">
-                                        <td style="padding: 6px;">📈 过程正确</td>
-                                        <td style="padding: 6px; text-align: center; font-weight: 600; color: #52c41a;">
+                                        <td class="p-6">📈 过程正确</td>
+                                        <td class="p-6 text-center font-semibold text-success">
                                             60-90分</td>
-                                        <td style="padding: 6px;">过程中≥50%时间方向正确</td>
+                                        <td class="p-6">过程中≥50%时间方向正确</td>
                                     </tr>
                                     <tr
                                         :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'partial' ? '#fffbe6' : '' }">
-                                        <td style="padding: 6px;">⚠️ 部分正确</td>
+                                        <td class="p-6">⚠️ 部分正确</td>
                                         <td style="padding: 6px; text-align: center; font-weight: 600; color: #faad14;">
                                             40-60分</td>
-                                        <td style="padding: 6px;">过程中30%-50%时间方向正确</td>
+                                        <td class="p-6">过程中30%-50%时间方向正确</td>
                                     </tr>
                                     <tr
                                         :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'failed' ? '#fff2f0' : '' }">
-                                        <td style="padding: 6px;">❌ 验证失败</td>
+                                        <td class="p-6">❌ 验证失败</td>
                                         <td style="padding: 6px; text-align: center; font-weight: 600; color: #ff4d4f;">
                                             0分</td>
-                                        <td style="padding: 6px;">方向完全错误</td>
+                                        <td class="p-6">方向完全错误</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                         <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0"
                             style="background: #fff; padding: 12px; border-radius: 6px;">
-                            <h5 style="margin-bottom: 8px; color: #333;">🔍 本次验证详情</h5>
+                            <h5 class="mb-8 text-secondary">🔍 本次验证详情</h5>
                             <div style="font-size: 13px; line-height: 1.8;">
                                 <div v-if="predictionDetail.verify_history[0].process_metrics">
                                     <div
                                         style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 8px;">
                                         <div style="background: #f6ffed; padding: 8px; border-radius: 4px;">
-                                            <div style="color: #666; font-size: 11px;">最大涨幅</div>
+                                            <div class="text-muted text-2xs">最大涨幅</div>
                                             <div style="font-weight: 600; color: #52c41a;">+{{
                                                 (predictionDetail.verify_history[0].process_metrics.max_change ||
                                                 0).toFixed(2) }}%</div>
                                         </div>
                                         <div style="background: #fff2f0; padding: 8px; border-radius: 4px;">
-                                            <div style="color: #666; font-size: 11px;">最大跌幅</div>
+                                            <div class="text-muted text-2xs">最大跌幅</div>
                                             <div style="font-weight: 600; color: #ff4d4f;">{{
                                                 (predictionDetail.verify_history[0].process_metrics.min_change ||
                                                 0).toFixed(2) }}%</div>
@@ -3220,7 +3220,7 @@
                                             Math.round((predictionDetail.verify_history[0].process_metrics.peak_hit_ratio
                                             || 0) * 100) }}%
                                         </span>
-                                        <span style="color: #999; font-size: 11px;">（{{
+                                        <span class="text-tertiary text-2xs">（{{
                                             predictionDetail.verify_history[0].process_metrics.peak_hit_days || 0 }}/{{
                                             predictionDetail.verify_history[0].process_metrics.total_days || 0
                                             }}天）</span>
@@ -3233,7 +3233,7 @@
                                             Math.round((predictionDetail.verify_history[0].process_metrics.daily_direction_hit_ratio
                                             || 0) * 100) }}%
                                         </span>
-                                        <span style="color: #999; font-size: 11px;">（{{
+                                        <span class="text-tertiary text-2xs">（{{
                                             predictionDetail.verify_history[0].process_metrics.daily_direction_hit_days || 0 }}/{{
                                             predictionDetail.verify_history[0].process_metrics.daily_direction_total_days || 0
                                             }}天，仅作参考）</span>
@@ -3257,7 +3257,7 @@
                     <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0"
                         class="detail-section">
                         <h4>验证历史（新规则：过程验证 + 分数机制）</h4>
-                        <table style="width: 100%; font-size: 12px;">
+                        <table class="w-full text-xs">
                             <thead>
                                 <tr>
                                     <th>验证日期</th>
@@ -3349,7 +3349,7 @@
                             <option value="6个月">6个月</option>
                         </select>
                     </div>
-                    <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                    <p class="text-xs text-muted mb-12">
                         <i class="ri-lightbulb-line"></i> 修改板块后，基金代码和名称会自动匹配（如果留空）
                     </p>
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
@@ -3383,7 +3383,7 @@
                     </div>
                     <div v-if="fundDetail.history && fundDetail.history.length > 0" class="detail-section">
                         <h4>历史净值（最近{{ fundDetail.history.length }}天）</h4>
-                        <table style="width: 100%; font-size: 12px;">
+                        <table class="w-full text-xs">
                             <thead>
                                 <tr>
                                     <th>日期</th>
@@ -3502,12 +3502,12 @@
                 <div v-if="configTab === 'aliases'">
                     <div style="margin-bottom: 15px; padding: 12px; background: #f6ffed; border-radius: 8px; border: 1px solid #b7eb8f;">
                         <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                            <div style="flex: 1; min-width: 150px;">
-                                <label style="font-size: 12px; color: #666;">别名（黑话/简称）</label>
+                            <div class="flex-1 min-w-150">
+                                <label class="text-xs text-muted">别名（黑话/简称）</label>
                                 <input v-model="newAlias.alias_name" placeholder="如：白酒股" style="width: 100%; padding: 6px 8px; border: 1px solid #d9d9d9; border-radius: 4px; margin-top: 4px;">
                             </div>
-                            <div style="flex: 1; min-width: 150px;">
-                                <label style="font-size: 12px; color: #666;">标准板块名称</label>
+                            <div class="flex-1 min-w-150">
+                                <label class="text-xs text-muted">标准板块名称</label>
                                 <select v-model="newAlias.sector_name" style="width: 100%; padding: 6px 8px; border: 1px solid #d9d9d9; border-radius: 4px; margin-top: 4px;">
                                     <option value="">选择板块</option>
                                     <option v-for="s in aliases.standard_sectors" :key="s" :value="s">{{ s }}</option>
@@ -3516,8 +3516,8 @@
                             <button class="action-btn small" @click="addAlias" style="margin-bottom: 1px;">添加别名</button>
                         </div>
                     </div>
-                    <div v-if="aliases.custom && aliases.custom.length > 0" style="margin-bottom: 15px;">
-                        <h4 style="margin-bottom: 8px; color: #333;">自定义别名 ({{ aliases.custom.length }})</h4>
+                    <div v-if="aliases.custom && aliases.custom.length > 0" class="mb-15">
+                        <h4 class="mb-8 text-secondary">自定义别名 ({{ aliases.custom.length }})</h4>
                         <div style="max-height: 200px; overflow-y: auto;">
                             <div v-for="a in aliases.custom" :key="a.id" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #f0f0f0;">
                                 <span><b>{{ a.alias_name }}</b> → {{ a.sector_name }}</span>
@@ -3539,10 +3539,10 @@
                 </div>
                 <div v-if="configTab === 'mappings'">
                     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
-                        <span style="font-size: 13px; color: #666;">共 {{ sectorMappings.total }} 条</span>
+                        <span class="text-sm text-muted">共 {{ sectorMappings.total }} 条</span>
                         <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}</span>
                         <span style="font-size: 13px; color: #faad14;">待审查 {{ sectorMappings.unreviewed_count }}</span>
-                        <span style="flex: 1;"></span>
+                        <span class="flex-1"></span>
                         <input v-model="mappingSearchKeyword" placeholder="搜索板块名、基金名称或基金代码" style="width: 220px; padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px;">
                         <button class="action-btn small" @click="loadSectorMappings(null)" :style="{ background: mappingFilter === null ? '#1890ff' : '#f5f5f5', color: mappingFilter === null ? '#fff' : '#666' }">全部</button>
                         <button class="action-btn small" @click="loadSectorMappings(false)" :style="{ background: mappingFilter === false ? '#faad14' : '#f5f5f5', color: mappingFilter === false ? '#fff' : '#666' }">待审查</button>
@@ -3556,30 +3556,30 @@
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0; width: 120px;">板块名</th>
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0;">基金名称</th>
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid #f0f0f0; width: 80px;">基金代码</th>
-                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 70px;">来源</th>
-                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 70px;">状态</th>
+                                    <th class="py-8 text-center table-cell">来源</th>
+                                    <th class="py-8 text-center table-cell">状态</th>
                                     <th style="padding: 8px; text-align: center; border-bottom: 1px solid #f0f0f0; width: 130px;">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-for="m in filteredMappings" :key="m.sector_name + m.fund_code" :style="{ background: m.source === 'builtin' ? '#f0f5ff' : (m.reviewed ? '#fff' : '#fffbe6') }">
                                     <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-weight: 600;">{{ m.sector_name }}</td>
-                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
+                                    <td class="table-cell">
                                         <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
                                         <span v-else>{{ m.fund_name }}</span>
                                     </td>
-                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0;">
+                                    <td class="table-cell">
                                         <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_code" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
                                         <span v-else>{{ m.fund_code }}</span>
                                     </td>
-                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                                    <td class="table-cell-center">
                                         <span :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.source === 'builtin' ? '#e6f7ff' : '#f5f5f5', color: m.source === 'builtin' ? '#1890ff' : '#999' }">{{ m.source === 'builtin' ? '内置' : '自定义' }}</span>
                                     </td>
-                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                                    <td class="table-cell-center">
                                         <span v-if="m.source === 'builtin'" :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: '#f6ffed', color: '#52c41a' }">已审查</span>
                                         <span v-else :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? '已审查' : '待审查' }}</span>
                                     </td>
-                                    <td style="padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                                    <td class="table-cell-center">
                                         <template v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)">
                                             <button @click="saveMappingEdit(m)" style="background: #52c41a; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 4px;">保存</button>
                                             <button @click="editingMappingKey = null" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
@@ -3588,7 +3588,7 @@
                                             <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
                                             <button v-if="!m.reviewed && m.source !== 'builtin'" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
                                             <button v-if="m.source !== 'builtin'" @click="deleteMapping(m.id, m.sector_name)" style="color: #ff4d4f; background: none; border: none; cursor: pointer; font-size: 12px;">删除</button>
-                                            <span v-if="m.source === 'builtin'" style="color: #999; font-size: 11px;">编辑后覆盖</span>
+                                            <span v-if="m.source === 'builtin'" class="text-tertiary text-2xs">编辑后覆盖</span>
                                         </template>
                                     </td>
                                 </tr>
@@ -3628,7 +3628,7 @@
                     <!-- LLM测试区域 -->
                     <div style="margin-top: 15px; padding: 12px; background: #e6f7ff; border-radius: 8px; border: 1px solid #91d5ff;">
                         <h4 style="color: #1890ff; margin-bottom: 10px;">🧪 LLM 连接测试</h4>
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <div class="flex gap-2 flex-wrap">
                             <button class="action-btn small" @click="testLLM" :disabled="llmTesting">
                                 {{ llmTesting ? '测试中...' : '测试对话模型' }}
                             </button>
@@ -3646,7 +3646,7 @@
                                 <div v-if="testResult.data.response" style="margin-top: 5px; padding: 8px; background: #fafafa; border-radius: 4px;">
                                     响应: {{ testResult.data.response }}
                                 </div>
-                                <div v-if="testResult.data.error" style="color: #ff4d4f;">
+                                <div v-if="testResult.data.error" class="text-danger">
                                     错误: {{ testResult.data.error }}
                                 </div>
                             </div>
@@ -3657,8 +3657,8 @@
                     <!-- 导出区域 -->
                     <div style="margin-bottom: 20px; padding: 15px; background: #f6ffed; border-radius: 8px; border: 1px solid #b7eb8f;">
                         <h4 style="color: #389e0d; margin-bottom: 12px;">📤 导出数据</h4>
-                        <p style="font-size: 13px; color: #666; margin-bottom: 12px;">将系统数据导出为 JSON 文件，可用于备份或迁移到其他环境。</p>
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <p class="text-sm text-muted mb-12">将系统数据导出为 JSON 文件，可用于备份或迁移到其他环境。</p>
+                        <div class="flex gap-2 flex-wrap">
                             <button class="action-btn" @click="exportAllData" :disabled="exportLoading">
                                 {{ exportLoading ? '导出中...' : '📦 导出全部数据' }}
                             </button>
@@ -3666,7 +3666,7 @@
                                 {{ exportConfigLoading ? '导出中...' : '⚙️ 导出系统配置' }}
                             </button>
                         </div>
-                        <div v-if="exportResult" style="margin-top: 10px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px;">
+                        <div v-if="exportResult" class="mt-10 p-8 bg-white rounded text-sm">
                             <span :style="{ color: exportResult.success ? '#52c41a' : '#ff4d4f' }">{{ exportResult.message }}</span>
                         </div>
                     </div>
@@ -3674,7 +3674,7 @@
                     <!-- 导入区域 -->
                     <div style="padding: 15px; background: #fff7e6; border-radius: 8px; border: 1px solid #ffd591;">
                         <h4 style="color: #d46b08; margin-bottom: 12px;">📥 导入数据</h4>
-                        <p style="font-size: 13px; color: #666; margin-bottom: 12px;">从 JSON 文件导入数据。默认为合并模式（跳过已存在的记录）。</p>
+                        <p class="text-sm text-muted mb-12">从 JSON 文件导入数据。默认为合并模式（跳过已存在的记录）。</p>
 
                         <div class="mb-12">
                             <label style="font-size: 13px; color: #333; display: block; margin-bottom: 6px;">选择导入文件：</label>
@@ -3687,7 +3687,7 @@
                             {{ importLoading ? '导入中...' : '📥 开始导入' }}
                         </button>
 
-                        <div v-if="importResult" style="margin-top: 10px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px;">
+                        <div v-if="importResult" class="mt-10 p-8 bg-white rounded text-sm">
                             <span :style="{ color: importResult.success ? '#52c41a' : '#ff4d4f' }">{{ importResult.message }}</span>
                             <div v-if="importResult.data" style="margin-top: 6px; color: #666;">
                                 <div v-for="(count, table) in importResult.data.imported" :key="table">
@@ -3697,7 +3697,7 @@
                                     <span v-if="count > 0">↪ {{ table }}: 跳过 {{ count }} 条已存在记录</span>
                                 </div>
                                 <div v-for="(count, table) in importResult.data.failed" :key="'failed-' + table">
-                                    <span v-if="count > 0" style="color: #ff4d4f;">❌ {{ table }}: 失败 {{ count }} 条</span>
+                                    <span v-if="count > 0" class="text-danger">❌ {{ table }}: 失败 {{ count }} 条</span>
                                 </div>
                                 <div v-if="importResult.data.warnings && importResult.data.warnings.length" style="margin-top: 6px; color: #d46b08;">
                                     <div v-for="warning in importResult.data.warnings" :key="warning">⚠️ {{ warning }}</div>
@@ -3718,17 +3718,17 @@
                         @click="showWeChatFetch = false">×</button></div>
                 <div v-if="!wechatFetching">
                     <div class="form-group">
-                        <label>文章链接 <span style="font-size: 11px; color: #999;">（支持多个链接，每行一个）</span></label>
+                        <label>文章链接 <span class="text-2xs text-tertiary">（支持多个链接，每行一个）</span></label>
                         <textarea v-model="wechatUrls" rows="6" placeholder="粘贴微信公众号文章链接，每行一个：&#10;https://mp.weixin.qq.com/s/xxx&#10;https://mp.weixin.qq.com/s/yyy&#10;https://mp.weixin.qq.com/s/zzz" style="width: 100%; padding: 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 13px; resize: vertical; font-family: inherit;"></textarea>
                         <p v-if="wechatUrlCount > 0" style="font-size: 11px; color: #1890ff; margin-top: 4px;">
                             ✅ 已识别 {{ wechatUrlCount }} 个有效链接
                         </p>
                     </div>
                     <div class="form-group">
-                        <label>发布日期 <span style="font-size: 11px; color: #999;">（留空则自动从文章中提取）</span></label>
+                        <label>发布日期 <span class="text-2xs text-tertiary">（留空则自动从文章中提取）</span></label>
                         <input type="date" v-model="wechatPostDate">
                     </div>
-                    <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                    <p class="text-xs text-muted mb-12">
                         <i class="ri-lightbulb-line"></i> 提示：从微信App中分享文章复制链接后粘贴到此处，支持一次粘贴多个链接
                     </p>
                 </div>
@@ -3758,10 +3758,10 @@
                     <i class="ri-bar-chart-line"></i> {{ wechatBatchSummary }}
                 </div>
                 <div v-if="wechatFailedUrls.length > 0" style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <button class="modal-btn default" style="font-size: 12px; padding: 6px 12px;" @click="copyFailedUrls">
+                    <button class="modal-btn default" class="text-xs px-12 py-6" @click="copyFailedUrls">
                         📋 复制失败链接 ({{ wechatFailedUrls.length }})
                     </button>
-                    <button class="modal-btn default" style="font-size: 12px; padding: 6px 12px;" @click="retryFailedUrls">
+                    <button class="modal-btn default" class="text-xs px-12 py-6" @click="retryFailedUrls">
                         🔄 填入文本框重试
                     </button>
                 </div>
