@@ -15,6 +15,10 @@ from src.fund.fund_api import FundAPI
 from src.utils.prediction_utils import PERIOD_MAP, ULTRA_SHORT_PERIODS, parse_period_to_days
 from src.analyzer.local_trend_analyzer import get_local_trend_analyzer
 from src.core.config import config
+from src.services.prediction_change_log_service import (
+    add_prediction_change_log,
+    snapshot_prediction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +31,20 @@ class PredictionVerifyService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.llm_analyzer = get_analyzer()
+        self._llm_analyzer = None
         self.fund_api = FundAPI()
         # 实例级净值缓存，用于批量验证时避免 N+1 查询
         # 结构: {(fund_code, date_str): nav, '_history': {fund_code: [FundHistory,...]}}
         # 注意：使用 LRU 机制限制大小，防止内存溢出
         self._nav_cache: Dict = {}
         self._cache_order: list = []  # 记录缓存插入顺序，用于 LRU 淘汰
+
+    @property
+    def llm_analyzer(self):
+        """只在边界评分需要 AI 辅助时初始化 LLM 客户端。"""
+        if self._llm_analyzer is None:
+            self._llm_analyzer = get_analyzer()
+        return self._llm_analyzer
     
     def get_verify_config(self, period_days: int) -> Dict:
         """
@@ -752,6 +763,7 @@ class PredictionVerifyService:
                     score = llm_score
                     analysis = llm_result.get("analysis", analysis)
         
+        before_state = snapshot_prediction(prediction)
         prediction.current_nav = end_nav
         prediction.current_nav_date = window_end
         prediction.actual_change = actual_change
@@ -794,10 +806,23 @@ class PredictionVerifyService:
                 is_newly_completed = True
             prediction.status = "success" if is_correct else "failed"
         
-        self.db.commit()
-        
         if is_newly_completed:
-            self._update_blogger_accuracy(prediction.blogger_id, score_change=score, is_new_verify=True, is_correct=is_correct)
+            self._update_blogger_accuracy(
+                prediction.blogger_id,
+                score_change=score,
+                is_new_verify=True,
+                is_correct=is_correct,
+                commit=False,
+            )
+
+        add_prediction_change_log(
+            self.db,
+            prediction,
+            action="verified",
+            source="automatic",
+            before_state=before_state,
+        )
+        self.db.commit()
         
         return {
             "success": True,
@@ -923,86 +948,10 @@ class PredictionVerifyService:
         logger.info(f"[Verify] 预热完成：{len(all_records)} 条记录，{len(history_cache)} 个基金")
     
     def verify_expired_pending(self) -> Dict:
-        """验证所有超过30天补救期的待验证预测（补救验证，与 verify_all_pending 互补）
-
-        verify_all_pending 验证 target_date <= today 的预测，
-        verify_expired_pending 验证 target_date < grace_cutoff (30天前) 的预测。
-        """
-        today = date.today()
-        grace_cutoff = today - timedelta(days=30)
-
-        # 查询超过30天补救期的预测（这些预测不会被 verify_all_pending 处理）
-        expired_pending = self.db.query(Prediction).filter(
-            Prediction.status == 'pending',
-            Prediction.is_deleted == False,
-            Prediction.prediction_type != 'flat',
-            Prediction.target_date < grace_cutoff
-        ).all()
-
-        logger.info(f"[Verify-Expired] 找到 {len(expired_pending)} 个超过30天补救期的待验证预测")
-
-        if not expired_pending:
-            return {
-                "success": True,
-                "message": "没有需要补救验证的预测",
-                "data": {
-                    "total": 0,
-                    "success_count": 0,
-                    "failed_count": 0,
-                    "results": []
-                }
-            }
-
-        # 预热缓存
-        self._warm_cache(expired_pending, today)
-
-        results = []
-        success_count = 0
-        failed_count = 0
-
-        for prediction in expired_pending:
-
-            fund_code, fund_name = self.match_fund_for_prediction(prediction)
-            if not fund_code:
-                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 无法匹配基金，跳过")
-                failed_count += 1
-                results.append({
-                    "prediction_id": prediction.id,
-                    "success": False,
-                    "message": f"无法匹配基金：{prediction.sector}"
-                })
-                continue
-
-            # 直接调用 verify_prediction，由它内部处理数据可用性检查
-            result = self.verify_prediction(prediction.id, force=True)
-            results.append({
-                "prediction_id": prediction.id,
-                "success": result.get("success"),
-                "message": result.get("message")
-            })
-
-            if result.get("success"):
-                success_count += 1
-            else:
-                failed_count += 1
-                logger.warning(f"[Verify-Expired] 预测 {prediction.id} 验证失败: {result.get('message')}")
-
-        # 清理缓存
-        self._nav_cache.clear()
-        self._cache_order.clear()
-
-        return {
-            "success": True,
-            "message": f"补救验证完成：成功 {success_count} 个，失败 {failed_count} 个",
-            "data": {
-                "total": len(expired_pending),
-                "success_count": success_count,
-                "failed_count": failed_count,
-                "results": results
-            }
-        }
+        """兼容旧补救入口；统一扫描已包含超过 30 天的待验证预测。"""
+        return self.verify_all_pending()
     
-    def _update_blogger_accuracy(self, blogger_id: int, score_change: int = None, is_new_verify: bool = False, was_correct: bool = None, is_correct: bool = None):
+    def _update_blogger_accuracy(self, blogger_id: int, score_change: int = None, is_new_verify: bool = False, was_correct: bool = None, is_correct: bool = None, commit: bool = True):
         """
         更新博主准确率（使用统一的统计模块）
         
@@ -1024,14 +973,16 @@ class PredictionVerifyService:
                     self.db, blogger_id,
                     score_delta=score_change,
                     correct_delta=1 if is_correct else 0,
-                    verified_delta=1
+                    verified_delta=1,
+                    commit=commit,
                 )
             else:
                 update_blogger_stats_incremental(
                     self.db, blogger_id,
                     score_delta=score_change,
                     correct_delta=-1 if was_correct else 0,
-                    verified_delta=-1
+                    verified_delta=-1,
+                    commit=commit,
                 )
     
     def update_blogger_on_prediction_delete(self, blogger_id: int, verify_score: int, is_correct: bool, commit: bool = True):
@@ -1073,7 +1024,7 @@ class PredictionVerifyService:
         else:
             return 0
     
-    def rollback_invalid_verifications(self, min_data_points: int = 2) -> Dict:
+    def rollback_invalid_verifications(self, min_data_points: int = 2, dry_run: bool = True) -> Dict:
         """
         回溯已验证但数据不足的预测
         
@@ -1107,9 +1058,11 @@ class PredictionVerifyService:
         
         total_checked = len(predictions)
         rolled_back = 0
+        would_rollback = 0
         kept = 0
         errors = 0
         rollback_details = []
+        affected_bloggers = set()
         
         for prediction in predictions:
             try:
@@ -1138,33 +1091,37 @@ class PredictionVerifyService:
                 )
                 
                 if not data_check['available']:
+                    would_rollback += 1
                     old_status = prediction.status
                     old_verify_score = prediction.verify_score
                     old_is_correct = prediction.is_correct
-                    
-                    prediction.status = 'pending'
-                    prediction.is_expired = False
-                    prediction.verify_history = []
-                    prediction.verify_count = 0
-                    prediction.verify_score = None
-                    prediction.actual_change = None
-                    prediction.is_correct = None
-                    prediction.current_nav = None
-                    prediction.current_nav_date = None
-                    prediction.end_nav = None
-                    prediction.end_nav_date = None
-                    prediction.start_nav = None
-                    prediction.start_nav_date = None
-                    
-                    if prediction.blogger_id and old_verify_score is not None:
-                        self._update_blogger_accuracy(
-                            prediction.blogger_id,
-                            score_change=-old_verify_score,
-                            is_new_verify=False,
-                            was_correct=old_is_correct
+
+                    if not dry_run:
+                        before_state = snapshot_prediction(prediction)
+                        prediction.status = 'pending'
+                        prediction.is_expired = False
+                        prediction.has_active_prediction = True
+                        prediction.verify_count = 0
+                        prediction.verify_score = None
+                        prediction.actual_change = None
+                        prediction.is_correct = None
+                        prediction.current_nav = None
+                        prediction.current_nav_date = None
+                        prediction.end_nav = None
+                        prediction.end_nav_date = None
+                        prediction.start_nav = None
+                        prediction.start_nav_date = None
+                        prediction.verified_at = None
+                        prediction.last_verify_date = None
+                        add_prediction_change_log(
+                            self.db,
+                            prediction,
+                            action="verification_rollback",
+                            source="maintenance",
+                            before_state=before_state,
                         )
-                    
-                    rolled_back += 1
+                        affected_bloggers.add(prediction.blogger_id)
+                        rolled_back += 1
                     rollback_details.append({
                         'prediction_id': prediction.id,
                         'fund_code': fund_code,
@@ -1181,15 +1138,28 @@ class PredictionVerifyService:
                     
             except Exception as e:
                 errors += 1
+                self.db.rollback()
                 logger.error(f"[Rollback] 检查预测 {prediction.id} 时出错: {e}")
-        
-        self.db.commit()
+                return {
+                    'success': False,
+                    'message': f"回溯检查失败，未保存任何修改: {e}",
+                    'data': {'total_checked': total_checked, 'errors': errors},
+                }
+
+        if not dry_run:
+            from src.utils.blogger_stats import recalculate_blogger_stats
+            for blogger_id in affected_bloggers:
+                if blogger_id:
+                    recalculate_blogger_stats(self.db, blogger_id, commit=False)
+            self.db.commit()
         
         return {
             'success': True,
-            'message': f"回溯完成：检查 {total_checked} 个预测，回溯 {rolled_back} 个，保留 {kept} 个，错误 {errors} 个",
+            'message': f"{'预览' if dry_run else '回溯'}完成：检查 {total_checked} 个预测，{'将回溯' if dry_run else '已回溯'} {would_rollback if dry_run else rolled_back} 个，保留 {kept} 个，错误 {errors} 个",
             'data': {
+                'dry_run': dry_run,
                 'total_checked': total_checked,
+                'would_rollback': would_rollback,
                 'rolled_back': rolled_back,
                 'kept': kept,
                 'errors': errors,

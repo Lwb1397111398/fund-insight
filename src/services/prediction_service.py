@@ -10,7 +10,12 @@ import re
 
 from .base import BaseService
 from src.models.database import Prediction, Post, Blogger, FundInfo
-from src.analyzer.llm_analyzer import get_analyzer
+from src.services.prediction_change_log_service import (
+    add_prediction_change_log,
+    snapshot_prediction,
+)
+from src.utils.prediction_utils import calculate_target_date
+from src.utils.blogger_stats import recalculate_blogger_stats
 
 
 class PredictionService(BaseService[Prediction]):
@@ -136,13 +141,33 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             更新后的预测实例
         """
-        return self.update(prediction_id, {
-            "status": "verified",
-            "actual_change": actual_change,
-            "is_correct": is_correct,
-            "ai_judgment": ai_judgment,
-            "verified_at": datetime.now()
-        })
+        prediction = self.db.query(Prediction).filter(
+            Prediction.id == prediction_id,
+            Prediction.is_deleted == False,
+        ).first()
+        if not prediction:
+            return None
+
+        before_state = snapshot_prediction(prediction)
+        prediction.status = "verified"
+        prediction.actual_change = actual_change
+        prediction.is_correct = is_correct
+        prediction.ai_judgment = ai_judgment
+        prediction.verified_at = datetime.now()
+        add_prediction_change_log(
+            self.db,
+            prediction,
+            action="verified",
+            source="manual",
+            before_state=before_state,
+        )
+        try:
+            self.db.commit()
+            self.db.refresh(prediction)
+            return prediction
+        except Exception:
+            self.db.rollback()
+            raise
     
     def get_stats(self, blogger_id: int = None) -> Dict:
         """
@@ -345,6 +370,118 @@ class PredictionService(BaseService[Prediction]):
             "verify_score": prediction.verify_score,
             "created_at": prediction.created_at.isoformat() if prediction.created_at else None
         }
+
+    def update_prediction_fields(self, prediction_id: int, changes: Dict[str, Any]) -> Optional[Prediction]:
+        """安全修改预测；验证依据一旦生效便不可原地覆盖。"""
+        prediction = self.db.query(Prediction).filter(
+            Prediction.id == prediction_id,
+            Prediction.is_deleted == False,
+        ).first()
+        if not prediction:
+            return None
+
+        allowed_fields = {
+            "sector", "fund_code", "fund_name", "prediction_type",
+            "confidence", "prediction_period",
+        }
+        values = {
+            key: value for key, value in changes.items()
+            if key in allowed_fields and value is not None
+        }
+        verification_inputs = {
+            "sector", "fund_code", "fund_name", "prediction_type",
+            "confidence", "prediction_period",
+        }
+        changed_inputs = {
+            key for key, value in values.items()
+            if key in verification_inputs and getattr(prediction, key) != value
+        }
+        is_verified = bool(
+            (prediction.verify_count or 0) > 0
+            or prediction.status in ("success", "failed", "verified")
+            or prediction.is_expired
+        )
+        if is_verified and changed_inputs:
+            raise ValueError("已验证预测不能直接修改验证依据，请先通过纠正流程重新验证")
+
+        before_state = snapshot_prediction(prediction)
+
+        from src.constants.sector_fund_map import (
+            get_category_for_sector,
+            get_fund_for_sector,
+            normalize_sector_name,
+        )
+
+        sector_changed = False
+        if "sector" in values:
+            standard_sector = normalize_sector_name(values["sector"])
+            sector_changed = standard_sector != prediction.sector
+            prediction.sector = standard_sector
+            prediction.sector_type = get_category_for_sector(standard_sector)
+
+        explicit_fund_change = "fund_code" in values or "fund_name" in values
+        if "fund_code" in values:
+            prediction.fund_code = values["fund_code"] or None
+        if "fund_name" in values:
+            prediction.fund_name = values["fund_name"] or None
+        if sector_changed and not explicit_fund_change:
+            matched_fund = get_fund_for_sector(prediction.sector)
+            if matched_fund:
+                prediction.fund_code = matched_fund.get("code") or None
+                prediction.fund_name = matched_fund.get("name") or None
+
+        if "prediction_type" in values:
+            prediction.prediction_type = values["prediction_type"]
+        if "confidence" in values:
+            prediction.confidence = values["confidence"]
+        if "prediction_period" in values and values["prediction_period"] != prediction.prediction_period:
+            prediction.prediction_period = values["prediction_period"]
+            prediction.target_date = calculate_target_date(
+                prediction.prediction_date,
+                prediction.prediction_period,
+            )
+            prediction.next_verify_date = self._calculate_next_verify_date(
+                prediction.prediction_date,
+                prediction.target_date,
+            )
+
+        try:
+            add_prediction_change_log(
+                self.db,
+                prediction,
+                action="updated",
+                source="user",
+                before_state=before_state,
+            )
+            self.db.commit()
+            self.db.refresh(prediction)
+            return prediction
+        except Exception:
+            self.db.rollback()
+            raise
+
+    @staticmethod
+    def _calculate_next_verify_date(prediction_date: date, target_date: date) -> date:
+        today = date.today()
+        days_since_prediction = max(0, (today - prediction_date).days)
+        next_verify_days = ((days_since_prediction // 5) + 1) * 5
+        return min(prediction_date + timedelta(days=next_verify_days), target_date)
+
+    def _recalculate_related_stats(self, prediction: Prediction) -> None:
+        recalculate_blogger_stats(self.db, prediction.blogger_id, commit=False)
+        if not prediction.fund_code:
+            return
+        fund = self.db.query(FundInfo).filter(
+            FundInfo.fund_code == prediction.fund_code
+        ).first()
+        if not fund:
+            return
+        active_count = self.db.query(func.count(Prediction.id)).filter(
+            Prediction.fund_code == prediction.fund_code,
+            Prediction.is_deleted == False,
+        ).scalar() or 0
+        fund.active_predictions = active_count
+        fund.can_delete = active_count == 0
     
     def delete_prediction(self, prediction_id: int) -> bool:
         """
@@ -356,22 +493,65 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             是否删除成功
         """
-        prediction = self.get(prediction_id)
+        prediction = self.db.query(Prediction).filter(
+            Prediction.id == prediction_id,
+            Prediction.is_deleted == False,
+        ).first()
         if not prediction:
             return False
-        
-        if prediction.verify_count and prediction.verify_count > 0:
-            from src.services.prediction_verify_service import PredictionVerifyService
-            verify_service = PredictionVerifyService(self.db)
-            verify_service.update_blogger_on_prediction_delete(
-                blogger_id=prediction.blogger_id,
-                verify_score=prediction.verify_score,
-                is_correct=prediction.is_correct
+
+        before_state = snapshot_prediction(prediction)
+        prediction.is_deleted = True
+        prediction.deleted_at = datetime.now()
+        prediction.deleted_by = "user"
+        prediction.delete_reason = "manual_archive"
+        prediction.restore_before = date.today() + timedelta(days=30)
+        try:
+            self.db.flush()
+            self._recalculate_related_stats(prediction)
+            add_prediction_change_log(
+                self.db,
+                prediction,
+                action="archived",
+                source="user",
+                before_state=before_state,
             )
-        
-        self.db.delete(prediction)
-        self.db.commit()
-        return True
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def restore_prediction(self, prediction_id: int) -> bool:
+        """恢复被归档的预测，并从有效预测重新计算关联统计。"""
+        prediction = self.db.query(Prediction).filter(
+            Prediction.id == prediction_id,
+            Prediction.is_deleted == True,
+        ).first()
+        if not prediction:
+            return False
+
+        before_state = snapshot_prediction(prediction)
+        prediction.is_deleted = False
+        prediction.deleted_at = None
+        prediction.deleted_by = None
+        prediction.delete_reason = None
+        prediction.restore_before = None
+        try:
+            self.db.flush()
+            self._recalculate_related_stats(prediction)
+            add_prediction_change_log(
+                self.db,
+                prediction,
+                action="restored",
+                source="user",
+                before_state=before_state,
+            )
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
     
     def get_verify_progress(self) -> Dict:
         """

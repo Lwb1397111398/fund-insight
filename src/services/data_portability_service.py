@@ -14,15 +14,21 @@ from sqlalchemy import Boolean, Date, DateTime, Float, Integer, JSON, Numeric, S
 from sqlalchemy.orm import Session
 
 from src.models.database import (
+    AnalysisLog,
+    BatchAnalysisTask,
     Blogger,
+    CrawlerArticleRecord,
     FundHistory,
     FundInfo,
     InvestmentAdvice,
     Post,
     Prediction,
+    PredictionChangeLog,
+    PredictionGroup,
     SectorAlias,
     SectorFundMapping,
     Viewpoint,
+    VerificationTask,
 )
 
 
@@ -34,7 +40,7 @@ class TableSpec:
     exclude_fields: Sequence[str] = ()
 
 
-EXPORT_VERSION = "1.0"
+EXPORT_VERSION = "1.3"
 
 
 TABLE_SPECS: Sequence[TableSpec] = (
@@ -42,7 +48,13 @@ TABLE_SPECS: Sequence[TableSpec] = (
     TableSpec("fund_info", FundInfo, ("fund_code",)),
     TableSpec("posts", Post, ("id",)),
     TableSpec("predictions", Prediction, ("id",), exclude_fields=("llm_raw_response",)),
+    TableSpec("prediction_change_logs", PredictionChangeLog, ("id",)),
+    TableSpec("batch_analysis_tasks", BatchAnalysisTask, ("id",)),
+    TableSpec("analysis_logs", AnalysisLog, ("id",)),
+    TableSpec("verification_tasks", VerificationTask, ("id",)),
+    TableSpec("prediction_groups", PredictionGroup, ("id",)),
     TableSpec("viewpoints", Viewpoint, ("id",)),
+    TableSpec("crawler_article_records", CrawlerArticleRecord, ("article_id",)),
     TableSpec("fund_history", FundHistory, ("fund_code", "nav_date")),
     TableSpec("sector_alias", SectorAlias, ("alias_name",)),
     TableSpec("sector_fund_mapping", SectorFundMapping, ("sector_name", "fund_code")),

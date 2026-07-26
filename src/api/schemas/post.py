@@ -1,7 +1,7 @@
 """
 帖子数据模式
 """
-from typing import Optional
+from typing import List, Optional
 from datetime import date, datetime
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ class PostBase(BaseModel):
 class PostCreate(PostBase):
     """创建帖子请求"""
     auto_generate_title: bool = Field(default=False, description="是否自动生成标题")
+    async_mode: bool = Field(default=True, description="兼容字段：True 表示仅保存，稍后分析")
 
 
 class PostUpdate(BaseModel):
@@ -55,3 +56,10 @@ class PostAnalysisResult(BaseModel):
     predictions: list = []
     viewpoint: Optional[dict] = None
     summary: Optional[str] = None
+
+
+class PostAnalysisJobRequest(BaseModel):
+    """创建帖子分析任务。"""
+
+    post_ids: Optional[List[int]] = None
+    limit: int = Field(default=100, ge=1, le=1000)

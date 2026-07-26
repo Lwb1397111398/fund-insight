@@ -20,7 +20,7 @@ def test_render_yaml_defines_daily_cron_service():
 
 
 def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
-    """一次性定时任务脚本应按顺序执行基金更新和预测验证"""
+    """一次性定时任务脚本应按顺序执行基金更新、预测验证和过期验证"""
     from scripts import run_scheduled_tasks
 
     calls = []

@@ -28,6 +28,7 @@ class TaskScheduler:
         self._last_cleanup_date = None
         self._last_verify_date = None
         self._last_fund_update_date = None
+        self._last_viewpoint_summary_date = None
 
     @property
     def running(self) -> bool:
@@ -69,7 +70,6 @@ class TaskScheduler:
         # 启动时先更新基金数据，再执行验证
         self._run_fund_update()
         self._run_prediction_verify()
-        self._run_expired_verify()
 
         # 初始化状态变量
         with self._state_lock:
@@ -77,6 +77,7 @@ class TaskScheduler:
             self._last_cleanup_date = now.date()
             self._last_verify_date = now.date()
             self._last_fund_update_date = now.date()
+            self._last_viewpoint_summary_date = now.date()
 
         while self.running:
             try:
@@ -91,9 +92,17 @@ class TaskScheduler:
                     if should_run:
                         self._run_fund_update()
                         self._run_prediction_verify()
-                        self._run_expired_verify()
                         with self._state_lock:
                             self._last_verify_date = current_date
+
+                # 每天上午 11:00-11:59 执行观点每日汇总（在观点抓取分析完成后）
+                if 660 <= current_minute < 720:
+                    with self._state_lock:
+                        should_run = self._last_viewpoint_summary_date != current_date
+                    if should_run:
+                        self._run_viewpoint_summary()
+                        with self._state_lock:
+                            self._last_viewpoint_summary_date = current_date
 
                 # 每天凌晨 2:00-2:59 执行清理任务
                 if 120 <= current_minute < 180:
@@ -124,6 +133,27 @@ class TaskScheduler:
                 logger.error(f"调度器异常: {e}", exc_info=True)
                 time.sleep(300)  # 异常后等待5分钟再试
     
+    def _run_viewpoint_summary(self):
+        """执行观点每日汇总任务"""
+        import os
+        from src.services.viewpoint_workflow_service import ViewpointWorkflowService
+
+        if os.getenv("VIEWPOINT_AUTO_SUMMARY_ENABLED", "false").lower() not in ("1", "true", "yes", "on"):
+            logger.info("观点每日汇总已禁用（VIEWPOINT_AUTO_SUMMARY_ENABLED=false）")
+            return {"success": True, "skipped": True, "reason": "viewpoint_summary_disabled"}
+
+        logger.info("开始执行观点每日汇总任务...")
+        try:
+            result = ViewpointWorkflowService.run_daily_summary_task()
+            if result.get("success"):
+                logger.info(f"观点每日汇总完成: task_id={result.get('task_id')}")
+            else:
+                logger.error(f"观点每日汇总失败: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"执行观点每日汇总任务失败: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
     def _run_cleanup(self):
         """执行清理任务"""
         if not destructive_cleanup_enabled():
@@ -131,7 +161,7 @@ class TaskScheduler:
             return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
         try:
             from src.tasks.cleanup_tasks import run_cleanup_task
-            
+
             logger.info("开始执行定时清理任务...")
             result = run_cleanup_task()
             
@@ -152,14 +182,31 @@ class TaskScheduler:
     def _run_prediction_verify(self):
         """执行预测验证任务"""
         from src.services.prediction_verify_service import PredictionVerifyService
+        from src.services.prediction_verify_task import prediction_verify_task
         from src.models.database import SessionLocal
+        from sqlalchemy.orm import Session
 
         logger.info("开始执行预测验证任务...")
         db = SessionLocal()
+        task_db = db if isinstance(db, Session) else None
+        task_started = False
+        task_id = None
+        task_result = None
         try:
             try:
+                start_result = prediction_verify_task.start(total=0, db=task_db)
+                if not start_result["success"]:
+                    return {
+                        "success": True,
+                        "skipped": True,
+                        "message": start_result["message"],
+                        "data": start_result["data"],
+                    }
+                task_id = start_result["data"]["task_id"]
+                task_started = True
                 service = PredictionVerifyService(db)
                 result = service.verify_all_pending()
+                task_result = result
 
                 if result.get("success"):
                     data = result.get("data", {})
@@ -168,6 +215,12 @@ class TaskScheduler:
                     logger.error(f"预测验证失败: {result}")
                 return result
             finally:
+                if task_started:
+                    prediction_verify_task.finish(
+                        task_result or {"success": False, "message": "定时验证异常终止"},
+                        db=task_db,
+                        task_id=task_id,
+                    )
                 db.close()
         except Exception as e:
             logger.error(f"执行预测验证任务失败: {e}", exc_info=True)
@@ -179,33 +232,8 @@ class TaskScheduler:
             return {"success": False, "error": str(e)}
     
     def _run_expired_verify(self):
-        """执行已过期待验证预测的补救验证"""
-        from src.services.prediction_verify_service import PredictionVerifyService
-        from src.models.database import SessionLocal
-
-        logger.info("开始执行补救验证任务...")
-        db = SessionLocal()
-        try:
-            try:
-                service = PredictionVerifyService(db)
-                result = service.verify_expired_pending()
-
-                if result.get("success"):
-                    data = result.get("data", {})
-                    logger.info(f"补救验证完成: 成功 {data.get('success_count', 0)} 个, 失败 {data.get('failed_count', 0)} 个")
-                else:
-                    logger.error(f"补救验证失败: {result}")
-                return result
-            finally:
-                db.close()
-        except Exception as e:
-            logger.error(f"执行补救验证任务失败: {e}", exc_info=True)
-            # 确保异常时也能关闭数据库连接
-            try:
-                db.close()
-            except Exception:
-                pass
-            return {"success": False, "error": str(e)}
+        """兼容旧调度入口；复用带持久化任务锁的统一验证任务。"""
+        return self._run_prediction_verify()
     
     def _run_fund_update(self):
         """执行基金数据更新（逐个提交：成功的即时保存，失败的不影响其他）"""

@@ -12,6 +12,8 @@ def test_check_data_changed_detects_recent_viewpoint_soft_delete(test_db):
         market_direction="bullish",
         confidence=70,
         sectors_bullish=["人工智能"],
+        summary="人工智能板块偏强",
+        reasoning="【AI深度分析】资金流改善",
         viewpoint_date=date.today(),
         created_at=datetime(2026, 7, 10, 9, 0, 0),
         is_deleted=False,

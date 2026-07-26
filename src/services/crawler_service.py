@@ -100,6 +100,7 @@ class CrawlerService:
         return {
             "enabled": self.is_crawler_enabled(),
             "modules": {
+                "eastmoney_news": True,
                 "sina_blog": True
             }
         }
@@ -437,6 +438,28 @@ class CrawlerService:
                 "skipped": skipped_articles
             }
         }
+
+    def crawl_eastmoney_news(self, max_articles: int = 20, fetch_content: bool = False, concurrent: bool = True, max_workers: int = 3) -> Dict:
+        """抓取东方财富7x24快讯"""
+        if not self.is_crawler_enabled():
+            return {"success": False, "message": "爬虫模块未启用"}
+
+        logger.info(f"开始抓取东方财富快讯 (最多 {max_articles} 篇, 并发: {concurrent}, 并发数: {max_workers})")
+
+        try:
+            from src.crawler.eastmoney_news_crawler import get_news_crawler
+            crawler = get_news_crawler()
+            articles = crawler.fetch_news(max_articles=max_articles, fetch_content=fetch_content)
+            result = self._crawl_source('eastmoney_news', articles, '东方财富', concurrent, max_workers)
+
+            adopted_count = result['data']['adopted_count']
+            skipped_count = result['data']['skipped_count']
+            logger.info(f"东方财富快讯抓取完成: 采纳 {adopted_count} 篇, 跳过 {skipped_count} 篇")
+
+            return result
+        except Exception as e:
+            self.db.rollback()
+            raise e
 
     def crawl_sina_blog(self, max_posts: int = 20, concurrent: bool = True, max_workers: int = 3) -> Dict:
         """抓取新浪博客"""

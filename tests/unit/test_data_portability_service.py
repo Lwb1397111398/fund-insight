@@ -6,18 +6,55 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.models.database import (
+    AnalysisLog,
     Base,
+    BatchAnalysisTask,
     Blogger,
+    CrawlerArticleRecord,
     FundHistory,
     FundInfo,
     InvestmentAdvice,
     Post,
     Prediction,
+    PredictionGroup,
     SectorAlias,
     SectorFundMapping,
     Viewpoint,
+    VerificationTask,
 )
 from src.services.data_portability_service import DataPortabilityService
+
+
+def test_export_and_restore_crawler_article_records(test_db):
+    viewpoint = Viewpoint(
+        content="备份观点",
+        source="eastmoney_blog",
+        viewpoint_date=date.today(),
+        is_deleted=False,
+    )
+    test_db.add(viewpoint)
+    test_db.flush()
+    test_db.add(CrawlerArticleRecord(
+        article_id="eastmoney_blog:backup-test",
+        source="eastmoney_blog",
+        title="备份文章",
+        url="https://example.test/backup",
+        is_adopted=True,
+        viewpoint_id=viewpoint.id,
+    ))
+    test_db.commit()
+
+    exported = DataPortabilityService(test_db).export_data()
+    assert exported["export_version"] == "1.3"
+    assert exported["summary"]["crawler_article_records"] == 1
+
+    test_db.query(CrawlerArticleRecord).delete()
+    test_db.query(Viewpoint).delete()
+    test_db.commit()
+    result = DataPortabilityService(test_db).import_data(exported)
+
+    assert result["success"] is True
+    assert test_db.query(CrawlerArticleRecord).one().viewpoint_id == test_db.query(Viewpoint).one().id
 
 
 def _export_v1_payload():
@@ -193,6 +230,81 @@ def _export_v1_payload():
     }
 
 
+def _export_v11_payload():
+    payload = _export_v1_payload()
+    payload["export_version"] = "1.1"
+    payload["batch_analysis_tasks"] = [
+        {
+            "id": 1,
+            "task_type": "posts",
+            "status": "succeeded",
+            "total_count": 1,
+            "processed_count": 1,
+            "success_count": 1,
+            "failed_count": 0,
+            "processed_ids": [1],
+            "failed_ids": [],
+            "task_params": {"post_ids": [1]},
+            "result_summary": {"succeeded": 1},
+            "started_at": "2026-07-09T08:43:00",
+            "completed_at": "2026-07-09T08:44:00",
+            "created_at": "2026-07-09T08:42:00",
+            "updated_at": "2026-07-09T08:44:00",
+        }
+    ]
+    payload["analysis_logs"] = [
+        {
+            "id": 1,
+            "task_id": 1,
+            "post_id": 1,
+            "llm_model": "test-model",
+            "parse_success": True,
+            "parse_method": "standard",
+            "fund_match_level": 1,
+            "fund_code": "000001",
+            "fund_name": "测试基金",
+            "analysis_duration": 1.5,
+            "created_at": "2026-07-09T08:44:00",
+        }
+    ]
+    payload["verification_tasks"] = [
+        {
+            "id": 1,
+            "prediction_id": 1,
+            "task_date": "2026-07-16",
+            "status": "pending",
+            "result": {"queued": True},
+            "created_at": "2026-07-09T08:44:00",
+        }
+    ]
+    payload["prediction_groups"] = [
+        {
+            "id": 1,
+            "blogger_id": 1,
+            "fund_code": "000001",
+            "fund_name": "测试基金",
+            "prediction_period": "1周",
+            "prediction_ids": [1],
+            "representative_id": 1,
+            "prediction_count": 1,
+            "start_date": "2026-07-09",
+            "end_date": "2026-07-09",
+            "overall_sentiment": "bullish",
+            "is_verified": False,
+            "is_active": True,
+            "created_at": "2026-07-09T08:44:00",
+            "updated_at": "2026-07-09T08:44:00",
+        }
+    ]
+    payload["summary"].update({
+        "batch_analysis_tasks": 1,
+        "analysis_logs": 1,
+        "verification_tasks": 1,
+        "prediction_groups": 1,
+    })
+    return payload
+
+
 def test_import_export_v1_payload_restores_all_exported_sections(test_db):
     result = DataPortabilityService(test_db).import_data(_export_v1_payload())
 
@@ -235,6 +347,39 @@ def test_import_export_v1_payload_is_idempotent(test_db):
     assert second["data"]["total_skipped"] == 9
     assert test_db.query(FundHistory).count() == 1
     assert test_db.query(InvestmentAdvice).count() == 1
+
+
+def test_import_export_v11_restores_task_and_prediction_dependencies(test_db):
+    service = DataPortabilityService(test_db)
+
+    first = service.import_data(_export_v11_payload())
+    second = service.import_data(_export_v11_payload())
+    exported = service.export_data()
+
+    assert first["success"] is True
+    assert first["data"]["total_imported"] == 13
+    assert second["success"] is True
+    assert second["data"]["total_imported"] == 0
+    assert second["data"]["total_skipped"] == 13
+    assert test_db.query(BatchAnalysisTask).count() == 1
+    assert test_db.query(AnalysisLog).count() == 1
+    assert test_db.query(VerificationTask).count() == 1
+    assert test_db.query(PredictionGroup).count() == 1
+    assert exported["export_version"] == "1.3"
+    assert exported["summary"]["analysis_logs"] == 1
+
+
+def test_import_invalid_v11_dependency_rolls_back_entire_payload(test_db):
+    payload = _export_v11_payload()
+    payload["verification_tasks"][0]["task_date"] = "not-a-date"
+
+    result = DataPortabilityService(test_db).import_data(payload)
+
+    assert result["success"] is False
+    assert result["data"]["rolled_back"] is True
+    assert test_db.query(Blogger).count() == 0
+    assert test_db.query(BatchAnalysisTask).count() == 0
+    assert test_db.query(VerificationTask).count() == 0
 
 
 def test_import_creates_recovery_fund_for_legacy_mapping_dependency(test_db):
@@ -305,7 +450,7 @@ def test_config_import_export_routes_preserve_v1_contract(monkeypatch):
         assert exported.status_code == 200
         assert exported.headers["content-type"].startswith("application/json")
         exported_payload = exported.json()
-        assert exported_payload["export_version"] == "1.0"
+        assert exported_payload["export_version"] == "1.3"
         assert len(exported_payload["fund_history"]) == 1
         assert len(exported_payload["investment_advice"]) == 1
     finally:

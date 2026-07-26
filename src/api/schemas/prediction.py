@@ -1,7 +1,7 @@
 """
 预测数据模式
 """
-from typing import Optional
+from typing import Literal, Optional
 from datetime import date, datetime
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,17 @@ class PredictionVerify(BaseModel):
     actual_change: float = Field(..., description="实际涨跌幅")
     is_correct: bool = Field(..., description="是否正确")
     ai_judgment: Optional[str] = Field(None, description="AI判断说明")
+
+
+class PredictionUpdate(BaseModel):
+    """预测人工修正请求。"""
+
+    sector: Optional[str] = Field(None, max_length=100)
+    fund_code: Optional[str] = Field(None, max_length=20)
+    fund_name: Optional[str] = Field(None, max_length=100)
+    prediction_type: Optional[Literal["up", "down", "flat"]] = None
+    confidence: Optional[int] = Field(None, ge=0, le=100)
+    prediction_period: Optional[Literal["1天", "3天", "1周", "1个月", "3个月", "6个月"]] = None
 
 
 class PredictionResponse(BaseModel):

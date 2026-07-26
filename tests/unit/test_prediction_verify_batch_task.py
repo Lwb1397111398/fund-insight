@@ -1,6 +1,8 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from src.models.database import Blogger, FundHistory, Post, Prediction
+import pytest
+
+from src.models.database import BatchAnalysisTask, Blogger, FundHistory, Post, Prediction
 
 
 def test_prediction_verify_task_keeps_running_until_finished():
@@ -22,6 +24,69 @@ def test_prediction_verify_task_keeps_running_until_finished():
     assert status["in_progress"] is False
     assert status["last_result"]["message"] == "验证完成"
     assert status["finished_at"] is not None
+
+
+def test_prediction_verify_task_status_survives_service_recreation(test_db):
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    first_service = PredictionVerifyTask()
+    started = first_service.start(total=4, db=test_db)
+
+    assert started["success"] is True
+    assert started["data"]["task_id"] is not None
+
+    second_service = PredictionVerifyTask()
+    status = second_service.status(db=test_db)
+    duplicate = second_service.start(total=2, db=test_db)
+
+    assert status["in_progress"] is True
+    assert status["total"] == 4
+    assert duplicate["success"] is False
+    assert duplicate["data"]["task_id"] == started["data"]["task_id"]
+
+
+def test_prediction_verify_task_finish_is_persisted(test_db):
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    service = PredictionVerifyTask()
+    started = service.start(total=3, db=test_db)
+    task_id = started["data"]["task_id"]
+    service.finish(
+        {"success": True, "message": "验证完成", "data": {"success_count": 2, "failed_count": 1}},
+        db=test_db,
+        task_id=task_id,
+    )
+
+    status = PredictionVerifyTask().status(db=test_db)
+    stored = test_db.get(BatchAnalysisTask, task_id)
+
+    assert status["in_progress"] is False
+    assert status["last_result"]["message"] == "验证完成"
+    assert status["success_count"] == 2
+    assert status["failed_count"] == 1
+    assert stored.status == "completed"
+    assert stored.completed_at is not None
+
+
+def test_prediction_verify_task_replaces_stale_running_task(test_db):
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    stale = BatchAnalysisTask(
+        task_type="predictions",
+        status="running",
+        total_count=5,
+        started_at=datetime.now() - timedelta(minutes=31),
+    )
+    test_db.add(stale)
+    test_db.commit()
+
+    started = PredictionVerifyTask(stale_after=timedelta(minutes=30)).start(total=2, db=test_db)
+    test_db.refresh(stale)
+
+    assert started["success"] is True
+    assert started["data"]["task_id"] != stale.id
+    assert stale.status == "failed"
+    assert "超时" in stale.error_message
 
 
 def test_count_due_predictions_excludes_future_targets(test_db):
@@ -169,3 +234,90 @@ def test_verify_all_pending_uses_force_for_old_pending_predictions(test_db, monk
     assert result["data"]["success_count"] == 2
     assert calls[old_prediction.id] is True
     assert calls[due_prediction.id] is False
+
+
+def test_expired_verification_entry_delegates_to_unified_scan():
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    expected = {"success": True, "data": {"total": 2}}
+    service = PredictionVerifyService.__new__(PredictionVerifyService)
+    calls = []
+
+    def fake_verify_all_pending():
+        calls.append("verify_all_pending")
+        return expected
+
+    service.verify_all_pending = fake_verify_all_pending
+
+    assert service.verify_expired_pending() is expected
+    assert calls == ["verify_all_pending"]
+
+
+def test_prediction_and_blogger_stats_commit_atomically(test_db, monkeypatch):
+    from src.services import prediction_verify_service
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 3)
+
+    monkeypatch.setattr(prediction_verify_service, "date", FixedDate)
+    today = FixedDate.today()
+    blogger = Blogger(name="事务测试博主", platform="eastmoney")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(blogger_id=blogger.id, title="事务测试", content="内容", post_date=today)
+    test_db.add(post)
+    test_db.flush()
+    prediction = Prediction(
+        post_id=post.id,
+        blogger_id=blogger.id,
+        fund_code="000001",
+        fund_name="事务测试基金",
+        prediction_type="up",
+        prediction_date=today - timedelta(days=1),
+        prediction_period="1天",
+        target_date=today,
+        status="pending",
+        is_deleted=False,
+    )
+    test_db.add(prediction)
+    test_db.add_all([
+        FundHistory(fund_code="000001", fund_name="事务测试基金", nav_date=today - timedelta(days=1), nav=1.0),
+        FundHistory(fund_code="000001", fund_name="事务测试基金", nav_date=today, nav=1.1),
+    ])
+    test_db.commit()
+
+    service = PredictionVerifyService(test_db)
+    monkeypatch.setattr(
+        service,
+        "get_nav_history",
+        lambda *args, **kwargs: [
+            {"date": "2026-07-02", "nav": 1.0},
+            {"date": "2026-07-03", "nav": 1.1},
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "comprehensive_verify",
+        lambda **kwargs: {
+            "is_correct": True,
+            "verify_type": "rule",
+            "score": 100,
+            "analysis": "正确",
+        },
+    )
+
+    def fail_stats(*args, **kwargs):
+        raise RuntimeError("统计更新失败")
+
+    monkeypatch.setattr(service, "_update_blogger_accuracy", fail_stats)
+
+    with pytest.raises(RuntimeError, match="统计更新失败"):
+        service.verify_prediction(prediction.id)
+    test_db.rollback()
+    test_db.refresh(prediction)
+
+    assert prediction.status == "pending"
+    assert prediction.verify_count in (None, 0)
