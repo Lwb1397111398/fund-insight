@@ -9,7 +9,6 @@
 - 从天天基金等来源获取基金信息和历史净值。
 - 同步基金信息和历史到数据库。
 - 根据板块自动匹配或管理基金。
-- 计算技术指标和相对表现。
 
 ## 主要文件
 
@@ -18,7 +17,6 @@
 | `fund_api.py` | 天天基金 API、`FundDataManager`、基金信息/历史更新 |
 | `fund_sync_manager.py` | 批量同步基金数据 |
 | `fund_auto_manager.py` | 板块到基金的自动管理 |
-| `technical_analyzer.py` | 技术指标和相对表现分析 |
 
 ## 数据流
 
