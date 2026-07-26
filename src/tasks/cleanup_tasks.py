@@ -8,7 +8,7 @@ from sqlalchemy import func
 from src.models.database import (
     Prediction, Viewpoint, Post, FundInfo, FundHistory,
     InvestmentAdvice, VerificationTask,
-    AdviceReasoning, AdvicePerformance, AdviceFeedback,
+    AdviceReasoning,
     SectorFundMapping, CrawlerArticleRecord, SessionLocal
 )
 from src.services.prediction_verify_service import PredictionVerifyService
@@ -397,8 +397,6 @@ class CleanupManager:
             for advice in old_advice:
                 # 先删除关联的子表记录（FK: advice_id → investment_advice.id）
                 db.query(AdviceReasoning).filter(AdviceReasoning.advice_id == advice.id).delete()
-                db.query(AdvicePerformance).filter(AdvicePerformance.advice_id == advice.id).delete()
-                db.query(AdviceFeedback).filter(AdviceFeedback.advice_id == advice.id).delete()
 
                 db.delete(advice)
                 deleted_count += 1

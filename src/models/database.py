@@ -1114,36 +1114,6 @@ class AdviceReasoning(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
-class AdvicePerformance(Base):
-    """建议效果跟踪表"""
-    __tablename__ = 'advice_performance'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    advice_id = Column(Integer, ForeignKey('investment_advice.id'))
-
-    # 建议信息
-    advice_type = Column(String(20))
-    suggested_sectors = Column(JSON)
-    advice_date = Column(Date)
-    
-    # 效果数据
-    sector_change_1d = Column(Float)
-    sector_change_3d = Column(Float)
-    sector_change_7d = Column(Float)
-    
-    # 判断结果
-    is_correct_1d = Column(Boolean)
-    is_correct_3d = Column(Boolean)
-    is_correct_7d = Column(Boolean)
-    
-    # 用户反馈
-    user_feedback = Column(String(20))
-    feedback_detail = Column(Text)
-    
-    calculated_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.now)
-
-
 class SystemConfig(Base):
     """系统配置表 - 持久化存储API配置（解决Render部署配置丢失问题）"""
     __tablename__ = 'system_config'
@@ -1153,25 +1123,6 @@ class SystemConfig(Base):
     config_value = Column(Text)
     description = Column(String(200))
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    created_at = Column(DateTime, default=datetime.now)
-
-
-class AdviceFeedback(Base):
-    """建议反馈表"""
-    __tablename__ = 'advice_feedback'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    advice_id = Column(Integer, ForeignKey('investment_advice.id'))
-    user_id = Column(String(50))
-    
-    feedback_type = Column(String(20))
-    feedback_score = Column(Integer)
-    feedback_detail = Column(Text)
-    
-    # 跟进调整
-    action_taken = Column(String(20))
-    result_note = Column(Text)
-    
     created_at = Column(DateTime, default=datetime.now)
 
 
