@@ -65,3 +65,4 @@ predictions_check.json
 *.sqlite
 .worktrees/
 .codegraph/
+.audit_tmp/
