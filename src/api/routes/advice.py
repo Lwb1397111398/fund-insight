@@ -126,15 +126,3 @@ async def get_advice_history(
         "success": True,
         "data": history
     }
-
-
-@router.get("/stats")
-async def get_advice_stats(db: Session = Depends(get_db)):
-    """获取投资建议统计"""
-    service = AdviceService(db)
-    stats = service.get_advice_stats()
-    
-    return {
-        "success": True,
-        "data": stats
-    }

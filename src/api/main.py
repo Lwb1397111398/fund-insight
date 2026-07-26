@@ -28,7 +28,6 @@ from src.core.config import config
 from src.models.database import init_db
 
 from src.api.prediction_groups import router as prediction_groups_router
-from src.api.routes.batch_analysis import router as batch_analysis_router
 
 from src.api.routes import (
     bloggers_router,
@@ -233,7 +232,6 @@ app.include_router(advice_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(test_data_router, prefix="/api")
-app.include_router(batch_analysis_router, prefix="/api")
 
 
 @app.get("/api")

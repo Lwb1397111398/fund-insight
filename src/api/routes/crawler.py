@@ -56,40 +56,6 @@ class SinaBlogRequest(BaseModel):
     max_workers: int = 5
 
 
-@router.get("/status")
-async def get_crawler_status(db: Session = Depends(get_db)):
-    """获取爬虫模块状态"""
-    service = CrawlerService(db)
-    return {
-        "success": True,
-        "data": service.get_crawler_status()
-    }
-
-
-@router.post("/eastmoney-news/auto-adopt")
-async def auto_adopt_eastmoney_news(data: EastmoneyNewsRequest, db: Session = Depends(get_db)):
-    """抓取东方财富7x24快讯并自动采纳符合标准的文章"""
-    service = CrawlerService(db)
-
-    try:
-        result = service.crawl_eastmoney_news(
-            max_articles=data.max_articles,
-            fetch_content=data.fetch_content,
-            concurrent=data.concurrent,
-            max_workers=min(data.max_workers, 5)
-        )
-        return result
-    except Exception as e:
-        traceback.print_exc()
-        return {"success": False, "message": f"自动采纳失败: {e}"}
-
-
-@router.post("/sina-blog/auto-adopt", include_in_schema=False)
-async def auto_adopt_sina_blog(data: SinaBlogRequest, db: Session = Depends(get_db)):
-    """已停用：观点抓取统一改走 /api/viewpoints/fetch 流水线"""
-    raise HTTPException(status_code=410, detail="该接口已停用，请改用 POST /api/viewpoints/fetch")
-
-
 @router.post("/wechat/fetch")
 async def fetch_wechat_article(
     data: WeChatArticleRequest,

@@ -258,39 +258,6 @@ def test_failed_job_can_resume_failed_items_without_duplicate_predictions(tmp_pa
         check.close()
 
 
-def test_generic_batch_analysis_route_reuses_post_job_service(test_db):
-    from fastapi import BackgroundTasks
-    from src.api.routes import batch_analysis as batch_routes
-
-    post = _create_post(test_db)
-    background_tasks = BackgroundTasks()
-    response = asyncio.run(batch_routes.start_batch_analysis(
-        request=batch_routes.BatchAnalysisRequest(task_type="posts", limit=10),
-        background_tasks=background_tasks,
-        db=test_db,
-    ))
-
-    task = test_db.get(BatchAnalysisTask, response["data"]["task_id"])
-    assert task.task_params["post_ids"] == [post.id]
-    assert len(background_tasks.tasks) == 1
-
-
-def test_generic_batch_runner_delegates_to_unified_service(monkeypatch):
-    from src.api.routes import batch_analysis as batch_routes
-    from src.services.post_analysis_service import PostAnalysisService
-
-    calls = []
-    monkeypatch.setattr(
-        PostAnalysisService,
-        "run_job",
-        lambda task_id: calls.append(task_id),
-    )
-
-    batch_routes._execute_batch_analysis_task(42)
-
-    assert calls == [42]
-
-
 def test_automatic_job_excludes_failed_and_low_quality_posts(test_db):
     from src.services.post_analysis_service import PostAnalysisService
 

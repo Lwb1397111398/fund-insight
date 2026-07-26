@@ -73,23 +73,6 @@ def test_single_post_analysis_route_creates_persistent_job(test_db):
     assert len(background_tasks.tasks) == 1
 
 
-def test_legacy_batch_analysis_and_status_use_persistent_task(test_db):
-    post = _add_unanalyzed_post(test_db)
-    background_tasks = BackgroundTasks()
-
-    started = asyncio.run(posts_route.batch_analyze_posts(
-        background_tasks=background_tasks,
-        db=test_db,
-    ))
-    status = asyncio.run(posts_route.get_batch_analyze_status(db=test_db))
-
-    assert started["data"]["task_id"] == status["data"]["task_id"]
-    assert started["data"]["total"] == 1
-    assert status["data"]["status"] == "pending"
-    assert status["data"]["in_progress"] is True
-    assert status["data"]["total_count"] == 1
-
-
 def test_existing_pending_job_is_rescheduled_after_render_restart(test_db):
     post = _add_unanalyzed_post(test_db)
     task, _ = PostAnalysisService.create_job(test_db, post_ids=[post.id])

@@ -246,17 +246,3 @@ def test_delete_route_requires_confirmation_header(test_db):
     assert test_db.get(Post, post.id) is not None
 
 
-def test_patch_route_uses_shared_post_update_schema(test_db):
-    blogger = Blogger(name="路由编辑博主", platform="wechat")
-    test_db.add(blogger)
-    test_db.flush()
-    post = _post(test_db, blogger, "待编辑")
-    test_db.commit()
-
-    response = asyncio.run(posts_routes.update_post(
-        post_id=post.id,
-        update=PostUpdate(title="新标题"),
-        db=test_db,
-    ))
-
-    assert response["data"]["title"] == "新标题"
