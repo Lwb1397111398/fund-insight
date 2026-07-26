@@ -31,8 +31,13 @@ def test_cleanup_requests_send_the_danger_confirmation_header():
 
 
 def test_cleanup_actions_are_responsive_grid():
-    """清理按钮组应支持电脑四列、手机两列布局"""
-    content = Path("web/index.html").read_text(encoding="utf-8")
+    """清理按钮组应支持电脑四列、手机两列布局。样式提取到 common.css 后，
+    需合并 index.html 与 common.css 一并断言。"""
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "web" / "index.html").read_text(encoding="utf-8")
+    css_path = root / "web" / "common.css"
+    if css_path.exists():
+        content += "\n" + css_path.read_text(encoding="utf-8")
 
     assert ".cleanup-actions" in content
     assert "grid-template-columns: repeat(4, 1fr)" in content
