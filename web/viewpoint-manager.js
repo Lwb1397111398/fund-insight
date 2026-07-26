@@ -4,6 +4,8 @@
     window.createViewpointManager = function createViewpointManager(options) {
         const { axios, ref, reactive, computed, localStorage, alert, confirm } = options;
         const viewpoints = options.viewpoints || ref([]);
+        const analyzing = options.analyzing || ref(false);
+        const onStatsChanged = options.onStatsChanged;
         const viewpointMeta = reactive({ page: 1, page_size: 20, total: 0, pages: 0 });
         const viewpointFilters = reactive({
             keyword: '', source: '', market_direction: '', analysis_status: '',
@@ -13,18 +15,15 @@
         const viewpointTask = ref(null);
         const viewpointDetail = options.viewpointDetail || ref(null);
         const showViewpointDetail = options.showViewpointDetail || ref(false);
+        const summarizing = ref(false);
+        const summaryStats = ref(null);
+        const showSummaryConfirmModal = ref(false);
         const sourceMenuOpen = ref(false);
-        const selectedSources = reactive({
-            eastmoney_blog: true,
-            eastmoney_guide: true,
-            sina_finance: true,
-            eastmoney_news: false,
-        });
+        const selectedSources = reactive({ sina_blog: true });
+        // 观点抓取来源已下线为仅新浪博客（后端 ALLOWED_SOURCES 只接受 sina_blog）。
+        // sourceOptions 保留 sina_blog 与历史来源标签，供筛选下拉使用。
         const sourceOptions = [
-            { value: 'eastmoney_blog', label: '东方财富博客' },
-            { value: 'eastmoney_guide', label: '东方财富导读' },
-            { value: 'sina_finance', label: '新浪财经' },
-            { value: 'eastmoney_news', label: '东方财富快讯' },
+            { value: 'sina_blog', label: '新浪博客' },
         ];
         const taskRunning = computed(() => ['pending', 'running'].includes(viewpointTask.value?.status));
         let pollTimer = null;
@@ -99,10 +98,11 @@
             if (taskId) pollTask(Number(taskId));
         };
         const fetchLatestViewpoints = async () => {
-            const sources = sourceOptions.filter(item => selectedSources[item.value]).map(item => item.value);
-            if (!sources.length) { alert('请至少选择一个来源'); return; }
+            if (!confirm('确认抓取新浪博客的最新观点？\n最多抓取 20 篇并直接入库（不调用 AI），抓取完成后可点「一键 AI 分析」。')) return;
             try {
-                const response = await axios.post('/api/viewpoints/fetch', { sources, limit_per_source: 15 });
+                const response = await axios.post('/api/viewpoints/fetch', {
+                    sources: ['sina_blog'], limit_per_source: 20, mode: 'fetch',
+                });
                 viewpointTask.value = response.data.data;
                 sourceMenuOpen.value = false;
                 localStorage.setItem('viewpoint_task_id', String(viewpointTask.value.task_id));
@@ -125,6 +125,46 @@
                 showViewpointDetail.value = true;
             } catch (error) { alert('获取详情失败: ' + errorMessage(error)); }
         };
+        const batchAnalyzeViewpoints = async () => {
+            analyzing.value = true;
+            try {
+                const res = await axios.post('/api/viewpoints/batch-analyze', { limit: 30 });
+                if (res.data.data?.in_progress) {
+                    // 后台分析中，轮询任务直到完成
+                    if (viewpointTask.value?.task_id) pollTask(viewpointTask.value.task_id);
+                    alert(res.data.message || '已开始后台分析，请稍后刷新查看结果');
+                } else {
+                    alert(res.data.message || '没有需要分析的观点');
+                }
+                await fetchViewpoints();
+                await fetchInsights();
+            } catch (error) { alert('分析失败: ' + errorMessage(error)); }
+            analyzing.value = false;
+        };
+        const fetchSummaryStats = async () => {
+            try {
+                const res = await axios.get('/api/viewpoints/summary/stats');
+                if (res.data.success) summaryStats.value = res.data.data;
+            } catch (error) { console.error('获取汇总统计失败:', error); }
+        };
+        const showSummaryModal = async () => {
+            await fetchSummaryStats();
+            const pending = (summaryStats.value && summaryStats.value.total_pending_viewpoints)
+                || (viewpointInsights.value.pending_summary && viewpointInsights.value.pending_summary.length > 0);
+            if (!pending) { alert('没有待汇总的观点'); return; }
+            showSummaryConfirmModal.value = true;
+        };
+        const executeSummary = async () => {
+            summarizing.value = true;
+            showSummaryConfirmModal.value = false;
+            try {
+                const res = await axios.post('/api/viewpoints/summary/execute', {});
+                alert(res.data.message);
+                await Promise.all([fetchViewpoints(), fetchInsights(), fetchSummaryStats()]);
+                if (onStatsChanged) await onStatsChanged();
+            } catch (error) { alert('汇总失败: ' + errorMessage(error)); }
+            summarizing.value = false;
+        };
         const deleteViewpoint = async (id) => {
             if (!confirm('此操作会永久删除该观点，无法恢复。确定继续？')) return;
             try {
@@ -136,7 +176,7 @@
         const sourceLabel = (source) => ({
             eastmoney_blog: '东方财富博客', eastmoney_guide: '东方财富导读',
             eastmoney_news: '东方财富快讯', sina_finance: '新浪财经',
-            sina_blog: '新浪历史来源', daily_summary: '每日汇总',
+            sina_blog: '新浪博客', daily_summary: '每日汇总',
         }[source] || source || '未知');
         const directionLabel = (direction) => ({ bullish: '看多', bearish: '看空', neutral: '中性' }[direction] || '中性');
         const taskStatusLabel = (status) => ({
@@ -146,10 +186,12 @@
         return {
             viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
             viewpointDetail, showViewpointDetail, sourceMenuOpen, selectedSources, sourceOptions,
-            taskRunning, fetchViewpoints, loadViewpoints, applyViewpointFilters, resetViewpointFilters,
+            taskRunning, summarizing, summaryStats, showSummaryConfirmModal,
+            fetchViewpoints, loadViewpoints, applyViewpointFilters, resetViewpointFilters,
             viewpointPrevPage, viewpointNextPage, fetchLatestViewpoints, retryViewpointTask,
             viewViewpointDetail, deleteViewpoint, restoreViewpointTask, sourceLabel,
             directionLabel, taskStatusLabel,
+            batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary,
         };
     };
 })();
