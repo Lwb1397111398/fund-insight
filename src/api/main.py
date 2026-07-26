@@ -375,8 +375,7 @@ def import_database(file: UploadFile = File(...), request: Request = None):
                 'bloggers', 'posts', 'predictions', 'viewpoints', 'fund_info',
                 'fund_history', 'sector_fund_mapping', 'investment_advice',
                 'crawler_article_records', 'prediction_groups', 'batch_analysis_tasks',
-                'user_fund_bindings', 'sync_logs', 'fund_holdings', 'market_data',
-                'policy_data', 'sentiment_data'
+                'user_fund_bindings', 'sync_logs', 'fund_holdings'
             }
 
             orm_map = [
