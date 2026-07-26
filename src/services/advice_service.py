@@ -12,7 +12,7 @@ import json
 from .base import BaseService
 from src.models.database import (
     InvestmentAdvice, Blogger, Prediction, Viewpoint, 
-    AdviceReasoning, UserProfile, MarketData, FundInfo
+    AdviceReasoning, UserProfile, FundInfo
 )
 
 
@@ -276,27 +276,6 @@ class AdviceService(BaseService[InvestmentAdvice]):
             "viewpoints": viewpoint_list,
             "funds": fund_list
         }
-    
-    def get_market_data(self) -> Dict:
-        """
-        获取最新市场数据
-        
-        Returns:
-            市场数据字典
-        """
-        latest = self.db.query(MarketData).filter(
-            MarketData.data_type == 'index'
-        ).order_by(MarketData.data_time.desc()).first()
-        
-        if latest:
-            return {
-                "index_name": latest.index_name,
-                "current_value": latest.current_value,
-                "change_pct": latest.change_pct,
-                "data_time": latest.data_time.isoformat() if latest.data_time else None
-            }
-        
-        return {}
     
     def get_user_profile(self, user_id: str) -> Optional[Dict]:
         """

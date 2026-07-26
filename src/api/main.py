@@ -341,7 +341,7 @@ def import_database(file: UploadFile = File(...), request: Request = None):
             Blogger, Post, Prediction, Viewpoint, FundInfo, FundHistory,
             SectorFundMapping, InvestmentAdvice, CrawlerArticleRecord,
             PredictionGroup, BatchAnalysisTask, UserFundBinding, SyncLog,
-            FundHolding, MarketData, PolicyData, SentimentData,
+            FundHolding,
             Base as TargetBase
         )
         
@@ -394,9 +394,6 @@ def import_database(file: UploadFile = File(...), request: Request = None):
                 ('user_fund_bindings', UserFundBinding),
                 ('sync_logs', SyncLog),
                 ('fund_holdings', FundHolding),
-                ('market_data', MarketData),
-                ('policy_data', PolicyData),
-                ('sentiment_data', SentimentData),
             ]
 
             # 验证所有表名都在白名单中（防御性编程）

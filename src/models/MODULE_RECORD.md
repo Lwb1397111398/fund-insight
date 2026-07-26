@@ -26,10 +26,9 @@
 | 基金 | `FundInfo`、`FundHistory`、`FundHolding`、`FundSyncRetry`、`SyncLog` |
 | 观点/爬虫 | `Viewpoint`、`CrawlerArticleRecord` |
 | 板块映射 | `SectorFundMapping`、`SectorAlias`、`UserFundBinding` |
-| 投资建议 | `InvestmentAdvice`、`AdviceReasoning`、`AdvicePerformance`、`AdviceFeedback` |
+| 投资建议 | `InvestmentAdvice`、`AdviceReasoning` |
 | 批量分析 | `BatchAnalysisTask`、`AnalysisLog` |
 | 清理 | `CleanupLog`、`CleanupItemLog`、`CleanupTask`、`CleanupRule`、`CleanupSchedule` |
-| 市场数据 | `MarketData`、`PolicyData`、`SentimentData`、`MarketEvent`、`SectorFundFlow`、`SectorFlowFetchRun` |
 | 用户/配置 | `UserProfile`、`SystemConfig` |
 
 ## 关键表关系
