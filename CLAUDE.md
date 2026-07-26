@@ -14,7 +14,7 @@ Fund Insight 是一个基金博主观点分析系统：用户录入或抓取基�
 | 前端 | `web/` 原生 HTML/CSS/JS，Vue 3 CDN，axios，本项目没有前端构建链 |
 | 数据库 | 本地 SQLite `data/fund_insight.db`；生产 PostgreSQL/Supabase，通过 `DATABASE_URL` 切换 |
 | LLM | OpenAI 兼容 SDK，支持硅基流动、DeepSeek、火山引擎 |
-| 基金/市场数据 | 天天基金、东方财富、akshare，另有多源基金 API 兜底 |
+| 基金/市场数据 | 天天基金、东方财富(7x24快讯)，另有多源基金 API 兜底 |
 | 部署 | Render Web Service + Render Cron + Supabase |
 | 测试 | pytest |
 | 代码索引 | `.codegraph/` 是本地索引产物，改代码/文档后运行 `codegraph sync .` |
@@ -125,12 +125,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 - `/api/predictions`：预测 CRUD、单条/批量验证、过期验证、统计、导出、合并相似预测。
 - `/api/funds`：基金列表、详情、同步、历史、趋势状态。
 - `/api/viewpoints`：观点列表、批量分析、汇总、清理。
-- `/api/crawler` 和 `/api/crawler/eastmoney-blog`：爬虫状态、抓取、采纳。
-- `/api/advice`：投资建议生成、历史、统计。
+- `/api/crawler`：爬虫状态、抓取、采纳。
+- `/api/advice`：投资建议生成、历史。
 - `/api/stats`：总体统计。
 - `/api/config`：LLM 配置、清理、别名、板块-基金映射、配置导入导出。
 - `/api/test-data`：测试数据扫描和清理。
-- `/api/batch-analysis`：批量分析任务。
 - `/api/prediction-groups`：相似预测组。
 
 ## 数据模型心智图
@@ -140,11 +139,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 - `bloggers`、`posts`、`predictions`：博主、帖子、预测主链路。
 - `fund_info`、`fund_history`：基金基础信息和历史净值。
 - `viewpoints`、`crawler_article_records`：观点和爬虫去重记录。
-- `investment_advice`、`advice_reasoning`、`advice_performance`、`advice_feedback`：投资建议链路。
+- `investment_advice`、`advice_reasoning`：投资建议链路。
 - `sector_fund_mapping`、`sector_alias`、`user_fund_bindings`：板块与基金映射。
 - `batch_analysis_tasks`、`analysis_logs`：批量分析和日志。
 - `cleanup_*`：清理任务、规则、日志。
-- `market_data`、`policy_data`、`sentiment_data`、`market_events`：市场辅助数据。
 - `system_config`：生产环境持久化配置。
 
 ## 前端约束
