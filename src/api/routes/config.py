@@ -4,7 +4,8 @@
 """
 import os
 import json
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+import uuid
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
@@ -45,6 +46,10 @@ class ConfigUpdate(BaseModel):
     volcengine_api_key: Optional[str] = None
     volcengine_model: Optional[str] = None
     volcengine_light_model: Optional[str] = None
+
+
+class CleanupExecuteRequest(BaseModel):
+    preview_fingerprint: str
 
 
 @router.get("")
@@ -124,196 +129,233 @@ async def update_config(config_update: ConfigUpdate):
     }
 
 
-@router.post("/cleanup")
-async def run_cleanup(request: Request):
-    """运行数据清理（包括过期预测、观点、空帖子、孤儿基金等）"""
-    _require_destructive_cleanup(request)
+def _set_cleanup_task_progress(task_id: str, processed: int, total: int, category: str):
+    from src.models.database import CleanupTask, SessionLocal
+
+    db = SessionLocal()
     try:
-        from src.tasks.cleanup_tasks import get_cleanup_manager
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if task:
+            task.current_item = processed
+            task.total_items = total
+            task.progress = 100 if total == 0 else min(100, int(processed * 100 / total))
+            task.cleanup_params = {**(task.cleanup_params or {}), "current_category": category}
+            db.commit()
+    finally:
+        db.close()
 
-        manager = get_cleanup_manager()
-        result = manager.run_full_cleanup()
 
-        if result.get("success"):
-            predictions = result.get("predictions", {})
-            viewpoints = result.get("viewpoints", {})
-            fund_history = result.get("fund_history", {})
-            empty_posts = result.get("empty_posts", {})
-            advice = result.get("advice", {})
-            orphan_funds = result.get("orphan_funds", {})
-            total = result.get("total_deleted", 0)
+def _run_cleanup_background(
+    task_id: str,
+    fingerprint: str,
+    categories: Optional[list[str]] = None,
+):
+    from src.models.database import CleanupTask, SessionLocal
+    from src.services.retention_cleanup_service import (
+        CleanupPlanChanged,
+        RetentionCleanupService,
+    )
 
-            parts = []
-            if predictions.get('deleted', 0) > 0:
-                parts.append(f"{predictions.get('deleted', 0)} 个过期预测")
-            if viewpoints.get('deleted', 0) > 0:
-                parts.append(f"{viewpoints.get('deleted', 0)} 个过期观点")
-            if fund_history.get('deleted', 0) > 0:
-                parts.append(f"{fund_history.get('deleted', 0)} 条基金历史记录")
-            if empty_posts.get('deleted', 0) > 0:
-                parts.append(f"{empty_posts.get('deleted', 0)} 个空帖子")
-            if advice.get('deleted', 0) > 0:
-                parts.append(f"{advice.get('deleted', 0)} 条过期投资建议")
-            if orphan_funds.get('deleted', 0) > 0:
-                parts.append(f"{orphan_funds.get('deleted', 0)} 个孤儿基金")
+    db = SessionLocal()
+    try:
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if not task:
+            return
+        task.status = "running"
+        task.started_at = datetime.now()
+        db.commit()
+        result = RetentionCleanupService(db).execute(
+            expected_fingerprint=fingerprint,
+            categories=set(categories) if categories else None,
+            progress_callback=lambda done, total, category: _set_cleanup_task_progress(
+                task_id, done, total, category
+            ),
+        )
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        task.status = "completed" if result["success"] else "partial"
+        task.progress = 100
+        task.current_item = task.total_items
+        task.result = result
+        task.completed_at = datetime.now()
+        db.commit()
+    except CleanupPlanChanged as exc:
+        db.rollback()
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error = f"预览已过期，请刷新后重试。当前指纹: {exc.current_fingerprint}"
+            task.completed_at = datetime.now()
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error = str(exc)
+            task.completed_at = datetime.now()
+            db.commit()
+    finally:
+        db.close()
 
-            if parts:
-                message = f"清理完成，共删除 {total} 项：{', '.join(parts)}"
-            else:
-                message = "清理完成，没有需要清理的数据"
 
-            return {
-                "success": True,
-                "message": message,
-                "data": result
-            }
-        else:
-            return {
-                "success": False,
-                "message": "清理失败",
-                "data": result
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"清理失败: {str(e)}",
-            "data": None
-        }
+def _queue_cleanup(
+    request: Request,
+    payload: Optional[CleanupExecuteRequest],
+    background_tasks: BackgroundTasks,
+    db: Session,
+    categories: Optional[set[str]] = None,
+):
+    from src.models.database import CleanupTask
+    from src.services.retention_cleanup_service import RetentionCleanupService
+
+    _require_destructive_cleanup(request)
+    if payload is None or not payload.preview_fingerprint:
+        raise HTTPException(status_code=400, detail="必须携带预览指纹")
+    plan = RetentionCleanupService(db).build_plan()
+    if plan.fingerprint != payload.preview_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "预览已过期，请刷新后重试",
+                "current_fingerprint": plan.fingerprint,
+            },
+        )
+
+    task_id = str(uuid.uuid4())
+    selected_categories = categories or set(plan.candidate_ids)
+    selected_total = sum(len(plan.candidate_ids[name]) for name in selected_categories)
+    task = CleanupTask(
+        task_id=task_id,
+        status="pending",
+        progress=0,
+        current_item=0,
+        total_items=selected_total,
+        cleanup_types=sorted(selected_categories),
+        cleanup_params={
+            "preview_fingerprint": plan.fingerprint,
+            "rule_version": "retention-v2",
+        },
+    )
+    db.add(task)
+    db.commit()
+    background_tasks.add_task(
+        _run_cleanup_background,
+        task_id,
+        plan.fingerprint,
+        sorted(selected_categories),
+    )
+    return {
+        "success": True,
+        "message": "安全清理任务已创建",
+        "data": {"task_id": task_id, "status": "pending", "total_items": selected_total},
+    }
+
+
+@router.post("/cleanup")
+async def run_cleanup(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: Optional[CleanupExecuteRequest] = None,
+    db: Session = Depends(get_db),
+):
+    return _queue_cleanup(request, payload, background_tasks, db)
 
 
 @router.post("/cleanup/oldest")
-async def cleanup_oldest_batch(request: Request, days: int = 7, limit: int = 100):
-    """
-    温和清理：只清理最老的一批过期数据
-
-    与 /cleanup 的区别：
-    - /cleanup 清理所有过期数据
-    - /cleanup/oldest 只清理过期最久的那一批，每批限制数量，避免一次性清理过多影响博主统计
-
-    Args:
-        days: 额外回溯天数，默认7天。即清理过期超过(7+days)天的数据
-        limit: 每类数据最多清理条数，默认100
-    """
-    _require_destructive_cleanup(request)
-    try:
-        from src.tasks.cleanup_tasks import get_cleanup_manager
-
-        manager = get_cleanup_manager()
-        result = manager.cleanup_oldest_batch(batch_days=days, limit=limit)
-
-        if result.get("success"):
-            predictions = result.get("predictions", {})
-            viewpoints = result.get("viewpoints", {})
-            total = result.get("total_deleted", 0)
-
-            parts = []
-            pred_count = predictions.get("deleted_predictions", 0)
-            vp_count = viewpoints.get("deleted_viewpoints", 0)
-            if pred_count > 0:
-                parts.append(f"{pred_count} 个过期预测")
-            if vp_count > 0:
-                parts.append(f"{vp_count} 个过期观点")
-
-            if parts:
-                message = f"温和清理完成，共删除 {total} 项：{', '.join(parts)}"
-            else:
-                message = "温和清理完成，没有需要清理的最老数据"
-
-            return {
-                "success": True,
-                "message": message,
-                "data": result
-            }
-        else:
-            return {
-                "success": False,
-                "message": "温和清理失败",
-                "data": result
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"温和清理失败: {str(e)}",
-            "data": None
-        }
+async def cleanup_oldest_batch(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: Optional[CleanupExecuteRequest] = None,
+    db: Session = Depends(get_db),
+):
+    """兼容旧入口，但不允许绕过统一保留规则和预览指纹。"""
+    return _queue_cleanup(request, payload, background_tasks, db)
 
 
 @router.get("/cleanup/orphan-funds/preview")
-async def preview_orphan_funds():
-    """
-    预览可清理的孤儿基金
+async def preview_orphan_funds(db: Session = Depends(get_db)):
+    from src.services.retention_cleanup_service import RetentionCleanupService
 
-    孤儿基金条件：
-    1. can_delete = True（没有活跃预测关联）
-    2. 没有任何预测使用该基金（包括已删除的预测）
-    3. 不是核心基金（is_core_fund = False）
-    """
-    try:
-        from src.tasks.cleanup_tasks import get_cleanup_manager
-        manager = get_cleanup_manager()
-        result = manager.cleanup_orphan_funds(preview_only=True)
-
-        if result.get("success"):
-            orphan_count = result.get("total_orphans", 0)
-            return {
-                "success": True,
-                "message": f"发现 {orphan_count} 个可清理的孤儿基金",
-                "data": result
-            }
-        else:
-            return {
-                "success": False,
-                "message": "获取孤儿基金列表失败",
-                "data": result
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"获取孤儿基金列表失败: {str(e)}",
-            "data": None
-        }
+    plan = RetentionCleanupService(db).build_plan()
+    return {
+        "success": True,
+        "message": f"发现 {len(plan.candidate_ids['funds'])} 个可清理的孤儿基金",
+        "data": {
+            "preview_fingerprint": plan.fingerprint,
+            "orphan_funds": plan.samples["funds"],
+            "total_orphans": len(plan.candidate_ids["funds"]),
+            "protected_funds": plan.protected_counts["protected_funds"],
+        },
+    }
 
 
 @router.post("/cleanup/orphan-funds")
-async def cleanup_orphan_funds(request: Request):
-    """
-    清理无关联的孤儿基金
-
-    会同时删除基金的历史净值数据，请谨慎操作！
-    """
-    _require_destructive_cleanup(request)
-    try:
-        from src.tasks.cleanup_tasks import get_cleanup_manager
-        manager = get_cleanup_manager()
-        result = manager.cleanup_orphan_funds(preview_only=False)
-
-        if result.get("success"):
-            deleted_count = result.get("deleted_count", 0)
-            if deleted_count > 0:
-                message = f"清理完成，删除了 {deleted_count} 个孤儿基金及其历史净值数据"
-            else:
-                message = "没有需要清理的孤儿基金"
-            return {
-                "success": True,
-                "message": message,
-                "data": result
-            }
-        else:
-            return {
-                "success": False,
-                "message": "清理孤儿基金失败",
-                "data": result
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"清理孤儿基金失败: {str(e)}",
-            "data": None
-        }
+async def cleanup_orphan_funds(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: Optional[CleanupExecuteRequest] = None,
+    db: Session = Depends(get_db),
+):
+    return _queue_cleanup(
+        request,
+        payload,
+        background_tasks,
+        db,
+        categories={"funds"},
+    )
 
 
 @router.get("/cleanup/preview")
 async def get_cleanup_preview(db: Session = Depends(get_db)):
+    from src.services.retention_cleanup_service import POLICY_VERSION, RetentionCleanupService
+
+    plan = RetentionCleanupService(db).build_plan()
+    return {
+        "success": True,
+        "data": {
+            "cleanup_enabled": destructive_cleanup_enabled(),
+            "rule_version": POLICY_VERSION,
+            "generated_at": plan.generated_at.isoformat(),
+            "preview_fingerprint": plan.fingerprint,
+            "policy": plan.policy.to_dict(),
+            "counts": {
+                category: len(ids) for category, ids in plan.candidate_ids.items()
+            },
+            "total": plan.total_candidates,
+            "samples": plan.samples,
+            "protected_counts": plan.protected_counts,
+            "health_warnings": plan.health_warnings,
+        },
+    }
+
+
+@router.get("/cleanup/tasks/{task_id}")
+async def get_cleanup_task(task_id: str, db: Session = Depends(get_db)):
+    from src.models.database import CleanupTask
+
+    task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="清理任务不存在")
+    return {
+        "success": True,
+        "data": {
+            "task_id": task.task_id,
+            "status": task.status,
+            "progress": task.progress,
+            "current_item": task.current_item,
+            "total_items": task.total_items,
+            "current_category": (task.cleanup_params or {}).get("current_category"),
+            "result": task.result,
+            "error": task.error,
+            "started_at": task.started_at.isoformat() if task.started_at else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        },
+    }
+
+
+@router.get("/cleanup/preview-legacy", include_in_schema=False)
+async def get_cleanup_preview_legacy(db: Session = Depends(get_db)):
+    return await get_cleanup_preview(db)
     """
     获取可清理数据预览
     

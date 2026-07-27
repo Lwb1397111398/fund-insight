@@ -254,7 +254,7 @@
 
         .cleanup-actions {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: var(--space-2);
             margin-bottom: var(--space-4);
         }
@@ -262,6 +262,50 @@
         .cleanup-actions .action-btn {
             width: 100%;
         }
+
+        .cleanup-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: var(--space-3);
+        }
+
+        .cleanup-summary,
+        .cleanup-progress,
+        .cleanup-warnings {
+            padding: var(--space-4);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            background: var(--bg-primary);
+        }
+
+        .delete-summary { border-left: 3px solid var(--danger-color); }
+        .keep-summary { border-left: 3px solid var(--success-color); }
+        .cleanup-warnings { border-left: 3px solid var(--warning-color); }
+
+        .cleanup-summary h4,
+        .cleanup-warnings h4 {
+            margin: 0 0 var(--space-3);
+            font-size: 15px;
+        }
+
+        .cleanup-metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-2) var(--space-4);
+            font-size: 13px;
+        }
+
+        .cleanup-total {
+            margin-top: var(--space-3);
+            padding-top: var(--space-3);
+            border-top: 1px solid var(--border-color);
+            font-size: 13px;
+        }
+
+        .cleanup-warnings span { margin-right: var(--space-4); font-size: 13px; }
+        .cleanup-progress-head { display: flex; justify-content: space-between; }
+        .cleanup-progress-track { height: 8px; margin-top: var(--space-3); overflow: hidden; background: var(--bg-tertiary); border-radius: 4px; }
+        .cleanup-progress-track span { display: block; height: 100%; background: var(--primary-color); transition: width .2s ease; }
 
         .action-btn {
             flex: 1;
@@ -1633,7 +1677,11 @@
             }
 
             .cleanup-actions {
-                grid-template-columns: repeat(2, 1fr);
+                grid-template-columns: 1fr;
+            }
+
+            .cleanup-summary-grid {
+                grid-template-columns: 1fr;
             }
 
             .cleanup-actions .action-btn {

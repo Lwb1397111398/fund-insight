@@ -117,18 +117,9 @@ class CleanupRuleManager:
     
     def get_retention_days(self, data_type: str, source: str = "all", 
                            importance: str = "normal", status: str = None) -> int:
-        rule = self.get_rule(data_type, source, importance)
-        retention = rule.retention_days
-        
-        if data_type == "prediction" and status:
-            if status == "success":
-                retention = int(retention * 2.0)
-            elif status == "failed":
-                retention = int(retention * 0.5)
-            elif status == "expired":
-                retention = int(retention * 0.3)
-        
-        return retention
+        from src.services.retention_cleanup_service import CleanupPolicy
+
+        return CleanupPolicy().retention_days
     
     def update_rule(self, key: str, rule: CleanupRule):
         self._rules[key] = rule

@@ -745,12 +745,22 @@ def get_cleanup_manager() -> CleanupManager:
 
 
 def run_cleanup_task():
-    """运行清理任务（供定时任务调用）"""
+    """运行统一安全清理（供定时任务调用）。"""
     if not destructive_cleanup_enabled():
         logger.info("清理任务已禁用（ENABLE_DATA_CLEANUP=false）")
         return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
-    manager = get_cleanup_manager()
-    return manager.run_full_cleanup()
+    from src.services.retention_cleanup_service import RetentionCleanupService
+
+    db = SessionLocal()
+    try:
+        service = RetentionCleanupService(db)
+        plan = service.build_plan()
+        return service.execute(
+            expected_fingerprint=plan.fingerprint,
+            trigger_type="scheduled",
+        )
+    finally:
+        db.close()
 
 
 if __name__ == '__main__':

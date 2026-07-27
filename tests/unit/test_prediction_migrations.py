@@ -13,6 +13,7 @@ def test_alembic_adds_and_removes_prediction_change_log_on_existing_database(tmp
     engine = create_engine(database_url)
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE predictions (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("CREATE TABLE bloggers (id INTEGER PRIMARY KEY)"))
 
     config = Config(str(Path("alembic.ini").resolve()))
     config.set_main_option("sqlalchemy.url", database_url)
@@ -26,6 +27,15 @@ def test_alembic_adds_and_removes_prediction_change_log_on_existing_database(tmp
         "id", "prediction_id", "action", "source", "changed_fields",
         "before_state", "after_state", "created_at",
     } <= columns
+
+    blogger_columns = {
+        column["name"] for column in inspector.get_columns("bloggers")
+    }
+    assert {
+        "archived_verified_count",
+        "archived_correct_count",
+        "archived_verify_score",
+    } <= blogger_columns
 
     command.downgrade(config, "prediction_schema_baseline")
 
@@ -45,3 +55,6 @@ def test_alembic_can_render_offline_sql(tmp_path):
 
     rendered = output.getvalue().lower()
     assert "create table prediction_change_logs" in rendered
+    assert "archived_verified_count" in rendered
+    assert "archived_correct_count" in rendered
+    assert "archived_verify_score" in rendered

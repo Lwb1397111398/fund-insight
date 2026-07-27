@@ -76,9 +76,9 @@ def recalculate_blogger_stats(db: Session, blogger_id: int, commit: bool = True)
         Prediction.prediction_type != 'flat'
     ).first()
     
-    verified_count = stats.verified or 0
-    correct_predictions = stats.correct or 0
-    total_verify_score = float(stats.total_score or 0)
+    verified_count = (blogger.archived_verified_count or 0) + (stats.verified or 0)
+    correct_predictions = (blogger.archived_correct_count or 0) + (stats.correct or 0)
+    total_verify_score = float(blogger.archived_verify_score or 0) + float(stats.total_score or 0)
     
     if verified_count > 0:
         accuracy = round(total_verify_score / (verified_count * 100) * 100, 2)

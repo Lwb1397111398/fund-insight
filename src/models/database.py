@@ -130,6 +130,9 @@ class Blogger(Base):
     total_predictions = Column(Integer, default=0)
     correct_predictions = Column(Integer, default=0)
     total_verify_score = Column(Integer, default=0)
+    archived_verified_count = Column(Integer, default=0, nullable=False)
+    archived_correct_count = Column(Integer, default=0, nullable=False)
+    archived_verify_score = Column(Float, default=0.0, nullable=False)
     
     grade = Column(String(5), default='C')
     
