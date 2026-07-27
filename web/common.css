@@ -2343,3 +2343,65 @@
         min-height: 40px;
     }
 }
+
+/* 帖子分析进度面板 */
+.analysis-progress-panel {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.ap-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+.ap-title {
+    font-size: 14px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.ap-spin {
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+.ap-bar-wrap {
+    height: 10px;
+    background: var(--bg-muted, #f0f2f5);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+.ap-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #65a6ff, #1677ff);
+    border-radius: 6px;
+    transition: width 0.4s ease;
+    min-width: 2px;
+}
+.ap-stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    font-size: 13px;
+    color: var(--text-secondary, #666);
+}
+.ap-percent {
+    font-weight: 700;
+    color: var(--text-primary, #222);
+    font-size: 15px;
+}
+.ap-ok { color: #16a34a; }
+.ap-skip { color: #d97706; }
+.ap-fail { color: #dc2626; }
+.ap-status {
+    margin-left: auto;
+    font-size: 12px;
+    opacity: 0.7;
+    text-transform: uppercase;
+}

@@ -17,11 +17,16 @@ def test_post_analysis_service_module_exists():
 class _Analyzer:
     model = "test-model"
 
-    def __init__(self, fail_during_write=False):
+    def __init__(self, fail_during_write=False, empty_predictions=False):
         self.fail_during_write = fail_during_write
+        self.empty_predictions = empty_predictions
         self.target_date_calls = 0
 
     def analyze_post(self, title, content, post_date=None):
+        if self.empty_predictions:
+            # 模拟 LLM 正常返回但未提取到任何预测（心得/经验/日记类内容）
+            return {"predictions": [], "summary": "未发现预测内容"}
+
         return {
             "predictions": [
                 {
@@ -128,10 +133,32 @@ def test_analysis_write_failure_rolls_back_all_predictions_and_records_error(tes
     assert "构造第二条预测失败" in saved.analysis_result["_meta"]["error"]
 
 
-def test_low_quality_post_is_marked_skipped_without_deletion(test_db):
+def test_no_prediction_post_is_auto_deleted(test_db):
+    """LLM 正常返回但无预测（如心得/经验/日记分享）→ 自动删除该帖，不再标记 failed。"""
+    from src.services.post_analysis_service import PostAnalysisService
+
+    post = _create_post(test_db, content="今天分享一下我炒股三年的心路历程，心态很重要。")
+    result = PostAnalysisService(
+        db=test_db,
+        analyzer_factory=lambda: _Analyzer(empty_predictions=True),
+        fund_auto_manager=_FundManager(),
+    ).analyze_post(post.id)
+
+    test_db.expire_all()
+    saved = test_db.get(Post, post.id)
+    assert result["status"] == "skipped"
+    assert result.get("auto_deleted") is True
+    # 帖子已被物理删除
+    assert saved is None
+    assert test_db.query(Prediction).filter(Prediction.post_id == post.id).count() == 0
+
+
+def test_low_quality_post_is_still_sent_to_llm(test_db):
+    """本地不再预判低质量：短内容也会送 LLM，由 LLM 结果决定去留。"""
     from src.services.post_analysis_service import PostAnalysisService
 
     post = _create_post(test_db, content="hi")
+    # LLM 对短内容正常返回预测 → 帖子保留并写入预测
     result = PostAnalysisService(
         db=test_db,
         analyzer_factory=lambda: _Analyzer(),
@@ -140,10 +167,9 @@ def test_low_quality_post_is_marked_skipped_without_deletion(test_db):
 
     test_db.expire_all()
     saved = test_db.get(Post, post.id)
-    assert result["status"] == "skipped"
+    assert result["status"] == "succeeded"
     assert saved is not None
-    assert saved.analyzed is False
-    assert saved.analysis_result["_meta"]["status"] == "skipped"
+    assert saved.analyzed is True
 
 
 def test_job_runner_closes_database_sessions_while_calling_llm(tmp_path):
@@ -258,14 +284,15 @@ def test_failed_job_can_resume_failed_items_without_duplicate_predictions(tmp_pa
         check.close()
 
 
-def test_automatic_job_excludes_failed_and_low_quality_posts(test_db):
+def test_automatic_job_excludes_failed_and_already_processed_posts(test_db):
+    """自动批量任务只挑选 pending 帖子，排除已 failed/skipped/succeeded 的帖子。"""
     from src.services.post_analysis_service import PostAnalysisService
 
     pending = _create_post(test_db)
     skipped = Post(
         blogger_id=pending.blogger_id,
-        title="低质量",
-        content="hi",
+        title="已删除候选",
+        content="此前经 LLM 分析无预测已被标记，保留此状态避免重复分析。",
         post_date=date(2026, 7, 10),
         analyzed=False,
         analysis_result={"_meta": {"status": "skipped"}},
