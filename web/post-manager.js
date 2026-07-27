@@ -103,6 +103,18 @@
             if (taskId) pollAnalysisJob(taskId);
         };
 
+        const cancelAnalysisJob = async () => {
+            const taskId = analysisJob.value?.task_id;
+            if (!taskId) return;
+            try {
+                await axios.post(`/api/posts/analysis-jobs/${taskId}/cancel`);
+                clearJob();
+                await refreshRelated();
+            } catch (error) {
+                alert('取消失败: ' + errorMessage(error));
+            }
+        };
+
         const startAnalysisJob = async (postIds) => {
             const res = await axios.post('/api/posts/analysis-jobs', {
                 post_ids: postIds?.length ? postIds : null,
@@ -199,7 +211,7 @@
         };
 
         const analysisStatusText = (status) => ({
-            pending: '待分析', running: '分析中', succeeded: '已完成', failed: '失败', skipped: '低质量候选',
+            pending: '待分析', running: '分析中', succeeded: '已完成', failed: '失败', skipped: '已删除',
         }[status] || '待分析');
 
         return {
@@ -207,7 +219,7 @@
             showAddPost, showPostDetail, showEditPost,
             fetchPosts, applyPostFilters, resetPostFilters, postPrevPage, postNextPage,
             addPost, analyzePost, batchAnalyzePosts, viewPostDetail, openEditPost, savePostEdit,
-            deletePost, restoreAnalysisJob, startAnalysisJob, analysisStatusText,
+            deletePost, restoreAnalysisJob, cancelAnalysisJob, startAnalysisJob, analysisStatusText,
         };
     };
 })();

@@ -7,7 +7,14 @@ from src.services.post_service import PostService
 
 
 class _FakeAnalyzer:
+    model = "test-model"
+
+    def __init__(self, empty=False):
+        self.empty = empty
+
     def analyze_post(self, title, content, post_date=None):
+        if self.empty:
+            return {"predictions": [], "summary": "未发现预测内容"}
         return {
             "predictions": [
                 {
@@ -68,17 +75,19 @@ def test_create_post_with_analysis_prefers_database_mapping_over_builtin_sector_
     assert prediction.fund_name == "用户审查人工智能基金"
 
 
-def test_batch_analysis_skips_low_quality_post_without_deleting_it(monkeypatch, test_db):
-    """批量分析只能跳过低质量帖子，不能绕过清理保护直接删除资料。"""
+def test_batch_analysis_auto_deletes_no_prediction_post(monkeypatch, test_db):
+    """批量分析中 LLM 返回 0 预测的帖子应被自动删除，且不影响其它帖子。"""
     from sqlalchemy.orm import sessionmaker
 
-    blogger = Blogger(name="低质量帖子博主", platform="wechat")
+    from src.services import post_analysis_service as pas_module
+
+    blogger = Blogger(name="无预测博主", platform="wechat")
     test_db.add(blogger)
     test_db.flush()
     post = Post(
         blogger_id=blogger.id,
         title="",
-        content="hi",
+        content="今天聊聊投资心态，不涉及具体预测。",
         post_date=date(2026, 7, 10),
     )
     test_db.add(post)
@@ -89,13 +98,18 @@ def test_batch_analysis_skips_low_quality_post_without_deleting_it(monkeypatch, 
         "src.models.database.SessionLocal",
         sessionmaker(bind=test_db.get_bind()),
     )
+    # run_job 默认用 get_analyzer；注入一个恒返回空预测的 analyzer
+    monkeypatch.setattr(
+        pas_module,
+        "get_analyzer",
+        lambda: _FakeAnalyzer(empty=True),
+    )
 
     result = PostService(test_db).batch_analyze_posts()
 
-    preserved = test_db.query(Post).filter(Post.id == post_id).one_or_none()
-    assert preserved is not None
-    assert preserved.analyzed is False
-    assert result["deleted"] == 0
+    deleted = test_db.query(Post).filter(Post.id == post_id).one_or_none()
+    assert deleted is None
+    # 无预测帖子计入 skipped（任务级 summary），deleted 仍为 0（删除由分析流程直接完成）
     assert result["skipped"] == 1
 
 

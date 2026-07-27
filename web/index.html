@@ -112,17 +112,33 @@
                         <button class="action-btn warning small" @click="batchAnalyzePosts" :disabled="analyzing">{{
                             analyzing ? '分析中...' : '🔄 批量分析未分析帖子' }}</button>
                     </div>
+                    <div v-if="analysisJob && analyzing" class="analysis-progress-panel mb-14">
+                        <div class="ap-header">
+                            <span class="ap-title"><i class="ri-loader-4-line ap-spin"></i> 帖子分析进行中</span>
+                            <button class="row-btn danger" @click="cancelAnalysisJob" :disabled="analysisJob.status === 'cancelled'">取消</button>
+                        </div>
+                        <div class="ap-bar-wrap">
+                            <div class="ap-bar" :style="{ width: (analysisJob.progress || 0) + '%' }"></div>
+                        </div>
+                        <div class="ap-stats">
+                            <span class="ap-percent">{{ Math.round(analysisJob.progress || 0) }}%</span>
+                            <span class="ap-stat">{{ analysisJob.processed_count || 0 }} / {{ analysisJob.total_count || 0 }}</span>
+                            <span class="ap-stat ap-ok">成功 {{ analysisJob.result_summary?.analyzed || 0 }}</span>
+                            <span class="ap-stat ap-skip">已删除 {{ analysisJob.result_summary?.skipped || 0 }}</span>
+                            <span class="ap-stat ap-fail" v-if="analysisJob.result_summary?.failed">失败 {{ analysisJob.result_summary.failed }}</span>
+                            <span class="ap-status">{{ analysisJob.status }}</span>
+                        </div>
+                    </div>
                     <div class="stats-mini-grid mb-14">
                         <div class="stat-mini"><span class="value">{{ postMeta.total || 0 }}</span><span class="label">筛选结果</span></div>
                         <div class="stat-mini"><span class="value">{{ postMeta.status_counts?.pending || 0 }}</span><span class="label">待分析</span></div>
                         <div class="stat-mini"><span class="value">{{ postMeta.status_counts?.running || 0 }}</span><span class="label">分析中</span></div>
                         <div class="stat-mini"><span class="value">{{ postMeta.status_counts?.failed || 0 }}</span><span class="label">失败</span></div>
-                        <div class="stat-mini"><span class="value">{{ postMeta.status_counts?.skipped || 0 }}</span><span class="label">低质量候选</span></div>
                     </div>
                     <div class="post-filter-bar">
                         <input v-model="postFilters.keyword" @keyup.enter="applyPostFilters" placeholder="搜索标题或正文">
                         <select v-model="postFilters.blogger_id"><option value="">全部博主</option><option v-for="b in bloggers" :key="b.id" :value="b.id">{{ b.name }}</option></select>
-                        <select v-model="postFilters.analysis_status"><option value="">全部状态</option><option value="pending">待分析</option><option value="running">分析中</option><option value="succeeded">已完成</option><option value="failed">失败</option><option value="skipped">低质量候选</option></select>
+                        <select v-model="postFilters.analysis_status"><option value="">全部状态</option><option value="pending">待分析</option><option value="running">分析中</option><option value="succeeded">已完成</option><option value="failed">失败</option></select>
                         <select v-model="postFilters.quality"><option value="">全部质量</option><option value="low">仅低质量候选</option><option value="normal">排除低质量候选</option></select>
                         <input type="date" v-model="postFilters.start_date" title="开始日期">
                         <input type="date" v-model="postFilters.end_date" title="结束日期">
@@ -1902,7 +1918,7 @@ const fetchWeChatBatch = async () => {
                     showAddPost, showPostDetail, showEditPost,
                     fetchPosts, applyPostFilters, resetPostFilters, postPrevPage, postNextPage,
                     addPost, analyzePost, batchAnalyzePosts, viewPostDetail, openEditPost, savePostEdit,
-                    deletePost, restoreAnalysisJob, startAnalysisJob, analysisStatusText,
+                    deletePost, restoreAnalysisJob, cancelAnalysisJob, startAnalysisJob, analysisStatusText,
                 } = postManager;
                 const viewpointManager = window.createViewpointManager({
                     axios, ref, reactive, computed, localStorage, alert, confirm,
@@ -2181,6 +2197,7 @@ const fetchWeChatBatch = async () => {
                     viewPredictionDetail, editPrediction, savePrediction, showTopBloggers,
                     batchAnalyzePosts, analyzePost, applyPostFilters, resetPostFilters,
                     postPrevPage, postNextPage, openEditPost, savePostEdit, analysisStatusText,
+                    cancelAnalysisJob,
                     fetchViewpoints, applyViewpointFilters, resetViewpointFilters,
                     viewpointPrevPage, viewpointNextPage, fetchLatestViewpoints, retryViewpointTask,
                     summarizing, summaryStats, showSummaryConfirmModal, loadViewpoints,

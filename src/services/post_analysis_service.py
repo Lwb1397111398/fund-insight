@@ -151,21 +151,8 @@ class PostAnalysisService:
                     "predictions_created": 0,
                 }
 
-        is_low, reason = self.is_low_quality_post(post.title or "", post.content or "")
-        if is_low:
-            post.analysis_result = self._with_meta(
-                post.analysis_result, "skipped", reason=reason, task_id=task_id
-            )
-            post.analyzed = False
-            db.commit()
-            return {
-                "proceed": False,
-                "success": True,
-                "status": "skipped",
-                "message": f"低质量帖子已跳过：{reason}",
-                "predictions_created": 0,
-            }
-
+        # 不再在调用 LLM 前用本地规则预判低质量：是否为预测内容交由 LLM 判定。
+        # LLM 正常返回但无预测的帖子，将在 _persist_success 中自动删除。
         post.analysis_result = self._with_meta(post.analysis_result, "running", task_id=task_id)
         snapshot = {
             "id": post.id,
@@ -235,7 +222,10 @@ class PostAnalysisService:
 
         predictions = list(result.get("predictions") or [])
         if not predictions:
-            raise ValueError("LLM未能提取有效预测")
+            # LLM 正常返回但未提取到任何预测：说明该帖子并非真正的预测内容
+            # （可能是公众号心得/经验/日记等分享）。直接删除该帖，避免占用分析队列。
+            db.rollback()
+            return self._auto_delete_no_prediction(db, post_id, result, analyzer, task_id)
 
         for pred in predictions:
             db.add(self._build_prediction(db, post, pred, analyzer))
@@ -249,6 +239,42 @@ class PostAnalysisService:
             "message": f"分析完成，创建 {len(predictions)} 个预测",
             "predictions_created": len(predictions),
             "analysis_result": post.analysis_result,
+            "llm_model": getattr(analyzer, "model", None),
+        }
+
+    def _auto_delete_no_prediction(
+        self,
+        db: Session,
+        post_id: int,
+        result: Dict[str, Any],
+        analyzer: Any,
+        task_id: Optional[int],
+    ) -> Dict[str, Any]:
+        """LLM 正常返回但无任何预测：判定为非预测内容，自动删除该帖。
+
+        复用 PostService 的级联删除（预测/验证任务/分析日志/观点解关联/博主统计重算）。
+        """
+        from src.services.post_service import PostService
+
+        delete_info = PostService(db).delete_post_permanently(post_id)
+        logger.info(
+            "帖子 %s 经 LLM 分析无有效预测，已自动删除（级联：%s）",
+            post_id,
+            delete_info,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "message": "无有效预测（非预测内容），帖子已自动删除",
+            "predictions_created": 0,
+            "auto_deleted": True,
+            "reason": "no_prediction",
+            "analysis_result": self._with_meta(
+                result,
+                "skipped",
+                reason="无有效预测（非预测内容），帖子已自动删除",
+                task_id=task_id,
+            ),
             "llm_model": getattr(analyzer, "model", None),
         }
 
@@ -446,11 +472,13 @@ class PostAnalysisService:
         task_id: int,
         *,
         session_factory: Optional[Callable[[], Session]] = None,
-        analyzer_factory: Callable[[], Any] = get_analyzer,
+        analyzer_factory: Optional[Callable[[], Any]] = None,
         fund_auto_manager: Any = None,
     ) -> None:
         """运行任务。每次数据库操作都使用独立短会话。"""
         session_factory = session_factory or cls._session_local()
+        # 延迟求值，便于测试 monkeypatch get_analyzer
+        analyzer_factory = analyzer_factory or get_analyzer
         db = session_factory()
         try:
             task = db.query(BatchAnalysisTask).filter(
