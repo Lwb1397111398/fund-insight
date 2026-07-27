@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
 
-from sqlalchemy.orm import Session
+from sqlalchemy import DateTime, case, func
+from sqlalchemy.orm import Session, load_only
 
 from src.constants.sector_fund_map import SECTOR_ALIASES, SECTOR_FUND_MAP
 from src.models.database import (
@@ -155,42 +156,69 @@ class RetentionCleanupService:
             "running_tasks": 0,
         }
 
-        prediction_candidates, pending = self._prediction_candidates(protected_counts)
-        viewpoint_candidates = self._viewpoint_candidates(protected_counts)
-        candidate_ids["predictions"] = sorted(prediction_candidates)
-        candidate_ids["posts"] = sorted(self._post_candidates(prediction_candidates))
-        candidate_ids["viewpoints"] = sorted(viewpoint_candidates)
-        candidate_ids["advice"] = sorted(self._advice_candidates())
-        candidate_ids["crawler_records"] = sorted(
-            self._crawler_candidates(viewpoint_candidates)
-        )
-        candidate_ids.update(self._operation_candidates(protected_counts))
+        # 预加载高频表为实例缓存，避免重复全表扫描（Supabase 每次往返 ~2s）
+        # 仅存活于本次 build_plan 调用，不影响其他方法
+        # 只选必要列，避免传输 TEXT/JSON 大列（predictions 全列 ~2MB，选 12 列后 ~200KB）
+        self._cache_predictions = self.db.query(Prediction).options(
+            load_only(
+                Prediction.id, Prediction.status, Prediction.is_deleted,
+                Prediction.restore_before, Prediction.verified_at,
+                Prediction.target_date, Prediction.post_id, Prediction.fund_code,
+                Prediction.fund_name, Prediction.sector, Prediction.sector_type,
+                Prediction.prediction_date,
+            )
+        ).all()
+        self._cache_funds = self.db.query(FundInfo).all()
+        self._cache_groups = self.db.query(PredictionGroup).all()
+        self._cache_mappings = self.db.query(SectorFundMapping).all()
+        self._cache_bindings = self.db.query(UserFundBinding).all()
 
-        protected_prediction_funds = self._prediction_fund_codes(
-            pending, protected_counts
-        )
-        fund_candidates = self._fund_candidates(
-            prediction_candidates,
-            viewpoint_candidates,
-            protected_prediction_funds,
-            protected_counts,
-        )
-        candidate_ids["funds"] = sorted(fund_candidates)
-        orphan_codes = {
-            row.fund_code
-            for row in self.db.query(FundInfo).filter(FundInfo.id.in_(fund_candidates)).all()
-        } if fund_candidates else set()
-        candidate_ids["fund_history"] = sorted(
-            self._fund_history_candidates(
-                pending,
+        try:
+            prediction_candidates, pending = self._prediction_candidates(protected_counts)
+            viewpoint_candidates = self._viewpoint_candidates(protected_counts)
+            candidate_ids["predictions"] = sorted(prediction_candidates)
+            candidate_ids["posts"] = sorted(self._post_candidates(prediction_candidates))
+            candidate_ids["viewpoints"] = sorted(viewpoint_candidates)
+            candidate_ids["advice"] = sorted(self._advice_candidates())
+            candidate_ids["crawler_records"] = sorted(
+                self._crawler_candidates(viewpoint_candidates)
+            )
+            candidate_ids.update(self._operation_candidates(protected_counts))
+
+            protected_prediction_funds = self._prediction_fund_codes(
+                pending, protected_counts
+            )
+            fund_candidates = self._fund_candidates(
+                prediction_candidates,
+                viewpoint_candidates,
                 protected_prediction_funds,
                 protected_counts,
-                orphan_codes,
             )
-        )
+            candidate_ids["funds"] = sorted(fund_candidates)
+            orphan_codes = {
+                row.fund_code
+                for row in self._cache_funds
+                if row.id in fund_candidates
+            }
+            candidate_ids["fund_history"] = sorted(
+                self._fund_history_candidates(
+                    pending,
+                    protected_prediction_funds,
+                    protected_counts,
+                    orphan_codes,
+                )
+            )
 
-        warnings = self._health_warnings(pending, protected_counts)
-        samples = self._samples(candidate_ids)
+            warnings = self._health_warnings(pending, protected_counts)
+            samples = self._samples(candidate_ids)
+        finally:
+            # 释放缓存，避免内存泄漏
+            del self._cache_predictions
+            del self._cache_funds
+            del self._cache_groups
+            del self._cache_mappings
+            del self._cache_bindings
+
         generated_at = datetime.combine(self.today, datetime.min.time())
         fingerprint_payload = {
             "version": POLICY_VERSION,
@@ -299,15 +327,21 @@ class RetentionCleanupService:
         }
 
     def _prediction_candidates(self, protected_counts: Dict[str, int]):
+        """返回 (candidate_ids, pending_predictions)。
+
+        优化：从缓存读取（已用 load_only 只加载必要列），避免重复查询。
+        """
         cutoff = self.today - timedelta(days=self.policy.retention_days)
-        predictions = self.db.query(Prediction).all()
+        long_term_threshold = self.today + timedelta(days=90)
+        predictions = self._cache_predictions
+        groups = self._cache_groups
         pending: List[Prediction] = []
         candidates: Set[int] = set()
         for prediction in predictions:
             if prediction.status == "pending" and not prediction.is_deleted:
                 pending.append(prediction)
                 protected_counts["pending_predictions"] += 1
-                if prediction.target_date and prediction.target_date > self.today + timedelta(days=90):
+                if prediction.target_date and prediction.target_date > long_term_threshold:
                     protected_counts["long_term_predictions"] += 1
                 continue
             if prediction.status not in {"success", "failed"}:
@@ -318,7 +352,7 @@ class RetentionCleanupService:
             if anchor and anchor < cutoff:
                 candidates.add(prediction.id)
 
-        for group in self.db.query(PredictionGroup).all():
+        for group in groups:
             member_ids = set(group.prediction_ids or [])
             if group.representative_id:
                 member_ids.add(group.representative_id)
@@ -329,35 +363,50 @@ class RetentionCleanupService:
         return candidates, pending
 
     def _post_candidates(self, prediction_candidates: Set[int]) -> Set[int]:
+        """空帖子候选：所有预测都在 candidates 中，或无任何预测且已分析过期。
+
+        优化：从缓存读取 predictions，Post 只查必要字段。
+        """
         cutoff = self.today - timedelta(days=self.policy.retention_days)
         predictions_by_post: Dict[int, Set[int]] = {}
-        for prediction in self.db.query(Prediction).all():
+        for prediction in self._cache_predictions:
             predictions_by_post.setdefault(prediction.post_id, set()).add(prediction.id)
+        # 只查失败日志的 post_id，不加载整行
         failed_analysis_posts = {
             row.post_id
-            for row in self.db.query(AnalysisLog).filter(AnalysisLog.parse_success.is_(False)).all()
-            if row.post_id is not None
+            for row in self.db.query(AnalysisLog.post_id).filter(
+                AnalysisLog.parse_success.is_(False),
+                AnalysisLog.post_id.isnot(None),
+            ).all()
         }
         result = set()
-        for post in self.db.query(Post).all():
-            member_ids = predictions_by_post.get(post.id, set())
+        # Post 只查 id, post_date, analyzed 三列
+        for post_id, post_date, analyzed in self.db.query(
+            Post.id, Post.post_date, Post.analyzed,
+        ).all():
+            member_ids = predictions_by_post.get(post_id, set())
             if member_ids:
                 if member_ids <= prediction_candidates:
-                    result.add(post.id)
-            elif post.post_date < cutoff and post.analyzed and post.id not in failed_analysis_posts:
-                result.add(post.id)
+                    result.add(post_id)
+            elif post_date < cutoff and analyzed and post_id not in failed_analysis_posts:
+                result.add(post_id)
         return result
 
     def _viewpoint_candidates(self, protected_counts: Dict[str, int]) -> Set[int]:
         cutoff = self.today - timedelta(days=self.policy.retention_days)
         result = set()
-        for viewpoint in self.db.query(Viewpoint).all():
-            if viewpoint.is_deleted and viewpoint.restore_before and viewpoint.restore_before >= self.today:
+        # 只查判定需要的字段，减少传输
+        rows = self.db.query(
+            Viewpoint.id, Viewpoint.is_deleted, Viewpoint.restore_before,
+            Viewpoint.viewpoint_date, Viewpoint.valid_until,
+        ).all()
+        for viewpoint_id, is_deleted, restore_before, viewpoint_date, valid_until in rows:
+            if is_deleted and restore_before and restore_before >= self.today:
                 protected_counts["active_viewpoints"] += 1
                 continue
-            anchor = max(viewpoint.viewpoint_date, viewpoint.valid_until or viewpoint.viewpoint_date)
+            anchor = max(viewpoint_date, valid_until or viewpoint_date)
             if anchor < cutoff:
-                result.add(viewpoint.id)
+                result.add(viewpoint_id)
             else:
                 protected_counts["active_viewpoints"] += 1
         return result
@@ -366,8 +415,9 @@ class RetentionCleanupService:
         cutoff = self.today - timedelta(days=self.policy.retention_days)
         return {
             row.id
-            for row in self.db.query(InvestmentAdvice).all()
-            if row.advice_date < cutoff
+            for row in self.db.query(InvestmentAdvice.id).filter(
+                InvestmentAdvice.advice_date < cutoff
+            ).all()
         }
 
     def _crawler_candidates(self, viewpoint_candidates: Set[int]) -> Set[int]:
@@ -378,15 +428,20 @@ class RetentionCleanupService:
             self.today - timedelta(days=self.policy.adopted_crawler_days), datetime.min.time()
         )
         result = set()
-        for row in self.db.query(CrawlerArticleRecord).all():
-            anchor = row.fetched_at or row.created_at
-            if row.viewpoint_id and row.viewpoint_id not in viewpoint_candidates:
+        rows = self.db.query(
+            CrawlerArticleRecord.id, CrawlerArticleRecord.viewpoint_id,
+            CrawlerArticleRecord.is_adopted, CrawlerArticleRecord.fetched_at,
+            CrawlerArticleRecord.created_at,
+        ).all()
+        for row_id, viewpoint_id, is_adopted, fetched_at, created_at in rows:
+            if viewpoint_id and viewpoint_id not in viewpoint_candidates:
                 continue
-            if row.is_adopted:
+            anchor = fetched_at or created_at
+            if is_adopted:
                 if anchor and anchor < adopted_cutoff:
-                    result.add(row.id)
+                    result.add(row_id)
             elif anchor and anchor < normal_cutoff:
-                result.add(row.id)
+                result.add(row_id)
         return result
 
     def _operation_candidates(self, protected_counts: Dict[str, int]) -> Dict[str, List[int]]:
@@ -397,38 +452,51 @@ class RetentionCleanupService:
             self.today - timedelta(days=self.policy.cleanup_audit_days), datetime.min.time()
         )
         terminal = {"completed", "failed", "cancelled", "success", "partial"}
-        result = {
-            "analysis_logs": [
-                row.id for row in self.db.query(AnalysisLog).all()
-                if row.created_at and row.created_at < cutoff
-            ],
+        result: Dict[str, List[int]] = {
+            "analysis_logs": [],
             "batch_tasks": [],
             "sync_logs": [],
             "fund_sync_retries": [],
             "cleanup_tasks": [],
-            "cleanup_logs": [
-                row.id for row in self.db.query(CleanupLog).all()
-                if row.created_at and row.created_at < audit_cutoff
-            ],
+            "cleanup_logs": [],
         }
-        for row in self.db.query(BatchAnalysisTask).all():
+        # 每张表只查判定需要的字段
+        for row in self.db.query(AnalysisLog.id, AnalysisLog.created_at).filter(
+            AnalysisLog.created_at < cutoff
+        ).all():
+            result["analysis_logs"].append(row.id)
+        for row in self.db.query(CleanupLog.id, CleanupLog.created_at).filter(
+            CleanupLog.created_at < audit_cutoff
+        ).all():
+            result["cleanup_logs"].append(row.id)
+        for row in self.db.query(
+            BatchAnalysisTask.id, BatchAnalysisTask.status,
+            BatchAnalysisTask.completed_at, BatchAnalysisTask.updated_at,
+            BatchAnalysisTask.created_at,
+        ).all():
             anchor = row.completed_at or row.updated_at or row.created_at
             if row.status in terminal and anchor and anchor < cutoff:
                 result["batch_tasks"].append(row.id)
             elif row.status not in terminal:
                 protected_counts["running_tasks"] += 1
-        for row in self.db.query(SyncLog).all():
+        for row in self.db.query(SyncLog.id, SyncLog.status, SyncLog.sync_date).all():
             if row.status in terminal and row.sync_date and row.sync_date < cutoff:
                 result["sync_logs"].append(row.id)
             elif row.status not in terminal:
                 protected_counts["running_tasks"] += 1
-        for row in self.db.query(FundSyncRetry).all():
+        for row in self.db.query(
+            FundSyncRetry.id, FundSyncRetry.status,
+            FundSyncRetry.updated_at, FundSyncRetry.created_at,
+        ).all():
             anchor = row.updated_at or row.created_at
             if row.status in terminal and anchor and anchor < cutoff:
                 result["fund_sync_retries"].append(row.id)
             elif row.status not in terminal:
                 protected_counts["running_tasks"] += 1
-        for row in self.db.query(CleanupTask).all():
+        for row in self.db.query(
+            CleanupTask.id, CleanupTask.status,
+            CleanupTask.completed_at, CleanupTask.created_at,
+        ).all():
             anchor = row.completed_at or row.created_at
             if row.status in terminal and anchor and anchor < cutoff:
                 result["cleanup_tasks"].append(row.id)
@@ -441,17 +509,24 @@ class RetentionCleanupService:
         predictions: Iterable[Prediction],
         protected_counts: Dict[str, int],
     ) -> Set[str]:
+        funds = self._cache_funds
+        mappings = self._cache_mappings
+        bindings = self._cache_bindings
         result = set()
+        unresolved = 0
         for prediction in predictions:
             codes = self._resolve_prediction_funds(prediction)
             if not codes:
-                protected_counts["unresolved_prediction_funds"] += 1
+                unresolved += 1
             result.update(codes)
+        protected_counts["unresolved_prediction_funds"] += unresolved
         return result
 
     def _resolve_prediction_funds(self, prediction: Prediction) -> Set[str]:
+        funds = self._cache_funds
+        mappings = self._cache_mappings
+        bindings = self._cache_bindings
         codes: Set[str] = set()
-        funds = self.db.query(FundInfo).all()
         if prediction.fund_code:
             codes.add(prediction.fund_code)
         if prediction.fund_name:
@@ -463,10 +538,10 @@ class RetentionCleanupService:
             return codes
 
         standard_sector = SECTOR_ALIASES.get(sector, sector)
-        for mapping in self.db.query(SectorFundMapping).all():
+        for mapping in mappings:
             if mapping.is_active is not False and self._sector_matches(standard_sector, mapping.sector_name):
                 codes.add(mapping.fund_code)
-        for binding in self.db.query(UserFundBinding).all():
+        for binding in bindings:
             if self._sector_matches(standard_sector, binding.sector):
                 codes.add(binding.fund_code)
         for mapped_sector, fund in SECTOR_FUND_MAP.items():
@@ -495,24 +570,31 @@ class RetentionCleanupService:
         cutoff = datetime.combine(
             self.today - timedelta(days=self.policy.retention_days), datetime.min.time()
         )
+        mappings = self._cache_mappings
+        bindings = self._cache_bindings
         protected_codes = set(protected_prediction_funds)
-        for prediction in self.db.query(Prediction).all():
+        for prediction in self._cache_predictions:
             if prediction.id not in prediction_candidates:
                 protected_codes.update(self._resolve_prediction_funds(prediction))
+        # 查未被清理的 viewpoint 关联的 fund_code
         protected_codes.update(
-            row.fund_code for row in self.db.query(Viewpoint).all()
-            if row.id not in viewpoint_candidates and row.fund_code
+            row.fund_code
+            for row in self.db.query(Viewpoint.fund_code, Viewpoint.id).all()
+            if row.fund_code and row.id not in viewpoint_candidates
         )
-        protected_codes.update(row.fund_code for row in self.db.query(SectorFundMapping).all())
-        protected_codes.update(row.fund_code for row in self.db.query(UserFundBinding).all())
-        protected_codes.update(row.fund_code for row in self.db.query(FundHolding).all())
+        protected_codes.update(row.fund_code for row in mappings)
+        protected_codes.update(row.fund_code for row in bindings)
         protected_codes.update(
-            row.fund_code for row in self.db.query(FundSyncRetry).all()
-            if row.status in {"pending", "retrying", "running"}
+            row.fund_code for row in self.db.query(FundHolding.fund_code).all()
+        )
+        protected_codes.update(
+            row.fund_code for row in self.db.query(FundSyncRetry.fund_code).filter(
+                FundSyncRetry.status.in_({"pending", "retrying", "running"})
+            ).all()
         )
 
         result = set()
-        for fund in self.db.query(FundInfo).all():
+        for fund in self._cache_funds:
             stale = fund.updated_at is None or fund.updated_at < cutoff
             protected = (
                 fund.is_core_fund
@@ -533,11 +615,15 @@ class RetentionCleanupService:
         orphan_codes: Set[str],
     ) -> Set[int]:
         protected_ids: Set[int] = set()
-        history_by_fund: Dict[str, List[FundHistory]] = {}
-        for row in self.db.query(FundHistory).order_by(
+        # 只查 3 列，按 fund_code 分组（避免加载 ORM 全行）
+        history_rows = self.db.query(
+            FundHistory.id, FundHistory.fund_code, FundHistory.nav_date,
+        ).order_by(
             FundHistory.fund_code.asc(), FundHistory.nav_date.desc()
-        ).all():
-            history_by_fund.setdefault(row.fund_code, []).append(row)
+        ).all()
+        history_by_fund: Dict[str, List[tuple]] = {}
+        for hist_id, fund_code, nav_date in history_rows:
+            history_by_fund.setdefault(fund_code, []).append((hist_id, nav_date))
 
         for prediction in pending_predictions:
             codes = self._resolve_prediction_funds(prediction)
@@ -545,29 +631,33 @@ class RetentionCleanupService:
                 rows = history_by_fund.get(code, [])
                 start = prediction.prediction_date
                 end = max(self.today, prediction.target_date or self.today)
-                protected_ids.update(row.id for row in rows if start <= row.nav_date <= end)
-                anchor = next((row for row in rows if row.nav_date <= start), None)
-                if anchor:
-                    protected_ids.add(anchor.id)
+                protected_ids.update(
+                    hist_id for hist_id, nav_date in rows if start <= nav_date <= end
+                )
+                anchor = next(
+                    (hist_id for hist_id, nav_date in rows if nav_date <= start), None
+                )
+                if anchor is not None:
+                    protected_ids.add(anchor)
 
         recent_cutoff = self.today - timedelta(days=self.policy.retention_days)
         weekly_cutoff = self.today - timedelta(days=self.policy.weekly_history_until_days)
         candidates: Set[int] = set()
         for code, rows in history_by_fund.items():
             if code in orphan_codes:
-                candidates.update(row.id for row in rows)
+                candidates.update(hist_id for hist_id, _ in rows)
                 continue
             kept_weeks = set()
-            for row in rows:
-                if row.id in protected_ids or row.nav_date >= recent_cutoff:
+            for hist_id, nav_date in rows:
+                if hist_id in protected_ids or nav_date >= recent_cutoff:
                     continue
-                if row.nav_date >= weekly_cutoff:
-                    iso = row.nav_date.isocalendar()
+                if nav_date >= weekly_cutoff:
+                    iso = nav_date.isocalendar()
                     week_key = (iso.year, iso.week)
                     if week_key not in kept_weeks:
                         kept_weeks.add(week_key)
                         continue
-                candidates.add(row.id)
+                candidates.add(hist_id)
         protected_counts["fund_history"] = len(protected_ids)
         return candidates
 
