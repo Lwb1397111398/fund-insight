@@ -1603,15 +1603,21 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
-            .header-content {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: var(--space-3);
+            /* 手机/平板头部:标题与操作换行,避免长标题挤压按钮 */
+            .header {
+                flex-wrap: wrap;
+                gap: var(--space-2);
+                padding: var(--space-3) var(--space-4);
+            }
+
+            .header h1 {
+                font-size: 16px;
+                flex: 1 1 100%;
             }
 
             .header-actions {
                 width: 100%;
-                justify-content: space-between;
+                justify-content: flex-end;
             }
 
             .stats-mini-grid {
@@ -1638,10 +1644,11 @@
                 grid-template-columns: 1fr;
             }
 
-            .modal-content {
+            .modal {
                 width: 95%;
+                max-width: none;
                 max-height: 90vh;
-                margin: var(--space-2);
+                margin: var(--space-2) auto;
             }
 
             .table-responsive {
@@ -2219,3 +2226,120 @@
 .bg-purple { background: #722ed1; }
 .text-white { color: #fff; }
 .text-warning { color: #d48806; }
+
+/* ===== 移动端增强（手机观看） ===== */
+
+/* 安全区/刘海屏留白，配合 viewport-fit=cover */
+@supports (padding: env(safe-area-inset-top)) {
+    .header {
+        padding-top: calc(var(--space-4) + env(safe-area-inset-top));
+        padding-left: calc(var(--space-6) + env(safe-area-inset-left));
+        padding-right: calc(var(--space-6) + env(safe-area-inset-right));
+    }
+    .container {
+        padding-left: calc(var(--space-4) + env(safe-area-inset-left));
+        padding-right: calc(var(--space-4) + env(safe-area-inset-right));
+        padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+    }
+}
+
+/* 平板及以下：顶部操作按钮改为自动换行，避免 6 个主按钮纵向堆叠过长 */
+@media (max-width: 768px) {
+    .action-bar {
+        flex-wrap: wrap;
+        flex-direction: row;
+        gap: var(--space-2);
+    }
+    .action-bar .action-btn {
+        min-width: 0;
+        flex: 1 1 calc(50% - var(--space-1));
+        justify-content: center;
+    }
+    .action-bar .action-btn.small {
+        flex: 1 1 calc(50% - var(--space-1));
+    }
+}
+
+/* 手机：触控目标加大、字号与间距优化 */
+@media (max-width: 480px) {
+    .header {
+        padding: var(--space-3);
+    }
+    .header h1 {
+        font-size: 16px;
+    }
+    .header-btn {
+        padding: 10px 14px;
+        font-size: 14px;
+    }
+    /* 主操作按钮:两列网格,指腹可点 */
+    .action-bar .action-btn {
+        flex: 1 1 calc(50% - var(--space-1));
+        min-height: 44px;
+        padding: var(--space-3);
+        font-size: 13px;
+    }
+    /* 行内按钮加大可点区域 */
+    .row-btn {
+        min-height: 36px;
+        padding: var(--space-2) var(--space-3);
+    }
+    /* 统计卡片两列,数值放大便于扫读 */
+    .stats-mini-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--space-2);
+    }
+    .stat-mini .value {
+        font-size: 22px;
+    }
+    .stat-mini .label {
+        font-size: 12px;
+    }
+    /* 弹窗几乎全屏,避免在小屏被截断(覆盖 inline max-width) */
+    .modal {
+        width: calc(100% - var(--space-4)) !important;
+        max-width: none !important;
+        margin: var(--space-2) auto;
+        max-height: 92vh;
+    }
+    /* 模块卡片内边距收紧 */
+    .card-body,
+    .blogger-card,
+    .post-card,
+    .prediction-card,
+    .viewpoint-card,
+    .fund-card {
+        padding: var(--space-3);
+    }
+    /* 筛选栏日期/选择框加大高度,便于手指操作 */
+    .post-filter-bar input,
+    .post-filter-bar select {
+        min-height: 38px;
+        font-size: 16px; /* 防 iOS 聚焦缩放 */
+    }
+    .viewpoint-filters input,
+    .viewpoint-filters select {
+        min-height: 38px;
+        font-size: 16px;
+    }
+    /* 观点指标在手机上两列 */
+    .viewpoint-metrics {
+        grid-template-columns: 1fr 1fr;
+    }
+    .viewpoint-metrics > div {
+        padding: 10px;
+    }
+    .viewpoint-metrics strong {
+        font-size: 18px;
+    }
+    /* 字段标签间距收紧 */
+    .form-group {
+        margin-bottom: var(--space-3);
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+        font-size: 16px; /* 防 iOS 缩放 */
+        min-height: 40px;
+    }
+}
