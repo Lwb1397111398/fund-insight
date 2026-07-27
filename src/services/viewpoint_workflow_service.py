@@ -19,6 +19,31 @@ logger = logging.getLogger(__name__)
 DEFAULT_SOURCES = ("sina_blog",)
 ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES)
 
+# 观点内容门禁：内容必须包含至少一个，才视为"博主市场观点"。
+_VIEWPOINT_KEYWORDS = (
+    '大盘', '板块', '看多', '看空', '加仓', '减仓', '建仓', '清仓', '补仓',
+    '调仓', '换股', '持股', '空仓', '满仓', '半仓', '仓位', '持仓', '观望',
+    '回调', '反弹', '突破', '跌破', '上涨', '下跌', '调整', '震荡',
+    '牛市', '熊市', '行情', '走势', '点位', '目标', '利好', '利空',
+    '股市', '市场', '投资', '观点', '预测', '预期', '判断', '分析', '逻辑',
+    '龙头', '白马', '蓝筹', '成长', '价值', '赛道', '概念', '风口',
+    'ETF', '基金', '股票', 'A股', '港股', '美股', '指数', '沪指', '深指',
+    '创业板', '科创板', '北交所', '金融', '科技', '医药', '消费', '新能源',
+    '地产', '军工', '能源', '光伏', '风电', '储能', '锂电池', '半导体',
+    '芯片', '人工智能', 'AI', '银行', '保险', '证券', '券商', '白酒',
+    '谨慎', '乐观', '悲观', '风险', '机会', '建议', '策略', '操作',
+)
+
+# 命中即丢弃的垃圾关键词（广告、导流、非法荐股）。
+_SPAM_KEYWORDS = (
+    '加群', '加微信', '加QQ', '私聊', '代客理财', '荐股', '牛股', '黑马',
+    '内幕', '跟单', '带盘', '分成', '保本', '稳赚', '包赚', '合作', '咨询',
+    '联系我', '扫码', '关注公众号', '添加好友', '免费领取', '限时',
+)
+
+# 低于此字数的内容视为无分析价值。
+_MIN_CONTENT_LENGTH = 80
+
 
 class ViewpointWorkflowService:
     """使用现有表实现可恢复的观点流水线。"""
@@ -280,6 +305,29 @@ class ViewpointWorkflowService:
         task.result_summary = summary
 
     @classmethod
+    def _is_quality_viewpoint(cls, article: Dict[str, Any]) -> Tuple[bool, str]:
+        """判断文章是否是值得入库的博主观点。返回 (是否通过, 原因)。"""
+        title = str(article.get("title") or "").strip()
+        content = str(article.get("content") or "").strip()
+
+        # 内容等于标题 → 详情页根本没抓到正文，只有列表页标题。
+        if content and content == title:
+            return False, f"内容等于标题，疑似未抓到正文（{len(content)}字）"
+
+        if len(content) < _MIN_CONTENT_LENGTH:
+            return False, f"内容过短（{len(content)}字 < {_MIN_CONTENT_LENGTH}）"
+
+        text = f"{title} {content}"
+        for spam in _SPAM_KEYWORDS:
+            if spam in text:
+                return False, f"命中垃圾关键词：{spam}"
+
+        if not any(kw in text for kw in _VIEWPOINT_KEYWORDS):
+            return False, "未包含任何市场/观点关键词，疑似非观点内容"
+
+        return True, "ok"
+
+    @classmethod
     def _process_article(cls, db, task_id, source, article):
         task = db.get(BatchAnalysisTask, task_id)
         article_id = cls._stable_article_id(source, article)
@@ -296,9 +344,13 @@ class ViewpointWorkflowService:
             db.commit()
             return
 
-        content_len = len(str(article.get("content") or "").strip())
-        if content_len < 30:
+        quality_ok, quality_reason = cls._is_quality_viewpoint(article)
+        if not quality_ok:
             source_stats["skipped"] = (source_stats.get("skipped") or 0) + 1
+            source_stats["skipped_reasons"] = source_stats.get("skipped_reasons") or {}
+            source_stats["skipped_reasons"][quality_reason] = (
+                source_stats["skipped_reasons"].get(quality_reason, 0) + 1
+            )
             summary["skipped"] = (summary.get("skipped") or 0) + 1
             task.processed_count = (task.processed_count or 0) + 1
             processed = list(task.processed_ids or [])

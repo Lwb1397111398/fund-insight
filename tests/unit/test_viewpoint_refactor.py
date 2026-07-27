@@ -49,7 +49,12 @@ class _NonClosingSession:
 def test_fetch_job_deduplicates_stable_articles_and_persists_progress(test_db):
     article = {
         "title": "同一篇文章",
-        "content": "看好半导体板块，订单和资金面均有改善，短期景气度持续回升，资金流入明显放大，建议重点关注相关产业链龙头标的。",
+        "content": (
+            "看好半导体板块，订单和资金面均有改善，短期景气度持续回升，"
+            "资金流入明显放大，建议重点关注相关产业链龙头标的，"
+            "中期看行业景气有望延续，逢低可逐步建仓，"
+            "重点把握细分赛道龙头的估值修复与业绩兑现机会。"
+        ),
         "author": "分析师",
         "url": "https://example.test/article/1",
         "publish_time": date.today().isoformat(),
@@ -225,7 +230,11 @@ def test_fetch_mode_does_not_invoke_llm_capture_or_deep_analyzer(test_db):
     """fetch 模式不调 AI，全部非重复文章直接入库 pending。"""
     article = {
         "title": "fetch模式文章",
-        "content": "看好半导体板块景气持续改善，订单与资金面共振，短期趋势偏强，建议关注相关产业链龙头标的。",
+        "content": (
+            "看好半导体板块景气持续改善，订单与资金面共振，短期趋势偏强，"
+            "建议关注相关产业链龙头标的，中期行业上行空间仍存，"
+            "可逢低分批建仓，重点把握细分赛道龙头估值修复机会。"
+        ),
         "author": "分析师",
         "url": "https://example.test/fetch/1",
         "publish_time": date.today().isoformat(),
@@ -355,7 +364,7 @@ def test_retry_path_runs_deep_retries_end_to_end(test_db):
 
 
 def test_fetch_mode_skips_short_content_below_threshold(test_db):
-    """fetch 模式正文<30字记 skipped, 不入库, 不调 LLM。"""
+    """fetch 模式正文<80字记 skipped, 不入库, 不调 LLM。"""
     article = {"title": "只有标题", "content": "看好半导体。", "url": "https://example.test/short"}
     task, _ = ViewpointWorkflowService.create_fetch_task(
         test_db, sources=["sina_blog"], limit_per_source=5
@@ -378,10 +387,15 @@ def test_fetch_mode_skips_short_content_below_threshold(test_db):
 
 
 def test_fetch_mode_adopts_content_at_threshold_boundary(test_db):
-    """正文恰好30字进入采纳流程(fetch模式不调LLM直接入库pending)。"""
-    content_30 = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十"  # 30字
-    assert len(content_30) >= 30
-    article = {"title": "边界", "content": content_30, "url": "https://example.test/boundary"}
+    """正文达到质量门槛时进入采纳流程(fetch模式不调LLM直接入库pending)。"""
+    content_ok = (
+        "人工智能板块资金流入显著放大，短期趋势偏强，"
+        "基本面与资金面形成共振，中期看仍具备上行空间，"
+        "建议逢低布局，重点关注算力、模型与应用侧龙头标的，"
+        "把握产业趋势驱动的持续性行情机会。"
+    )
+    assert len(content_ok) >= 80
+    article = {"title": "边界", "content": content_ok, "url": "https://example.test/boundary"}
     task, _ = ViewpointWorkflowService.create_fetch_task(
         test_db, sources=["sina_blog"], limit_per_source=5
     )
