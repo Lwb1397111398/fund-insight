@@ -157,26 +157,26 @@ class ViewpointWorkflowService:
         HOT_STOCKS = ['000001', '399001', '399006']  # 上证、深证、创业板
         HOT_FUNDS = ['000001', '110022', '519772', '161725']  # 热门基金示例
 
-        def fetch_stock_guba(limit: int) -> List[Dict[str, Any]]:
-            """抓取热门股吧"""
+        def fetch_stock_guba(_limit: int) -> List[Dict[str, Any]]:
+            """抓取热门股吧（固定10条）"""
             results = stock_guba.fetch_hot_stocks(HOT_STOCKS)
             all_posts = []
             for posts in results.values():
                 all_posts.extend(posts)
-            return all_posts[:limit]
+            return all_posts[:10]
 
-        def fetch_fund_guba(limit: int) -> List[Dict[str, Any]]:
-            """抓取热门基金吧"""
+        def fetch_fund_guba(_limit: int) -> List[Dict[str, Any]]:
+            """抓取热门基金吧（固定10条）"""
             all_posts = []
             for fund_code in HOT_FUNDS:
                 posts = fund_guba.fetch_fund_posts(fund_code)
                 all_posts.extend(posts)
-                if len(all_posts) >= limit:
+                if len(all_posts) >= 10:
                     break
-            return all_posts[:limit]
+            return all_posts[:10]
 
         return {
-            "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=limit),
+            "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=20),
             "stock_guba": fetch_stock_guba,
             "fund_guba": fetch_fund_guba,
         }
