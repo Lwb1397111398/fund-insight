@@ -554,29 +554,31 @@ class FundService(BaseService[FundInfo]):
 
             result = fund_sync_manager.full_sync(self.db)
 
-            if result.get("success"):
-                # 使用 full_sync 返回的详细消息
-                message = result.get("message", "")
-                if not message:
-                    # 兜底：如果没有 message，手动构建
-                    summary = result.get("summary", {})
-                    message = f"同步完成：检测 {summary.get('total_predictions', 0)} 个预测，"
-                    message += f"新增 {summary.get('new_funds_added', 0)} 个基金，"
-                    message += f"关联 {summary.get('predictions_linked', 0)} 个预测，"
-                    message += f"更新 {summary.get('funds_updated', 0)} 个基金"
+            # full_sync 在部分失败时 success=False，但仍会给出 message/summary；
+            # 有更新结果时优先透传详细消息，避免前端只看到“未知错误”。
+            message = result.get("message") or ""
+            if not message:
+                summary = result.get("summary", {}) or {}
+                if summary:
+                    message = (
+                        f"同步完成：检测 {summary.get('total_predictions', 0)} 个预测，"
+                        f"新增 {summary.get('new_funds_added', 0)} 个基金，"
+                        f"关联 {summary.get('predictions_linked', 0)} 个预测，"
+                        f"更新 {summary.get('funds_updated', 0)} 个基金"
+                    )
+                else:
+                    message = f"同步失败: {result.get('error', '未知错误')}"
 
-                return {
-                    "success": True,
-                    "message": message,
-                    "data": result
-                }
-            else:
-                error_msg = result.get('error', '未知错误')
-                return {
-                    "success": False,
-                    "message": f"同步失败: {error_msg}",
-                    "data": result
-                }
+            # 只要更新到了基金，就视为业务成功（部分失败细节在 message 里）
+            summary = result.get("summary", {}) or {}
+            funds_updated = summary.get("funds_updated", 0)
+            business_ok = bool(result.get("success")) or funds_updated > 0
+
+            return {
+                "success": business_ok,
+                "message": message if business_ok else f"同步失败: {result.get('error') or message or '未知错误'}",
+                "data": result
+            }
 
         except Exception as e:
             print(f"[FundService] 更新失败: {e}")

@@ -59,6 +59,32 @@ class FundAPI:
     def __exit__(self, *args):
         self.close()
     
+    def _history_fallback_info(self, fund_code: str) -> Optional[Dict]:
+        """fundgz 实时接口失效时，用最近一天历史净值兜底。
+
+        名称/类型刻意返回 None，避免覆盖库内已有字段。
+        """
+        history = self.get_fund_history(fund_code, days=1)
+        if not history:
+            return None
+
+        latest = history[0]
+        nav_date = latest.get('date')
+        return {
+            'fund_code': fund_code,
+            'fund_name': None,
+            'fund_type': None,
+            'nav': latest.get('nav'),
+            'nav_date': (
+                nav_date.strftime('%Y-%m-%d')
+                if hasattr(nav_date, 'strftime')
+                else (str(nav_date) if nav_date else None)
+            ),
+            'estimate_nav': None,
+            'estimate_date': None,
+            'day_growth': latest.get('growth'),
+        }
+
     def get_fund_info(self, fund_code: str) -> Optional[Dict]:
         """获取基金实时信息
 
@@ -66,6 +92,9 @@ class FundAPI:
         - nav/nav_date: 实际净值和净值日期（来自 jzrq/dwjz）
         - estimate_nav/estimate_date: 估值和估值时间（来自 gsz/gztime）
         - day_growth: 估值涨跌幅
+
+        fundgz 实时接口失效（404 HTML / 超时 / 网络错误）时，
+        自动用历史净值接口兜底，保证基金更新链路可用。
         """
         try:
             url = f"{self.base_url}/js/{fund_code}.js"
@@ -96,13 +125,22 @@ class FundAPI:
                         'day_growth': float(data.get('gszzl', 0) or 0),
                         'fund_type': data.get('fundtype', '')
                     }
+
+            # fundgz 接口失效时（返回 404 页面等），用历史净值兜底
+            logger.warning(f"基金{fund_code}实时接口无有效数据，尝试历史净值兜底")
+            return self._history_fallback_info(fund_code)
         except requests.exceptions.Timeout:
-            logger.warning(f"获取基金{fund_code}信息超时")
+            logger.warning(f"获取基金{fund_code}信息超时，尝试历史净值兜底")
+            return self._history_fallback_info(fund_code)
         except requests.exceptions.RequestException as e:
-            logger.warning(f"获取基金{fund_code}网络错误: {e}")
+            logger.warning(f"获取基金{fund_code}网络错误: {e}，尝试历史净值兜底")
+            return self._history_fallback_info(fund_code)
         except Exception as e:
-            logger.error(f"获取基金{fund_code}信息失败: {e}")
-        return None
+            logger.error(f"获取基金{fund_code}信息失败: {e}，尝试历史净值兜底")
+            try:
+                return self._history_fallback_info(fund_code)
+            except Exception:
+                return None
     
     def get_fund_history(self, fund_code: str, days: int = 30) -> List[Dict]:
         """获取基金历史净值"""

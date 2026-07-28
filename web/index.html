@@ -2056,13 +2056,31 @@ const fetchWeChatBatch = async () => {
                 };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
                 const showTopBloggers = async () => { try { const res = await axios.get('/api/bloggers/top?limit=10'); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('获取失败'); } };
+                let fundUpdatePollTimer = null;
+                const clearFundUpdatePoll = () => {
+                    if (fundUpdatePollTimer) {
+                        clearInterval(fundUpdatePollTimer);
+                        fundUpdatePollTimer = null;
+                    }
+                };
                 const pollFundUpdateStatus = async () => {
-                    const timer = setInterval(async () => {
+                    clearFundUpdatePoll();
+                    let consecutiveErrors = 0;
+                    const startedAt = Date.now();
+                    const FUND_UPDATE_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+                    fundUpdatePollTimer = setInterval(async () => {
                         try {
+                            if (Date.now() - startedAt > FUND_UPDATE_POLL_TIMEOUT_MS) {
+                                clearFundUpdatePoll();
+                                analyzing.value = false;
+                                alert('基金更新超时，请稍后刷新列表或重新触发更新');
+                                return;
+                            }
                             const res = await axios.get('/api/funds/update-status');
                             const status = res.data.data;
+                            consecutiveErrors = 0;
                             if (!status.in_progress) {
-                                clearInterval(timer);
+                                clearFundUpdatePoll();
                                 analyzing.value = false;
                                 if (status.last_result === null) {
                                     alert('更新状态已丢失，请重新触发更新');
@@ -2074,9 +2092,13 @@ const fetchWeChatBatch = async () => {
                                 }
                             }
                         } catch (e) {
-                            clearInterval(timer);
-                            analyzing.value = false;
-                            alert('获取更新状态失败: ' + (e.response?.data?.message || e.message));
+                            consecutiveErrors += 1;
+                            // 短暂网络抖动不立刻放弃；连续失败再停
+                            if (consecutiveErrors >= 3) {
+                                clearFundUpdatePoll();
+                                analyzing.value = false;
+                                alert('获取更新状态失败: ' + (e.response?.data?.message || e.message));
+                            }
                         }
                     }, 3000);
                 };
@@ -2085,8 +2107,9 @@ const fetchWeChatBatch = async () => {
                     try {
                         const res = await axios.post('/api/funds/update-all');
                         if (res.data.success) {
-                            alert(res.data.message || '更新任务已启动');
+                            // 先启动轮询，再提示；避免 alert 阻塞导致状态刷新滞后
                             await pollFundUpdateStatus();
+                            alert(res.data.message || '更新任务已启动，正在后台更新…');
                         } else {
                             analyzing.value = false;
                             alert(res.data.message || '更新失败');
