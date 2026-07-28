@@ -46,14 +46,15 @@ class TiantianCrawler:
         self.timeout = config.CRAWLER_TIMEOUT
         self.request_delay = config.CRAWLER_REQUEST_DELAY
         self.max_posts = config.MAX_POSTS_PER_FUND
-        
+        self.fetch_detail = True
+
         # 筛选参数 - 适度宽松，保证观点数量
         self.min_click_count = 30   # 最小阅读数（从100降到30）
         self.min_comment_count = 1   # 最小评论数（从5降到1）
         self.min_title_length = 6    # 最小标题长度（从8降到6）
-        
+
         self._last_request_time = 0
-    
+
     def _rate_limit(self):
         """频率限制"""
         now = time.time()
@@ -61,18 +62,40 @@ class TiantianCrawler:
         if elapsed < self.request_delay:
             time.sleep(self.request_delay - elapsed)
         self._last_request_time = time.time()
-    
+
     def _fix_encoding(self, text: str) -> str:
         """修复乱码"""
         try:
             # 先尝试 UTF-8
             return text.encode('latin1').decode('utf-8')
-        except:
+        except Exception:
             try:
                 # 尝试 GBK
                 return text.encode('latin1').decode('gbk')
-            except:
+            except Exception:
                 return text
+
+    def _fetch_post_content(self, url: str) -> str:
+        """抓取基金吧详情页正文。列表接口只有标题。"""
+        if not url:
+            return ""
+        try:
+            self._rate_limit()
+            response = requests.get(url, headers=self.headers, timeout=self.timeout)
+            response.encoding = "utf-8"
+            if response.status_code != 200:
+                return ""
+            soup = BeautifulSoup(response.text, "html.parser")
+            for selector in (".newstext", "#zwconbody", ".zwcontentmain", ".stockcodec"):
+                node = soup.select_one(selector)
+                if not node:
+                    continue
+                text = node.get_text("\n", strip=True)
+                if text:
+                    return text
+        except Exception as exc:
+            print(f"[Crawler] 获取基金吧正文失败: {exc}")
+        return ""
     
     def _is_quality_post(self, item: Dict) -> tuple:
         """
@@ -128,12 +151,11 @@ class TiantianCrawler:
         Returns:
             帖子列表
         """
-        if not config.CRAWLER_ENABLED:
-            print("[Crawler] 爬虫模块未启用，跳过抓取")
-            return []
-        
+        # 不在这里再挡 CRAWLER_ENABLED：
+        # - /api/crawler 入口已在 CrawlerService 层统一门控
+        # - 观点流水线 fetch 是用户手动触发，需与 stock_guba/sina 行为一致
         posts = []
-        
+
         try:
             url = f"{self.base_url}/list,{fund_code}.html"
             
@@ -204,38 +226,43 @@ class TiantianCrawler:
         try:
             post_id = str(item.get('post_id', ''))
             title = item.get('post_title', '')
-            
+
             # 修复编码
             title = self._fix_encoding(title)
-            
+
             # 匿名处理：统称为网友
             author = "网友"
-            
+
             # 获取热度
             read_count = item.get('post_click_count', 0)
             reply_count = item.get('post_comment_count', 0)
-            
+
             post_time_str = item.get('post_publish_time', '')
             post_time = self._parse_time(post_time_str)
-            
+
             # 获取达人标记
             v_user_code = item.get('v_user_code', 0)
             is_vip = v_user_code and v_user_code != 0
-            
+
             # 获取精华标记
             is_essence = item.get('is_essence', False) or item.get('post_essence', False)
-            
+
             # 获取质量等级
             quality_level = item.get('_quality_level', 'normal')
-            
+
             # 构建 URL
             url = f"https://guba.eastmoney.com/news,{fund_code},{post_id}.html"
-            
-            # 默认使用标题作为内容
+
+            # 列表页只有标题；尽量补详情正文，否则观点门禁会因 content==title 全拒。
             content = title
-            
+            if self.fetch_detail:
+                detail = self._fetch_post_content(url)
+                if detail:
+                    content = detail
+
             return {
                 'post_id': post_id,
+                'article_id': post_id,
                 'fund_code': fund_code,
                 'title': title,
                 'content': content,
@@ -246,10 +273,12 @@ class TiantianCrawler:
                 'read_count': read_count,
                 'reply_count': reply_count,
                 'post_time': post_time,
+                'publish_time': post_time,
                 'url': url,
-                'crawl_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'crawl_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'source': 'fund_guba',
             }
-            
+
         except Exception as e:
             print(f"[Crawler] 解析 JSON 帖子失败：{e}")
             return None

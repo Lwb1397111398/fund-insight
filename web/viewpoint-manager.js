@@ -19,16 +19,28 @@
         const summaryStats = ref(null);
         const showSummaryConfirmModal = ref(false);
         const sourceMenuOpen = ref(false);
-        const selectedSources = reactive({ sina_blog: true });
-        // 观点抓取来源已下线为仅新浪博客（后端 ALLOWED_SOURCES 只接受 sina_blog）。
-        // sourceOptions 保留 sina_blog 与历史来源标签，供筛选下拉使用。
-        const sourceOptions = [
+        const selectedSources = reactive({ sina_blog: true, stock_guba: true, fund_guba: true });
+        // 抓取可选来源（后端 ALLOWED_SOURCES）
+        const fetchSourceOptions = [
             { value: 'sina_blog', label: '新浪博客' },
+            { value: 'stock_guba', label: '热门股吧' },
+            { value: 'fund_guba', label: '热门基金吧' },
+        ];
+        // 筛选下拉保留历史来源标签，兼容库内旧数据
+        const sourceOptions = [
+            ...fetchSourceOptions,
+            { value: 'eastmoney_blog', label: '东方财富博客' },
+            { value: 'eastmoney_guide', label: '东方财富导读' },
+            { value: 'eastmoney_news', label: '东方财富快讯' },
+            { value: 'sina_finance', label: '新浪财经' },
         ];
         const taskRunning = computed(() => ['pending', 'running'].includes(viewpointTask.value?.status));
         let pollTimer = null;
 
         const errorMessage = (error) => error.response?.data?.detail || error.response?.data?.message || error.message;
+        const selectedSourceList = () => fetchSourceOptions
+            .map((item) => item.value)
+            .filter((value) => selectedSources[value]);
         const fetchViewpoints = async () => {
             const params = {
                 page: viewpointFilters.page,
@@ -83,6 +95,7 @@
                 const latest = await fetchLatestTask();
                 if (!latest || latest.task_id !== taskId || ['succeeded', 'failed', 'cancelled'].includes(latest.status)) {
                     clearPoll();
+                    analyzing.value = false;
                     await Promise.all([fetchViewpoints(), fetchInsights()]);
                     return;
                 }
@@ -90,6 +103,7 @@
                 pollTimer = window.setTimeout(() => pollTask(taskId), 3000);
             } catch (error) {
                 clearPoll();
+                analyzing.value = false;
                 console.error('观点任务轮询失败', error);
             }
         };
@@ -98,11 +112,22 @@
             if (taskId) pollTask(Number(taskId));
         };
         const fetchLatestViewpoints = async () => {
-            const sourcesText = 'sina_blog: 新浪博客\nstock_guba: 热门股吧\nfund_guba: 热门基金吧';
-            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n新浪博客20条，其他各10条，总计约40条观点。`)) return;
+            const sources = selectedSourceList();
+            if (!sources.length) {
+                alert('请至少选择一个数据源');
+                return;
+            }
+            const sourcesText = fetchSourceOptions
+                .filter((item) => sources.includes(item.value))
+                .map((item) => `${item.value}: ${item.label}`)
+                .join('\n');
+            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n新浪博客约20条，股吧/基金吧各约10条。`)) return;
             try {
                 const response = await axios.post('/api/viewpoints/fetch', {
-                    sources: ['sina_blog', 'stock_guba', 'fund_guba'], limit_per_source: 20, mode: 'fetch',
+                    sources,
+                    // 后端会对 sina 用 20、其他源按传入 limit 截断；20 作为上限即可。
+                    limit_per_source: 20,
+                    mode: 'fetch',
                 });
                 viewpointTask.value = response.data.data;
                 sourceMenuOpen.value = false;
@@ -130,11 +155,16 @@
             analyzing.value = true;
             try {
                 const res = await axios.post('/api/viewpoints/batch-analyze', { limit: 30 });
-                const data = res.data.data;
+                const data = res.data.data || {};
                 const message = res.data.message || '没有需要分析的观点';
-                if (data?.in_progress && data?.task_id) {
-                    // 立即启动轮询
-                    viewpointTask.value = data;
+                if (data.in_progress && data.task_id) {
+                    // 立即启动轮询；补齐 status 字段，避免 taskRunning 误判
+                    viewpointTask.value = {
+                        ...data,
+                        status: data.status || 'pending',
+                        total_count: data.total || data.total_count || 0,
+                        processed_count: data.analyzed_count || data.processed_count || 0,
+                    };
                     localStorage.setItem('viewpoint_task_id', String(data.task_id));
                     pollTask(data.task_id);
                 } else {
@@ -184,7 +214,8 @@
         const sourceLabel = (source) => ({
             eastmoney_blog: '东方财富博客', eastmoney_guide: '东方财富导读',
             eastmoney_news: '东方财富快讯', sina_finance: '新浪财经',
-            sina_blog: '新浪博客', daily_summary: '每日汇总',
+            sina_blog: '新浪博客', stock_guba: '热门股吧', fund_guba: '热门基金吧',
+            daily_summary: '每日汇总',
         }[source] || source || '未知');
         const directionLabel = (direction) => ({ bullish: '看多', bearish: '看空', neutral: '中性' }[direction] || '中性');
         const taskStatusLabel = (status) => ({
@@ -194,6 +225,7 @@
         return {
             viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
             viewpointDetail, showViewpointDetail, sourceMenuOpen, selectedSources, sourceOptions,
+            fetchSourceOptions,
             taskRunning, summarizing, summaryStats, showSummaryConfirmModal,
             fetchViewpoints, loadViewpoints, applyViewpointFilters, resetViewpointFilters,
             viewpointPrevPage, viewpointNextPage, fetchLatestViewpoints, retryViewpointTask,

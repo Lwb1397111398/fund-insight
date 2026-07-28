@@ -45,7 +45,8 @@ _SPAM_KEYWORDS = (
 )
 
 # 低于此字数的内容视为无分析价值。
-_MIN_CONTENT_LENGTH = 80
+# 股吧/基金吧很多有效短帖在 40~80 字，过严会把两源几乎全过滤。
+_MIN_CONTENT_LENGTH = 40
 
 
 class ViewpointWorkflowService:
@@ -74,20 +75,44 @@ class ViewpointWorkflowService:
 
     @staticmethod
     def _article_date(article: Dict[str, Any]) -> date:
-        value = article.get("publish_time") or article.get("publish_date") or article.get("date")
+        value = (
+            article.get("publish_time")
+            or article.get("post_time")
+            or article.get("publish_date")
+            or article.get("date")
+        )
         if isinstance(value, datetime):
             return value.date()
         if isinstance(value, date):
             return value
         if value:
-            text = str(value).strip().replace("/", "-")
-            try:
-                return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-            except ValueError:
+            text = str(value).strip()
+            # 新浪列表常见：2026年03月07日 01:00
+            for fmt in (
+                "%Y年%m月%d日 %H:%M:%S",
+                "%Y年%m月%d日 %H:%M",
+                "%Y年%m月%d日",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y/%m/%d %H:%M:%S",
+                "%Y/%m/%d %H:%M",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+            ):
                 try:
-                    return datetime.strptime(text[:10], "%Y-%m-%d").date()
+                    return datetime.strptime(text, fmt).date()
                 except ValueError:
-                    pass
+                    continue
+            # ISO / 带时区
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00").replace("/", "-")).date()
+            except ValueError:
+                pass
+            # 兜底：截前 10 位当 YYYY-MM-DD
+            try:
+                return datetime.strptime(text.replace("/", "-")[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
         return date.today()
 
     @staticmethod
@@ -157,26 +182,40 @@ class ViewpointWorkflowService:
         HOT_STOCKS = ['000001', '399001', '399006']  # 上证、深证、创业板
         HOT_FUNDS = ['000001', '110022', '519772', '161725']  # 热门基金示例
 
-        def fetch_stock_guba(_limit: int) -> List[Dict[str, Any]]:
-            """抓取热门股吧（固定10条）"""
+        def _cap(limit: int, default: int) -> int:
+            try:
+                value = int(limit or default)
+            except (TypeError, ValueError):
+                value = default
+            return max(1, min(value, 50))
+
+        def fetch_stock_guba(limit: int) -> List[Dict[str, Any]]:
+            """抓取热门股吧。固定最多 10 条，会补详情正文。"""
+            # 前端统一传 limit_per_source=20（给新浪），股吧/基金吧刻意压到 10。
+            cap = min(_cap(limit, 10), 10)
+            # 每个吧先抓一点列表，再统一截断，避免只打一个吧。
+            per_board = max(3, (cap + len(HOT_STOCKS) - 1) // len(HOT_STOCKS))
+            stock_guba.max_posts = per_board
             results = stock_guba.fetch_hot_stocks(HOT_STOCKS)
-            all_posts = []
+            all_posts: List[Dict[str, Any]] = []
             for posts in results.values():
                 all_posts.extend(posts)
-            return all_posts[:10]
+            return all_posts[:cap]
 
-        def fetch_fund_guba(_limit: int) -> List[Dict[str, Any]]:
-            """抓取热门基金吧（固定10条）"""
-            all_posts = []
+        def fetch_fund_guba(limit: int) -> List[Dict[str, Any]]:
+            """抓取热门基金吧。固定最多 10 条，会补详情正文。"""
+            cap = min(_cap(limit, 10), 10)
+            fund_guba.max_posts = max(3, (cap + len(HOT_FUNDS) - 1) // len(HOT_FUNDS))
+            all_posts: List[Dict[str, Any]] = []
             for fund_code in HOT_FUNDS:
                 posts = fund_guba.fetch_fund_posts(fund_code)
                 all_posts.extend(posts)
-                if len(all_posts) >= 10:
+                if len(all_posts) >= cap:
                     break
-            return all_posts[:10]
+            return all_posts[:cap]
 
         return {
-            "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=20),
+            "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=_cap(limit, 20)),
             "stock_guba": fetch_stock_guba,
             "fund_guba": fetch_fund_guba,
         }
@@ -341,15 +380,14 @@ class ViewpointWorkflowService:
         """判断文章是否是值得入库的博主观点。返回 (是否通过, 原因)。"""
         title = str(article.get("title") or "").strip()
         content = str(article.get("content") or "").strip()
+        # 列表页偶发 content 空/等于标题；用 title+content 合成后再判长度与关键词。
+        text = f"{title}\n{content}".strip() if content and content != title else (content or title)
+        text = str(text or "").strip()
 
-        # 内容等于标题 → 详情页根本没抓到正文，只有列表页标题。
-        if content and content == title:
-            return False, f"内容等于标题，疑似未抓到正文（{len(content)}字）"
+        if len(text) < _MIN_CONTENT_LENGTH:
+            return False, f"内容过短（{len(text)}字 < {_MIN_CONTENT_LENGTH}）"
 
-        if len(content) < _MIN_CONTENT_LENGTH:
-            return False, f"内容过短（{len(content)}字 < {_MIN_CONTENT_LENGTH}）"
-
-        text = f"{title} {content}"
+        # content==title 通常表示详情抓取失败；已有长度与关键词门槛兜底，不再额外硬拒。
         for spam in _SPAM_KEYWORDS:
             if spam in text:
                 return False, f"命中垃圾关键词：{spam}"
@@ -404,9 +442,13 @@ class ViewpointWorkflowService:
         )
         db.add(record)
 
+        content_text = str(article.get("content") or article.get("title") or "").strip()
+        title_text = str(article.get("title") or "").strip()
         viewpoint = Viewpoint(
             viewpoint_date=cls._article_date(article),
-            content=str(article.get("content") or article.get("title") or ""),
+            content=content_text,
+            # 未分析前也给列表页可用摘要，避免一直显示“待生成摘要”
+            summary=(title_text or content_text)[:160] or None,
             author=str(article.get("author") or "未知"),
             source=source,
             article_id=article_id,

@@ -17,9 +17,11 @@ SOURCE_AUTHORITY_MAP = {
     'eastmoney_news': 0.8,
     'sina_finance': 0.75,
     'sina_blog': 0.7,
+    'stock_guba': 0.55,
+    'fund_guba': 0.55,
     'xueqiu': 0.65,
     'manual': 0.6,
-    'crawler': 0.5
+    'crawler': 0.5,
 }
 
 
@@ -286,25 +288,30 @@ class ViewpointService(BaseService[Viewpoint]):
             需要分析的观点列表
         """
         start_date = date.today() - timedelta(days=days)
-        
+
         query = self.db.query(Viewpoint).filter(
             Viewpoint.viewpoint_date >= start_date,
-            Viewpoint.is_deleted == False
+            Viewpoint.is_deleted == False,
+            # 汇总观点不再送 LLM 深度分析
+            Viewpoint.is_summary == False,
         )
-        
+
         if source != 'all':
             query = query.filter(Viewpoint.source == source)
-        
+
         viewpoints = query.order_by(Viewpoint.created_at.desc()).limit(limit * 2).all()
-        
+
         # 过滤出需要分析的（没有 reasoning 或不包含"AI深度分析"）
         result = []
         for v in viewpoints:
-            if not v.reasoning or "AI深度分析" not in v.reasoning:
+            # 已成功分析的跳过
+            if (v.analysis_summary or "") == "succeeded":
+                continue
+            if not v.reasoning or "AI深度分析" not in (v.reasoning or ""):
                 result.append(v)
             if len(result) >= limit:
                 break
-        
+
         return result
     
     def update_viewpoint_analysis(

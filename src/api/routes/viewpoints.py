@@ -26,7 +26,7 @@ router = APIRouter(prefix="/viewpoints", tags=["观点"])
 class ViewpointFetchRequest(BaseModel):
     sources: List[str] = Field(default_factory=lambda: list(DEFAULT_SOURCES))
     limit_per_source: int = Field(default=20, ge=1, le=50)
-    mode: Literal["fetch"] = Field(default="fetch", description="仅抓取新浪博客，不调用 AI")
+    mode: Literal["fetch"] = Field(default="fetch", description="仅抓取观点，不调用 AI")
 
 
 def _is_analyzed(row: Viewpoint) -> bool:
@@ -43,11 +43,13 @@ def _analysis_status(row: Viewpoint) -> str:
 
 def _serialize_list(row: Viewpoint) -> dict:
     expired = bool(row.valid_until and row.valid_until < date.today())
+    # 未分析原始观点也返回 content 前缀，避免前端只显示“待生成摘要”
+    summary = row.summary or ((row.content or "")[:160] if (row.is_summary or row.content) else "")
     return {
         "id": row.id,
         "author": row.author or "未知",
         "source": row.source,
-        "summary": row.summary or ((row.content or "")[:160] if row.is_summary else ""),
+        "summary": summary,
         "market_direction": row.market_direction or "neutral",
         "confidence": row.confidence or 50,
         "valid_until": row.valid_until.isoformat() if row.valid_until else None,
@@ -295,7 +297,13 @@ async def batch_analyze_viewpoints(
         return {
             "success": True,
             "message": "观点批量分析正在进行中，请稍候...",
-            "data": {"analyzed_count": 0, "total": 0, "in_progress": True},
+            "data": {
+                "analyzed_count": 0,
+                "total": existing.total_count or 0,
+                "in_progress": True,
+                "task_id": existing.id,
+                "status": existing.status,
+            },
         }
 
     # 取最近7天未完成深度分析的观点
@@ -310,7 +318,7 @@ async def batch_analyze_viewpoints(
         return {
             "success": True,
             "message": "没有需要分析的观点",
-            "data": {"analyzed_count": 0, "total": 0},
+            "data": {"analyzed_count": 0, "total": 0, "in_progress": False},
         }
 
     task = BatchAnalysisTask(
@@ -327,7 +335,13 @@ async def batch_analyze_viewpoints(
     return {
         "success": True,
         "message": f"已开始后台分析 {total} 个观点，请稍后刷新查看结果",
-        "data": {"analyzed_count": 0, "total": total, "in_progress": True},
+        "data": {
+            "analyzed_count": 0,
+            "total": total,
+            "in_progress": True,
+            "task_id": task.id,
+            "status": task.status,
+        },
     }
 
 

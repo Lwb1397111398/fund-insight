@@ -364,7 +364,7 @@ def test_retry_path_runs_deep_retries_end_to_end(test_db):
 
 
 def test_fetch_mode_skips_short_content_below_threshold(test_db):
-    """fetch 模式正文<80字记 skipped, 不入库, 不调 LLM。"""
+    """fetch 模式正文过短记 skipped, 不入库, 不调 LLM。"""
     article = {"title": "只有标题", "content": "看好半导体。", "url": "https://example.test/short"}
     task, _ = ViewpointWorkflowService.create_fetch_task(
         test_db, sources=["sina_blog"], limit_per_source=5
@@ -412,18 +412,115 @@ def test_fetch_mode_adopts_content_at_threshold_boundary(test_db):
     assert task.result_summary["skipped"] == 0
 
 
-def test_fetch_defaults_only_allow_twenty_sina_blog_posts():
-    """观点抓取只允许新浪博客，默认直接抓取20篇。"""
+def test_fetch_defaults_include_three_live_sources():
+    """观点抓取默认三源：新浪博客 + 热门股吧 + 热门基金吧。"""
     from src.services.viewpoint_workflow_service import (
         DEFAULT_SOURCES, ALLOWED_SOURCES,
     )
-    assert DEFAULT_SOURCES == ("sina_blog",)
-    assert ALLOWED_SOURCES == frozenset({"sina_blog"})
+    assert DEFAULT_SOURCES == ("sina_blog", "stock_guba", "fund_guba")
+    assert ALLOWED_SOURCES == frozenset({"sina_blog", "stock_guba", "fund_guba"})
 
     payload = viewpoint_routes.ViewpointFetchRequest()
-    assert payload.sources == ["sina_blog"]
+    assert payload.sources == ["sina_blog", "stock_guba", "fund_guba"]
     assert payload.limit_per_source == 20
     assert payload.mode == "fetch"
+
+
+def test_quality_gate_accepts_long_title_only_guba_style_posts():
+    """股吧详情失败时，足够长且含观点词的标题仍可入库，避免整源 0 条。"""
+    title = (
+        "看多科技半导体板块，短期反弹可加仓，中期仍有上行空间和资金流入机会，"
+        "建议关注龙头标的估值修复与业绩兑现。"
+    )
+    assert len(title) >= 40
+    ok, reason = ViewpointWorkflowService._is_quality_viewpoint({
+        "title": title,
+        "content": title,
+    })
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_quality_gate_rejects_short_title_only_posts():
+    ok, reason = ViewpointWorkflowService._is_quality_viewpoint({
+        "title": "看多科技",
+        "content": "看多科技",
+    })
+    assert ok is False
+    assert "内容" in reason
+
+
+def test_list_serialization_uses_content_prefix_for_pending_rows():
+    row = Viewpoint(
+        content="人工智能板块资金流改善，短期趋势偏强，建议逢低布局相关龙头。",
+        author="测试",
+        source="stock_guba",
+        viewpoint_date=date.today(),
+        is_deleted=False,
+        is_summary=False,
+        summary=None,
+        reasoning=None,
+        market_direction=None,
+    )
+    data = viewpoint_routes._serialize_list(row)
+    assert data["summary"].startswith("人工智能板块")
+    assert data["analysis_status"] == "pending"
+
+
+def test_stock_guba_board_code_mapping():
+    from src.crawler.stock_guba_crawler import StockGubaCrawler
+    crawler = StockGubaCrawler()
+    assert crawler._board_code("000001") == "zssh000001"
+    assert crawler._board_code("399001") == "sz399001"
+    assert crawler._board_code("399006") == "sz399006"
+    assert crawler._board_code("600519") == "sh600519"
+
+
+def test_article_date_parses_chinese_and_post_time():
+    assert ViewpointWorkflowService._article_date({
+        "publish_time": "2026年03月07日 01:00",
+    }) == date(2026, 3, 7)
+    assert ViewpointWorkflowService._article_date({
+        "post_time": "2026-07-28 16:16:21",
+    }) == date(2026, 7, 28)
+    assert ViewpointWorkflowService._article_date({
+        "publish_time": "2026-07-19",
+    }) == date(2026, 7, 19)
+
+
+def test_batch_analyze_candidates_skip_summary_and_succeeded(test_db):
+    from src.services.viewpoint_service import ViewpointService
+
+    pending = _add_viewpoint(
+        test_db,
+        reasoning=None,
+        summary=None,
+        market_direction=None,
+        analysis_summary="pending",
+        is_summary=False,
+        content="待分析原始观点，看多科技板块反弹机会。",
+    )
+    _add_viewpoint(
+        test_db,
+        is_summary=True,
+        source="daily_summary",
+        content="这是汇总，不应再送 AI",
+        reasoning=None,
+        summary="汇总摘要",
+        analysis_summary="pending",
+    )
+    _add_viewpoint(
+        test_db,
+        analysis_summary="succeeded",
+        reasoning="【AI深度分析】已完成",
+        summary="已分析",
+        content="已分析观点",
+    )
+    rows = ViewpointService(test_db).get_viewpoints_for_batch_analyze(limit=10, source="all", days=7)
+    ids = [r.id for r in rows]
+    assert pending.id in ids
+    assert all(not r.is_summary for r in rows)
+    assert all((r.analysis_summary or "") != "succeeded" for r in rows)
 
 
 @pytest.mark.parametrize("source", ["eastmoney_blog", "eastmoney_guide", "sina_finance"])

@@ -302,7 +302,7 @@
                                 <i class="ri-arrow-down-s-line"></i>
                             </button>
                             <div v-if="sourceMenuOpen" class="viewpoint-source-menu">
-                                <label v-for="source in sourceOptions" :key="source.value">
+                                <label v-for="source in fetchSourceOptions" :key="source.value">
                                     <input type="checkbox" v-model="selectedSources[source.value]"> {{ source.label }}
                                 </label>
                             </div>
@@ -1965,7 +1965,7 @@ const fetchWeChatBatch = async () => {
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
-                    sourceMenuOpen, selectedSources, sourceOptions, taskRunning,
+                    sourceMenuOpen, selectedSources, sourceOptions, fetchSourceOptions, taskRunning,
                     summarizing, summaryStats, showSummaryConfirmModal,
                     fetchViewpoints, loadViewpoints, applyViewpointFilters, resetViewpointFilters,
                     viewpointPrevPage, viewpointNextPage, fetchLatestViewpoints, retryViewpointTask,
@@ -2302,7 +2302,7 @@ const fetchWeChatBatch = async () => {
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
                     verifyTask, showPredictionMaintenance, maintenancePreview,
                     viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
-                    sourceMenuOpen, selectedSources, sourceOptions, taskRunning,
+                    sourceMenuOpen, selectedSources, sourceOptions, fetchSourceOptions, taskRunning,
                     funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds,
                     fundLoading, fundError, fundPage, fundMeta, fetchFunds, fundPrevPage, fundNextPage,
                     advice, adviceGenerating, adviceIsNew, analyzing,

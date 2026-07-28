@@ -12,6 +12,7 @@ import json
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from bs4 import BeautifulSoup
 
 import sys
 import os
@@ -27,6 +28,13 @@ from src.core.config import config
 class StockGubaCrawler:
     """股吧爬虫 - 复用基金吧的成熟经验"""
 
+    # 指数/板块吧代码映射。错误前缀会落到 error 页，导致整源 0 条。
+    BOARD_CODE_MAP = {
+        "000001": "zssh000001",  # 上证指数
+        "399001": "sz399001",    # 深证成指
+        "399006": "sz399006",    # 创业板指
+    }
+
     def __init__(self):
         self.base_url = "https://guba.eastmoney.com"
         self.headers = {
@@ -38,6 +46,7 @@ class StockGubaCrawler:
         self.timeout = 15
         self.request_delay = 1.0
         self.max_posts = 20
+        self.fetch_detail = True
 
         # 筛选参数 - 适度宽松，优先保证观点数量
         self.min_click_count = 50      # 最小阅读数（比基金吧的100低）
@@ -54,14 +63,26 @@ class StockGubaCrawler:
             time.sleep(self.request_delay - elapsed)
         self._last_request_time = time.time()
 
+    def _board_code(self, stock_code: str) -> str:
+        """把股票/指数代码转成股吧列表页可用的 board code。"""
+        code = str(stock_code or "").strip()
+        if code in self.BOARD_CODE_MAP:
+            return self.BOARD_CODE_MAP[code]
+        # 6 开头偏沪市个股；其余优先用原始代码（基金/深市个股）。
+        if code.startswith("6"):
+            return f"sh{code}"
+        if code.startswith(("0", "3")) and len(code) == 6:
+            return f"sz{code}"
+        return code
+
     def _fix_encoding(self, text: str) -> str:
         """修复乱码"""
         try:
             return text.encode('latin1').decode('utf-8')
-        except:
+        except Exception:
             try:
                 return text.encode('latin1').decode('gbk')
-            except:
+            except Exception:
                 return text
 
     def _is_quality_post(self, item: Dict) -> Tuple[bool, str]:
@@ -100,6 +121,28 @@ class StockGubaCrawler:
 
         return False, None
 
+    def _fetch_post_content(self, url: str) -> str:
+        """抓取帖子详情页正文。列表接口只有标题，没有正文。"""
+        if not url:
+            return ""
+        try:
+            self._rate_limit()
+            response = requests.get(url, headers=self.headers, timeout=self.timeout)
+            response.encoding = "utf-8"
+            if response.status_code != 200:
+                return ""
+            soup = BeautifulSoup(response.text, "html.parser")
+            for selector in (".newstext", "#zwconbody", ".zwcontentmain", ".stockcodec"):
+                node = soup.select_one(selector)
+                if not node:
+                    continue
+                text = node.get_text("\n", strip=True)
+                if text:
+                    return text
+        except Exception as exc:
+            print(f"[StockGuba] 获取帖子正文失败: {exc}")
+        return ""
+
     def fetch_stock_posts(self, stock_code: str, quality_filter: bool = True) -> List[Dict]:
         """
         抓取指定股票/指数的热门帖子
@@ -112,9 +155,10 @@ class StockGubaCrawler:
             帖子列表
         """
         posts = []
+        board = self._board_code(stock_code)
 
         try:
-            url = f"{self.base_url}/list,zssh{stock_code}.html"
+            url = f"{self.base_url}/list,{board}.html"
 
             self._rate_limit()
             response = requests.get(url, headers=self.headers, timeout=self.timeout)
@@ -122,6 +166,9 @@ class StockGubaCrawler:
 
             if response.status_code != 200:
                 print(f"[StockGuba] 抓取股票{stock_code}吧失败：HTTP {response.status_code}")
+                return []
+            if "var article_list=" not in response.text:
+                print(f"[StockGuba] 抓取股票{stock_code}吧失败：无效吧页 {url}")
                 return []
 
             # 使用正则表达式提取 JSON 数据
@@ -140,7 +187,7 @@ class StockGubaCrawler:
                     normal_posts = []
 
                     for item in post_items:
-                        should_include, quality_level = self._is_quality_post(item)
+                        should_include, quality_level = self._is_quality_post(item) if quality_filter else (True, 'normal')
                         if should_include:
                             item['_quality_level'] = quality_level
                             if quality_level == 'elite':
@@ -157,7 +204,7 @@ class StockGubaCrawler:
 
                     for item in filtered_posts[:self.max_posts]:
                         try:
-                            post_data = self._parse_json_post(item, stock_code)
+                            post_data = self._parse_json_post(item, stock_code, board)
                             if post_data:
                                 posts.append(post_data)
                         except Exception as e:
@@ -178,11 +225,12 @@ class StockGubaCrawler:
 
         return posts
 
-    def _parse_json_post(self, item: Dict, stock_code: str) -> Optional[Dict]:
+    def _parse_json_post(self, item: Dict, stock_code: str, board: Optional[str] = None) -> Optional[Dict]:
         """解析 JSON 格式的帖子数据"""
         try:
             post_id = str(item.get('post_id', ''))
             title = item.get('post_title', '')
+            board = board or self._board_code(stock_code)
 
             # 修复编码
             title = self._fix_encoding(title)
@@ -207,15 +255,21 @@ class StockGubaCrawler:
             # 获取质量等级
             quality_level = item.get('_quality_level', 'normal')
 
-            # 构建 URL
-            url = f"https://guba.eastmoney.com/news,zssh{stock_code},{post_id}.html"
+            # 构建 URL（必须用真实 board code，不能写死 zssh）
+            url = f"https://guba.eastmoney.com/news,{board},{post_id}.html"
 
-            # 默认使用标题作为内容
+            # 列表页只有标题；观点入库需要正文，尽量补详情。
             content = title
+            if self.fetch_detail:
+                detail = self._fetch_post_content(url)
+                if detail:
+                    content = detail
 
             return {
                 'post_id': post_id,
+                'article_id': post_id,
                 'stock_code': stock_code,
+                'board_code': board,
                 'title': title,
                 'content': content,
                 'author': author,
@@ -225,6 +279,7 @@ class StockGubaCrawler:
                 'read_count': read_count,
                 'reply_count': reply_count,
                 'post_time': post_time,
+                'publish_time': post_time,
                 'url': url,
                 'crawl_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'source': 'stock_guba'
