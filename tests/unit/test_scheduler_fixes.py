@@ -106,6 +106,7 @@ class TestSchedulerFixes:
             def update_side_effect(fund_code, db=None):
                 if fund_code == "000002":
                     raise ValueError("更新失败")
+                return mock_fund1
 
             mock_dm.update_fund_info.side_effect = update_side_effect
             mock_dm.update_fund_history.return_value = None
@@ -120,6 +121,22 @@ class TestSchedulerFixes:
         assert result["success"] is False
         assert result["updated_count"] == 1
         assert result["failed_count"] == 1
+
+    def test_fund_update_returning_none_is_counted_as_failure(self):
+        scheduler = TaskScheduler()
+        mock_db = Mock()
+        mock_db.query.return_value.all.return_value = [Mock(fund_code="000001")]
+
+        with patch('src.fund.fund_api.FundDataManager') as MockManager:
+            MockManager.return_value.update_fund_info.return_value = None
+            with patch('src.models.database.SessionLocal', return_value=mock_db):
+                result = scheduler._run_fund_update()
+
+        assert result["success"] is False
+        assert result["updated_count"] == 0
+        assert result["failed_count"] == 1
+        mock_db.commit.assert_not_called()
+        mock_db.rollback.assert_called_once()
 
     def test_fund_update_transaction_commit_on_success(self):
         """测试基金更新事务：全部成功时提交"""
@@ -142,8 +159,8 @@ class TestSchedulerFixes:
         # 模拟 FundDataManager：全部成功
         with patch('src.fund.fund_api.FundDataManager') as MockManager:
             mock_dm = MockManager.return_value
-            mock_dm.update_fund_info.return_value = None
-            mock_dm.update_fund_history.return_value = None
+            mock_dm.update_fund_info.return_value = Mock()
+            mock_dm.update_fund_history.return_value = 0
 
             with patch('src.models.database.SessionLocal', return_value=mock_db):
                 result = scheduler._run_fund_update()

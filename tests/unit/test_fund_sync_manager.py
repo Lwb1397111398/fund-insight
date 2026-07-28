@@ -15,6 +15,11 @@ class TestFundSyncManager:
     def setup_method(self):
         self.manager = FundSyncManager()
     
+    def test_parse_nav_date_uses_api_date_and_rejects_invalid_values(self):
+        assert self.manager._parse_nav_date('2026-07-24') == date(2026, 7, 24)
+        assert self.manager._parse_nav_date('') is None
+        assert self.manager._parse_nav_date('bad-date') is None
+
     def test_datetime_import(self):
         """测试datetime导入是否正确"""
         from src.fund import fund_sync_manager
@@ -115,7 +120,8 @@ class TestFundSyncManager:
         mock_fund.day_growth = 0.0
         mock_fund.week_growth = 0.0
         mock_fund.month_growth = 0.0
-        
+        mock_fund.nav_date = None
+
         mock_db.query.return_value.all.return_value = [mock_fund]
         
         mock_fund_api.get_fund_info.return_value = {
@@ -132,8 +138,7 @@ class TestFundSyncManager:
         
         assert mock_fund.updated_at is not None
         assert isinstance(mock_fund.updated_at, datetime)
-        assert mock_fund.nav_date is not None
-        assert isinstance(mock_fund.nav_date, date)
+        assert mock_fund.nav_date is None
 
     @patch('src.fund.fund_sync_manager.fund_api')
     def test_update_all_funds_info_keeps_existing_nav_date_when_api_date_invalid(self, mock_fund_api):
@@ -158,3 +163,22 @@ class TestFundSyncManager:
         assert result['updated'] == 1
         assert result['failed'] == 0
         assert mock_fund.nav_date == date(2026, 7, 1)
+
+    @patch('src.fund.fund_sync_manager.fund_api')
+    def test_full_sync_reports_partial_failure(self, mock_fund_api):
+        mock_db = Mock()
+        self.manager.check_prediction_fund_match = Mock(return_value={
+            'total_predictions': 1, 'matched_predictions': 1, 'unmatched_predictions': 0,
+        })
+        self.manager.sync_missing_funds = Mock(return_value={
+            'added': 0, 'linked': 0, 'skipped': 0, 'failed': 1,
+        })
+        self.manager.update_all_funds_info = Mock(return_value={
+            'total': 1, 'updated': 0, 'failed': 1,
+            'failed_funds': [{'fund_code': '000001', 'fund_name': '失败基金', 'reason': '网络错误'}],
+        })
+
+        result = self.manager.full_sync(mock_db)
+
+        assert result['success'] is False
+        assert '失败' in result['message']

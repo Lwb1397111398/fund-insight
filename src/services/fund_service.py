@@ -249,6 +249,29 @@ class FundService(BaseService[FundInfo]):
     
     # ==================== 为路由重构新增的方法 ====================
     
+    def _get_active_prediction_counts(self, fund_codes: List[str]) -> Dict[str, int]:
+        if not fund_codes:
+            return {}
+        rows = self.db.query(
+            Prediction.fund_code,
+            func.count(Prediction.id),
+        ).filter(
+            Prediction.fund_code.in_(fund_codes),
+            Prediction.is_deleted.is_(False),
+        ).group_by(Prediction.fund_code).all()
+        return {fund_code: count for fund_code, count in rows}
+
+    def refresh_prediction_counts(self, fund_codes: List[str]) -> None:
+        codes = {code for code in fund_codes if code}
+        if not codes:
+            return
+        self.db.flush()
+        counts = self._get_active_prediction_counts(list(codes))
+        for fund in self.db.query(FundInfo).filter(FundInfo.fund_code.in_(codes)).all():
+            count = counts.get(fund.fund_code, 0)
+            fund.active_predictions = count
+            fund.can_delete = count == 0
+
     def _get_recent_history_map(self, fund_codes: List[str], per_fund: int = 5) -> Dict[str, List[FundHistory]]:
         if not fund_codes:
             return {}
@@ -301,6 +324,7 @@ class FundService(BaseService[FundInfo]):
         fund_codes = [f.fund_code for f in funds]
         
         history_map = self._get_recent_history_map(fund_codes, per_fund=5)
+        prediction_counts = self._get_active_prediction_counts(fund_codes)
         
         if group_by_sector:
             sector_groups = {}
@@ -330,8 +354,8 @@ class FundService(BaseService[FundInfo]):
                     "day_growth": f.day_growth,
                     "week_growth": f.week_growth,
                     "month_growth": f.month_growth,
-                    "active_predictions": f.active_predictions,
-                    "can_delete": f.can_delete,
+                    "active_predictions": prediction_counts.get(f.fund_code, 0),
+                    "can_delete": prediction_counts.get(f.fund_code, 0) == 0,
                     "last_analyze_date": f.last_analyze_date.isoformat() if f.last_analyze_date else None,
                     "updated_at": f.updated_at.isoformat() if f.updated_at else None,
                     "recent_history": [
@@ -346,7 +370,7 @@ class FundService(BaseService[FundInfo]):
                 
                 sector_groups[sector]["funds"].append(fund_data)
                 sector_groups[sector]["fund_count"] += 1
-                sector_groups[sector]["active_predictions"] += f.active_predictions or 0
+                sector_groups[sector]["active_predictions"] += fund_data["active_predictions"]
             
             for sector in sector_groups:
                 funds_list = sector_groups[sector]["funds"]
@@ -377,8 +401,8 @@ class FundService(BaseService[FundInfo]):
                     "day_growth": f.day_growth,
                     "week_growth": f.week_growth,
                     "month_growth": f.month_growth,
-                    "active_predictions": f.active_predictions,
-                    "can_delete": f.can_delete,
+                    "active_predictions": prediction_counts.get(f.fund_code, 0),
+                    "can_delete": prediction_counts.get(f.fund_code, 0) == 0,
                     "last_analyze_date": f.last_analyze_date.isoformat() if f.last_analyze_date else None,
                     "updated_at": f.updated_at.isoformat() if f.updated_at else None,
                     "recent_history": [
@@ -581,7 +605,11 @@ class FundService(BaseService[FundInfo]):
         if not fund:
             return {"success": False, "message": "基金不存在"}
         
-        if not fund.can_delete:
+        active_count = self.db.query(Prediction).filter(
+            Prediction.fund_code == fund_code,
+            Prediction.is_deleted.is_(False),
+        ).count()
+        if active_count > 0:
             return {"success": False, "message": "该基金有关联的预测，无法删除"}
         
         self.db.delete(fund)

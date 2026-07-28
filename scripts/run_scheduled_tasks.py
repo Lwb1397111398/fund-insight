@@ -50,7 +50,6 @@ def run_daily_tasks() -> dict:
     try:
         run_step("fund_update", scheduler._run_fund_update)
         run_step("prediction_verify", scheduler._run_prediction_verify)
-        run_step("expired_verify", scheduler._run_expired_verify)
         # 观点每日汇总：默认关闭，生产确认 Supabase 备份后设 ENABLE_VIEWPOINT_SUMMARY=true
         if os.environ.get("ENABLE_VIEWPOINT_SUMMARY", "false").lower() == "true":
             from src.services.viewpoint_workflow_service import ViewpointWorkflowService

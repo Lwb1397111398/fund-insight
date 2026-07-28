@@ -37,6 +37,8 @@ async def get_funds(
     db: Session = Depends(get_db)
 ):
     """获取基金列表（支持按板块分组）"""
+    if skip < 0 or limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="分页参数无效")
     service = FundService(db)
     funds = service.get_funds_with_grouping(
         skip=skip,
@@ -45,9 +47,19 @@ async def get_funds(
         group_by_sector=group_by_sector
     )
     
+    total_query = db.query(FundInfo)
+    if sector_type:
+        total_query = total_query.filter(FundInfo.sector_type == sector_type)
+    total = total_query.count()
     return {
         "success": True,
-        "data": funds
+        "data": funds,
+        "meta": {
+            "total": total,
+            "page": skip // limit + 1,
+            "page_size": limit,
+            "pages": (total + limit - 1) // limit,
+        },
     }
 
 
@@ -88,5 +100,23 @@ def update_all_funds(db: Session = Depends(get_db)):
             worker_db.close()
 
     return fund_update_task.start(runner)
+
+
+@router.get("/{fund_code}")
+def get_fund_detail(fund_code: str, db: Session = Depends(get_db)):
+    """获取单只基金及近期净值。"""
+    detail = FundService(db).get_fund_detail(fund_code)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="基金不存在")
+    return {"success": True, "data": detail}
+
+
+@router.delete("/{fund_code}")
+def delete_fund(fund_code: str, db: Session = Depends(get_db)):
+    """删除没有有效预测关联的基金。"""
+    result = FundService(db).delete_fund(fund_code)
+    if not result["success"] and result["message"] == "基金不存在":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
 
 

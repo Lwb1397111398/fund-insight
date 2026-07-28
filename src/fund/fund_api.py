@@ -235,8 +235,10 @@ class FundDataManager:
                 nav_date = actual_nav_date
             
             if fund:
-                fund.fund_name = info.get('fund_name')
-                fund.fund_type = info.get('fund_type')
+                if info.get('fund_name'):
+                    fund.fund_name = info['fund_name']
+                if info.get('fund_type'):
+                    fund.fund_type = info['fund_type']
                 fund.latest_nav = info.get('nav')
                 fund.nav_date = nav_date
                 fund.day_growth = day_growth
@@ -255,7 +257,9 @@ class FundDataManager:
             # 避免提前提交调用方 session 上的其它 pending 改动（与 update_fund_history 一致）
             if close_db:
                 db.commit()
-            db.refresh(fund)
+                db.refresh(fund)
+            else:
+                db.flush()
             return fund
 
         except Exception as e:

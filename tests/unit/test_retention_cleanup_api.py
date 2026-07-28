@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -110,6 +110,54 @@ def test_cleanup_task_status_returns_404_for_unknown_task(monkeypatch, tmp_path)
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+def test_cleanup_status_marks_stale_pending_task_failed(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    with session_factory() as db:
+        db.add(CleanupTask(
+            task_id="stale-pending",
+            status="pending",
+            progress=0,
+            created_at=datetime.now() - timedelta(minutes=6),
+        ))
+        db.commit()
+    app, client = _client(monkeypatch, session_factory)
+
+    try:
+        response = client.get(
+            "/api/config/cleanup/tasks/stale-pending", headers=AUTH_HEADERS
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "failed"
+    assert "中断" in data["error"] or "超时" in data["error"]
+    assert data["completed_at"] is not None
+
+
+def test_cleanup_status_keeps_recent_pending_task(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    with session_factory() as db:
+        db.add(CleanupTask(
+            task_id="recent-pending",
+            status="pending",
+            progress=0,
+            created_at=datetime.now(),
+        ))
+        db.commit()
+    app, client = _client(monkeypatch, session_factory)
+
+    try:
+        response = client.get(
+            "/api/config/cleanup/tasks/recent-pending", headers=AUTH_HEADERS
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.json()["data"]["status"] == "pending"
 
 
 def test_cleanup_background_task_reaches_completed(monkeypatch, tmp_path):

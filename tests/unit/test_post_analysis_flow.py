@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from types import SimpleNamespace
 
-from src.models.database import Blogger, Post, Prediction
+from src.models.database import Blogger, FundInfo, Post, Prediction
 from src.services import post_service as post_service_module
 from src.services.post_service import PostService
 
@@ -73,6 +73,39 @@ def test_create_post_with_analysis_prefers_database_mapping_over_builtin_sector_
     assert result["success"] is True
     assert prediction.fund_code == "999999"
     assert prediction.fund_name == "用户审查人工智能基金"
+
+
+def test_analysis_refreshes_cached_fund_prediction_count(monkeypatch, test_db):
+    from src.services.post_analysis_service import PostAnalysisService
+
+    blogger = Blogger(name="计数刷新博主", platform="wechat")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(
+        blogger_id=blogger.id,
+        content="看好人工智能未来一周上涨",
+        post_date=date(2026, 7, 10),
+    )
+    test_db.add(post)
+    test_db.add(FundInfo(
+        fund_code="999999",
+        fund_name="用户审查人工智能基金",
+        active_predictions=0,
+        can_delete=True,
+    ))
+    test_db.commit()
+
+    service = PostAnalysisService(
+        db=test_db,
+        analyzer_factory=lambda: _FakeAnalyzer(),
+        fund_auto_manager=_FakeFundAutoManager(),
+    )
+    result = service.analyze_post(post.id)
+
+    fund = test_db.query(FundInfo).filter_by(fund_code="999999").one()
+    assert result["success"] is True
+    assert fund.active_predictions == 1
+    assert fund.can_delete is False
 
 
 def test_batch_analysis_auto_deletes_no_prediction_post(monkeypatch, test_db):

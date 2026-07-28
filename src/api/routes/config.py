@@ -329,6 +329,23 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
     }
 
 
+def _mark_cleanup_task_stale_if_needed(task, now: datetime) -> bool:
+    if task.status == "pending":
+        reference = task.created_at
+        timeout = timedelta(minutes=5)
+    elif task.status == "running":
+        reference = task.started_at or task.created_at
+        timeout = timedelta(minutes=30)
+    else:
+        return False
+    if reference and now - reference > timeout:
+        task.status = "failed"
+        task.error = "清理任务因服务中断或执行超时而停止，请刷新预览后重新执行"
+        task.completed_at = now
+        return True
+    return False
+
+
 @router.get("/cleanup/tasks/{task_id}")
 async def get_cleanup_task(task_id: str, db: Session = Depends(get_db)):
     from src.models.database import CleanupTask
@@ -336,6 +353,8 @@ async def get_cleanup_task(task_id: str, db: Session = Depends(get_db)):
     task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="清理任务不存在")
+    if _mark_cleanup_task_stale_if_needed(task, datetime.now()):
+        db.commit()
     return {
         "success": True,
         "data": {

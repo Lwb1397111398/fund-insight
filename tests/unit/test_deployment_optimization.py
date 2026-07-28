@@ -19,8 +19,16 @@ def test_render_yaml_defines_daily_cron_service():
     assert "python scripts/run_scheduled_tasks.py daily" in content
 
 
+def test_render_web_runs_migrations_before_starting_server():
+    content = Path("render.yaml").read_text(encoding="utf-8")
+    web_config, cron_config = content.split("  - type: cron", 1)
+
+    assert "startCommand: python scripts/run_migrations.py && uvicorn" in web_config
+    assert "run_migrations.py" not in cron_config
+
+
 def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
-    """一次性定时任务脚本应按顺序执行基金更新、预测验证和过期验证"""
+    """一次性定时任务只执行一次统一预测验证。"""
     from scripts import run_scheduled_tasks
 
     calls = []
@@ -40,7 +48,8 @@ def test_scheduled_task_runner_runs_daily_jobs_once(monkeypatch):
     result = run_scheduled_tasks.run_daily_tasks()
 
     assert result["success"] is True
-    assert calls == ["fund_update", "prediction_verify", "expired_verify"]
+    assert calls == ["fund_update", "prediction_verify"]
+    assert "expired_verify" not in result["tasks"]
 
 
 def test_scheduled_task_runner_reports_followup_task_failure(monkeypatch):

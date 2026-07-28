@@ -227,8 +227,15 @@ class PostAnalysisService:
             db.rollback()
             return self._auto_delete_no_prediction(db, post_id, result, analyzer, task_id)
 
-        for pred in predictions:
-            db.add(self._build_prediction(db, post, pred, analyzer))
+        created_predictions = [
+            self._build_prediction(db, post, pred, analyzer) for pred in predictions
+        ]
+        db.add_all(created_predictions)
+        from src.services.fund_service import FundService
+
+        FundService(db).refresh_prediction_counts([
+            prediction.fund_code for prediction in created_predictions
+        ])
 
         post.analyzed = True
         post.analysis_result = self._with_meta(result, "succeeded", task_id=task_id)

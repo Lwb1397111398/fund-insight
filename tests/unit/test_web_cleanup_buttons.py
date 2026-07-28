@@ -15,7 +15,9 @@ def test_cleanup_view_guards_all_hard_delete_buttons():
     assert "cleanupOldestBatch" not in cleanup_actions
     assert "温和清理" not in cleanup_actions
     assert "一键清理测试数据" in cleanup_actions
-    assert cleanup_actions.count('v-if="cleanupEnabled"') == 1
+    assert 'v-if="cleanupEnabled"' not in cleanup_actions
+    assert ':disabled="analyzing || !cleanupEnabled || !cleanupPreview"' in cleanup_actions
+    assert "仅维护环境可执行" in content
     assert 'v-if="testData && testData.cleanup_enabled"' in cleanup_actions
 
 
@@ -24,6 +26,8 @@ def test_cleanup_requests_send_the_danger_confirmation_header():
     content = Path("web/index.html").read_text(encoding="utf-8")
 
     assert "cleanupEnabled = ref(false)" in content
+    assert "cleanupPreviewError" in content
+    assert "CLEANUP_POLL_TIMEOUT_MS" in content
     assert "cleanupEnabled.value = Boolean(res.data.data?.cleanup_enabled)" in content
     assert "'X-Danger-Confirm': 'cleanup-data'" in content
     assert "preview_fingerprint" in content

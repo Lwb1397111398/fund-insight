@@ -252,7 +252,9 @@ class TaskScheduler:
 
                 for fund in funds:
                     try:
-                        dm.update_fund_info(fund.fund_code, db=db)
+                        updated_fund = dm.update_fund_info(fund.fund_code, db=db)
+                        if updated_fund is None:
+                            raise RuntimeError("无法获取基金信息")
                         dm.update_fund_history(fund.fund_code, days=30, db=db)
                         db.commit()  # 每个基金单独提交
                         updated += 1

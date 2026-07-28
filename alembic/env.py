@@ -12,6 +12,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 explicit_url = os.getenv("ALEMBIC_DATABASE_URL")
+if not explicit_url and config.get_main_option("sqlalchemy.url") == "sqlite:///data/fund_insight.db":
+    explicit_url = os.getenv("DATABASE_URL")
 if explicit_url:
     config.set_main_option("sqlalchemy.url", explicit_url.replace("%", "%%"))
 
@@ -31,6 +33,17 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    provided_connection = config.attributes.get("connection")
+    if provided_connection is not None:
+        context.configure(
+            connection=provided_connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

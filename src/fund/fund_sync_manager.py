@@ -22,7 +22,18 @@ class FundSyncManager:
     
     def __init__(self):
         pass
-    
+
+    @staticmethod
+    def _parse_nav_date(value) -> Optional[date]:
+        if not value:
+            return None
+        if isinstance(value, date):
+            return value
+        try:
+            return datetime.strptime(value, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return None
+
     def check_prediction_fund_match(self, db: Session) -> Dict:
         """
         检查预测与基金的匹配情况
@@ -201,7 +212,7 @@ class FundSyncManager:
                             fund_type=fund_info.get('fund_type', '未知类型'),
                             sector_type=sector,
                             latest_nav=fund_info.get('nav'),
-                            nav_date=date.today(),
+                            nav_date=self._parse_nav_date(fund_info.get('nav_date')),
                             day_growth=day_growth,
                             can_delete=True
                         )
@@ -324,15 +335,9 @@ class FundSyncManager:
                     fund.day_growth = fund_info.get('day_growth', fund.day_growth)
 
                     # 使用实际净值日期（jzrq），而不是 date.today()
-                    nav_date_str = fund_info.get('nav_date', '')
-                    if nav_date_str:
-                        try:
-                            fund.nav_date = datetime.strptime(nav_date_str, '%Y-%m-%d').date()
-                        except (ValueError, TypeError):
-                            if not fund.nav_date:
-                                fund.nav_date = date.today()
-                    else:
-                        fund.nav_date = date.today()
+                    parsed_nav_date = self._parse_nav_date(fund_info.get('nav_date'))
+                    if parsed_nav_date:
+                        fund.nav_date = parsed_nav_date
 
                     # 更新历史净值表
                     self._update_fund_history(db, fund.fund_code, fund.fund_name)
@@ -552,7 +557,7 @@ class FundSyncManager:
                             fund_type=fund_info.get('fund_type', '未知类型'),
                             sector_type=sector_name,
                             latest_nav=fund_info.get('nav'),
-                            nav_date=date.today(),
+                            nav_date=self._parse_nav_date(fund_info.get('nav_date')),
                             day_growth=day_growth,
                             can_delete=True
                         )
@@ -644,8 +649,9 @@ class FundSyncManager:
                 if len(failed_funds) > 5:
                     success_msg += f"\n...等共 {len(failed_funds)} 个"
 
+            failed_count = sync_report.get('failed', 0) + update_report.get('failed', 0)
             return {
-                "success": True,
+                "success": failed_count == 0,
                 "match_report": match_report,
                 "sync_report": sync_report,
                 "update_report": update_report,
