@@ -163,7 +163,8 @@
             analyzing.value = true;
             try {
                 const res = await startAnalysisJob();
-                alert(res.data.message);
+                // alert 放在 rememberJob 之后，轮询已经启动，避免阻塞 UI 更新
+                if (res.data.message) alert(res.data.message);
             } catch (error) {
                 analyzing.value = false;
                 alert('分析失败: ' + errorMessage(error));

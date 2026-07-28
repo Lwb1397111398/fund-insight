@@ -99,10 +99,10 @@
         };
         const fetchLatestViewpoints = async () => {
             const sourcesText = 'sina_blog: 新浪博客\nstock_guba: 热门股吧（上证/深证/创业板）\nfund_guba: 热门基金吧';
-            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n最多每个源抓取 20 条，直接入库（不调用 AI）。`)) return;
+            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n每个源抓取 10 条，总计约 30 条观点。`)) return;
             try {
                 const response = await axios.post('/api/viewpoints/fetch', {
-                    sources: ['sina_blog', 'stock_guba', 'fund_guba'], limit_per_source: 20, mode: 'fetch',
+                    sources: ['sina_blog', 'stock_guba', 'fund_guba'], limit_per_source: 10, mode: 'fetch',
                 });
                 viewpointTask.value = response.data.data;
                 sourceMenuOpen.value = false;
