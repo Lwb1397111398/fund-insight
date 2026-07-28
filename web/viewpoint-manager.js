@@ -98,10 +98,11 @@
             if (taskId) pollTask(Number(taskId));
         };
         const fetchLatestViewpoints = async () => {
-            if (!confirm('确认抓取新浪博客的最新观点？\n最多抓取 20 篇并直接入库（不调用 AI），抓取完成后可点「一键 AI 分析」。')) return;
+            const sourcesText = 'sina_blog: 新浪博客\nstock_guba: 热门股吧（上证/深证/创业板）\nfund_guba: 热门基金吧';
+            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n最多每个源抓取 20 条，直接入库（不调用 AI）。`)) return;
             try {
                 const response = await axios.post('/api/viewpoints/fetch', {
-                    sources: ['sina_blog'], limit_per_source: 20, mode: 'fetch',
+                    sources: ['sina_blog', 'stock_guba', 'fund_guba'], limit_per_source: 20, mode: 'fetch',
                 });
                 viewpointTask.value = response.data.data;
                 sourceMenuOpen.value = false;
@@ -129,17 +130,24 @@
             analyzing.value = true;
             try {
                 const res = await axios.post('/api/viewpoints/batch-analyze', { limit: 30 });
-                if (res.data.data?.in_progress) {
-                    // 后台分析中，轮询任务直到完成
-                    if (viewpointTask.value?.task_id) pollTask(viewpointTask.value.task_id);
-                    alert(res.data.message || '已开始后台分析，请稍后刷新查看结果');
+                const data = res.data.data;
+                const message = res.data.message || '没有需要分析的观点';
+                if (data?.in_progress && data?.task_id) {
+                    // 立即启动轮询
+                    viewpointTask.value = data;
+                    localStorage.setItem('viewpoint_task_id', String(data.task_id));
+                    pollTask(data.task_id);
                 } else {
-                    alert(res.data.message || '没有需要分析的观点');
+                    analyzing.value = false;
                 }
+                // alert 放在轮询启动后，避免阻塞 UI 更新
+                alert(message);
                 await fetchViewpoints();
                 await fetchInsights();
-            } catch (error) { alert('分析失败: ' + errorMessage(error)); }
-            analyzing.value = false;
+            } catch (error) {
+                analyzing.value = false;
+                alert('分析失败: ' + errorMessage(error));
+            }
         };
         const fetchSummaryStats = async () => {
             try {

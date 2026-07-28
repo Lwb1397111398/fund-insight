@@ -16,7 +16,7 @@ from src.services.viewpoint_service import get_source_authority
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_SOURCES = ("sina_blog",)
+DEFAULT_SOURCES = ("sina_blog", "stock_guba", "fund_guba")
 ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES)
 
 # 观点内容门禁：内容必须包含至少一个，才视为"博主市场观点"。
@@ -144,9 +144,38 @@ class ViewpointWorkflowService:
     @staticmethod
     def _default_fetchers() -> Dict[str, Callable[[int], List[Dict[str, Any]]]]:
         from src.crawler.sina_blog_crawler import get_blog_crawler
+        from src.crawler.stock_guba_crawler import StockGubaCrawler
+        from src.crawler.tiantian_crawler import TiantianCrawler
+
+        stock_guba = StockGubaCrawler()
+        fund_guba = TiantianCrawler()
+
+        # 热门指数和基金代码
+        HOT_STOCKS = ['000001', '399001', '399006']  # 上证、深证、创业板
+        HOT_FUNDS = ['000001', '110022', '519772', '161725']  # 热门基金示例
+
+        def fetch_stock_guba(limit: int) -> List[Dict[str, Any]]:
+            """抓取热门股吧"""
+            results = stock_guba.fetch_hot_stocks(HOT_STOCKS)
+            all_posts = []
+            for posts in results.values():
+                all_posts.extend(posts)
+            return all_posts[:limit]
+
+        def fetch_fund_guba(limit: int) -> List[Dict[str, Any]]:
+            """抓取热门基金吧"""
+            all_posts = []
+            for fund_code in HOT_FUNDS:
+                posts = fund_guba.fetch_fund_posts(fund_code)
+                all_posts.extend(posts)
+                if len(all_posts) >= limit:
+                    break
+            return all_posts[:limit]
 
         return {
             "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=limit),
+            "stock_guba": fetch_stock_guba,
+            "fund_guba": fetch_fund_guba,
         }
 
     @staticmethod
