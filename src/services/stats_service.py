@@ -109,20 +109,22 @@ class StatsService:
         }
 
     def get_prediction_stats(self) -> Dict:
-        """获取预测统计（1条SQL替代原来6条）"""
+        """获取预测统计（准确率分母 = is_correct 非空，与 get_overall_stats 对齐）"""
         row = self.db.query(
             func.count(case((Prediction.is_deleted == False, 1))).label('total'),
-            func.count(case((and_(Prediction.is_deleted == False, Prediction.status == 'pending'), 1))).label('pending'),
-            func.count(case((and_(Prediction.is_deleted == False, Prediction.status == 'success'), 1))).label('verified'),
-            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_expired == True), 1))).label('expired'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct.is_(None)), 1))).label('pending'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct.isnot(None)), 1))).label('verified'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct.isnot(None)), 1))).label('expired'),
             func.count(case((and_(Prediction.is_deleted == False, Prediction.prediction_type == 'up'), 1))).label('up'),
             func.count(case((and_(Prediction.is_deleted == False, Prediction.prediction_type == 'down'), 1))).label('down'),
-            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_expired == True, Prediction.is_correct == True), 1))).label('correct'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct == True), 1))).label('correct'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct == False), 1))).label('incorrect'),
         ).first()
 
         total = row.total or 0
-        expired = row.expired or 0
+        expired = row.expired or 0  # 兼容字段：= 已验证结论数
         correct = row.correct or 0
+        incorrect = row.incorrect or 0
 
         return {
             "total": total,
@@ -137,7 +139,7 @@ class StatsService:
             },
             "accuracy": round(correct / expired * 100, 2) if expired > 0 else 0,
             "correct_count": correct,
-            "incorrect_count": expired - correct
+            "incorrect_count": incorrect,
         }
 
     def get_content_stats(self) -> Dict:

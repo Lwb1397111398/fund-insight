@@ -185,11 +185,12 @@ class PredictionService(BaseService[Prediction]):
         if blogger_id:
             base_filter = and_(base_filter, Prediction.blogger_id == blogger_id)
 
+        # 准确率分母 = is_correct 非空（已有验证结论），与 stats_service / lifecycle 对齐
         row = self.db.query(
             func.count(case((base_filter, 1))).label('total'),
-            func.count(case((and_(base_filter, Prediction.status.in_(("success", "failed"))), 1))).label('verified'),
+            func.count(case((and_(base_filter, Prediction.is_correct.isnot(None)), 1))).label('verified'),
             func.count(case((and_(base_filter, Prediction.is_correct == True), 1))).label('correct'),
-            func.count(case((and_(base_filter, Prediction.status == 'pending'), 1))).label('pending'),
+            func.count(case((and_(base_filter, Prediction.is_correct.is_(None)), 1))).label('pending'),
         ).first()
 
         total = row.total or 0
@@ -564,31 +565,30 @@ class PredictionService(BaseService[Prediction]):
 
         has_fund = Prediction.fund_code.isnot(None)
 
+        # 准确率分母 = is_correct 非空；expired 兼容字段等同 verified
         row = self.db.query(
             func.count(case((has_fund, 1))).label('total'),
-            func.count(case((and_(has_fund, Prediction.verify_count > 0), 1))).label('verified'),
-            func.count(case((and_(has_fund, Prediction.is_expired == True), 1))).label('expired'),
-            func.count(case((and_(has_fund, Prediction.is_expired == False), 1))).label('pending'),
+            func.count(case((and_(has_fund, Prediction.is_correct.isnot(None)), 1))).label('verified'),
+            func.count(case((and_(has_fund, Prediction.is_correct == True), 1))).label('correct'),
+            func.count(case((and_(has_fund, Prediction.is_correct == False), 1))).label('incorrect'),
+            func.count(case((and_(has_fund, Prediction.is_correct.is_(None)), 1))).label('pending'),
             func.count(case((and_(has_fund, Prediction.start_nav == None), 1))).label('failed_nav_fetch'),
-            func.count(case((and_(Prediction.is_expired == True, Prediction.is_correct == True), 1))).label('correct'),
-            func.count(case((and_(Prediction.is_expired == True, Prediction.is_correct == False), 1))).label('incorrect'),
         ).first()
 
         total = row.total or 0
         verified = row.verified or 0
-        expired = row.expired or 0
         correct = row.correct or 0
 
         return {
             "total": total,
             "verified": verified,
-            "expired": expired,
+            "expired": verified,  # 兼容字段：= 已有验证结论数（is_correct 非空）
             "pending": row.pending or 0,
             "failed_nav_fetch": row.failed_nav_fetch or 0,
             "correct": correct,
             "incorrect": row.incorrect or 0,
             "progress_percent": round(verified / total * 100, 1) if total > 0 else 0,
-            "accuracy_percent": round(correct / expired * 100, 1) if expired > 0 else 0
+            "accuracy_percent": round(correct / verified * 100, 1) if verified > 0 else 0
         }
     
     def get_failed_predictions(self) -> List[Dict]:
@@ -598,12 +598,13 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             失败预测列表
         """
+        # 失败 = 已有验证结论且方向判错（只看 is_correct，不看 is_expired 列）
         failed = self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
             Prediction.fund_code.isnot(None),
-            Prediction.is_expired == True,
-            Prediction.is_correct == False
+            Prediction.is_deleted == False,
+            Prediction.is_correct == False,
         ).all()
 
         result = []
@@ -637,11 +638,13 @@ class PredictionService(BaseService[Prediction]):
         today = date.today()
         target_date_limit = today + timedelta(days=days)
         
+        # 即将到期且尚无验证结论
         expiring = self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
             Prediction.fund_code.isnot(None),
-            Prediction.is_expired == False,
+            Prediction.is_deleted == False,
+            Prediction.is_correct.is_(None),
             Prediction.target_date <= target_date_limit,
             Prediction.target_date >= today
         ).all()
@@ -680,11 +683,11 @@ class PredictionService(BaseService[Prediction]):
         """
         anomalies = []
         
-        # 高信心但失败的预测
+        # 高信心但失败的预测（结论只看 is_correct）
         high_confidence_failed = self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
-            Prediction.is_expired == True,
+            Prediction.is_deleted == False,
             Prediction.is_correct == False,
             Prediction.confidence >= 80
         ).all()
@@ -704,11 +707,12 @@ class PredictionService(BaseService[Prediction]):
                 "description": f"高信心预测({p.confidence}%)验证失败，实际涨跌{p.actual_change:+.2f}%"
             })
         
-        # 方向严重偏离的预测
+        # 方向严重偏离的预测（须已有验证结论）
         large_deviation = self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
-            Prediction.is_expired == True,
+            Prediction.is_deleted == False,
+            Prediction.is_correct.isnot(None),
             Prediction.prediction_type == 'up',
             Prediction.actual_change < -5
         ).all()
@@ -716,7 +720,8 @@ class PredictionService(BaseService[Prediction]):
         large_deviation += self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
-            Prediction.is_expired == True,
+            Prediction.is_deleted == False,
+            Prediction.is_correct.isnot(None),
             Prediction.prediction_type == 'down',
             Prediction.actual_change > 5
         ).all()
@@ -735,11 +740,12 @@ class PredictionService(BaseService[Prediction]):
                 "description": f"预测方向与实际严重偏离，预测{'看涨' if p.prediction_type == 'up' else '看跌'}，实际{p.actual_change:+.2f}%"
             })
         
-        # 长期未验证的预测
+        # 长期未验证的预测（尚无验证结论）
         long_unverified = self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
-            Prediction.is_expired == False,
+            Prediction.is_deleted == False,
+            Prediction.is_correct.is_(None),
             Prediction.fund_code.isnot(None),
             Prediction.verify_count == 0
         ).all()
@@ -857,10 +863,12 @@ class PredictionService(BaseService[Prediction]):
         Returns:
             历史预测数据
         """
+        # 历史回溯：只取已有验证结论的记录
         query = self.db.query(Prediction).options(
             joinedload(Prediction.blogger)
         ).filter(
-            Prediction.is_expired == True,
+            Prediction.is_deleted == False,
+            Prediction.is_correct.isnot(None),
             Prediction.fund_code.isnot(None)
         )
         
