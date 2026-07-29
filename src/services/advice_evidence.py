@@ -18,7 +18,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.core.config import config
 from src.models.database import Blogger, FundInfo, Prediction, Viewpoint
+from src.services import l1_weighting as l1
 from src.services.prediction_lifecycle import (
     ACTIVE,
     classify,
@@ -91,15 +93,65 @@ class AdviceEvidenceBuilder:
         self.max_viewpoints_per_author = max_viewpoints_per_author
         self.max_predictions_per_blogger = max_predictions_per_blogger
 
-    def build(self, as_of: Optional[date] = None) -> EvidencePack:
+    def build(
+        self,
+        as_of: Optional[date] = None,
+        *,
+        force_l1: Optional[bool] = None,
+        run_shadow: Optional[bool] = None,
+    ) -> EvidencePack:
+        """
+        构建证据包。
+        force_l1: 覆盖 flag（shadow 双跑用）。
+        run_shadow: 默认跟 config.ADVICE_L1_SHADOW；force_l1 指定时不套娃 shadow。
+        """
         as_of = as_of or current_as_of()
+        use_l1 = (
+            bool(force_l1)
+            if force_l1 is not None
+            else bool(getattr(config, "ADVICE_L1_HIT_WEIGHTING", False))
+        )
+        pack = self._build_pack(as_of=as_of, use_l1=use_l1)
+
+        do_shadow = run_shadow if run_shadow is not None else None
+        if do_shadow is None:
+            from src.services.l1_shadow import shadow_enabled
+
+            do_shadow = shadow_enabled() and force_l1 is None and not use_l1
+
+        if do_shadow:
+            try:
+                from src.services.l1_shadow import summarize_shadow, write_shadow_log
+
+                shadow_pack = self._build_pack(as_of=as_of, use_l1=True)
+                summary = summarize_shadow(
+                    as_of=as_of,
+                    legacy_pack_meta=pack.meta,
+                    legacy_predictions=pack.predictions,
+                    l1_predictions=shadow_pack.predictions,
+                    l1_bloggers=shadow_pack.bloggers,
+                    l1_meta=shadow_pack.meta,
+                )
+                write_shadow_log(summary)
+                pack.meta["l1_shadow"] = summary
+                pack.meta["l1_shadow_enabled"] = True
+            except Exception as e:  # noqa: BLE001 — shadow 失败不得影响主路径
+                pack.meta["l1_shadow_enabled"] = True
+                pack.meta["l1_shadow_error"] = str(e)
+
+        return pack
+
+    def _build_pack(self, *, as_of: date, use_l1: bool) -> EvidencePack:
         exclusions: List[Dict[str, Any]] = []
 
-        bloggers, blogger_map, blogger_excl = self._build_blogger_reliability()
+        if use_l1:
+            bloggers, blogger_map, blogger_excl = self._build_blogger_reliability_l1()
+        else:
+            bloggers, blogger_map, blogger_excl = self._build_blogger_reliability_legacy()
         exclusions.extend(blogger_excl)
 
         predictions, pred_excl, pred_truncated = self._build_predictions(
-            as_of=as_of, blogger_map=blogger_map
+            as_of=as_of, blogger_map=blogger_map, use_l1=use_l1
         )
         exclusions.extend(pred_excl)
 
@@ -125,7 +177,10 @@ class AdviceEvidenceBuilder:
                 "viewpoint_count": len(viewpoints),
                 "exclusion_count": len(exclusions),
                 "conflict_count": len(conflicts),
-                "weight_strategy_version": "p0.global_accuracy.v1",
+                "weight_strategy_version": (
+                    l1.STRATEGY_VERSION if use_l1 else l1.LEGACY_STRATEGY_VERSION
+                ),
+                "l1_hit_weighting": use_l1,
                 "insufficient_evidence": len(predictions) == 0 and len(viewpoints) == 0,
             },
         )
@@ -136,6 +191,14 @@ class AdviceEvidenceBuilder:
     def _build_blogger_reliability(
         self,
     ) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]], List[Dict[str, Any]]]:
+        if bool(getattr(config, "ADVICE_L1_HIT_WEIGHTING", False)):
+            return self._build_blogger_reliability_l1()
+        return self._build_blogger_reliability_legacy()
+
+    def _build_blogger_reliability_legacy(
+        self,
+    ) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]], List[Dict[str, Any]]]:
+        """现网行为：accuracy_rate=加权评分 + 简单 n/10 收缩。"""
         exclusions: List[Dict[str, Any]] = []
         q = (
             self.db.query(Blogger)
@@ -158,7 +221,7 @@ class AdviceEvidenceBuilder:
             exclusions.append(
                 {
                     "reason": "blogger_fallback_low_sample",
-                    "detail": "无满足 accuracy/样本阈值的博主，回退 total>=1",
+                    "detail": "无满足 accuracy/样本门槛的博主，回退 total>=1",
                 }
             )
 
@@ -179,12 +242,9 @@ class AdviceEvidenceBuilder:
         bloggers: List[Dict[str, Any]] = []
         blogger_map: Dict[int, Dict[str, Any]] = {}
         for b in rows:
-            # 全局口径；预留 sector/horizon 位供后续细分
             sample = int(b.total_predictions or 0)
             acc = float(b.accuracy_rate or 0.0)
-            # 简单样本收缩：样本越少 reliability 越靠近中性 50
-            shrink = min(1.0, sample / 10.0)
-            reliability = 50.0 + (acc - 50.0) * shrink
+            reliability = l1.legacy_reliability_score(acc, sample)
             item = {
                 "blogger_id": b.id,
                 "name": b.name,
@@ -193,12 +253,66 @@ class AdviceEvidenceBuilder:
                 "total_predictions": sample,
                 "correct_predictions": int(b.correct_predictions or 0),
                 "reliability_score": round(reliability, 2),
-                "sector_accuracy": None,  # 预留
-                "horizon_accuracy": None,  # 预留
+                "sector_accuracy": None,
+                "horizon_accuracy": None,
             }
             bloggers.append(item)
             blogger_map[b.id] = item
         return bloggers, blogger_map, exclusions
+
+    def _build_blogger_reliability_l1(
+        self,
+    ) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]], List[Dict[str, Any]]]:
+        """L1：存活 is_correct + Beta 收缩；min_n 分层排序。"""
+        exclusions: List[Dict[str, Any]] = []
+        p0 = float(getattr(config, "L1_P0", l1.DEFAULT_P0))
+        alpha = float(getattr(config, "L1_ALPHA", l1.DEFAULT_ALPHA))
+        min_n = int(getattr(config, "L1_MIN_N", l1.DEFAULT_MIN_N))
+
+        # 候选：优先 is_active；不足再全表
+        rows = (
+            self.db.query(Blogger)
+            .filter(Blogger.is_active == True)  # noqa: E712
+            .all()
+        )
+        if not rows:
+            rows = self.db.query(Blogger).all()
+            exclusions.append(
+                {
+                    "reason": "blogger_fallback_any",
+                    "detail": "无 is_active 博主，回退全表后按 L1 排序截断",
+                }
+            )
+
+        hit_map = l1.query_hit_stats(self.db, [b.id for b in rows])
+        items: List[Dict[str, Any]] = []
+        for b in rows:
+            items.append(
+                l1.build_l1_blogger_item(
+                    blogger_id=b.id,
+                    name=b.name,
+                    grade=b.grade,
+                    accuracy_rate=float(b.accuracy_rate or 0.0),
+                    total_predictions=int(b.total_predictions or 0),
+                    correct_predictions=int(b.correct_predictions or 0),
+                    hit=hit_map.get(b.id),
+                    p0=p0,
+                    alpha=alpha,
+                    min_n=min_n,
+                )
+            )
+        items.sort(key=l1.sort_key_l1)
+        selected = items[: self.top_bloggers]
+        if len(items) > self.top_bloggers:
+            exclusions.append(
+                {
+                    "reason": "blogger_l1_top_truncated",
+                    "detail": f"L1 按 tier/p_hat 截断 top {self.top_bloggers}",
+                }
+            )
+
+        blogger_map = {int(it["blogger_id"]): it for it in selected}
+        return selected, blogger_map, exclusions
 
     # --------------------------------------------------------------- predictions
     def _build_predictions(
@@ -206,6 +320,7 @@ class AdviceEvidenceBuilder:
         *,
         as_of: date,
         blogger_map: Dict[int, Dict[str, Any]],
+        use_l1: bool = False,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
         exclusions: List[Dict[str, Any]] = []
         raw = filter_actionable_current(
@@ -220,22 +335,40 @@ class AdviceEvidenceBuilder:
         missing_ids = {p.blogger_id for p in raw if p.blogger_id not in blogger_map}
         if missing_ids:
             extra = self.db.query(Blogger).filter(Blogger.id.in_(list(missing_ids))).all()
-            for b in extra:
-                sample = int(b.total_predictions or 0)
-                acc = float(b.accuracy_rate or 0.0)
-                shrink = min(1.0, sample / 10.0) if sample else 0.0
-                reliability = 50.0 + (acc - 50.0) * shrink
-                blogger_map[b.id] = {
-                    "blogger_id": b.id,
-                    "name": b.name,
-                    "accuracy_rate": acc,
-                    "grade": b.grade or "C",
-                    "total_predictions": sample,
-                    "correct_predictions": int(b.correct_predictions or 0),
-                    "reliability_score": round(reliability, 2),
-                    "sector_accuracy": None,
-                    "horizon_accuracy": None,
-                }
+            if use_l1:
+                hit_map = l1.query_hit_stats(self.db, list(missing_ids))
+                p0 = float(getattr(config, "L1_P0", l1.DEFAULT_P0))
+                alpha = float(getattr(config, "L1_ALPHA", l1.DEFAULT_ALPHA))
+                min_n = int(getattr(config, "L1_MIN_N", l1.DEFAULT_MIN_N))
+                for b in extra:
+                    blogger_map[b.id] = l1.build_l1_blogger_item(
+                        blogger_id=b.id,
+                        name=b.name,
+                        grade=b.grade,
+                        accuracy_rate=float(b.accuracy_rate or 0.0),
+                        total_predictions=int(b.total_predictions or 0),
+                        correct_predictions=int(b.correct_predictions or 0),
+                        hit=hit_map.get(b.id),
+                        p0=p0,
+                        alpha=alpha,
+                        min_n=min_n,
+                    )
+            else:
+                for b in extra:
+                    sample = int(b.total_predictions or 0)
+                    acc = float(b.accuracy_rate or 0.0)
+                    reliability = l1.legacy_reliability_score(acc, sample)
+                    blogger_map[b.id] = {
+                        "blogger_id": b.id,
+                        "name": b.name,
+                        "accuracy_rate": acc,
+                        "grade": b.grade or "C",
+                        "total_predictions": sample,
+                        "correct_predictions": int(b.correct_predictions or 0),
+                        "reliability_score": round(reliability, 2),
+                        "sector_accuracy": None,
+                        "horizon_accuracy": None,
+                    }
 
         # 按博主聚合/限流，防一人多票
         by_blogger: Dict[int, List[Prediction]] = defaultdict(list)
@@ -286,6 +419,18 @@ class AdviceEvidenceBuilder:
             selected_sorted = selected_sorted[: self.max_predictions]
             truncated = True
 
+        weight_floor = None
+        if use_l1:
+            p_hats = [
+                float(blogger_map[bid]["p_hat"])
+                for bid in {p.blogger_id for p in selected_sorted if p.blogger_id in blogger_map}
+                if blogger_map[bid].get("p_hat") is not None
+            ]
+            weight_floor = l1.compute_weight_floor(
+                p_hats,
+                floor_ratio=float(getattr(config, "L1_FLOOR_RATIO", l1.DEFAULT_FLOOR_RATIO)),
+            )
+
         out: List[Dict[str, Any]] = []
         for p in selected_sorted:
             binfo = blogger_map.get(p.blogger_id) or {
@@ -297,31 +442,40 @@ class AdviceEvidenceBuilder:
             days = (p.target_date - as_of).days if p.target_date else 0
             conf = float(p.confidence or 50)
             rel = float(binfo.get("reliability_score") or 50)
-            # 合成权重：可靠性 × 自身信心（均归一到 0-1 再放大）
-            weight = round((rel / 100.0) * (conf / 100.0), 4)
-            out.append(
-                {
-                    "prediction_id": p.id,
-                    "blogger_id": p.blogger_id,
-                    "blogger_name": binfo.get("name") or "未知",
-                    "blogger_grade": binfo.get("grade") or "C",
-                    "blogger_accuracy": binfo.get("accuracy_rate") or 0,
-                    "blogger_reliability": rel,
-                    "sector": p.sector,
-                    "prediction_type": p.prediction_type,
-                    "prediction_content": p.prediction_content or "",
-                    "confidence": p.confidence,
-                    "status": p.status,
-                    "lifecycle": classify(p, as_of=as_of),
-                    "prediction_date": p.prediction_date.isoformat()
-                    if p.prediction_date
-                    else None,
-                    "target_date": p.target_date.isoformat() if p.target_date else None,
-                    "days_to_target": days,
-                    "term": "near" if days <= self.near_days else "mid",
-                    "weight": weight,
-                }
-            )
+            if use_l1:
+                weight, floored = l1.prediction_weight_from_reliability(
+                    rel, conf, weight_floor=weight_floor
+                )
+            else:
+                # 合成权重：可靠性 × 自身信心（现网）
+                weight = round((rel / 100.0) * (conf / 100.0), 4)
+                floored = False
+            row = {
+                "prediction_id": p.id,
+                "blogger_id": p.blogger_id,
+                "blogger_name": binfo.get("name") or "未知",
+                "blogger_grade": binfo.get("grade") or "C",
+                "blogger_accuracy": binfo.get("accuracy_rate") or 0,
+                "blogger_reliability": rel,
+                "sector": p.sector,
+                "prediction_type": p.prediction_type,
+                "prediction_content": p.prediction_content or "",
+                "confidence": p.confidence,
+                "status": p.status,
+                "lifecycle": classify(p, as_of=as_of),
+                "prediction_date": p.prediction_date.isoformat()
+                if p.prediction_date
+                else None,
+                "target_date": p.target_date.isoformat() if p.target_date else None,
+                "days_to_target": days,
+                "term": "near" if days <= self.near_days else "mid",
+                "weight": weight,
+            }
+            if use_l1:
+                row["weight_floored"] = floored
+                row["blogger_p_hat"] = binfo.get("p_hat")
+                row["evidence_tier"] = binfo.get("evidence_tier")
+            out.append(row)
         return out, exclusions, truncated
 
     # ---------------------------------------------------------------- viewpoints

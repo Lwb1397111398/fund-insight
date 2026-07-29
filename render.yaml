@@ -44,6 +44,19 @@ services:
         value: "ep-20260424143452-nhsrm"
       - key: VOLCENGINE_LIGHT_MODEL
         value: "ep-20260424143452-nhsrm"
+      # L1：正式加权默认关；shadow 双跑默认开（只记 log，服务 legacy）
+      - key: ADVICE_L1_HIT_WEIGHTING
+        value: "0"
+      - key: ADVICE_L1_SHADOW
+        value: "1"
+      - key: L1_SHADOW_STARTED_AT
+        value: "2026-07-29"
+      - key: L1_SHADOW_BASELINE_VERIFIED
+        value: "220"
+      - key: L1_SHADOW_REEVAL_NEW
+        value: "150"
+      - key: L1_SHADOW_REEVAL_WEEKS
+        value: "6"
 
   - type: cron
     name: fund-insight-scheduler

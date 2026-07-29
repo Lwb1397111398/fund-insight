@@ -140,6 +140,30 @@ class Config:
 
     VERIFY_PROCESS_THRESHOLD = float(os.getenv("VERIFY_PROCESS_THRESHOLD", "0.5"))
 
+    # L1 命中率 Beta 收缩加权（证据层）；默认关，回测过关再开
+    ADVICE_L1_HIT_WEIGHTING = os.getenv("ADVICE_L1_HIT_WEIGHTING", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    # shadow：双跑 l1 只记录，服务仍 legacy；L1 正式开闸时自动停 shadow
+    ADVICE_L1_SHADOW = os.getenv("ADVICE_L1_SHADOW", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    L1_P0 = float(os.getenv("L1_P0", "0.609"))
+    L1_ALPHA = float(os.getenv("L1_ALPHA", "15"))
+    L1_MIN_N = int(os.getenv("L1_MIN_N", "10"))
+    L1_FLOOR_RATIO = float(os.getenv("L1_FLOOR_RATIO", "0.4"))
+    # shadow 复评触发（先到先评）
+    L1_SHADOW_STARTED_AT = os.getenv("L1_SHADOW_STARTED_AT", "2026-07-29")
+    L1_SHADOW_BASELINE_VERIFIED = int(os.getenv("L1_SHADOW_BASELINE_VERIFIED", "220"))
+    L1_SHADOW_REEVAL_NEW = int(os.getenv("L1_SHADOW_REEVAL_NEW", "150"))
+    L1_SHADOW_REEVAL_WEEKS = int(os.getenv("L1_SHADOW_REEVAL_WEEKS", "6"))
+
     _analysis_rules: Dict = None
     _platform_rules: Dict = None
 
