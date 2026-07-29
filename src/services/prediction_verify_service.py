@@ -926,9 +926,13 @@ class PredictionVerifyService:
         prediction.current_nav_date = window_end
         prediction.actual_change = actual_change
         prediction.is_correct = is_correct
+        # 台账与状态同事务：有结论则 status 不得再留 pending（防二次扫待验证）
+        prediction.status = "success" if is_correct else "failed"
+        if prediction.verified_at is None:
+            prediction.verified_at = datetime.now()
         prediction.verify_count = (prediction.verify_count or 0) + 1
         prediction.last_verify_date = today
-        
+
         if not prediction.start_nav:
             prediction.start_nav = start_nav
             prediction.start_nav_date = nav_start_date
@@ -936,7 +940,7 @@ class PredictionVerifyService:
         # 确保 score 始终在 [0, 100] 范围内
         score = max(0, min(100, score))
         prediction.verify_score = score
-        
+
         if not prediction.verify_history:
             prediction.verify_history = []
         prediction.verify_history.append({
@@ -954,16 +958,17 @@ class PredictionVerifyService:
             "process_metrics": process_metrics
         })
         attributes.flag_modified(prediction, 'verify_history')
-        
+
         is_newly_completed = False
         if target_date and today >= target_date:
             prediction.is_expired = True
             prediction.end_nav = end_nav
             prediction.end_nav_date = window_end
-            if prediction.status == 'pending':
+            # status 已在上方与 is_correct 同步；此处只补到期收口字段
+            if before_state.get("status") == "pending" or before_state.get("is_correct") is None:
                 is_newly_completed = True
             prediction.status = "success" if is_correct else "failed"
-        
+
         if is_newly_completed:
             self._update_blogger_accuracy(
                 prediction.blogger_id,

@@ -149,7 +149,8 @@ class PredictionService(BaseService[Prediction]):
             return None
 
         before_state = snapshot_prediction(prediction)
-        prediction.status = "verified"
+        # 与 is_correct 同事务：结论行不得再标 pending
+        prediction.status = "success" if is_correct else "failed"
         prediction.actual_change = actual_change
         prediction.is_correct = is_correct
         prediction.ai_judgment = ai_judgment
