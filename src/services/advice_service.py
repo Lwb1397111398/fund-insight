@@ -107,20 +107,35 @@ class AdviceService(BaseService[InvestmentAdvice]):
     
     def check_data_changed(self) -> Tuple[bool, str, Optional[Dict]]:
         """
-        检查数据是否发生变化
-        
-        Returns:
-            (是否变化, 当前哈希, 最新建议)
+        检查是否需要重新生成建议（P2）。
+
+        缓存键 = evidence_hash + prompt 版本 + 模型版本。
+        与全局统计哈希脱钩：证据/权重/版本任一变化即重算。
         """
-        current_hash = self._calculate_data_hash()
+        from src.services.advice_validation import (
+            ADVICE_PROMPT_VERSION,
+            build_advice_cache_key,
+        )
+        from src.core.config import config
+
+        data = self.get_data_for_advice()
+        evidence_hash = data.get("evidence_hash") or ""
+        model_version = getattr(config, "LLM_MODEL", None) or getattr(
+            config, "VOLCENGINE_MODEL", ""
+        ) or ""
+        cache_key = build_advice_cache_key(
+            evidence_hash,
+            prompt_version=ADVICE_PROMPT_VERSION,
+            model_version=str(model_version),
+        )
         latest_advice = self.get_latest_advice()
-        
+
         if latest_advice:
-            stored_hash = latest_advice.get('data_hash')
-            if stored_hash == current_hash:
-                return False, current_hash, latest_advice
-        
-        return True, current_hash, latest_advice
+            stored_hash = latest_advice.get("data_hash")
+            if stored_hash == cache_key:
+                return False, cache_key, latest_advice
+
+        return True, cache_key, latest_advice
     
     def get_data_for_advice(
         self,

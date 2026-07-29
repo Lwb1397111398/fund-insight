@@ -1625,7 +1625,10 @@ class LLMAnalyzer:
                 "market_sentiment": "neutral",
                 "hot_sectors": [],
                 "risk_sectors": [],
-                "key_points": []
+                "key_points": [],
+                "_stage_status": "ok",
+                "_stage": 1,
+                "_stage_reason": "empty_viewpoints",
             }
         
         viewpoint_data = []
@@ -1655,17 +1658,22 @@ class LLMAnalyzer:
             result_text = self._call_llm(prompt, task_type='analysis', max_tokens=800, temperature=0.3)
             result = self._parse_json_with_fallback(result_text)
             if result:
+                result.setdefault("_stage_status", "ok")
+                result.setdefault("_stage", 1)
                 return result
         except Exception as e:
             logger.warning(f"[LLM] 观点分析失败: {e}")
-        
+
         return {
             "summary": "观点分析失败",
             "market_sentiment": "neutral",
             "hot_sectors": [],
             "risk_sectors": [],
             "key_points": [],
-            "confidence_avg": 50
+            "confidence_avg": 50,
+            "_stage_status": "failed",
+            "_stage": 1,
+            "_stage_reason": "llm_or_parse_failed",
         }
     
     def analyze_predictions_stage2(self, predictions: List[Dict], viewpoint_summary: Dict, bloggers: List[Dict] = None) -> Dict:
@@ -1677,7 +1685,10 @@ class LLMAnalyzer:
                 "mid_term_trend": "neutral",
                 "high_confidence_predictions": [],
                 "sector_predictions": {},
-                "blogger_accuracy": {}
+                "blogger_accuracy": {},
+                "_stage_status": "failed",
+                "_stage": 2,
+                "_stage_reason": "empty_predictions",
             }
         
         blogger_info_map = {}
@@ -1746,10 +1757,12 @@ class LLMAnalyzer:
             result_text = self._call_llm(prompt, task_type='analysis', max_tokens=1000, temperature=0.3)
             result = self._parse_json_with_fallback(result_text)
             if result:
+                result.setdefault("_stage_status", "ok")
+                result.setdefault("_stage", 2)
                 return result
         except Exception as e:
             logger.warning(f"[LLM] 预测分析失败: {e}")
-        
+
         return {
             "summary": "预测分析失败",
             "near_term_trend": "neutral",
@@ -1757,7 +1770,10 @@ class LLMAnalyzer:
             "high_confidence_predictions": [],
             "sector_predictions": {},
             "blogger_accuracy": {},
-            "key_insights": []
+            "key_insights": [],
+            "_stage_status": "failed",
+            "_stage": 2,
+            "_stage_reason": "llm_or_parse_failed",
         }
     
     def generate_advice_stage3(self, viewpoint_summary: Dict, prediction_analysis: Dict, 
@@ -1835,10 +1851,13 @@ class LLMAnalyzer:
             result_text = self._call_llm(prompt, task_type='advice', max_tokens=1000, temperature=0.5)
             result = self._parse_json_with_fallback(result_text)
             if result:
+                result.setdefault("_stage_status", "ok")
+                result.setdefault("_stage3_status", "ok")
+                result.setdefault("_stage", 3)
                 return result
         except Exception as e:
             logger.warning(f"[LLM] 投资建议生成失败: {e}")
-        
+
         return {
             "advice_type": "hold",
             "advice_content": "建议观望，等待更明确的市场信号",
@@ -1864,7 +1883,11 @@ class LLMAnalyzer:
             },
             "avoid_sectors": [],
             "avoid_reasoning": "",
-            "risk_warning": "投资有风险，入市需谨慎"
+            "risk_warning": "投资有风险，入市需谨慎",
+            "_stage_status": "failed",
+            "_stage3_status": "failed",
+            "_stage": 3,
+            "_stage_reason": "llm_or_parse_failed",
         }
     
     def generate_investment_advice_three_stage(self, bloggers: List[Dict], predictions: List[Dict],
@@ -1884,10 +1907,19 @@ class LLMAnalyzer:
         logger.info("[LLM] 第三阶段：生成投资建议...")
         advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers)
         
-        # 保存中间结果
+        # 保存中间结果与阶段状态（供 P1 落库前校验）
         advice["viewpoint_summary"] = viewpoint_summary
         advice["prediction_analysis"] = prediction_analysis
-        
+        advice["_stage_statuses"] = {
+            "stage1_viewpoints": viewpoint_summary.get("_stage_status", "ok"),
+            "stage2_predictions": prediction_analysis.get("_stage_status", "ok"),
+            "stage3_advice": advice.get("_stage3_status") or advice.get("_stage_status") or "ok",
+        }
+        if any(v == "failed" for v in advice["_stage_statuses"].values()):
+            advice["_stage_status"] = "failed"
+            failed = [k for k, v in advice["_stage_statuses"].items() if v == "failed"]
+            advice["_stage_reason"] = "stages_failed:" + ",".join(failed)
+
         logger.info("[LLM] 三阶段分析完成")
         return advice
     
