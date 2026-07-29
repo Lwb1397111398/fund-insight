@@ -1006,16 +1006,16 @@ class PredictionVerifyService:
         }
     
     def verify_all_pending(self) -> Dict:
-        """验证所有待验证的预测（只验证已到期的，带缓存预热）"""
-        today = date.today()
+        """验证所有待验证的预测（只验证已到期且仍在窗口内的，带缓存预热）"""
+        from src.services.prediction_lifecycle import (
+            current_as_of,
+            filter_due_for_verify,
+        )
 
-        # 只查询已到期的预测（target_date <= today）
-        all_pending = self.db.query(Prediction).filter(
-            Prediction.status == 'pending',
-            Prediction.is_deleted == False,
-            Prediction.prediction_type != 'flat',
-            Prediction.target_date <= today
-        ).all()
+        today = current_as_of()
+
+        # 统一入口：due_unverified（is_correct is null 且未超过 NAV 年龄窗口）
+        all_pending = filter_due_for_verify(self.db, as_of=today)
 
         logger.info(f"[Verify] 找到 {len(all_pending)} 个已到期待验证预测")
 
