@@ -97,3 +97,68 @@
 - 改造会改变「可验证结论」定义；**禁止**把 pre-other 与 post-other 结论混进同一 +150 复评计数。
 - 代码侧：`L1_SHADOW_DATA_ERA=pre_other|post_other`，other 上线日写 `L3_OTHER_CUTOVER_AT` 并重置 `L1_SHADOW_BASELINE_VERIFIED` / `L1_SHADOW_STARTED_AT`。
 - 详见 `src/services/l1_shadow.reeval_status` 返回的 `data_era` / `era_note`。
+
+## 附录 C：clear 桶标签审计 + bucket×tier 交叉表（只读）
+
+- 日期：2026-07-30
+- 数据源：`DATABASE_URL`
+- **不改生产、不 push**
+- 复读方法：对 clear 桶随机 50 条（seed=20260729）做**否定/条件句敏感**规则复读（非金标准人工，可复现）
+- 博主 tier：存活已结论 n≥10 → empirical；1–9 → prior；0 → neutral
+
+### C1 预注册判读表
+
+| 结果 | 动作 |
+| --- | --- |
+| clear 抽样**错配率 ≥15%** | **方向标签 bug 立项**修抽取（否定/条件句），P0 |
+| 错配率 **&lt;15%** 且交叉表显示 clear 差主要由 prior 拖累 | 成分效应，记录观察 |
+| 错配率 **&lt;15%** 且成分未解释 clear 异常 | **信号备忘录**移交基金线（清晰喊单降权/反指候选） |
+
+### C2 clear 抽样审计
+
+| 项 | 值 |
+| --- | ---: |
+| clear 全量 | 220 |
+| 抽样 | 50 |
+| **错配数** | **4** |
+| **错配率** | **8.0%** |
+| 原因计数 | net_polarity_bull_vs_down:2, only_negated_bear_words:2, net_polarity_bear_vs_up:2, only_negated_bull_words:2 |
+
+#### 错配样例（截断）
+
+- id=1051 type=down correct=None reasons=['net_polarity_bull_vs_down', 'only_negated_bear_words']: '等到大部分人都上车了，主力就要撤退了，最后肯定是一地鸡毛，留下广大散户站岗，然后随着不断下跌，各种利空也会慢慢释放出来。'
+- id=2337 type=down correct=None reasons=['net_polarity_bull_vs_down', 'only_negated_bear_words']: '科技再次启动大行情的前提是大部分普通散户先坚持不住卖出，重仓科技的要么尽快找机会跑，要么坚持到底忍受波动调整'
+- id=1997 type=up correct=False reasons=['net_polarity_bear_vs_up', 'only_negated_bull_words']: '新建主动基，小买一点儿看看能不能走一波反弹'
+- id=1388 type=up correct=None reasons=['net_polarity_bear_vs_up', 'only_negated_bull_words']: '不影响长期上涨逻辑'
+
+#### 非错配样例
+
+- id=752 type=up: '创业板指接近前高，按牛市不言顶的节奏，突破是迟早的'
+- id=1977 type=up: '在算力回撤前，纳斯达克属于值得重仓的方向，当时更看好纳斯达克，现在回撤真正发生，可以两者较均衡地加仓，但优先加均衡的全球科技'
+- id=2072 type=down: '科技这波调整，短期趋势走弱，不拿，等企稳再接回来'
+
+### C3 bucket × tier 交叉表（仅已结论）
+
+| bucket | tier | n | 命中率 | 方向收益 | 收益n |
+| --- | --- | ---: | ---: | ---: | ---: |
+| clear | empirical | 63 | 50.8% | -2.2% | 63 |
+| clear | prior | 13 | 61.5% | -1.3% | 13 |
+| vague_hard | empirical | 152 | 56.6% | -0.4% | 152 |
+| vague_hard | prior | 33 | 60.6% | 0.7% | 33 |
+| weak | empirical | 15 | 80.0% | 1.9% | 15 |
+| weak | prior | 3 | 100.0% | 24.9% | 3 |
+
+- 成分读数：clear×empirical hit=50.8% (n=63) vs clear×prior 61.5% (n=13), gap=-10.7pp
+
+### C4 裁决（按 C1，禁止改口）
+
+- **verdict**：`signal_candidate`
+- **错配率**：8.0%
+- **action**：错配率<15% 且交叉表未显示「仅 prior 拖累」→ 写信号备忘录移交基金线（清晰喊单类或需降权/反指候选）；shadow 期继续观察 weak 桶
+
+### C5 信号备忘录草稿（仅当 verdict=signal_candidate 时启用）
+
+- 观察：附录 A 中 clear 命中 54.3%/收益为负，vague 60.5%/收益略正。
+- 若标签审计未达 bug 线：启发式「清晰方向词」可能对应**滞后喊单/追高**话术，而非更好的可验证预测。
+- 基金线候选：**对 clear 桶（或高激动措辞）预测降权**，weak/谨慎措辞观察清单（n 仍小）。
+- 需 shadow 期更大样本与人工抽检后再上线权重。
