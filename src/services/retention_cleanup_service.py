@@ -41,6 +41,13 @@ from src.utils.blogger_stats import recalculate_blogger_stats
 
 POLICY_VERSION = "retention-v2"
 
+# 硬删统一走 three-buckets 脚本；本服务 execute 永久只读下线（preview/build_plan 仍可用）
+HARD_DELETE_DISABLED = True
+HARD_DELETE_DISABLED_REASON = (
+    "retention-v2 硬删路径已下线；请使用 scripts/run_three_bucket_retention.py "
+    "（默认 dry-run，含 verified 台账护栏）。preview/build_plan 仍只读可用。"
+)
+
 
 class CleanupPlanChanged(Exception):
     """Raised when data changed after the user reviewed a cleanup preview."""
@@ -48,6 +55,10 @@ class CleanupPlanChanged(Exception):
     def __init__(self, current_fingerprint: str):
         self.current_fingerprint = current_fingerprint
         super().__init__("cleanup preview is stale")
+
+
+class HardDeleteDisabled(RuntimeError):
+    """旧执行器硬删已关闭。"""
 
 
 @dataclass(frozen=True)
@@ -250,6 +261,9 @@ class RetentionCleanupService:
         trigger_type: str = "manual",
         categories: Optional[Set[str]] = None,
     ) -> dict:
+        if HARD_DELETE_DISABLED:
+            raise HardDeleteDisabled(HARD_DELETE_DISABLED_REASON)
+
         plan = self.build_plan()
         if plan.fingerprint != expected_fingerprint:
             raise CleanupPlanChanged(plan.fingerprint)

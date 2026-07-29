@@ -1,24 +1,25 @@
-"""三桶轻量保留策略（默认 dry-run）。
+"""轻量保留策略（默认 dry-run）— three-buckets-v2。
 
 桶：
-1. deleted_predictions — is_deleted 且 deleted_at 早于 N 天 → 硬删
-2. cleanup_item_logs — created_at 早于 M 天 → 硬删
-3. unverifiable_predictions — lifecycle=unverifiable 且目标日距今 ≥ K 天 → 硬删
+1. deleted_predictions — 软删且 deleted_at 满 N 天；**is_correct 非空永不进候选**
+2. cleanup_item_logs — created_at 满 M 天
+3. unverifiable_predictions — lifecycle=unverifiable 且目标日龄满 K 天；无结论
+4. deleted_viewpoints — 软删观点，锚点 **deleted_at** 满 30 天（不看 valid_until）
+5. summary_viewpoints — is_summary，锚点 **viewpoint_date** 满窗口（默认 90 天）
 
-不替换 RetentionCleanupService；独立、可审、默认可逆（只出清单）。
-真删必须 dry_run=False 且 confirm_token 匹配。
+全局单次上限 max_total_per_run；真删需 dry_run=False + confirm_token。
 """
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Set
 
 from sqlalchemy.orm import Session, load_only
 
-from src.models.database import CleanupItemLog, Prediction
+from src.models.database import CleanupItemLog, Prediction, Viewpoint
 from src.services.prediction_lifecycle import (
     UNVERIFIABLE,
     classify,
@@ -26,7 +27,7 @@ from src.services.prediction_lifecycle import (
 )
 from src.utils.blogger_stats import recalculate_blogger_stats
 
-POLICY_NAME = "three-buckets-v1"
+POLICY_NAME = "three-buckets-v2"
 CONFIRM_TOKEN = "three-buckets-hard-delete"
 
 
@@ -35,17 +36,22 @@ class ThreeBucketPolicy:
     deleted_hard_delete_days: int = 30
     cleanup_item_log_days: int = 90
     unverifiable_days: int = 90
+    deleted_viewpoint_days: int = 30
+    summary_viewpoint_days: int = 90  # 参数化；前端仍读历史汇总列表
     batch_size: int = 200
-    # 单次执行每桶最多处理条数（防止一次扫光）
     max_per_bucket: int = 500
+    max_total_per_run: int = 500  # 全局单次上限（跨桶）
 
     def to_dict(self) -> Dict[str, int]:
         return {
             "deleted_hard_delete_days": self.deleted_hard_delete_days,
             "cleanup_item_log_days": self.cleanup_item_log_days,
             "unverifiable_days": self.unverifiable_days,
+            "deleted_viewpoint_days": self.deleted_viewpoint_days,
+            "summary_viewpoint_days": self.summary_viewpoint_days,
             "batch_size": self.batch_size,
             "max_per_bucket": self.max_per_bucket,
+            "max_total_per_run": self.max_total_per_run,
         }
 
 
@@ -54,8 +60,10 @@ class BucketPlan:
     as_of: date
     policy: ThreeBucketPolicy
     candidate_ids: Dict[str, List[int]] = field(default_factory=dict)
+    protected_counts: Dict[str, int] = field(default_factory=dict)
     samples: Dict[str, List[dict]] = field(default_factory=dict)
     notes: Dict[str, str] = field(default_factory=dict)
+    truncated: bool = False
 
     @property
     def total(self) -> int:
@@ -67,12 +75,18 @@ class BucketPlan:
             "as_of": self.as_of.isoformat(),
             "policy": self.policy.to_dict(),
             "counts": {k: len(v) for k, v in self.candidate_ids.items()},
+            "protected_counts": self.protected_counts,
             "total": self.total,
+            "truncated_by_global_cap": self.truncated,
             "candidate_ids": self.candidate_ids,
             "samples": self.samples,
             "notes": self.notes,
             "default_mode": "dry-run",
             "confirm_token_required_for_execute": CONFIRM_TOKEN,
+            "invariants": [
+                "is_correct IS NOT NULL predictions are never hard-deleted",
+                f"max_total_per_run={self.policy.max_total_per_run}",
+            ],
         }
 
 
@@ -80,7 +94,15 @@ class ThreeBucketRetentionService:
     BUCKET_DELETED = "deleted_predictions"
     BUCKET_LOGS = "cleanup_item_logs"
     BUCKET_UNVERIFIABLE = "unverifiable_predictions"
-    BUCKETS = (BUCKET_DELETED, BUCKET_LOGS, BUCKET_UNVERIFIABLE)
+    BUCKET_DELETED_VP = "deleted_viewpoints"
+    BUCKET_SUMMARY_VP = "summary_viewpoints"
+    BUCKETS = (
+        BUCKET_DELETED,
+        BUCKET_LOGS,
+        BUCKET_UNVERIFIABLE,
+        BUCKET_DELETED_VP,
+        BUCKET_SUMMARY_VP,
+    )
 
     def __init__(
         self,
@@ -95,23 +117,56 @@ class ThreeBucketRetentionService:
 
     def build_plan(self) -> BucketPlan:
         plan = BucketPlan(as_of=self.today, policy=self.policy)
-        plan.candidate_ids[self.BUCKET_DELETED] = self._deleted_prediction_ids()
-        plan.candidate_ids[self.BUCKET_LOGS] = self._cleanup_item_log_ids()
-        plan.candidate_ids[self.BUCKET_UNVERIFIABLE] = self._unverifiable_prediction_ids()
+        deleted_ids, protected_verified = self._deleted_prediction_ids()
+        plan.protected_counts["verified_ledger_excluded"] = protected_verified
+        raw: Dict[str, List[int]] = {
+            self.BUCKET_DELETED: deleted_ids,
+            self.BUCKET_LOGS: self._cleanup_item_log_ids(),
+            self.BUCKET_UNVERIFIABLE: self._unverifiable_prediction_ids(),
+            self.BUCKET_DELETED_VP: self._deleted_viewpoint_ids(),
+            self.BUCKET_SUMMARY_VP: self._summary_viewpoint_ids(),
+        }
+        # 全局上限：按桶顺序截断
+        remaining = self.policy.max_total_per_run
+        capped: Dict[str, List[int]] = {}
+        truncated = False
+        for name in self.BUCKETS:
+            ids = raw.get(name, [])
+            if remaining <= 0:
+                capped[name] = []
+                if ids:
+                    truncated = True
+                continue
+            if len(ids) > remaining:
+                capped[name] = ids[:remaining]
+                truncated = True
+                remaining = 0
+            else:
+                capped[name] = ids
+                remaining -= len(ids)
+        plan.candidate_ids = capped
+        plan.truncated = truncated
         plan.samples = {
-            name: self._samples(name, ids)
-            for name, ids in plan.candidate_ids.items()
+            name: self._samples(name, ids) for name, ids in plan.candidate_ids.items()
         }
         plan.notes = {
             self.BUCKET_DELETED: (
-                f"is_deleted=true 且 deleted_at < {self.today - timedelta(days=self.policy.deleted_hard_delete_days)}"
+                f"is_deleted 且 deleted_at 满 {self.policy.deleted_hard_delete_days} 天；"
+                f"排除 is_correct 非空（护栏排除 {protected_verified} 条）"
             ),
             self.BUCKET_LOGS: (
-                f"cleanup_item_logs.created_at < {self.today - timedelta(days=self.policy.cleanup_item_log_days)}"
+                f"cleanup_item_logs.created_at 满 {self.policy.cleanup_item_log_days} 天"
             ),
             self.BUCKET_UNVERIFIABLE: (
-                f"lifecycle=unverifiable 且 (as_of-target_date) >= {self.policy.unverifiable_days}；"
-                "当前未满窗则计数为 0（策略先行）"
+                f"lifecycle=unverifiable 且目标日龄满 {self.policy.unverifiable_days} 天"
+            ),
+            self.BUCKET_DELETED_VP: (
+                f"观点软删：deleted_at 满 {self.policy.deleted_viewpoint_days} 天"
+                "（锚点不用 valid_until）"
+            ),
+            self.BUCKET_SUMMARY_VP: (
+                f"is_summary：viewpoint_date 满 {self.policy.summary_viewpoint_days} 天"
+                "（前端列表可读历史汇总，窗口宜偏大）"
             ),
         }
         return plan
@@ -136,10 +191,6 @@ class ThreeBucketRetentionService:
         confirm_token: Optional[str] = None,
         plan: Optional[BucketPlan] = None,
     ) -> dict:
-        """默认 dry_run=True：只返回将删清单，不写库。
-
-        真删条件：dry_run=False 且 confirm_token==CONFIRM_TOKEN。
-        """
         plan = plan or self.build_plan()
         report = plan.to_report_dict()
         if dry_run:
@@ -153,6 +204,12 @@ class ThreeBucketRetentionService:
                 f"真删需要 confirm_token={CONFIRM_TOKEN!r} 且 dry_run=False"
             )
 
+        # 执行前再拦一层 verified 台账
+        pred_ids = list(plan.candidate_ids.get(self.BUCKET_DELETED, [])) + list(
+            plan.candidate_ids.get(self.BUCKET_UNVERIFIABLE, [])
+        )
+        self._assert_no_verified_ledger(pred_ids)
+
         deleted_counts = {
             self.BUCKET_DELETED: self._hard_delete_predictions(
                 plan.candidate_ids.get(self.BUCKET_DELETED, [])
@@ -163,6 +220,12 @@ class ThreeBucketRetentionService:
             self.BUCKET_UNVERIFIABLE: self._hard_delete_predictions(
                 plan.candidate_ids.get(self.BUCKET_UNVERIFIABLE, [])
             ),
+            self.BUCKET_DELETED_VP: self._hard_delete_viewpoints(
+                plan.candidate_ids.get(self.BUCKET_DELETED_VP, [])
+            ),
+            self.BUCKET_SUMMARY_VP: self._hard_delete_viewpoints(
+                plan.candidate_ids.get(self.BUCKET_SUMMARY_VP, [])
+            ),
         }
         self.db.commit()
         report["mode"] = "execute"
@@ -171,25 +234,40 @@ class ThreeBucketRetentionService:
         report["message"] = "hard-delete completed"
         return report
 
+    def _assert_no_verified_ledger(self, ids: Sequence[int]) -> None:
+        if not ids:
+            return
+        bad = (
+            self.db.query(Prediction.id)
+            .filter(Prediction.id.in_(list(ids)), Prediction.is_correct.isnot(None))
+            .all()
+        )
+        if bad:
+            raise RuntimeError(
+                f"verified ledger guard blocked delete of ids={[r.id for r in bad[:20]]}"
+            )
+
     # ----- candidates -----
 
-    def _deleted_prediction_ids(self) -> List[int]:
+    def _deleted_prediction_ids(self) -> tuple[List[int], int]:
+        """返回 (可删 id, 因 verified 护栏排除数)。"""
         cutoff = datetime.combine(
             self.today - timedelta(days=self.policy.deleted_hard_delete_days),
             datetime.min.time(),
         )
+        base = self.db.query(Prediction).filter(
+            Prediction.is_deleted.is_(True),
+            Prediction.deleted_at.isnot(None),
+            Prediction.deleted_at < cutoff,
+        )
+        protected = base.filter(Prediction.is_correct.isnot(None)).count()
         rows = (
-            self.db.query(Prediction.id)
-            .filter(
-                Prediction.is_deleted.is_(True),
-                Prediction.deleted_at.isnot(None),
-                Prediction.deleted_at < cutoff,
-            )
+            base.filter(Prediction.is_correct.is_(None))
             .order_by(Prediction.deleted_at.asc(), Prediction.id.asc())
             .limit(self.policy.max_per_bucket)
             .all()
         )
-        return [r.id for r in rows]
+        return [r.id for r in rows], int(protected)
 
     def _cleanup_item_log_ids(self) -> List[int]:
         cutoff = datetime.combine(
@@ -206,9 +284,7 @@ class ThreeBucketRetentionService:
         return [r.id for r in rows]
 
     def _unverifiable_prediction_ids(self) -> List[int]:
-        """只收 lifecycle=unverifiable 且目标日距 as_of 已满窗。"""
         min_age = self.policy.unverifiable_days
-        # 粗筛：未删、无结论、target 足够早，再 classify 精筛
         target_cutoff = self.today - timedelta(days=min_age)
         rows = (
             self.db.query(Prediction)
@@ -225,22 +301,57 @@ class ThreeBucketRetentionService:
             )
             .filter(
                 Prediction.is_deleted.is_(False),
-                Prediction.is_correct.is_(None),
+                Prediction.is_correct.is_(None),  # 台账护栏
                 Prediction.target_date.isnot(None),
                 Prediction.target_date <= target_cutoff,
             )
             .order_by(Prediction.target_date.asc(), Prediction.id.asc())
-            .limit(self.policy.max_per_bucket * 3)  # classify 前多取一点
+            .limit(self.policy.max_per_bucket * 3)
             .all()
         )
         ids: List[int] = []
         for p in rows:
+            if p.is_correct is not None:
+                continue
             if classify(p, as_of=self.today) != UNVERIFIABLE:
                 continue
             ids.append(p.id)
             if len(ids) >= self.policy.max_per_bucket:
                 break
         return ids
+
+    def _deleted_viewpoint_ids(self) -> List[int]:
+        cutoff = datetime.combine(
+            self.today - timedelta(days=self.policy.deleted_viewpoint_days),
+            datetime.min.time(),
+        )
+        rows = (
+            self.db.query(Viewpoint.id)
+            .filter(
+                Viewpoint.is_deleted.is_(True),
+                Viewpoint.deleted_at.isnot(None),
+                Viewpoint.deleted_at < cutoff,
+            )
+            .order_by(Viewpoint.deleted_at.asc(), Viewpoint.id.asc())
+            .limit(self.policy.max_per_bucket)
+            .all()
+        )
+        return [r.id for r in rows]
+
+    def _summary_viewpoint_ids(self) -> List[int]:
+        cutoff = self.today - timedelta(days=self.policy.summary_viewpoint_days)
+        rows = (
+            self.db.query(Viewpoint.id)
+            .filter(
+                Viewpoint.is_summary.is_(True),
+                Viewpoint.is_deleted.is_(False),
+                Viewpoint.viewpoint_date < cutoff,
+            )
+            .order_by(Viewpoint.viewpoint_date.asc(), Viewpoint.id.asc())
+            .limit(self.policy.max_per_bucket)
+            .all()
+        )
+        return [r.id for r in rows]
 
     def _samples(self, bucket: str, ids: Sequence[int], limit: int = 15) -> List[dict]:
         if not ids:
@@ -262,22 +373,36 @@ class ThreeBucketRetentionService:
                 }
                 for r in rows
             ]
-        rows = self.db.query(Prediction).filter(Prediction.id.in_(sample_ids)).all()
-        out = []
-        for r in rows:
-            out.append(
+        if bucket in (self.BUCKET_DELETED_VP, self.BUCKET_SUMMARY_VP):
+            rows = self.db.query(Viewpoint).filter(Viewpoint.id.in_(sample_ids)).all()
+            return [
                 {
                     "id": r.id,
-                    "status": r.status,
-                    "is_deleted": r.is_deleted,
-                    "is_correct": r.is_correct,
-                    "target_date": r.target_date.isoformat() if r.target_date else None,
+                    "is_summary": bool(r.is_summary),
+                    "is_deleted": bool(r.is_deleted),
+                    "viewpoint_date": r.viewpoint_date.isoformat()
+                    if r.viewpoint_date
+                    else None,
+                    "valid_until": r.valid_until.isoformat() if r.valid_until else None,
                     "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None,
-                    "lifecycle": classify(r, as_of=self.today),
-                    "fund_code": r.fund_code,
+                    "source": r.source,
                 }
-            )
-        return out
+                for r in rows
+            ]
+        rows = self.db.query(Prediction).filter(Prediction.id.in_(sample_ids)).all()
+        return [
+            {
+                "id": r.id,
+                "status": r.status,
+                "is_deleted": r.is_deleted,
+                "is_correct": r.is_correct,
+                "target_date": r.target_date.isoformat() if r.target_date else None,
+                "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None,
+                "lifecycle": classify(r, as_of=self.today),
+                "fund_code": r.fund_code,
+            }
+            for r in rows
+        ]
 
     # ----- execute helpers -----
 
@@ -289,13 +414,19 @@ class ThreeBucketRetentionService:
     def _hard_delete_predictions(self, ids: List[int]) -> int:
         if not ids:
             return 0
+        self._assert_no_verified_ledger(ids)
         deleted = 0
         for batch in self._batches(list(ids)):
             rows = self.db.query(Prediction).filter(Prediction.id.in_(batch)).all()
+            # 再滤一层
+            rows = [r for r in rows if r.is_correct is None]
             blogger_ids = {r.blogger_id for r in rows if r.blogger_id}
             for row in rows:
-                # 软删行若曾验证：归档分数，避免准确率分母空洞
-                if (row.verify_count or 0) > 0 and row.prediction_type != "flat" and row.blogger_id:
+                if (
+                    (row.verify_count or 0) > 0
+                    and row.prediction_type != "flat"
+                    and row.blogger_id
+                ):
                     from src.models.database import Blogger
 
                     blogger = self.db.get(Blogger, row.blogger_id)
@@ -326,6 +457,26 @@ class ThreeBucketRetentionService:
                 .filter(CleanupItemLog.id.in_(batch))
                 .all()
             )
+            for row in rows:
+                self.db.delete(row)
+                deleted += 1
+            self.db.flush()
+        return deleted
+
+    def _hard_delete_viewpoints(self, ids: List[int]) -> int:
+        if not ids:
+            return 0
+        from src.models.database import CrawlerArticleRecord
+
+        deleted = 0
+        for batch in self._batches(list(ids)):
+            self.db.query(CrawlerArticleRecord).filter(
+                CrawlerArticleRecord.viewpoint_id.in_(batch)
+            ).update(
+                {CrawlerArticleRecord.viewpoint_id: None},
+                synchronize_session=False,
+            )
+            rows = self.db.query(Viewpoint).filter(Viewpoint.id.in_(batch)).all()
             for row in rows:
                 self.db.delete(row)
                 deleted += 1

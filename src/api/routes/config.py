@@ -206,7 +206,22 @@ def _queue_cleanup(
     categories: Optional[set[str]] = None,
 ):
     from src.models.database import CleanupTask
-    from src.services.retention_cleanup_service import RetentionCleanupService
+    from src.services.retention_cleanup_service import (
+        HARD_DELETE_DISABLED,
+        HARD_DELETE_DISABLED_REASON,
+        RetentionCleanupService,
+    )
+
+    # 旧执行器硬删下线：API 直接拒绝，preview 仍可用
+    if HARD_DELETE_DISABLED:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": HARD_DELETE_DISABLED_REASON,
+                "use": "scripts/run_three_bucket_retention.py",
+                "hard_delete_disabled": True,
+            },
+        )
 
     _require_destructive_cleanup(request)
     if payload is None or not payload.preview_fingerprint:

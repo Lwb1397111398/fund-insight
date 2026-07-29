@@ -745,11 +745,34 @@ def get_cleanup_manager() -> CleanupManager:
 
 
 def run_cleanup_task():
-    """运行统一安全清理（供定时任务调用）。"""
+    """运行统一安全清理（供定时任务调用）。
+
+    硬删已下线：仅保留 preview 能力说明，定时任务不再调用 execute。
+    """
     if not destructive_cleanup_enabled():
         logger.info("清理任务已禁用（ENABLE_DATA_CLEANUP=false）")
         return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
-    from src.services.retention_cleanup_service import RetentionCleanupService
+    from src.services.retention_cleanup_service import (
+        HARD_DELETE_DISABLED,
+        HARD_DELETE_DISABLED_REASON,
+        RetentionCleanupService,
+    )
+
+    if HARD_DELETE_DISABLED:
+        logger.info("旧执行器硬删已下线，跳过定时清理: %s", HARD_DELETE_DISABLED_REASON)
+        db = SessionLocal()
+        try:
+            plan = RetentionCleanupService(db).build_plan()
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "hard_delete_disabled",
+                "message": HARD_DELETE_DISABLED_REASON,
+                "preview_only_total_candidates": plan.total_candidates,
+                "protected_counts": plan.protected_counts,
+            }
+        finally:
+            db.close()
 
     db = SessionLocal()
     try:

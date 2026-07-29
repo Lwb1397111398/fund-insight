@@ -93,8 +93,10 @@ def test_cleanup_execute_rejects_stale_fingerprint_before_creating_task(
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 409
-    assert "current_fingerprint" in response.json()["detail"]
+    # 旧执行器硬删已下线：直接 403，不再走到指纹校验
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail.get("hard_delete_disabled") is True or "hard_delete" in str(detail).lower()
     with session_factory() as db:
         assert db.query(CleanupTask).count() == 0
 
@@ -163,7 +165,11 @@ def test_cleanup_status_keeps_recent_pending_task(monkeypatch, tmp_path):
 def test_cleanup_background_task_reaches_completed(monkeypatch, tmp_path):
     session_factory = _database(tmp_path)
     from src.api.routes.config import _run_cleanup_background
+    from src.services import retention_cleanup_service as rcs
     from src.services.retention_cleanup_service import RetentionCleanupService
+
+    # 单测临时打开旧硬删，验证后台任务链路仍可用（生产默认关闭）
+    monkeypatch.setattr(rcs, "HARD_DELETE_DISABLED", False)
 
     with session_factory() as db:
         fingerprint = RetentionCleanupService(db).build_plan().fingerprint

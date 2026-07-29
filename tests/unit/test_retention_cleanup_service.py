@@ -307,7 +307,10 @@ def test_plan_uses_effective_expiry_for_viewpoints_and_selects_old_advice(test_d
     assert record.id in plan.candidate_ids["crawler_records"]
 
 
-def test_execute_removes_dependencies_and_keeps_archived_blogger_score(test_db):
+def test_execute_removes_dependencies_and_keeps_archived_blogger_score(test_db, monkeypatch):
+    from src.services import retention_cleanup_service as rcs
+
+    monkeypatch.setattr(rcs, "HARD_DELETE_DISABLED", False)
     from src.services.retention_cleanup_service import RetentionCleanupService
 
     blogger, post = _blogger_and_post(test_db, post_date=date(2026, 1, 1))
@@ -423,11 +426,14 @@ def test_plan_exposes_long_term_fund_window_protection_counts(test_db):
     assert window_ids.isdisjoint(plan.candidate_ids["fund_history"])
 
 
-def test_execute_rejects_stale_preview_fingerprint(test_db):
+def test_execute_rejects_stale_preview_fingerprint(test_db, monkeypatch):
+    from src.services import retention_cleanup_service as rcs
     from src.services.retention_cleanup_service import (
         CleanupPlanChanged,
         RetentionCleanupService,
     )
+
+    monkeypatch.setattr(rcs, "HARD_DELETE_DISABLED", False)
 
     blogger, post = _blogger_and_post(test_db)
     _prediction(
@@ -496,8 +502,11 @@ def test_plan_keeps_retry_posts_and_viewpoints_in_restore_window(test_db):
     assert viewpoint.id not in plan.candidate_ids["viewpoints"]
 
 
-def test_archiving_only_counts_predictions_used_by_blogger_stats(test_db):
+def test_archiving_only_counts_predictions_used_by_blogger_stats(test_db, monkeypatch):
+    from src.services import retention_cleanup_service as rcs
     from src.services.retention_cleanup_service import RetentionCleanupService
+
+    monkeypatch.setattr(rcs, "HARD_DELETE_DISABLED", False)
 
     blogger, post = _blogger_and_post(test_db, post_date=date(2026, 1, 1))
     blogger.total_predictions = 1
@@ -547,8 +556,11 @@ def test_archiving_only_counts_predictions_used_by_blogger_stats(test_db):
     assert saved.accuracy_rate == 70
 
 
-def test_category_limited_cleanup_does_not_delete_other_candidates(test_db):
+def test_category_limited_cleanup_does_not_delete_other_candidates(test_db, monkeypatch):
+    from src.services import retention_cleanup_service as rcs
     from src.services.retention_cleanup_service import RetentionCleanupService
+
+    monkeypatch.setattr(rcs, "HARD_DELETE_DISABLED", False)
 
     fund = FundInfo(
         fund_code="ORPHAN-LIMITED",
