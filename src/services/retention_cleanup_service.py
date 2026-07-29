@@ -151,6 +151,8 @@ class RetentionCleanupService:
             "mixed_group_predictions": 0,
             "unresolved_prediction_funds": 0,
             "fund_history": 0,
+            "long_term_fund_windows": 0,
+            "long_term_fund_history": 0,
             "protected_funds": 0,
             "active_viewpoints": 0,
             "running_tasks": 0,
@@ -260,6 +262,11 @@ class RetentionCleanupService:
             len(plan.candidate_ids[category]) for category in selected_categories
         )
 
+        # 清理前快照博主准确率，用于防崩溃校验
+        accuracy_before = self._snapshot_blogger_accuracy(
+            plan.candidate_ids.get("predictions", [])
+        )
+
         backup = self._create_backup() if backup_before_cleanup else None
         started_at = datetime.now()
         log = CleanupLog(
@@ -301,6 +308,14 @@ class RetentionCleanupService:
                 self.db.rollback()
                 failed_categories[category] = str(exc)
 
+        # 清理后准确率对比
+        accuracy_after = self._snapshot_blogger_accuracy_by_ids(
+            list(accuracy_before.keys())
+        )
+        blogger_accuracy_guard = self._build_accuracy_guard(
+            accuracy_before, accuracy_after
+        )
+
         finished_at = datetime.now()
         log = self.db.get(CleanupLog, log_id)
         log.end_time = finished_at
@@ -310,7 +325,11 @@ class RetentionCleanupService:
             len(plan.candidate_ids[category]) for category in failed_categories
         )
         log.status = "partial" if failed_categories else "completed"
-        log.details = {"backup": backup, "deleted_counts": deleted_counts}
+        log.details = {
+            "backup": backup,
+            "deleted_counts": deleted_counts,
+            "blogger_accuracy_guard": blogger_accuracy_guard,
+        }
         log.errors = [
             {"category": category, "error": error}
             for category, error in failed_categories.items()
@@ -324,6 +343,7 @@ class RetentionCleanupService:
             "total_deleted": sum(deleted_counts.values()),
             "log_id": log_id,
             "backup": backup,
+            "blogger_accuracy_guard": blogger_accuracy_guard,
         }
 
     def _prediction_candidates(self, protected_counts: Dict[str, int]):
@@ -615,6 +635,8 @@ class RetentionCleanupService:
         orphan_codes: Set[str],
     ) -> Set[int]:
         protected_ids: Set[int] = set()
+        long_term_protected_ids: Set[int] = set()
+        long_term_codes: Set[str] = set()
         # 只查 3 列，按 fund_code 分组（避免加载 ORM 全行）
         history_rows = self.db.query(
             FundHistory.id, FundHistory.fund_code, FundHistory.nav_date,
@@ -627,18 +649,26 @@ class RetentionCleanupService:
 
         for prediction in pending_predictions:
             codes = self._resolve_prediction_funds(prediction)
+            start = prediction.prediction_date
+            end = max(self.today, prediction.target_date or self.today)
+            span_days = (end - start).days if start else 0
+            is_long_term = span_days >= 90
             for code in codes:
                 rows = history_by_fund.get(code, [])
-                start = prediction.prediction_date
-                end = max(self.today, prediction.target_date or self.today)
-                protected_ids.update(
+                window_ids = {
                     hist_id for hist_id, nav_date in rows if start <= nav_date <= end
-                )
+                }
+                protected_ids.update(window_ids)
+                if is_long_term:
+                    long_term_codes.add(code)
+                    long_term_protected_ids.update(window_ids)
                 anchor = next(
                     (hist_id for hist_id, nav_date in rows if nav_date <= start), None
                 )
                 if anchor is not None:
                     protected_ids.add(anchor)
+                    if is_long_term:
+                        long_term_protected_ids.add(anchor)
 
         recent_cutoff = self.today - timedelta(days=self.policy.retention_days)
         weekly_cutoff = self.today - timedelta(days=self.policy.weekly_history_until_days)
@@ -651,6 +681,7 @@ class RetentionCleanupService:
             for hist_id, nav_date in rows:
                 if hist_id in protected_ids or nav_date >= recent_cutoff:
                     continue
+                # 长期预测关联基金：预测窗外的 30-90 天仍可抽稀，窗内已全保护
                 if nav_date >= weekly_cutoff:
                     iso = nav_date.isocalendar()
                     week_key = (iso.year, iso.week)
@@ -659,7 +690,65 @@ class RetentionCleanupService:
                         continue
                 candidates.add(hist_id)
         protected_counts["fund_history"] = len(protected_ids)
+        protected_counts["long_term_fund_windows"] = len(long_term_codes)
+        protected_counts["long_term_fund_history"] = len(long_term_protected_ids)
         return candidates
+
+    def _snapshot_blogger_accuracy(self, prediction_ids: List[int]) -> Dict[int, dict]:
+        """清理前快照：将要删除的预测所涉博主的准确率。"""
+        if not prediction_ids:
+            return {}
+        blogger_ids = {
+            row.blogger_id
+            for row in self.db.query(Prediction.blogger_id).filter(
+                Prediction.id.in_(prediction_ids)
+            ).all()
+            if row.blogger_id
+        }
+        return self._snapshot_blogger_accuracy_by_ids(list(blogger_ids))
+
+    def _snapshot_blogger_accuracy_by_ids(self, blogger_ids: List[int]) -> Dict[int, dict]:
+        if not blogger_ids:
+            return {}
+        result: Dict[int, dict] = {}
+        for blogger in self.db.query(Blogger).filter(Blogger.id.in_(blogger_ids)).all():
+            result[blogger.id] = {
+                "blogger_id": blogger.id,
+                "name": blogger.name,
+                "accuracy_rate": float(blogger.accuracy_rate or 0),
+                "total_predictions": int(blogger.total_predictions or 0),
+                "archived_verified_count": int(blogger.archived_verified_count or 0),
+                "archived_verify_score": float(blogger.archived_verify_score or 0),
+            }
+        return result
+
+    @staticmethod
+    def _build_accuracy_guard(
+        before: Dict[int, dict], after: Dict[int, dict]
+    ) -> dict:
+        rows = []
+        max_abs_delta = 0.0
+        for blogger_id, snap in before.items():
+            after_snap = after.get(blogger_id) or {}
+            before_acc = float(snap.get("accuracy_rate") or 0)
+            after_acc = float(after_snap.get("accuracy_rate") or 0)
+            delta = round(after_acc - before_acc, 4)
+            max_abs_delta = max(max_abs_delta, abs(delta))
+            rows.append({
+                "blogger_id": blogger_id,
+                "name": snap.get("name"),
+                "before": before_acc,
+                "after": after_acc,
+                "delta": delta,
+                "total_predictions_before": snap.get("total_predictions"),
+                "total_predictions_after": after_snap.get("total_predictions"),
+            })
+        return {
+            "bloggers_touched": len(rows),
+            "accuracy_before_after": rows,
+            "max_abs_delta": round(max_abs_delta, 4),
+            "stable": max_abs_delta < 0.01,
+        }
 
     def _health_warnings(
         self,
@@ -777,14 +866,17 @@ class RetentionCleanupService:
             synchronize_session=False
         )
         rows = self.db.query(Prediction).filter(Prediction.id.in_(ids)).all()
-        blogger_ids = set()
+        blogger_ids = {row.blogger_id for row in rows if row.blogger_id}
+        bloggers = {
+            b.id: b
+            for b in self.db.query(Blogger).filter(Blogger.id.in_(blogger_ids)).all()
+        } if blogger_ids else {}
         for row in rows:
-            blogger = self.db.get(Blogger, row.blogger_id)
-            if (row.verify_count or 0) > 0 and row.prediction_type != "flat":
+            blogger = bloggers.get(row.blogger_id)
+            if blogger is not None and (row.verify_count or 0) > 0 and row.prediction_type != "flat":
                 blogger.archived_verified_count = (blogger.archived_verified_count or 0) + 1
                 blogger.archived_correct_count = (blogger.archived_correct_count or 0) + int(bool(row.is_correct))
                 blogger.archived_verify_score = (blogger.archived_verify_score or 0) + float(row.verify_score or 0)
-            blogger_ids.add(row.blogger_id)
             self._audit_item(log_id, "prediction", row)
             self.db.delete(row)
         self.db.flush()

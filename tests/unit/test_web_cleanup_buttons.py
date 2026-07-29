@@ -16,8 +16,9 @@ def test_cleanup_view_guards_all_hard_delete_buttons():
     assert "温和清理" not in cleanup_actions
     assert "一键清理测试数据" in cleanup_actions
     assert 'v-if="cleanupEnabled"' not in cleanup_actions
-    assert ':disabled="analyzing || !cleanupEnabled || !cleanupPreview"' in cleanup_actions
-    assert "仅维护环境可执行" in content
+    # 可点：仅 analyzing / 无预览时禁用；开关关闭时用 alert 说明，避免“无反应”
+    assert ':disabled="analyzing || !cleanupPreview"' in cleanup_actions
+    assert "清理开关已关闭" in content
     assert 'v-if="testData && testData.cleanup_enabled"' in cleanup_actions
 
 
@@ -28,11 +29,12 @@ def test_cleanup_requests_send_the_danger_confirmation_header():
     assert "cleanupEnabled = ref(false)" in content
     assert "cleanupPreviewError" in content
     assert "CLEANUP_POLL_TIMEOUT_MS" in content
-    assert "cleanupEnabled.value = Boolean(res.data.data?.cleanup_enabled)" in content
+    assert "cleanupEnabled.value = Boolean(d.cleanup_enabled)" in content
     assert "'X-Danger-Confirm': 'cleanup-data'" in content
     assert "preview_fingerprint" in content
     assert "/config/cleanup/tasks/" in content
     assert "await fetchCleanupPreview(); await loadTestData();" in content
+    assert "blogger_accuracy_guard" in content
 
 
 def test_cleanup_actions_are_responsive_grid():
@@ -47,3 +49,10 @@ def test_cleanup_actions_are_responsive_grid():
     assert ".cleanup-actions" in content
     assert "grid-template-columns: repeat(2, 1fr)" in content
     assert "grid-template-columns: 1fr" in content
+
+
+def test_cleanup_page_mentions_long_term_fund_and_accuracy_guard():
+    content = Path("web/index.html").read_text(encoding="utf-8")
+    assert "预测窗口完整保留" in content
+    assert "归档累计" in content
+    assert "long_term_fund_history" in content

@@ -371,10 +371,56 @@ def test_execute_removes_dependencies_and_keeps_archived_blogger_score(test_db):
     assert saved_blogger.archived_verify_score == 80
     assert saved_blogger.total_predictions == 1
     assert saved_blogger.accuracy_rate == 80
+    guard = result["blogger_accuracy_guard"]
+    assert guard["bloggers_touched"] == 1
+    assert guard["stable"] is True
+    assert abs(guard["max_abs_delta"]) < 0.01
     assert test_db.query(CleanupLog).count() == 1
     assert test_db.query(CleanupItemLog).filter(
         CleanupItemLog.data_type == "prediction"
     ).count() == 1
+
+
+def test_plan_exposes_long_term_fund_window_protection_counts(test_db):
+    from src.services.retention_cleanup_service import RetentionCleanupService
+
+    blogger, post = _blogger_and_post(test_db)
+    prediction = _prediction(
+        test_db,
+        blogger=blogger,
+        post=post,
+        prediction_date=date(2026, 1, 10),
+        target_date=date(2026, 7, 10),
+        status="pending",
+    )
+    test_db.add(FundInfo(
+        fund_code="000001",
+        fund_name="测试基金",
+        updated_at=datetime(2026, 7, 1),
+    ))
+    history = []
+    current = date(2026, 1, 5)
+    while current <= TODAY:
+        row = FundHistory(
+            fund_code="000001",
+            fund_name="测试基金",
+            nav_date=current,
+            nav=1.0,
+        )
+        test_db.add(row)
+        history.append(row)
+        current += timedelta(days=7)
+    test_db.commit()
+
+    plan = RetentionCleanupService(test_db, today=TODAY).build_plan()
+    assert plan.protected_counts["long_term_fund_windows"] >= 1
+    assert plan.protected_counts["long_term_fund_history"] >= 1
+    assert prediction.id not in plan.candidate_ids["predictions"]
+    window_ids = {
+        row.id for row in history
+        if prediction.prediction_date <= row.nav_date <= prediction.target_date
+    }
+    assert window_ids.isdisjoint(plan.candidate_ids["fund_history"])
 
 
 def test_execute_rejects_stale_preview_fingerprint(test_db):

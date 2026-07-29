@@ -89,10 +89,10 @@ def test_test_data_cleanup_requires_confirmation_when_explicitly_enabled(monkeyp
     assert "确认" in response.json()["detail"]
 
 
-def test_destructive_data_cleanup_routes_are_disabled_by_default(monkeypatch):
-    """常规过期数据和观点批量清理不能在默认环境删除资料。"""
+def test_destructive_data_cleanup_routes_are_disabled_when_explicitly_off(monkeypatch):
+    """显式 ENABLE_DATA_CLEANUP=false 时禁止批量硬删除。"""
     monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
-    monkeypatch.delenv("ENABLE_DATA_CLEANUP", raising=False)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "false")
 
     from src.api.main import app
 
@@ -108,6 +108,22 @@ def test_destructive_data_cleanup_routes_are_disabled_by_default(monkeypatch):
         response = client.post(path, headers=AUTH_HEADERS, json=payload)
         assert response.status_code == 403, path
         assert "已禁用" in response.json()["detail"]
+
+
+def test_destructive_cleanup_defaults_on(monkeypatch):
+    """未配置时清理默认开启（仍需确认头）。"""
+    monkeypatch.delenv("ENABLE_DATA_CLEANUP", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    from src.core.safety import destructive_cleanup_enabled
+
+    assert destructive_cleanup_enabled() is True
+
+
+def test_destructive_cleanup_explicit_false_overrides_default(monkeypatch):
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "false")
+    from src.core.safety import destructive_cleanup_enabled
+
+    assert destructive_cleanup_enabled() is False
 
 
 def test_destructive_data_cleanup_requires_confirmation_when_enabled(monkeypatch):

@@ -470,8 +470,8 @@
                 <div v-if="currentView === 'cleanup'">
                     <div class="section-title">安全清理</div>
                     <div class="cleanup-actions">
-                        <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing || !cleanupEnabled || !cleanupPreview"><i class="ri-delete-bin-line"></i> {{ analyzing ? '安全清理中...' : '安全清理' }}</button>
-                        <span v-if="!cleanupEnabled && !cleanupPreviewError" class="text-xs text-tertiary">仅维护环境可执行</span>
+                        <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing || !cleanupPreview"><i class="ri-delete-bin-line"></i> {{ analyzing ? '安全清理中...' : '安全清理' }}</button>
+                        <span v-if="!cleanupEnabled && !cleanupPreviewError" class="text-xs text-danger">清理开关已关闭（ENABLE_DATA_CLEANUP=false）。需要清理时改为 true 或删除该配置后重启</span>
                         <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">预览加载失败，点击重试</button>
                         <button v-if="testData && testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                     </div>
@@ -491,12 +491,16 @@
                     <div class="mb-20 p-15 bg-warning-light rounded-lg">
                         <h4 class="text-warning mb-10"><i class="ri-funds-line"></i> 基金历史净值数据</h4>
                         <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
-                            清理规则：最近30天完整保留，30-90天每周保留1条，超过90天删除
+                            清理规则：最近30天完整保留；30-90天无预测依赖时每周保留1条；
+                            <strong>待验证/长期预测按预测窗口完整保留对应净值（可覆盖半年及以上）</strong>；
+                            已验证预测删除后准确率进入归档累计，不会归零。
                         </p>
-                        <div style="display: flex; gap: 20px; font-size: 13px;">
+                        <div style="display: flex; gap: 20px; font-size: 13px; flex-wrap: wrap;">
                             <span>总记录数: <strong>{{ stats.funds?.fund_history_count || 0 }}</strong></span>
                             <span>基金数: <strong>{{ stats.funds?.fund_count || 0 }}</strong></span>
                             <span>平均每基金: <strong>{{ stats.funds?.fund_count ? ((stats.funds?.fund_history_count || 0) / stats.funds.fund_count).toFixed(1) : 0 }}</strong> 条</span>
+                            <span v-if="cleanupPreview">长期窗保护基金: <strong>{{ cleanupPreview.protected_counts?.long_term_fund_windows || 0 }}</strong></span>
+                            <span v-if="cleanupPreview">长期窗保护净值: <strong>{{ cleanupPreview.protected_counts?.long_term_fund_history || 0 }}</strong></span>
                         </div>
                     </div>
                     
@@ -517,6 +521,7 @@
                                 <span>待验证预测 <strong>{{ cleanupPreview.protected_counts.pending_predictions || 0 }}</strong></span>
                                 <span>长期预测 <strong>{{ cleanupPreview.protected_counts.long_term_predictions || 0 }}</strong></span>
                                 <span>预测所需净值 <strong>{{ cleanupPreview.protected_counts.fund_history || 0 }}</strong></span>
+                                <span>长期窗净值 <strong>{{ cleanupPreview.protected_counts.long_term_fund_history || 0 }}</strong></span>
                                 <span>依赖基金 <strong>{{ cleanupPreview.protected_counts.protected_funds || 0 }}</strong></span>
                             </div>
                         </div>
@@ -530,130 +535,83 @@
                     </div>
                     
                     <div v-if="cleanupPreview && cleanupPreview.predictions && cleanupPreview.predictions.length > 0" class="mb-20">
-                        <h4 class="text-danger mb-10">⏰ 过期预测 ({{ cleanupPreview.predictions.length }})</h4>
-                        <p class="text-xs text-tertiary mb-10">条件：目标日期 < 今天-7天</p>
+                        <h4 class="text-danger mb-10">⏰ 过期预测样本 ({{ cleanupPreview.predictions.length }}，最多20条)</h4>
+                        <p class="text-xs text-tertiary mb-10">条件：已验证且超过保留窗口；长期待验证预测不会出现在此列表</p>
                         <div class="data-table">
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>博主</th>
-                                        <th>板块</th>
-                                        <th>预测内容</th>
-                                        <th>目标日期</th>
-                                        <th>结果</th>
-                                        <th>操作</th>
+                                        <th>ID</th>
+                                        <th>标题/内容</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="p in cleanupPreview.predictions" :key="p.id">
-                                        <td>{{ p.blogger_name }}</td>
-                                        <td>{{ p.sector }}</td>
-                                        <td>{{ (p.prediction_content || '').substring(0, 30) }}...</td>
-                                        <td>{{ p.target_date }}</td>
-                                        <td><span class="status-badge"
-                                                :class="p.is_correct ? 'status-success' : 'status-failed'">{{
-                                                p.is_correct ? '正确' : '错误' }}</span></td>
-                                        <td><button class="row-btn danger" @click="deletePrediction(p.id)">删除</button>
-                                        </td>
+                                        <td>{{ p.id }}</td>
+                                        <td>{{ (p.title || p.prediction_content || '-').toString().substring(0, 60) }}</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                     </div>
                     <div v-if="cleanupPreview && cleanupPreview.viewpoints && cleanupPreview.viewpoints.length > 0" class="mb-20">
-                        <h4 class="text-danger mb-10">⏰ 过期观点 ({{ cleanupPreview.viewpoints.length }})</h4>
-                        <p class="text-xs text-tertiary mb-10">条件：观点日期 < 今天-10天</p>
+                        <h4 class="text-danger mb-10">⏰ 过期观点样本 ({{ cleanupPreview.viewpoints.length }}，最多20条)</h4>
                         <div class="data-table">
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>来源</th>
-                                        <th>作者</th>
+                                        <th>ID</th>
                                         <th>内容</th>
-                                        <th>有效期至</th>
-                                        <th>操作</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="v in cleanupPreview.viewpoints" :key="v.id">
-                                        <td>{{ v.source }}</td>
-                                        <td>{{ v.author }}</td>
-                                        <td>{{ (v.content || '').substring(0, 30) }}...</td>
-                                        <td>{{ v.valid_until }}</td>
-                                        <td><button class="row-btn danger" @click="deleteViewpoint(v.id)">删除</button>
-                                        </td>
+                                        <td>{{ v.id }}</td>
+                                        <td>{{ (v.title || v.content || '-').toString().substring(0, 60) }}</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                     </div>
                     <div v-if="cleanupPreview && cleanupPreview.posts && cleanupPreview.posts.length > 0" class="mb-20">
-                        <h4 style="color: #fa8c16; margin-bottom: 10px;">📭 空帖子 ({{ cleanupPreview.posts.length }})</h4>
-                        <p class="text-xs text-tertiary mb-10">条件：帖子没有任何预测</p>
+                        <h4 style="color: #fa8c16; margin-bottom: 10px;">📭 空帖子样本 ({{ cleanupPreview.posts.length }}，最多20条)</h4>
                         <div class="data-table">
                             <table>
                                 <thead>
                                     <tr>
+                                        <th>ID</th>
                                         <th>标题</th>
-                                        <th>博主</th>
-                                        <th>日期</th>
-                                        <th>操作</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="p in cleanupPreview.posts" :key="p.id">
-                                        <td>{{ p.title }}</td>
-                                        <td>{{ p.blogger_name }}</td>
-                                        <td>{{ p.post_date }}</td>
-                                        <td><button class="row-btn danger" @click="deletePost(p.id)">删除</button></td>
+                                        <td>{{ p.id }}</td>
+                                        <td>{{ p.title || '-' }}</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                     </div>
                     <div v-if="cleanupPreview && cleanupPreview.funds && cleanupPreview.funds.length > 0" class="mb-20">
-                        <h4 style="color: #722ed1; margin-bottom: 10px;"><i class="ri-funds-line"></i> 无用基金 ({{ cleanupPreview.funds.length }})</h4>
-                        <p class="text-xs text-tertiary mb-10">条件：基金没有预测关联</p>
+                        <h4 style="color: #722ed1; margin-bottom: 10px;"><i class="ri-funds-line"></i> 无用基金样本 ({{ cleanupPreview.funds.length }}，最多20条)</h4>
                         <div class="data-table">
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>代码</th>
+                                        <th>ID</th>
                                         <th>名称</th>
-                                        <th>板块</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="f in cleanupPreview.funds" :key="f.id">
-                                        <td>{{ f.fund_code }}</td>
-                                        <td>{{ f.fund_name }}</td>
-                                        <td>{{ f.sector_type || '-' }}</td>
+                                        <td>{{ f.id }}</td>
+                                        <td>{{ f.title || f.fund_name || '-' }}</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                     </div>
-                    <div v-if="cleanupPreview && cleanupPreview.bloggers && cleanupPreview.bloggers.length > 0" class="mb-20">
-                        <h4 style="color: #13c2c2; margin-bottom: 10px;">👤 无用博主 ({{ cleanupPreview.bloggers.length }})</h4>
-                        <p class="text-xs text-tertiary mb-10">条件：博主没有任何预测</p>
-                        <div class="data-table">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>等级</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr v-for="b in cleanupPreview.bloggers" :key="b.id">
-                                        <td>{{ b.name }}</td>
-                                        <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-' }}</span></td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                    <div v-if="cleanupPreview && cleanupPreview.summary && cleanupPreview.summary.total === 0"
+                    <div v-if="cleanupPreview && (cleanupPreview.total === 0 || (cleanupPreview.summary && cleanupPreview.summary.total === 0))"
                         class="empty-state">✅ 暂无待清理数据</div>
 
                     <!-- 测试数据区域 -->
@@ -2015,8 +1973,18 @@ const fetchWeChatBatch = async () => {
                     try {
                         const res = await axios.get('/api/config/cleanup/preview');
                         if (res.data.success) {
-                            cleanupPreview.value = res.data.data;
-                            cleanupEnabled.value = Boolean(res.data.data?.cleanup_enabled);
+                            const d = res.data.data || {};
+                            // 兼容旧字段：明细表与空状态
+                            d.predictions = d.predictions || d.samples?.predictions || [];
+                            d.viewpoints = d.viewpoints || d.samples?.viewpoints || [];
+                            d.posts = d.posts || d.samples?.posts || [];
+                            d.funds = d.funds || d.samples?.funds || [];
+                            d.bloggers = d.bloggers || d.samples?.bloggers || [];
+                            d.summary = d.summary || { total: d.total || 0 };
+                            d.protected_counts = d.protected_counts || {};
+                            d.health_warnings = d.health_warnings || [];
+                            cleanupPreview.value = d;
+                            cleanupEnabled.value = Boolean(d.cleanup_enabled);
                         }
                     } catch (e) {
                         cleanupEnabled.value = false;
@@ -2157,9 +2125,17 @@ const fetchWeChatBatch = async () => {
                     throw new Error('清理任务等待超时，请刷新预览后重新执行');
                 };
                 const cleanupData = async () => {
-                    if (!cleanupPreview.value) return;
+                    if (!cleanupPreview.value) {
+                        alert('预览尚未加载，请先打开清理页或点击重试');
+                        await fetchCleanupPreview();
+                        return;
+                    }
+                    if (!cleanupEnabled.value) {
+                        alert('清理开关已关闭（ENABLE_DATA_CLEANUP=false）。\n改为 true，或删除该配置使用默认开启，然后重启服务。');
+                        return;
+                    }
                     const kept = cleanupPreview.value.protected_counts || {};
-                    const message = `将删除 ${cleanupPreview.value.total || 0} 条资料。\n\n明确保留：${kept.pending_predictions || 0} 条待验证预测、${kept.long_term_predictions || 0} 条长期预测、${kept.fund_history || 0} 条预测所需净值。\n\n确定执行安全清理吗？`;
+                    const message = `将删除 ${cleanupPreview.value.total || 0} 条资料。\n\n明确保留：${kept.pending_predictions || 0} 条待验证预测、${kept.long_term_predictions || 0} 条长期预测、${kept.fund_history || 0} 条预测所需净值（其中长期窗 ${kept.long_term_fund_history || 0} 条）。\n\n已验证预测删除后准确率会归档累计，不会归零。\n\n确定执行安全清理吗？`;
                     if (!confirm(message)) return;
                     analyzing.value = true;
                     cleanupTask.value = { status: 'pending', progress: 0, current_item: 0, total_items: cleanupPreview.value.total || 0 };
@@ -2170,7 +2146,13 @@ const fetchWeChatBatch = async () => {
                         const task = await pollCleanupTask(res.data.data.task_id);
                         if (task.status === 'failed') alert('清理失败：' + (task.error || '未知错误'));
                         else if (task.status === 'partial') alert('清理部分完成，请查看失败分类');
-                        else alert(`安全清理完成，共删除 ${task.result?.total_deleted || 0} 条资料`);
+                        else {
+                            const guard = task.result?.blogger_accuracy_guard;
+                            const guardMsg = guard
+                                ? `\n博主准确率保护：触及 ${guard.bloggers_touched || 0} 人，最大变化 ${guard.max_abs_delta ?? 0}%${guard.stable === false ? '（请检查）' : '（稳定）'}`
+                                : '';
+                            alert(`安全清理完成，共删除 ${task.result?.total_deleted || 0} 条资料${guardMsg}`);
+                        }
                         await fetchStats();
                         await fetchCleanupPreview();
                     } catch (e) {

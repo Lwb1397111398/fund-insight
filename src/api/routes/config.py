@@ -30,7 +30,7 @@ def _require_destructive_cleanup(request: Request) -> None:
     if not destructive_cleanup_enabled():
         raise HTTPException(
             status_code=403,
-            detail="数据清理接口已禁用。请在隔离维护环境显式设置 ENABLE_DATA_CLEANUP=true 后再使用",
+            detail="数据清理接口已禁用。请将 ENABLE_DATA_CLEANUP 设为 true（或删除该变量以使用默认开启）后再使用",
         )
     if request.headers.get("X-Danger-Confirm") != "cleanup-data":
         raise HTTPException(status_code=403, detail="缺少数据清理确认头")
@@ -310,6 +310,7 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
     from src.services.retention_cleanup_service import POLICY_VERSION, RetentionCleanupService
 
     plan = RetentionCleanupService(db).build_plan()
+    samples = plan.samples
     return {
         "success": True,
         "data": {
@@ -322,7 +323,14 @@ async def get_cleanup_preview(db: Session = Depends(get_db)):
                 category: len(ids) for category, ids in plan.candidate_ids.items()
             },
             "total": plan.total_candidates,
-            "samples": plan.samples,
+            "samples": samples,
+            # 兼容旧前端字段（样本预览，最多 20 条）
+            "predictions": samples.get("predictions", []),
+            "viewpoints": samples.get("viewpoints", []),
+            "posts": samples.get("posts", []),
+            "funds": samples.get("funds", []),
+            "bloggers": samples.get("bloggers", []),
+            "summary": {"total": plan.total_candidates},
             "protected_counts": plan.protected_counts,
             "health_warnings": plan.health_warnings,
         },
