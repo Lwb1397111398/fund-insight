@@ -51,13 +51,19 @@ def test_get_stats_uses_is_correct_not_is_expired(test_db):
     assert stats["verified"] == 2
     assert stats["correct"] == 1
     assert stats["pending"] == 1
-    assert stats["accuracy"] == 0.5
+    assert stats["accuracy"] == 50.0
 
 
 def test_get_verify_progress_accuracy_denominator(test_db):
     _seed(test_db, is_correct=True, is_expired=False, fund_code="VP001")
     _seed(test_db, is_correct=False, is_expired=False, fund_code="VP002")
     _seed(test_db, is_correct=None, is_expired=True, fund_code="VP003")  # 不进分母
+    # 软删有结论：不得进验证进度/命中率
+    p = _seed(test_db, is_correct=True, is_expired=True, fund_code="VP004")
+    from src.models.database import Prediction
+    row = test_db.query(Prediction).filter(Prediction.id == p.id).one()
+    row.is_deleted = True
+    test_db.commit()
 
     progress = PredictionService(test_db).get_verify_progress()
     assert progress["verified"] == 2
@@ -66,7 +72,8 @@ def test_get_verify_progress_accuracy_denominator(test_db):
     assert progress["incorrect"] == 1
     assert progress["pending"] == 1
     assert progress["accuracy_percent"] == 50.0
-
+    assert progress["progress_label"] == "验证进度"
+    assert progress["accuracy_label"] == "存活命中率"
 
 def test_stats_service_prediction_stats_aligns(test_db):
     _seed(test_db, is_correct=True, is_expired=False, fund_code="SS001")

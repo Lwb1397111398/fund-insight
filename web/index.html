@@ -43,6 +43,10 @@
                         <div class="value">{{ stats.overall?.total_predictions || 0 }}</div>
                         <div class="label">预测 <span class="stat-extra">({{ stats.overall?.pending_predictions || 0 }}待验)</span></div>
                     </div>
+                    <div class="stat-mini" title="存活命中率 = 方向判对 / 已有验证结论（未删）">
+                        <div class="value">{{ stats.overall?.avg_accuracy != null ? stats.overall.avg_accuracy.toFixed(1) + '%' : '-' }}</div>
+                        <div class="label">准确率 <span class="stat-extra">命中</span></div>
+                    </div>
                     <div class="stat-mini" @click="loadView('viewpoints')">
                         <div class="value">{{ stats.overall?.total_viewpoints || 0 }}</div>
                         <div class="label">观点</div>
@@ -76,9 +80,10 @@
                                     <th>排名</th>
                                     <th>名称</th>
                                     <th>等级</th>
-                                    <th>加权准确率</th>
-                                    <th>预测数</th>
-                                    <th>正确数</th>
+                                    <th title="存活命中率 = 判对 / 已验证结论（未删）">准确率</th>
+                                    <th title="verify_score 加权评分，非命中率">加权评分</th>
+                                    <th>已验证</th>
+                                    <th>判对</th>
                                     <th>未过期帖子</th>
                                     <th>操作</th>
                                 </tr>
@@ -89,9 +94,10 @@
                                     <td>{{ b.name }}</td>
                                     <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
                                             }}</span></td>
-                                    <td>{{ b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%' : '-' }}</td>
-                                    <td>{{ b.total_predictions || 0 }}</td>
-                                    <td>{{ b.correct_predictions || 0 }}</td>
+                                    <td><strong>{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%' : '-' }}</strong></td>
+                                    <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? b.accuracy_rate.toFixed(1) : '-') }}</td>
+                                    <td>{{ b.hit_verified != null ? b.hit_verified : (b.total_predictions || 0) }}</td>
+                                    <td>{{ b.hit_correct != null ? b.hit_correct : (b.correct_predictions || 0) }}</td>
                                     <td>{{ b.active_posts_count || 0 }}</td>
                                     <td>
                                         <div class="row-actions"><button class="row-btn danger"
@@ -1340,8 +1346,9 @@
                                 <th>排名</th>
                                 <th>名称</th>
                                 <th>等级</th>
-                                <th>加权准确率</th>
-                                <th>预测数</th>
+                                <th>准确率</th>
+                                <th>加权评分</th>
+                                <th>已验证</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1350,8 +1357,9 @@
                                 <td>{{ b.name }}</td>
                                 <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
                                         }}</span></td>
-                                <td>{{ b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%' : '-' }}</td>
-                                <td>{{ b.total_predictions || 0 }}</td>
+                                <td><strong>{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%' : (b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%' : '-') }}</strong></td>
+                                <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? Number(b.accuracy_rate).toFixed(1) : '-') }}</td>
+                                <td>{{ b.hit_verified != null ? b.hit_verified : (b.total_predictions || 0) }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -1946,7 +1954,13 @@ const fetchWeChatBatch = async () => {
                 } = predictionManager;
                 const deletePrediction = archivePrediction;
                 const fetchStats = async () => { try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
-                const fetchBloggers = async () => { const res = await axios.get('/api/bloggers'); if (res.data.success) bloggers.value = res.data.data.sort((a, b) => (b.accuracy_rate || 0) - (a.accuracy_rate || 0)); };
+                const fetchBloggers = async () => {
+                    const res = await axios.get('/api/bloggers');
+                    if (res.data.success) {
+                        // 后端已按 hit_rate 排序；兼容旧字段
+                        bloggers.value = res.data.data;
+                    }
+                };
                 const fetchFunds = async () => {
                     fundLoading.value = true;
                     fundError.value = '';

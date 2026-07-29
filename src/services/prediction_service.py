@@ -199,14 +199,15 @@ class PredictionService(BaseService[Prediction]):
         correct = row.correct or 0
         pending = row.pending or 0
 
-        accuracy = round(correct / verified, 4) if verified > 0 else 0
+        accuracy = round(correct / verified * 100, 2) if verified > 0 else 0.0
 
         return {
             "total": total,
             "verified": verified,
             "correct": correct,
             "pending": pending,
-            "accuracy": accuracy
+            "accuracy": accuracy,  # 0–100 存活命中率，与 stats overall 对齐
+            "accuracy_label": "存活命中率",
         }
     
     def get_by_sector(self, sector: str, skip: int = 0, limit: int = 100) -> List[Prediction]:
@@ -557,23 +558,25 @@ class PredictionService(BaseService[Prediction]):
     
     def get_verify_progress(self) -> Dict:
         """
-        获取验证进度统计（1条SQL替代原来7条）
+        获取验证进度统计（存活行；分母/进度不含软删）。
 
-        Returns:
-            验证进度统计
+        accuracy_percent = 存活命中率（is_correct 口径），与 stats overall 对齐。
+        progress_percent = 已有结论数 / 有基金代码的存活预测数。
         """
         from sqlalchemy import and_, case
 
-        has_fund = Prediction.fund_code.isnot(None)
+        alive = and_(
+            Prediction.is_deleted == False,
+            Prediction.fund_code.isnot(None),
+        )
 
-        # 准确率分母 = is_correct 非空；expired 兼容字段等同 verified
         row = self.db.query(
-            func.count(case((has_fund, 1))).label('total'),
-            func.count(case((and_(has_fund, Prediction.is_correct.isnot(None)), 1))).label('verified'),
-            func.count(case((and_(has_fund, Prediction.is_correct == True), 1))).label('correct'),
-            func.count(case((and_(has_fund, Prediction.is_correct == False), 1))).label('incorrect'),
-            func.count(case((and_(has_fund, Prediction.is_correct.is_(None)), 1))).label('pending'),
-            func.count(case((and_(has_fund, Prediction.start_nav == None), 1))).label('failed_nav_fetch'),
+            func.count(case((alive, 1))).label('total'),
+            func.count(case((and_(alive, Prediction.is_correct.isnot(None)), 1))).label('verified'),
+            func.count(case((and_(alive, Prediction.is_correct == True), 1))).label('correct'),
+            func.count(case((and_(alive, Prediction.is_correct == False), 1))).label('incorrect'),
+            func.count(case((and_(alive, Prediction.is_correct.is_(None)), 1))).label('pending'),
+            func.count(case((and_(alive, Prediction.start_nav == None), 1))).label('failed_nav_fetch'),
         ).first()
 
         total = row.total or 0
@@ -583,13 +586,17 @@ class PredictionService(BaseService[Prediction]):
         return {
             "total": total,
             "verified": verified,
-            "expired": verified,  # 兼容字段：= 已有验证结论数（is_correct 非空）
+            "expired": verified,  # 兼容字段：= 已有验证结论数
             "pending": row.pending or 0,
             "failed_nav_fetch": row.failed_nav_fetch or 0,
             "correct": correct,
             "incorrect": row.incorrect or 0,
             "progress_percent": round(verified / total * 100, 1) if total > 0 else 0,
-            "accuracy_percent": round(correct / verified * 100, 1) if verified > 0 else 0
+            "accuracy_percent": round(correct / verified * 100, 1) if verified > 0 else 0,
+            # 语义标签：避免被当成第三种「准确率」产品名
+            "progress_label": "验证进度",
+            "accuracy_label": "存活命中率",
+            "denominator_note": "仅 is_deleted=false 且 fund_code 非空；命中率分母=is_correct 非空",
         }
     
     def get_failed_predictions(self) -> List[Dict]:
