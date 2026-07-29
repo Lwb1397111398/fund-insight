@@ -28,11 +28,13 @@ class StatsService:
             func.count(case((Post.analyzed == True, 1))).label('analyzed_posts'),
         ).first()
 
-        # 预测聚合（一条SQL拿到所有count）
+        # 预测聚合：准确率分母改为 is_correct 非空（已验证结论），不再依赖不可靠的 is_expired 列
         pred_row = self.db.query(
             func.count(case((Prediction.is_deleted == False, 1))).label('total_predictions'),
-            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_expired == True), 1))).label('expired_predictions'),
-            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_expired == True, Prediction.is_correct == True), 1))).label('correct_predictions'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct.isnot(None)), 1))).label('expired_predictions'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct == True), 1))).label('correct_predictions'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct == False), 1))).label('incorrect_predictions'),
+            func.count(case((and_(Prediction.is_deleted == False, Prediction.is_correct.is_(None)), 1))).label('pending_predictions'),
         ).first()
 
         # 基金 + 观点聚合
@@ -48,12 +50,15 @@ class StatsService:
         total_posts = post_row.total_posts or 0
         analyzed_posts = post_row.analyzed_posts or 0
         total_predictions = pred_row.total_predictions or 0
-        expired_predictions = pred_row.expired_predictions or 0
+        expired_predictions = pred_row.expired_predictions or 0  # 兼容字段：= 已验证结论数
         correct_predictions = pred_row.correct_predictions or 0
+        incorrect_predictions = pred_row.incorrect_predictions or 0
+        pending_predictions = pred_row.pending_predictions or 0
         total_funds = fund_row.total_funds or 0
         total_viewpoints = vp_row.total_viewpoints or 0
 
-        accuracy_rate = (correct_predictions / expired_predictions * 100) if expired_predictions > 0 else 0
+        verified = correct_predictions + incorrect_predictions
+        accuracy_rate = (correct_predictions / verified * 100) if verified > 0 else 0
 
         return {
             "total_bloggers": total_bloggers,
@@ -62,10 +67,10 @@ class StatsService:
             "analyzed_posts": analyzed_posts,
             "analysis_rate": round(analyzed_posts / total_posts * 100, 1) if total_posts > 0 else 0,
             "total_predictions": total_predictions,
-            "pending_predictions": total_predictions - expired_predictions,
+            "pending_predictions": pending_predictions,
             "expired_predictions": expired_predictions,
             "correct_predictions": correct_predictions,
-            "incorrect_predictions": expired_predictions - correct_predictions,
+            "incorrect_predictions": incorrect_predictions,
             "avg_accuracy": round(accuracy_rate, 2),
             "total_viewpoints": total_viewpoints,
             "total_funds": total_funds,

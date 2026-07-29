@@ -131,180 +131,51 @@ class AdviceService(BaseService[InvestmentAdvice]):
         top_viewpoints: int = 50
     ) -> Dict:
         """
-        获取生成投资建议所需的数据
-        
-        Args:
-            min_accuracy: 最低准确率要求
-            top_bloggers: 顶级博主数量
-            max_predictions: 最大预测数量
-            recent_viewpoints_days: 近期观点天数
-            top_viewpoints: 顶级观点数量
-            
-        Returns:
-            包含博主、预测、观点的数据字典
+        获取生成投资建议所需的数据。
+
+        P0：内部经 AdviceEvidenceBuilder 规范化；
+        方向信号唯一入口 filter_actionable_current。
+        返回键保持 bloggers/predictions/viewpoints/funds 兼容三阶段与 API。
+        额外附带 evidence_pack 审计字段（不影响旧调用方）。
         """
-        bloggers = self.db.query(Blogger).filter(
-            Blogger.accuracy_rate >= min_accuracy,
-            Blogger.total_predictions >= 3
-        ).order_by(Blogger.accuracy_rate.desc()).limit(top_bloggers).all()
-        
-        if not bloggers:
-            bloggers = self.db.query(Blogger).filter(
-                Blogger.total_predictions >= 1
-            ).order_by(Blogger.accuracy_rate.desc()).limit(top_bloggers).all()
-        
-        if not bloggers:
-            bloggers = self.db.query(Blogger).order_by(
-                Blogger.accuracy_rate.desc()
-            ).limit(top_bloggers).all()
-        
-        blogger_list = [
-            {
-                "name": b.name,
-                "accuracy_rate": b.accuracy_rate or 0,
-                "grade": b.grade or 'C',
-                "total_predictions": b.total_predictions or 0,
-                "correct_predictions": b.correct_predictions or 0,
-                "recent_view": ""
-            }
-            for b in bloggers
-        ]
-        
-        near_term_predictions = self.db.query(Prediction).filter(
-            Prediction.is_expired == False,
-            Prediction.is_deleted == False,
-            Prediction.target_date >= date.today(),
-            Prediction.target_date <= date.today() + timedelta(days=7)
-        ).order_by(Prediction.target_date.asc()).all()
-        
-        mid_term_predictions = self.db.query(Prediction).filter(
-            Prediction.is_expired == False,
-            Prediction.is_deleted == False,
-            Prediction.target_date > date.today() + timedelta(days=7),
-            Prediction.target_date <= date.today() + timedelta(days=30)
-        ).order_by(Prediction.target_date.asc()).limit(20).all()
-        
-        predictions = near_term_predictions + mid_term_predictions
+        from src.services.advice_evidence import AdviceEvidenceBuilder
 
-        # 批量查询博主，避免 N+1
-        blogger_ids = list(set(p.blogger_id for p in predictions if p.blogger_id))
-        bloggers_map = {}
-        if blogger_ids:
-            bloggers = self.db.query(Blogger).filter(Blogger.id.in_(blogger_ids)).all()
-            bloggers_map = {b.id: b for b in bloggers}
+        from src.services.prediction_lifecycle import current_as_of
+        pack = AdviceEvidenceBuilder(
+            self.db,
+            min_accuracy=float(min_accuracy),
+            top_bloggers=top_bloggers,
+            max_predictions=max_predictions,
+            recent_viewpoints_days=recent_viewpoints_days,
+            top_viewpoints=top_viewpoints,
+        ).build(as_of=current_as_of())
 
-        prediction_list = []
-        for p in predictions:
-            blogger = bloggers_map.get(p.blogger_id)
-            days_to_target = (p.target_date - date.today()).days if p.target_date else 0
-            prediction_list.append({
-                "blogger_name": blogger.name if blogger else "未知",
-                "blogger_id": p.blogger_id,
-                "blogger_grade": blogger.grade if blogger else "C",
-                "blogger_accuracy": blogger.accuracy_rate if blogger else 0,
-                "sector": p.sector,
-                "prediction_type": p.prediction_type,
-                "prediction_content": p.prediction_content or "",
-                "confidence": p.confidence,
-                "status": p.status,
-                "prediction_date": p.prediction_date.isoformat() if p.prediction_date else None,
-                "target_date": p.target_date.isoformat() if p.target_date else None,
-                "days_to_target": days_to_target,
-                "term": "near" if days_to_target <= 7 else "mid"
+        # 三阶段兼容：blogger 列表保留 name/accuracy/grade 等旧字段
+        blogger_list = []
+        for b in pack.bloggers:
+            blogger_list.append({
+                "name": b.get("name"),
+                "accuracy_rate": b.get("accuracy_rate") or 0,
+                "grade": b.get("grade") or "C",
+                "total_predictions": b.get("total_predictions") or 0,
+                "correct_predictions": b.get("correct_predictions") or 0,
+                "recent_view": "",
+                "blogger_id": b.get("blogger_id"),
+                "reliability_score": b.get("reliability_score"),
             })
-        
-        summary_dates = self.db.query(Viewpoint.viewpoint_date).filter(
-            Viewpoint.is_summary == True,
-            Viewpoint.is_deleted == False,
-        )
-        recent_viewpoints = self.db.query(Viewpoint).filter(
-            Viewpoint.viewpoint_date >= date.today() - timedelta(days=recent_viewpoints_days),
-            Viewpoint.is_deleted == False,
-            (Viewpoint.valid_until == None) | (Viewpoint.valid_until >= date.today()),
-            (Viewpoint.is_summary == True) | (
-                (Viewpoint.reasoning.isnot(None)) &
-                (Viewpoint.summary.isnot(None)) &
-                (~Viewpoint.viewpoint_date.in_(summary_dates))
-            )
-        ).order_by(Viewpoint.viewpoint_date.desc()).limit(top_viewpoints).all()
-        
-        viewpoint_list = [
-            {
-                "source": v.source,
-                "author": v.author,
-                "market_direction": v.market_direction,
-                "confidence": v.confidence,
-                "credibility_score": v.credibility_score or 50,
-                "weight": v.weight or 1.0,
-                "sectors_bullish": v.sectors_bullish or [],
-                "sectors_bearish": v.sectors_bearish or [],
-                "summary": v.summary if v.summary else (v.content[:500] if v.content else ""),
-                "reasoning": v.reasoning or "",
-                "is_summary": v.is_summary or False
-            }
-            for v in recent_viewpoints
-        ]
-        
-        funds = self.db.query(FundInfo).filter(
-            FundInfo.latest_nav.isnot(None)
-        ).order_by(FundInfo.day_growth.desc()).limit(10).all()
-        
-        fund_list = [
-            {
-                "fund_code": f.fund_code,
-                "fund_name": f.fund_name,
-                "sector_type": f.sector_type,
-                "day_growth": f.day_growth,
-                "week_growth": f.week_growth,
-                "month_growth": f.month_growth,
-                "ma5": f.ma5,
-                "ma10": f.ma10,
-                "ma20": f.ma20,
-                "sharpe_ratio": f.sharpe_ratio,
-                "max_drawdown": f.max_drawdown,
-                "support_level": f.support_level,
-                "resistance_level": f.resistance_level,
-                "vs_sector": f.vs_sector,
-                "vs_market": f.vs_market
-            }
-            for f in funds
-        ]
-        
+
         return {
             "bloggers": blogger_list,
-            "predictions": prediction_list,
-            "viewpoints": viewpoint_list,
-            "funds": fund_list
+            "predictions": pack.predictions,
+            "viewpoints": pack.viewpoints,
+            "funds": pack.funds,
+            "as_of_date": pack.as_of_date.isoformat(),
+            "evidence_hash": pack.evidence_hash,
+            "exclusions": pack.exclusions,
+            "conflicts": pack.conflicts,
+            "meta": pack.meta,
         }
-    
-    def get_user_profile(self, user_id: str) -> Optional[Dict]:
-        """
-        获取用户画像
-        
-        Args:
-            user_id: 用户ID
-            
-        Returns:
-            用户画像字典或None
-        """
-        if not user_id:
-            return None
-        
-        profile = self.db.query(UserProfile).filter(
-            UserProfile.user_id == user_id
-        ).first()
-        
-        if profile:
-            return {
-                "risk_level": profile.risk_level,
-                "investment_period": profile.investment_period,
-                "experience_level": profile.experience_level,
-                "preferred_sectors": profile.preferred_sectors or [],
-                "holdings": profile.holdings or []
-            }
-        
-        return None
-    
+
     def create_advice(
         self,
         advice_type: str,
