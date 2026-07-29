@@ -84,3 +84,14 @@ ORDER BY 4 DESC;
 - 三桶 dry-run 已归零；护栏继续排除这 53 条物理删除
 - 回填只改 status/verified_at，**不删行、不改 is_correct**
 - 回填确认后清理线可收口
+
+## 6. 回填执行记录（2026-07-29，已跑）
+
+| 步 | 结果 |
+| --- | --- |
+| SELECT 影响面 | **53**（pending+false+deleted 44；pending+true+deleted 9） |
+| UPDATE rowcount | **53** |
+| 事后 dirty 计数 | **0** |
+| 抽查 10 行 | 对→success、错→failed；**is_deleted 仍 true**；**deleted_at 未变** |
+| 存活 dirty | **0** |
+| 事务 | 单事务提交成功 |

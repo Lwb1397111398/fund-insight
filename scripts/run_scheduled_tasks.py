@@ -76,14 +76,133 @@ def run_daily_tasks() -> dict:
         }
 
 
+def run_weekly_retention() -> dict:
+    """周清理：三桶 execute + cap/guard + 多轮直到 dry-run 归零或达上限。
+
+    默认开启；设 ENABLE_THREE_BUCKET_RETENTION=false 可跳过。
+    """
+    started_at = datetime.now()
+    if os.environ.get("ENABLE_THREE_BUCKET_RETENTION", "true").lower() == "false":
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "ENABLE_THREE_BUCKET_RETENTION=false",
+            "started_at": started_at.isoformat(),
+        }
+
+    init_db()
+    from pathlib import Path
+
+    from src.models.database import SessionLocal
+    from src.services.retention_three_buckets import (
+        CONFIRM_TOKEN,
+        ThreeBucketRetentionService,
+    )
+
+    max_rounds = int(os.environ.get("THREE_BUCKET_MAX_ROUNDS", "5"))
+    report_dir = Path(
+        os.environ.get("THREE_BUCKET_REPORT_DIR", "data/retention_reports")
+    )
+    report_dir.mkdir(parents=True, exist_ok=True)
+    stamp = started_at.strftime("%Y%m%dT%H%M%S")
+    rounds = []
+    session = SessionLocal()
+    try:
+        service = ThreeBucketRetentionService(session)
+        for i in range(1, max_rounds + 1):
+            plan = service.build_plan()
+            dry_path = report_dir / f"three_buckets_{stamp}_r{i}_dryrun.json"
+            service.write_dry_run_report(dry_path, plan)
+            counts = {k: len(v) for k, v in plan.candidate_ids.items()}
+            total = plan.total
+            round_info = {
+                "round": i,
+                "dry_run_counts": counts,
+                "dry_run_total": total,
+                "protected_counts": plan.protected_counts,
+                "dry_run_report": str(dry_path),
+            }
+            if total == 0:
+                round_info["execute"] = None
+                round_info["message"] = "dry-run zero; stop"
+                rounds.append(round_info)
+                break
+            result = service.execute(
+                dry_run=False,
+                confirm_token=CONFIRM_TOKEN,
+                plan=plan,
+            )
+            round_info["execute"] = {
+                "deleted_counts": result.get("deleted_counts"),
+                "total_deleted": result.get("total_deleted"),
+                "cleanup_log_id": result.get("cleanup_log_id"),
+                "protected_counts": result.get("protected_counts"),
+            }
+            rounds.append(round_info)
+            logger.info(
+                "weekly retention round %s deleted=%s protected=%s",
+                i,
+                result.get("deleted_counts"),
+                plan.protected_counts,
+            )
+        else:
+            # 达到 max_rounds 仍可能有残留：再记一笔 dry-run
+            final_plan = service.build_plan()
+            rounds.append(
+                {
+                    "round": max_rounds + 1,
+                    "dry_run_counts": {
+                        k: len(v) for k, v in final_plan.candidate_ids.items()
+                    },
+                    "dry_run_total": final_plan.total,
+                    "message": "max_rounds reached; residual may remain",
+                }
+            )
+
+        summary_path = report_dir / f"three_buckets_{stamp}_summary.json"
+        payload = {
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now().isoformat(),
+            "rounds": rounds,
+            "total_deleted": sum(
+                (r.get("execute") or {}).get("total_deleted") or 0 for r in rounds
+            ),
+        }
+        summary_path.write_text(
+            __import__("json").dumps(payload, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        payload["summary_report"] = str(summary_path)
+        payload["success"] = True
+        return payload
+    except Exception as e:
+        logger.exception("weekly retention failed")
+        return {
+            "success": False,
+            "error": str(e),
+            "started_at": started_at.isoformat(),
+            "rounds": rounds,
+        }
+    finally:
+        session.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="运行 Fund Insight 一次性定时任务")
-    parser.add_argument("job", choices=["daily"], help="任务类型")
+    parser.add_argument(
+        "job",
+        choices=["daily", "weekly-retention"],
+        help="任务类型：daily=基金/验证；weekly-retention=三桶清理",
+    )
     args = parser.parse_args()
 
     if args.job == "daily":
         result = run_daily_tasks()
         logger.info("定时任务结果: %s", result)
+        return 0 if result.get("success") else 1
+    if args.job == "weekly-retention":
+        result = run_weekly_retention()
+        logger.info("周清理结果: %s", result)
         return 0 if result.get("success") else 1
     return 1
 

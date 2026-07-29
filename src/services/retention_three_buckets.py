@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Sequence, Set
 
 from sqlalchemy.orm import Session, load_only
 
-from src.models.database import CleanupItemLog, Prediction, Viewpoint
+from src.models.database import CleanupItemLog, CleanupLog, Prediction, Viewpoint
 from src.services.prediction_lifecycle import (
     UNVERIFIABLE,
     classify,
@@ -210,6 +210,7 @@ class ThreeBucketRetentionService:
         )
         self._assert_no_verified_ledger(pred_ids)
 
+        started_at = datetime.now()
         deleted_counts = {
             self.BUCKET_DELETED: self._hard_delete_predictions(
                 plan.candidate_ids.get(self.BUCKET_DELETED, [])
@@ -227,10 +228,38 @@ class ThreeBucketRetentionService:
                 plan.candidate_ids.get(self.BUCKET_SUMMARY_VP, [])
             ),
         }
+        total_deleted = sum(deleted_counts.values())
+        finished_at = datetime.now()
+        # 摘要归档：一条 CleanupLog，便于周 cron 审计（不写逐条 item，避免再堆 2600 行）
+        log = CleanupLog(
+            trigger_type="three_buckets",
+            start_time=started_at,
+            end_time=finished_at,
+            duration_ms=int((finished_at - started_at).total_seconds() * 1000),
+            status="completed",
+            total_items=plan.total,
+            success_count=total_deleted,
+            failed_count=0,
+            rules_snapshot={
+                "policy_name": POLICY_NAME,
+                "policy": self.policy.to_dict(),
+                "as_of": self.today.isoformat(),
+                "protected_counts": plan.protected_counts,
+            },
+            details={
+                "deleted_counts": deleted_counts,
+                "candidate_counts": {k: len(v) for k, v in plan.candidate_ids.items()},
+                "truncated_by_global_cap": plan.truncated,
+                "invariants": plan.to_report_dict().get("invariants"),
+            },
+            errors=[],
+        )
+        self.db.add(log)
         self.db.commit()
         report["mode"] = "execute"
         report["deleted_counts"] = deleted_counts
-        report["total_deleted"] = sum(deleted_counts.values())
+        report["total_deleted"] = total_deleted
+        report["cleanup_log_id"] = log.id
         report["message"] = "hard-delete completed"
         return report
 

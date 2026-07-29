@@ -82,6 +82,38 @@ services:
       - key: VOLCENGINE_LIGHT_MODEL
         value: "ep-20260424143452-nhsrm"
 
+  # 每周一 11:30 UTC ≈ 北京时间 19:30：三桶保留（cap 500 + verified 护栏 + 摘要归档）
+  - type: cron
+    name: fund-insight-weekly-retention
+    runtime: python
+    schedule: "30 11 * * 1"
+    buildCommand: |
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+      export CARGO_HOME=/tmp/cargo
+      export RUSTUP_HOME=/tmp/rustup
+      pip install -r requirements.txt
+    startCommand: python scripts/run_scheduled_tasks.py weekly-retention
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10.12"
+      - key: APP_ENV
+        value: production
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      - key: DB_POOL_RECYCLE
+        value: "120"
+      - key: DB_POOL_TIMEOUT
+        value: "30"
+      - key: DATABASE_URL
+        sync: false
+      - key: ENABLE_THREE_BUCKET_RETENTION
+        value: "true"
+      - key: THREE_BUCKET_MAX_ROUNDS
+        value: "5"
+
 databases:
   - name: fund-insight-db
     plan: free
