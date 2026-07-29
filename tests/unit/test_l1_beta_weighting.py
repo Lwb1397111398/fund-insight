@@ -194,6 +194,25 @@ def test_reeval_era_post_other_flags_missing_cutover(test_db, monkeypatch):
     assert "cutover" in st["era_note"]
 
 
+def test_tier_separation_in_reeval_checklist(test_db, monkeypatch):
+    from src.services import l1_shadow
+
+    monkeypatch.setattr(config, "L1_SHADOW_BASELINE_VERIFIED", 0)
+    monkeypatch.setattr(config, "L1_SHADOW_REEVAL_NEW", 999)
+    monkeypatch.setattr(config, "L1_SHADOW_REEVAL_WEEKS", 99)
+    monkeypatch.setattr(config, "L1_SHADOW_STARTED_AT", "2026-07-29")
+    monkeypatch.setattr(config, "L1_SHADOW_DATA_ERA", "pre_other")
+    # empirical: 10 条；prior: 3 条
+    _seed_blogger_with_hits(test_db, "tier_emp", [True, False] * 5)
+    _seed_blogger_with_hits(test_db, "tier_pri", [True, True, False])
+    st = l1_shadow.reeval_status(test_db)
+    assert "tier_separation" in st
+    assert st["tier_separation"].get("checklist_item") == "tier_separation"
+    assert st["tier_separation"]["empirical"]["n"] == 10
+    assert st["tier_separation"]["prior"]["n"] == 3
+    assert "tier_separation empirical vs prior" in st["reeval_checklist"]
+
+
 def test_flag_on_uses_beta_not_accuracy_rate(test_db, monkeypatch):
     monkeypatch.setattr(config, "ADVICE_L1_HIT_WEIGHTING", True)
     monkeypatch.setattr(config, "ADVICE_L1_SHADOW", False)  # 正式开闸不跑 shadow
