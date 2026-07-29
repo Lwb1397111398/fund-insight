@@ -163,6 +163,9 @@ class Config:
     L1_SHADOW_BASELINE_VERIFIED = int(os.getenv("L1_SHADOW_BASELINE_VERIFIED", "220"))
     L1_SHADOW_REEVAL_NEW = int(os.getenv("L1_SHADOW_REEVAL_NEW", "150"))
     L1_SHADOW_REEVAL_WEEKS = int(os.getenv("L1_SHADOW_REEVAL_WEEKS", "6"))
+    # pre_other：other 桶改造前口径；改造上线须切 post_other 并重置 baseline（禁止混计）
+    L1_SHADOW_DATA_ERA = os.getenv("L1_SHADOW_DATA_ERA", "pre_other").strip() or "pre_other"
+    L3_OTHER_CUTOVER_AT = os.getenv("L3_OTHER_CUTOVER_AT", "").strip()
 
     _analysis_rules: Dict = None
     _platform_rules: Dict = None

@@ -128,6 +128,11 @@ def reeval_status(db: Session) -> Dict[str, Any]:
     """
     复评触发：新增验证结论 ≥ L1_SHADOW_REEVAL_NEW 或满 L1_SHADOW_REEVAL_WEEKS 周。
     基线：L1_SHADOW_BASELINE_VERIFIED + L1_SHADOW_STARTED_AT
+
+    口径分层（other 改造交互）：
+    - data_era=pre_other|post_other（L1_SHADOW_DATA_ERA）
+    - other 上线须：设 L3_OTHER_CUTOVER_AT、把 era 切 post_other、
+      重置 BASELINE_VERIFIED 与 STARTED_AT；禁止 pre/post 混进同一 +150 计数。
     """
     baseline = int(getattr(config, "L1_SHADOW_BASELINE_VERIFIED", 220))
     started_s = str(getattr(config, "L1_SHADOW_STARTED_AT", "") or "")
@@ -137,6 +142,8 @@ def reeval_status(db: Session) -> Dict[str, Any]:
         started = date.today()
     need_n = int(getattr(config, "L1_SHADOW_REEVAL_NEW", 150))
     need_weeks = int(getattr(config, "L1_SHADOW_REEVAL_WEEKS", 6))
+    era = str(getattr(config, "L1_SHADOW_DATA_ERA", "pre_other") or "pre_other").strip()
+    cutover = str(getattr(config, "L3_OTHER_CUTOVER_AT", "") or "").strip() or None
 
     current = count_alive_verified(db)
     new_n = max(0, current - baseline)
@@ -144,6 +151,17 @@ def reeval_status(db: Session) -> Dict[str, Any]:
     by_count = new_n >= need_n
     by_time = elapsed_days >= need_weeks * 7
     due = by_count or by_time
+
+    era_note = (
+        "当前 pre_other：复评计数含改造前口径；other 上线须清零 baseline 并切 post_other"
+        if era == "pre_other"
+        else "当前 post_other：仅计改造后口径；勿与 pre_other 历史混加"
+    )
+    if cutover and era == "pre_other":
+        era_note += f"；已配置 L3_OTHER_CUTOVER_AT={cutover} 但仍为 pre_other，请重置 baseline/era"
+    if not cutover and era == "post_other":
+        era_note += "；post_other 但未写 cutover 日，请补 L3_OTHER_CUTOVER_AT"
+
     return {
         "due": due,
         "reason": (
@@ -160,4 +178,7 @@ def reeval_status(db: Session) -> Dict[str, Any]:
         "need_weeks": need_weeks,
         "by_count": by_count,
         "by_time": by_time,
+        "data_era": era,
+        "other_cutover_at": cutover,
+        "era_note": era_note,
     }

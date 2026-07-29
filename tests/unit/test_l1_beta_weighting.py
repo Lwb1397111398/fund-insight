@@ -169,10 +169,29 @@ def test_reeval_trigger_by_count(test_db, monkeypatch):
     monkeypatch.setattr(config, "L1_SHADOW_REEVAL_NEW", 5)
     monkeypatch.setattr(config, "L1_SHADOW_REEVAL_WEEKS", 99)
     monkeypatch.setattr(config, "L1_SHADOW_STARTED_AT", "2026-07-29")
+    monkeypatch.setattr(config, "L1_SHADOW_DATA_ERA", "pre_other")
+    monkeypatch.setattr(config, "L3_OTHER_CUTOVER_AT", "")
     _seed_blogger_with_hits(test_db, "reeval", [True] * 6)
     st = l1_shadow.reeval_status(test_db)
     assert st["due"] is True
     assert st["by_count"] is True
+    assert st["data_era"] == "pre_other"
+    assert st["other_cutover_at"] is None
+    assert "pre_other" in st["era_note"]
+
+
+def test_reeval_era_post_other_flags_missing_cutover(test_db, monkeypatch):
+    from src.services import l1_shadow
+
+    monkeypatch.setattr(config, "L1_SHADOW_BASELINE_VERIFIED", 1000)
+    monkeypatch.setattr(config, "L1_SHADOW_REEVAL_NEW", 150)
+    monkeypatch.setattr(config, "L1_SHADOW_REEVAL_WEEKS", 99)
+    monkeypatch.setattr(config, "L1_SHADOW_STARTED_AT", "2026-07-29")
+    monkeypatch.setattr(config, "L1_SHADOW_DATA_ERA", "post_other")
+    monkeypatch.setattr(config, "L3_OTHER_CUTOVER_AT", "")
+    st = l1_shadow.reeval_status(test_db)
+    assert st["data_era"] == "post_other"
+    assert "cutover" in st["era_note"]
 
 
 def test_flag_on_uses_beta_not_accuracy_rate(test_db, monkeypatch):
