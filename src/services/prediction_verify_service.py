@@ -3,6 +3,7 @@
 支持所有预测周期的验证，包括超短期预测（1-3天）
 支持过程验证和峰值验证
 """
+import datetime as _dt
 from datetime import date, timedelta, datetime
 from typing import Dict, Optional, List, Tuple
 from sqlalchemy.orm import Session, attributes
@@ -132,9 +133,44 @@ class PredictionVerifyService:
         self._nav_cache[key] = value
         self._cache_order.append(key)
 
-    def get_nav_by_date(self, fund_code: str, target_date: date):
-        """获取指定日期的基金净值（优先读缓存）"""
-        cache_key = (fund_code, target_date.isoformat())
+    @staticmethod
+    def _parse_api_nav_date(raw_value) -> Optional[date]:
+        """解析外部 API 返回的净值日期，失败时返回 None。
+
+        使用 datetime 模块真实类型，避免测试 monkeypatch 模块内 date 名称后误判。
+        """
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, _dt.datetime):
+            return raw_value.date()
+        if isinstance(raw_value, _dt.date):
+            return raw_value
+        if isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                return None
+            try:
+                return _dt.datetime.strptime(text[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        return None
+
+    def get_nav_by_date(
+        self,
+        fund_code: str,
+        target_date: date,
+        strict_as_of: bool = False,
+    ):
+        """获取指定日期的基金净值（优先读缓存）。
+
+        Args:
+            fund_code: 基金代码
+            target_date: 请求的净值日期
+            strict_as_of: 为 True 时，API fallback 也必须满足净值日期 <= target_date；
+                日期缺失、无法解析或晚于请求日时返回 None，避免把“当前最新净值”
+                当作历史日期净值使用。
+        """
+        cache_key = (fund_code, target_date.isoformat(), bool(strict_as_of))
         if cache_key in self._nav_cache:
             # 更新 LRU 顺序
             self._cache_order.remove(cache_key)
@@ -153,6 +189,21 @@ class PredictionVerifyService:
         fund_info = self.fund_api.get_fund_info(fund_code)
         if fund_info:
             nav = fund_info.get('nav')
+            if nav is None:
+                self._add_to_cache(cache_key, None)
+                return None
+
+            if strict_as_of:
+                api_nav_date = self._parse_api_nav_date(fund_info.get('nav_date'))
+                if api_nav_date is None or api_nav_date > target_date:
+                    logger.info(
+                        f"[Verify] 严格 as-of 拒绝 API 净值: fund={fund_code}, "
+                        f"request_date={target_date.isoformat()}, "
+                        f"api_nav_date={api_nav_date}"
+                    )
+                    self._add_to_cache(cache_key, None)
+                    return None
+
             self._add_to_cache(cache_key, nav)
             return nav
 
@@ -194,40 +245,75 @@ class PredictionVerifyService:
 
         return []
     
+    @staticmethod
+    def _as_date(value) -> Optional[date]:
+        """统一把 date/datetime 转成 date，便于自然日比较。
+
+        使用 datetime 模块真实类型，避免测试 monkeypatch 模块内 date 名称后误判。
+        """
+        if value is None:
+            return None
+        if isinstance(value, _dt.datetime):
+            return value.date()
+        if isinstance(value, _dt.date):
+            return value
+        return None
+
     def _check_fund_data_availability(
         self,
         fund_code: str,
         nav_start_date: date,
         window_end: date,
-        min_data_points: int = 2
+        min_data_points: int = None,
+        today: date = None,
+        target_date: date = None,
+        skip_wait: bool = False,
+        data_wait_days: int = None,
+        max_end_nav_age_days: int = None,
     ) -> Dict:
         """
-        检查基金数据是否充足以进行验证（优先读缓存）
+        检查基金数据是否充足以进行验证（优先读缓存）。
+
+        成功条件：
+        1. 区间 [nav_start_date, window_end] 内数据点 >= min_data_points
+        2. 区间内最新净值日期 latest_nav_date 相对 target/window_end 的年龄合规
+           - 已有目标日当天净值：立即就绪
+           - 周末目标日：可用最近前值，但年龄不得超过 max_end_nav_age_days
+           - 工作日缺当天净值：data_wait_days 内等待；超时后可用年龄合规前值
+           - 年龄超过 max_end_nav_age_days：拒绝（force 也不能跳过）
 
         Args:
             fund_code: 基金代码
             nav_start_date: 净值起始日期
-            window_end: 验证窗口结束日期
-            min_data_points: 最少需要的数据点数
-
-        Returns:
-            {
-                'available': bool,  # 数据是否充足
-                'message': str,     # 提示信息
-                'data_points': int, # 实际数据点数
-                'latest_date': date # 最新数据日期
-            }
+            window_end: 验证窗口结束日期（应等于 target_date）
+            min_data_points: 最少数据点数
+            today: 当前自然日（默认 date.today()）
+            target_date: 预测目标日（默认 window_end）
+            skip_wait: True 时跳过工作日等待期（force 可触发重试），但仍受最大陈旧期限约束
+            data_wait_days: 工作日等待自然日数
+            max_end_nav_age_days: 结束净值最大允许陈旧自然日数
         """
+        if min_data_points is None:
+            min_data_points = config.VERIFY_MIN_DATA_POINTS
+        if data_wait_days is None:
+            data_wait_days = config.VERIFY_DATA_WAIT_DAYS
+        if max_end_nav_age_days is None:
+            max_end_nav_age_days = config.VERIFY_MAX_END_NAV_AGE_DAYS
+
+        nav_start_date = self._as_date(nav_start_date)
+        window_end = self._as_date(window_end)
+        today = self._as_date(today) or date.today()
+        target_date = self._as_date(target_date) or window_end
+
         records = None
-        # 尝试从缓存获取
         history_cache = self._nav_cache.get('_history', {})
         if fund_code in history_cache:
             cached_records = history_cache[fund_code]
             records = [
                 r for r in cached_records
-                if nav_start_date <= r.nav_date <= window_end
+                if nav_start_date <= self._as_date(r.nav_date) <= window_end
             ]
-            records.sort(key=lambda r: r.nav_date)
+            records.sort(key=lambda r: self._as_date(r.nav_date))
 
         if records is None:
             records = self.db.query(FundHistory).filter(
@@ -237,43 +323,107 @@ class PredictionVerifyService:
             ).order_by(FundHistory.nav_date.asc()).all()
 
         data_points = len(records)
-        latest_date = records[-1].nav_date if records else None
+        latest_date = self._as_date(records[-1].nav_date) if records else None
+
+        def _fail(message: str, reason: str, **extra) -> Dict:
+            payload = {
+                'available': False,
+                'message': message,
+                'data_points': data_points,
+                'latest_date': latest_date,
+                'reason': reason,
+            }
+            payload.update(extra)
+            return payload
 
         if data_points < min_data_points:
-            # 尝试从缓存获取最新记录
             latest_record = None
             if fund_code in history_cache:
                 cached = history_cache[fund_code]
                 if cached:
-                    latest_record = max(cached, key=lambda r: r.nav_date)
+                    latest_record = max(cached, key=lambda r: self._as_date(r.nav_date))
             else:
                 latest_record = self.db.query(FundHistory).filter(
                     FundHistory.fund_code == fund_code
                 ).order_by(FundHistory.nav_date.desc()).first()
 
             if latest_record:
-                latest_date = latest_record.nav_date
-                days_behind = (window_end - latest_date).days
-                return {
-                    'available': False,
-                    'message': f"基金数据不足，最新数据为 {latest_date}，落后 {days_behind} 天，请更新基金数据后再验证",
-                    'data_points': data_points,
-                    'latest_date': latest_date,
-                    'days_behind': days_behind
-                }
-            else:
-                return {
-                    'available': False,
-                    'message': f"基金 {fund_code} 无历史数据，请先更新基金数据",
-                    'data_points': 0,
-                    'latest_date': None
-                }
+                latest_date = self._as_date(latest_record.nav_date)
+                days_behind = (window_end - latest_date).days if latest_date else None
+                return _fail(
+                    f"基金数据不足，最新数据为 {latest_date}，落后 {days_behind} 天，请更新基金数据后再验证",
+                    reason='insufficient_points',
+                    days_behind=days_behind,
+                )
+            return _fail(
+                f"基金 {fund_code} 无历史数据，请先更新基金数据",
+                reason='no_history',
+            )
+
+        # 数据点足够后，再检查结束净值是否“就绪且不过旧”
+        end_nav_age_days = (target_date - latest_date).days if latest_date else None
+        days_since_target = (today - target_date).days
+
+        if latest_date == target_date:
+            return {
+                'available': True,
+                'message': f"数据充足，共 {data_points} 个数据点，已含目标日净值",
+                'data_points': data_points,
+                'latest_date': latest_date,
+                'end_nav_age_days': 0,
+                'reason': 'exact_target',
+            }
+
+        if end_nav_age_days is not None and end_nav_age_days > max_end_nav_age_days:
+            return _fail(
+                (
+                    f"目标日期前最近净值已超过允许陈旧期限"
+                    f"（最新 {latest_date}，距目标日 {end_nav_age_days} 天，"
+                    f"上限 {max_end_nav_age_days} 天）"
+                ),
+                reason='end_nav_too_old',
+                end_nav_age_days=end_nav_age_days,
+                max_end_nav_age_days=max_end_nav_age_days,
+            )
+
+        is_weekend_target = target_date.weekday() >= 5
+        if is_weekend_target:
+            return {
+                'available': True,
+                'message': (
+                    f"目标日为周末，使用此前最近净值 {latest_date}"
+                    f"（距目标日 {end_nav_age_days} 天）"
+                ),
+                'data_points': data_points,
+                'latest_date': latest_date,
+                'end_nav_age_days': end_nav_age_days,
+                'reason': 'weekend_previous',
+            }
+
+        # 工作日（含无法识别的法定节假日）缺少目标日当天净值
+        if not skip_wait and days_since_target < data_wait_days:
+            return _fail(
+                (
+                    f"等待目标日期净值更新"
+                    f"（目标日 {target_date}，最新 {latest_date}，"
+                    f"已过 {days_since_target} 天，等待期 {data_wait_days} 个自然日）"
+                ),
+                reason='waiting_target_nav',
+                days_since_target=days_since_target,
+                data_wait_days=data_wait_days,
+                end_nav_age_days=end_nav_age_days,
+            )
 
         return {
             'available': True,
-            'message': f"数据充足，共 {data_points} 个数据点",
+            'message': (
+                f"等待期已过，使用目标日前最近净值 {latest_date}"
+                f"（距目标日 {end_nav_age_days} 天）"
+            ),
             'data_points': data_points,
-            'latest_date': latest_date
+            'latest_date': latest_date,
+            'end_nav_age_days': end_nav_age_days,
+            'reason': 'waited_previous',
         }
     
     def calculate_process_metrics(
@@ -365,9 +515,9 @@ class PredictionVerifyService:
             "max_change": round(max_change, 2),
             "min_change": round(min_change, 2),
             "final_change": round(final_change, 2),
-            "peak_date": peak_date.isoformat() if isinstance(peak_date, date) else peak_date,
+            "peak_date": peak_date.isoformat() if isinstance(peak_date, _dt.date) else peak_date,
             "peak_nav": peak_nav,
-            "trough_date": trough_date.isoformat() if isinstance(trough_date, date) else trough_date,
+            "trough_date": trough_date.isoformat() if isinstance(trough_date, _dt.date) else trough_date,
             "trough_nav": trough_nav,
             "peak_hit": peak_hit,
             "peak_hit_days": peak_hit_days,
@@ -599,9 +749,10 @@ class PredictionVerifyService:
                             "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
                         }
         
-        # 验证窗口：已过期的预测扩展到 today，允许用最新交易日数据验证
-        # 解决 target_date 是非交易日（周末/节假日）导致数据不足的问题
-        window_end = today if today > target_date else target_date
+        # 验证窗口固定截止到 target_date，禁止使用目标日之后的行情。
+        # 目标日为非交易日时，由 get_nav_by_date(nav_date <= target_date)
+        # 自动回退到目标日或之前最近有效净值，不取下一个交易日。
+        window_end = target_date
 
         # 检查验证时间窗口：只有目标日期已过期才允许验证
         if today < target_date:
@@ -612,14 +763,17 @@ class PredictionVerifyService:
 
         # 所有预测都使用预测日期作为净值起始点，确保覆盖完整周期
         nav_start_date = prediction.prediction_date
-        
+
         data_check = self._check_fund_data_availability(
             fund_code=fund_code,
             nav_start_date=nav_start_date,
             window_end=window_end,
-            min_data_points=2
+            today=today,
+            target_date=target_date,
+            # force 只跳过工作日等待期，不跳过最大净值年龄检查
+            skip_wait=bool(force),
         )
-        
+
         if not data_check['available']:
             return {
                 "success": False,
@@ -630,9 +784,9 @@ class PredictionVerifyService:
                     "data_status": data_check
                 }
             }
-        
+
         logger.info(f"[Verify] 预测 {prediction_id} 开始验证, 今日: {today.isoformat()}")
-        
+
         if prediction.last_verify_date and prediction.last_verify_date == today:
             logger.info(f"[Verify] 今日已验证, 跳过 prediction_id={prediction_id}")
             return {
@@ -640,7 +794,7 @@ class PredictionVerifyService:
                 "message": "今日已验证",
                 "skipped": True
             }
-        
+
         if prediction.start_nav and prediction.start_nav_date:
             if prediction.start_nav_date < window_end:
                 nav_start_date = prediction.start_nav_date
@@ -654,13 +808,17 @@ class PredictionVerifyService:
             nav_start_date = prediction.prediction_date
             start_nav = None
             is_cumulative = False
-        
+
         if not start_nav:
-            start_nav = self.get_nav_by_date(fund_code, nav_start_date)
+            start_nav = self.get_nav_by_date(
+                fund_code, nav_start_date, strict_as_of=True
+            )
             if not start_nav:
                 start_nav = prediction.start_nav
-        
-        end_nav = self.get_nav_by_date(fund_code, window_end)
+
+        end_nav = self.get_nav_by_date(
+            fund_code, window_end, strict_as_of=True
+        )
         
         if not start_nav or not end_nav:
             return {"success": False, "message": "无法获取净值数据"}
@@ -1087,7 +1245,10 @@ class PredictionVerifyService:
                     fund_code=fund_code,
                     nav_start_date=nav_start_date,
                     window_end=window_end,
-                    min_data_points=min_data_points
+                    min_data_points=min_data_points,
+                    today=today,
+                    target_date=target_date,
+                    skip_wait=True,  # rollback 不等待，直接判断是否可验证
                 )
                 
                 if not data_check['available']:
@@ -1244,7 +1405,10 @@ class PredictionVerifyService:
             fund_code=fund_code,
             nav_start_date=nav_start_date,
             window_end=window_end,
-            min_data_points=2
+            min_data_points=2,
+            today=today,
+            target_date=target_date,
+            skip_wait=True,  # rollback 不等待，直接判断是否可验证
         )
 
         return {

@@ -133,6 +133,10 @@ class Config:
     VERIFY_FLAT_THRESHOLD_LONG = float(os.getenv("VERIFY_FLAT_THRESHOLD_LONG", "2.0"))
 
     VERIFY_MIN_DATA_POINTS = int(os.getenv("VERIFY_MIN_DATA_POINTS", "2"))
+    # 工作日目标日净值未发布时，等待的自然日数（与 grace 补救期独立）
+    VERIFY_DATA_WAIT_DAYS = int(os.getenv("VERIFY_DATA_WAIT_DAYS", "2"))
+    # 允许结束净值早于 target_date 的最大自然日数
+    VERIFY_MAX_END_NAV_AGE_DAYS = int(os.getenv("VERIFY_MAX_END_NAV_AGE_DAYS", "10"))
 
     VERIFY_PROCESS_THRESHOLD = float(os.getenv("VERIFY_PROCESS_THRESHOLD", "0.5"))
 
