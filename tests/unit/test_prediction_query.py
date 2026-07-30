@@ -1,4 +1,3 @@
-import asyncio
 from datetime import date, timedelta
 
 from src.models.database import Blogger, Post, Prediction
@@ -188,7 +187,7 @@ def test_prediction_route_returns_data_array_and_pagination_meta(test_db):
     ))
     test_db.commit()
 
-    response = asyncio.run(get_predictions(page=1, page_size=20, db=test_db))
+    response = get_predictions(page=1, page_size=20, db=test_db)
 
     assert response["success"] is True
     assert isinstance(response["data"], list)

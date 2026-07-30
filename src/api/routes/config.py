@@ -53,7 +53,7 @@ class CleanupExecuteRequest(BaseModel):
 
 
 @router.get("")
-async def get_config():
+def get_config():
     """获取配置信息"""
     return {
         "success": True,
@@ -79,7 +79,7 @@ async def get_config():
 
 
 @router.post("")
-async def update_config(config_update: ConfigUpdate):
+def update_config(config_update: ConfigUpdate):
     """更新配置"""
     updated = []
     
@@ -267,7 +267,7 @@ def _queue_cleanup(
 
 
 @router.post("/cleanup")
-async def run_cleanup(
+def run_cleanup(
     request: Request,
     background_tasks: BackgroundTasks,
     payload: Optional[CleanupExecuteRequest] = None,
@@ -277,7 +277,7 @@ async def run_cleanup(
 
 
 @router.post("/cleanup/oldest")
-async def cleanup_oldest_batch(
+def cleanup_oldest_batch(
     request: Request,
     background_tasks: BackgroundTasks,
     payload: Optional[CleanupExecuteRequest] = None,
@@ -288,7 +288,7 @@ async def cleanup_oldest_batch(
 
 
 @router.get("/cleanup/orphan-funds/preview")
-async def preview_orphan_funds(db: Session = Depends(get_db)):
+def preview_orphan_funds(db: Session = Depends(get_db)):
     from src.services.retention_cleanup_service import RetentionCleanupService
 
     plan = RetentionCleanupService(db).build_plan()
@@ -305,7 +305,7 @@ async def preview_orphan_funds(db: Session = Depends(get_db)):
 
 
 @router.post("/cleanup/orphan-funds")
-async def cleanup_orphan_funds(
+def cleanup_orphan_funds(
     request: Request,
     background_tasks: BackgroundTasks,
     payload: Optional[CleanupExecuteRequest] = None,
@@ -321,7 +321,7 @@ async def cleanup_orphan_funds(
 
 
 @router.get("/cleanup/preview")
-async def get_cleanup_preview(db: Session = Depends(get_db)):
+def get_cleanup_preview(db: Session = Depends(get_db)):
     from src.services.retention_cleanup_service import POLICY_VERSION, RetentionCleanupService
 
     plan = RetentionCleanupService(db).build_plan()
@@ -370,7 +370,7 @@ def _mark_cleanup_task_stale_if_needed(task, now: datetime) -> bool:
 
 
 @router.get("/cleanup/tasks/{task_id}")
-async def get_cleanup_task(task_id: str, db: Session = Depends(get_db)):
+def get_cleanup_task(task_id: str, db: Session = Depends(get_db)):
     from src.models.database import CleanupTask
 
     task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
@@ -551,7 +551,7 @@ async def get_cleanup_preview_legacy(db: Session = Depends(get_db)):
 
 
 @router.post("/test-llm")
-async def test_llm():
+def test_llm():
     """测试LLM连接"""
     try:
         from src.analyzer.llm_analyzer import get_analyzer
@@ -583,7 +583,7 @@ async def test_llm():
 
 
 @router.post("/test-volcengine-light")
-async def test_volcengine_light():
+def test_volcengine_light():
     """测试火山引擎辅助模型"""
     try:
         from src.analyzer.llm_analyzer import get_analyzer
@@ -634,7 +634,7 @@ class AliasCreate(BaseModel):
 
 
 @router.get("/aliases")
-async def get_aliases(db: Session = Depends(get_db)):
+def get_aliases(db: Session = Depends(get_db)):
     """获取所有别名（硬编码+自定义）"""
     from src.constants.sector_fund_map import SECTOR_ALIASES, SECTOR_FUND_MAP
 
@@ -669,7 +669,7 @@ async def get_aliases(db: Session = Depends(get_db)):
 
 
 @router.post("/aliases")
-async def create_alias(alias: AliasCreate, db: Session = Depends(get_db)):
+def create_alias(alias: AliasCreate, db: Session = Depends(get_db)):
     """添加自定义别名"""
     # 检查是否与已有别名冲突
     existing = db.query(SectorAlias).filter(SectorAlias.alias_name == alias.alias_name).first()
@@ -713,7 +713,7 @@ async def create_alias(alias: AliasCreate, db: Session = Depends(get_db)):
 
 
 @router.delete("/aliases/{alias_id}")
-async def delete_alias(alias_id: int, db: Session = Depends(get_db)):
+def delete_alias(alias_id: int, db: Session = Depends(get_db)):
     """删除自定义别名"""
     alias = db.query(SectorAlias).filter(SectorAlias.id == alias_id).first()
     if not alias:
@@ -754,7 +754,7 @@ class BatchReviewRequest(BaseModel):
 
 
 @router.get("/sector-mappings")
-async def get_sector_mappings(
+def get_sector_mappings(
     reviewed: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
@@ -802,7 +802,7 @@ async def get_sector_mappings(
 
 
 @router.put("/sector-mappings/{mapping_id}")
-async def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = Depends(get_db)):
+def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = Depends(get_db)):
     """更新映射（自动标记为已审查）"""
     from src.services.sector_fund_service import get_sector_fund_service
 
@@ -836,7 +836,7 @@ async def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Sess
 
 
 @router.post("/sector-mappings")
-async def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db)):
+def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db)):
     """创建新的板块映射（覆盖内置映射或新增）"""
     from src.services.sector_fund_service import get_sector_fund_service
 
@@ -904,7 +904,7 @@ async def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(ge
 
 
 @router.post("/sector-mappings/{mapping_id}/review")
-async def review_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
+def review_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
     """标记映射为已审查"""
     from src.services.sector_fund_service import get_sector_fund_service
 
@@ -921,7 +921,7 @@ async def review_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/sector-mappings/batch-review")
-async def batch_review_sector_mappings(req: BatchReviewRequest, db: Session = Depends(get_db)):
+def batch_review_sector_mappings(req: BatchReviewRequest, db: Session = Depends(get_db)):
     """批量标记映射为已审查/未审查"""
     from src.services.sector_fund_service import get_sector_fund_service
 
@@ -937,7 +937,7 @@ async def batch_review_sector_mappings(req: BatchReviewRequest, db: Session = De
 
 
 @router.delete("/sector-mappings/{mapping_id}")
-async def delete_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
+def delete_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
     """删除映射"""
     from src.services.sector_fund_service import get_sector_fund_service
 
@@ -954,7 +954,7 @@ async def delete_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/sector-mappings/seed")
-async def seed_sector_mappings(db: Session = Depends(get_db)):
+def seed_sector_mappings(db: Session = Depends(get_db)):
     """导入预置板块映射数据"""
     try:
         import subprocess
@@ -1002,7 +1002,7 @@ def _serialize_row(obj, exclude_fields=None):
 
 
 @router.get("/export")
-async def export_all_data(db: Session = Depends(get_db)):
+def export_all_data(db: Session = Depends(get_db)):
     """导出全部业务数据为 JSON 文件"""
     try:
         export_data = DataPortabilityService(db).export_data()
@@ -1019,7 +1019,7 @@ async def export_all_data(db: Session = Depends(get_db)):
 
 
 @router.get("/export/config")
-async def export_config(db: Session = Depends(get_db)):
+def export_config(db: Session = Depends(get_db)):
     """导出系统配置（LLM 设置 + 别名 + 板块映射）"""
     try:
         from src.constants.sector_fund_map import SECTOR_ALIASES
@@ -1064,7 +1064,7 @@ class ImportDataRequest(BaseModel):
 
 
 @router.post("/import")
-async def import_data(req: ImportDataRequest, db: Session = Depends(get_db)):
+def import_data(req: ImportDataRequest, db: Session = Depends(get_db)):
     """
     导入 JSON 数据（合并模式：跳过已存在的记录，按 natural key 判断）
     """

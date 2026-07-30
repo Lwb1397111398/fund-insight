@@ -1,4 +1,3 @@
-import asyncio
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -165,7 +164,7 @@ def test_viewpoint_list_is_paginated_filtered_and_uses_dynamic_expiry(test_db):
     _add_viewpoint(test_db, content="匹配关键词且有效", source="sina_finance")
     _add_viewpoint(test_db, content="不应出现", is_deleted=True)
 
-    response = asyncio.run(viewpoint_routes.get_viewpoints(
+    response = viewpoint_routes.get_viewpoints(
         page=1,
         page_size=1,
         keyword="匹配关键词",
@@ -176,7 +175,7 @@ def test_viewpoint_list_is_paginated_filtered_and_uses_dynamic_expiry(test_db):
         date_to=None,
         viewpoint_type=None,
         db=test_db,
-    ))
+    )
 
     assert response["meta"] == {"page": 1, "page_size": 1, "total": 2, "pages": 2}
     assert len(response["data"]) == 1
@@ -188,7 +187,7 @@ def test_viewpoint_detail_excludes_soft_deleted_rows(test_db):
     viewpoint = _add_viewpoint(test_db, is_deleted=True)
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(viewpoint_routes.get_viewpoint_detail(viewpoint.id, db=test_db))
+        viewpoint_routes.get_viewpoint_detail(viewpoint.id, db=test_db)
 
     assert exc_info.value.status_code == 404
 
@@ -205,14 +204,14 @@ def test_permanent_delete_requires_confirmation_and_detaches_crawler_record(test
     test_db.commit()
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(viewpoint_routes.delete_viewpoint(viewpoint.id, request=_Request({}), db=test_db))
+        viewpoint_routes.delete_viewpoint(viewpoint.id, request=_Request({}), db=test_db)
     assert exc_info.value.status_code == 403
 
-    response = asyncio.run(viewpoint_routes.delete_viewpoint(
+    response = viewpoint_routes.delete_viewpoint(
         viewpoint.id,
         request=_Request({"x-danger-confirm": "delete-viewpoint"}),
         db=test_db,
-    ))
+    )
 
     assert response["success"] is True
     assert test_db.get(Viewpoint, viewpoint.id) is None

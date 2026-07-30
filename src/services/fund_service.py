@@ -306,24 +306,26 @@ class FundService(BaseService[FundInfo]):
         skip: int = 0,
         limit: int = 100,
         sector_type: Optional[str] = None,
-        group_by_sector: bool = True
+        group_by_sector: bool = True,
+        include_history: bool = True
     ) -> List[Dict]:
         """
         获取基金列表（支持按板块分组）
         优化：批量查询历史数据，解决 N+1 问题
+        include_history=False 时跳过净值窗口查询（列表页不展示走势，省一次全表扫描）
         """
         query = self.db.query(FundInfo)
         if sector_type:
             query = query.filter(FundInfo.sector_type == sector_type)
-        
+
         funds = query.offset(skip).limit(limit).all()
-        
+
         if not funds:
             return [] if group_by_sector else []
-        
+
         fund_codes = [f.fund_code for f in funds]
-        
-        history_map = self._get_recent_history_map(fund_codes, per_fund=5)
+
+        history_map = self._get_recent_history_map(fund_codes, per_fund=5) if include_history else {}
         prediction_counts = self._get_active_prediction_counts(fund_codes)
         
         if group_by_sector:
@@ -405,7 +407,9 @@ class FundService(BaseService[FundInfo]):
                     "can_delete": prediction_counts.get(f.fund_code, 0) == 0,
                     "last_analyze_date": f.last_analyze_date.isoformat() if f.last_analyze_date else None,
                     "updated_at": f.updated_at.isoformat() if f.updated_at else None,
-                    "recent_history": [
+                }
+                if include_history:
+                    fund_data["recent_history"] = [
                         {
                             "date": h.nav_date.isoformat(),
                             "nav": h.nav,
@@ -413,9 +417,8 @@ class FundService(BaseService[FundInfo]):
                         }
                         for h in history
                     ]
-                }
                 result.append(fund_data)
-            
+
             return result
     
     def add_fund_with_history(

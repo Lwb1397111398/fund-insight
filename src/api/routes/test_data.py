@@ -19,7 +19,7 @@ def _test_data_cleanup_enabled() -> bool:
 
 
 @router.get("/find")
-async def find_test_data(db: Session = Depends(get_db)):
+def find_test_data(db: Session = Depends(get_db)):
     """查找所有测试数据"""
     service = TestDataCleanupService(db)
     test_data = service.get_all_test_data()
@@ -32,7 +32,7 @@ async def find_test_data(db: Session = Depends(get_db)):
 
 
 @router.post("/cleanup")
-async def cleanup_test_data(request: Request, db: Session = Depends(get_db)):
+def cleanup_test_data(request: Request, db: Session = Depends(get_db)):
     """清理所有测试数据（硬删除）"""
     if not _test_data_cleanup_enabled():
         raise HTTPException(

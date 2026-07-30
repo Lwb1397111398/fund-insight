@@ -14,7 +14,7 @@ router = APIRouter(prefix="/stats", tags=["统计"])
 
 
 @router.get("")
-async def get_stats(db: Session = Depends(get_db)):
+def get_stats(db: Session = Depends(get_db)):
     """获取统计数据"""
     try:
         service = StatsService(db)
@@ -27,7 +27,7 @@ async def get_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/overall")
-async def get_overall_stats(db: Session = Depends(get_db)):
+def get_overall_stats(db: Session = Depends(get_db)):
     """获取整体统计数据"""
     service = StatsService(db)
     return {

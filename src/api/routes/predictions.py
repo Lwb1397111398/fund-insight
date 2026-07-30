@@ -29,7 +29,7 @@ class PredictionVerify(BaseModel):
 
 
 @router.get("")
-async def get_predictions(
+def get_predictions(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     search: Optional[str] = None,
@@ -77,7 +77,7 @@ async def get_predictions(
 
 
 @router.get("/{prediction_id}")
-async def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db)):
+def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db)):
     """获取预测详情"""
     prediction = PredictionQueryService(db).get_detail(prediction_id)
     
@@ -91,7 +91,7 @@ async def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db
 
 
 @router.delete("/{prediction_id}")
-async def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
+def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
     """删除预测"""
     service = PredictionService(db)
     success = service.delete_prediction(prediction_id)
@@ -103,7 +103,7 @@ async def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{prediction_id}/restore")
-async def restore_prediction(prediction_id: int, db: Session = Depends(get_db)):
+def restore_prediction(prediction_id: int, db: Session = Depends(get_db)):
     """恢复归档预测。"""
     if not PredictionService(db).restore_prediction(prediction_id):
         raise HTTPException(status_code=404, detail="未找到可恢复的预测")
@@ -111,7 +111,7 @@ async def restore_prediction(prediction_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/rollback-invalid")
-async def rollback_invalid_verifications(
+def rollback_invalid_verifications(
     request: Request,
     dry_run: bool = Query(True),
     db: Session = Depends(get_db),
@@ -129,7 +129,7 @@ async def rollback_invalid_verifications(
 
 
 @router.post("/sync-sector-mapping")
-async def sync_sector_mapping(
+def sync_sector_mapping(
     request: Request,
     dry_run: bool = Query(True),
     db: Session = Depends(get_db),
@@ -209,7 +209,7 @@ def _verify_all_background(task_id: int):
 
 
 @router.post("/verify-all")
-async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """验证所有待验证的预测（异步模式，跳过通道未开放的）"""
     status = prediction_verify_task.status(db=db)
     if status["in_progress"]:
@@ -232,7 +232,7 @@ async def verify_all_predictions(background_tasks: BackgroundTasks, db: Session 
 
 
 @router.get("/verify-all/status")
-async def get_verify_all_status(db: Session = Depends(get_db)):
+def get_verify_all_status(db: Session = Depends(get_db)):
     """获取批量预测验证后台任务状态"""
     return {
         "success": True,
@@ -243,7 +243,7 @@ async def get_verify_all_status(db: Session = Depends(get_db)):
 
 
 @router.post("/merge-similar")
-async def merge_similar_predictions(db: Session = Depends(get_db)):
+def merge_similar_predictions(db: Session = Depends(get_db)):
     """兼容旧入口：只扫描重复候选，不再删除原始预测。"""
     result = PredictionMaintenanceService(db).scan_duplicate_groups()
     return {

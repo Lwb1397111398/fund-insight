@@ -29,7 +29,7 @@ class FundAdd(BaseModel):
 
 
 @router.get("")
-async def get_funds(
+def get_funds(
     skip: int = 0,
     limit: int = 100,
     sector_type: Optional[str] = None,
@@ -44,7 +44,10 @@ async def get_funds(
         skip=skip,
         limit=limit,
         sector_type=sector_type,
-        group_by_sector=group_by_sector
+        group_by_sector=group_by_sector,
+        # 平铺列表页只显示最新净值，不画走势：跳过每只基金最近 5 条净值的窗口查询。
+        # 分组模式保留原返回结构，避免改动其他调用方。
+        include_history=group_by_sector
     )
     
     total_query = db.query(FundInfo)
@@ -64,7 +67,7 @@ async def get_funds(
 
 
 @router.post("")
-async def add_fund(fund: FundAdd, db: Session = Depends(get_db)):
+def add_fund(fund: FundAdd, db: Session = Depends(get_db)):
     """添加基金"""
     service = FundService(db)
     result = service.add_fund_with_history(

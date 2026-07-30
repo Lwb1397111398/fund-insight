@@ -1,4 +1,3 @@
-import asyncio
 from datetime import date
 
 import pytest
@@ -26,7 +25,7 @@ def test_create_post_propagates_service_failure(monkeypatch):
 
     monkeypatch.setattr(posts_route, "PostService", FakePostService)
 
-    response = asyncio.run(posts_route.create_post(
+    response = posts_route.create_post(
         PostCreate(
             blogger_id=1,
             content="这是一段足够长但没有明确预测的基金帖子内容",
@@ -34,7 +33,7 @@ def test_create_post_propagates_service_failure(monkeypatch):
             async_mode=False,
         ),
         db=None,
-    ))
+    )
 
     assert response["success"] is False
     assert response["message"] == "分析失败：LLM未能提取有效预测"
@@ -60,11 +59,11 @@ def test_single_post_analysis_route_creates_persistent_job(test_db):
     post = _add_unanalyzed_post(test_db)
     background_tasks = BackgroundTasks()
 
-    response = asyncio.run(posts_route.analyze_post(
+    response = posts_route.analyze_post(
         post_id=post.id,
         background_tasks=background_tasks,
         db=test_db,
-    ))
+    )
 
     task = test_db.query(BatchAnalysisTask).one()
     assert response["success"] is True
@@ -78,11 +77,11 @@ def test_existing_pending_job_is_rescheduled_after_render_restart(test_db):
     task, _ = PostAnalysisService.create_job(test_db, post_ids=[post.id])
     background_tasks = BackgroundTasks()
 
-    response = asyncio.run(posts_route.start_analysis_job(
+    response = posts_route.start_analysis_job(
         payload=PostAnalysisJobRequest(post_ids=[post.id]),
         background_tasks=background_tasks,
         db=test_db,
-    ))
+    )
 
     assert response["data"]["task_id"] == task.id
     assert len(background_tasks.tasks) == 1
@@ -101,10 +100,10 @@ def test_explicit_job_does_not_claim_unrelated_active_task(test_db):
     PostAnalysisService.create_job(test_db, post_ids=[first.id])
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(posts_route.start_analysis_job(
+        posts_route.start_analysis_job(
             payload=PostAnalysisJobRequest(post_ids=[second.id]),
             background_tasks=BackgroundTasks(),
             db=test_db,
-        ))
+        )
 
     assert exc_info.value.status_code == 409

@@ -23,7 +23,7 @@ def _batch_analyze_background(task_id: int):
 
 
 @router.get("")
-async def get_posts(
+def get_posts(
     skip: int = 0,
     limit: int = 1000,
     blogger_id: Optional[int] = None,
@@ -55,7 +55,7 @@ async def get_posts(
 
 
 @router.post("")
-async def create_post(post: PostCreate, db: Session = Depends(get_db)):
+def create_post(post: PostCreate, db: Session = Depends(get_db)):
     """添加帖子（async_mode=True 时不自动分析，需手动触发）"""
     service = PostService(db)
     
@@ -80,7 +80,7 @@ async def create_post(post: PostCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/analysis-jobs")
-async def start_analysis_job(
+def start_analysis_job(
     payload: PostAnalysisJobRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -105,7 +105,7 @@ async def start_analysis_job(
 
 
 @router.get("/analysis-jobs/{task_id}")
-async def get_analysis_job(task_id: int, db: Session = Depends(get_db)):
+def get_analysis_job(task_id: int, db: Session = Depends(get_db)):
     task = db.query(BatchAnalysisTask).filter(
         BatchAnalysisTask.id == task_id,
         BatchAnalysisTask.task_type == "posts",
@@ -116,7 +116,7 @@ async def get_analysis_job(task_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/analysis-jobs/{task_id}/resume")
-async def resume_analysis_job(
+def resume_analysis_job(
     task_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -130,7 +130,7 @@ async def resume_analysis_job(
 
 
 @router.post("/analysis-jobs/{task_id}/cancel")
-async def cancel_analysis_job(task_id: int, db: Session = Depends(get_db)):
+def cancel_analysis_job(task_id: int, db: Session = Depends(get_db)):
     try:
         task = PostAnalysisService.cancel_job(db, task_id)
     except ValueError as exc:
@@ -139,7 +139,7 @@ async def cancel_analysis_job(task_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/cleanup-low-quality")
-async def cleanup_low_quality_posts(
+def cleanup_low_quality_posts(
     request: Request,
     dry_run: bool = True,
     db: Session = Depends(get_db),
@@ -192,7 +192,7 @@ async def cleanup_low_quality_posts(
 
 
 @router.post("/{post_id}/analyze")
-async def analyze_post(
+def analyze_post(
     post_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -212,7 +212,7 @@ async def analyze_post(
 
 
 @router.get("/{post_id}/delete-preview")
-async def get_post_delete_preview(post_id: int, db: Session = Depends(get_db)):
+def get_post_delete_preview(post_id: int, db: Session = Depends(get_db)):
     preview = PostService(db).get_delete_preview(post_id)
     if not preview:
         raise HTTPException(status_code=404, detail="帖子不存在")
@@ -220,7 +220,7 @@ async def get_post_delete_preview(post_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{post_id}")
-async def get_post(post_id: int, db: Session = Depends(get_db)):
+def get_post(post_id: int, db: Session = Depends(get_db)):
     """获取帖子详情"""
     service = PostService(db)
     post = service.get_post_detail(post_id)
@@ -235,7 +235,7 @@ async def get_post(post_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{post_id}")
-async def delete_post(
+def delete_post(
     post_id: int,
     request: Request,
     db: Session = Depends(get_db),

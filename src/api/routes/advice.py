@@ -50,7 +50,7 @@ def _log_advice_rejection(code: str, message: str, details: Optional[dict] = Non
 
 
 @router.post("")
-async def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends(get_db)):
+def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends(get_db)):
     """生成投资建议（证据校验在 LLM 前；缓存键=evidence_hash+版本）"""
     service = AdviceService(db)
     llm_analyzer = get_analyzer()
@@ -200,7 +200,7 @@ async def generate_advice(request: GenerateAdviceRequest = None, db: Session = D
 
 
 @router.get("")
-async def get_latest_advice(db: Session = Depends(get_db)):
+def get_latest_advice(db: Session = Depends(get_db)):
     """获取最新投资建议（读路径不做枚举硬校验，容忍历史值）"""
     service = AdviceService(db)
     advice = service.get_latest_advice()
@@ -212,7 +212,7 @@ async def get_latest_advice(db: Session = Depends(get_db)):
 
 
 @router.get("/history")
-async def get_advice_history(
+def get_advice_history(
     skip: int = 0,
     limit: int = 30,
     db: Session = Depends(get_db),

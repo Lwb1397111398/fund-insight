@@ -1,5 +1,4 @@
 """基金 API 与服务回归测试。"""
-import asyncio
 from datetime import date
 
 from sqlalchemy import create_engine
@@ -114,7 +113,7 @@ def test_fund_list_response_includes_pagination_metadata(tmp_path):
         ])
         db.commit()
 
-        response = asyncio.run(get_funds(skip=100, limit=100, sector_type=None, group_by_sector=False, db=db))
+        response = get_funds(skip=100, limit=100, sector_type=None, group_by_sector=False, db=db)
 
         assert len(response["data"]) == 1
         assert response["meta"] == {"total": 101, "page": 2, "page_size": 100, "pages": 2}

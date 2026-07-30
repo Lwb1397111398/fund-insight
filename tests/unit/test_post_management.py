@@ -1,4 +1,3 @@
-import asyncio
 from datetime import date
 
 import pytest
@@ -236,11 +235,11 @@ def test_delete_route_requires_confirmation_header(test_db):
     _, _, post, _, _ = _seed_delete_graph(test_db)
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(posts_routes.delete_post(
+        posts_routes.delete_post(
             post_id=post.id,
             request=_request_with_headers(),
             db=test_db,
-        ))
+        )
 
     assert exc.value.status_code == 403
     assert test_db.get(Post, post.id) is not None

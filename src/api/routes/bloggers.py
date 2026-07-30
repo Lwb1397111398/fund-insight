@@ -52,7 +52,7 @@ def _hit_rate_map(db: Session, blogger_ids: List[int]) -> Dict[int, dict]:
 
 
 @router.get("")
-async def get_bloggers(
+def get_bloggers(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     platform: Optional[str] = None,
@@ -128,7 +128,7 @@ async def get_bloggers(
 
 
 @router.get("/top")
-async def get_top_bloggers(
+def get_top_bloggers(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db)
 ):
@@ -165,7 +165,7 @@ async def get_top_bloggers(
 
 
 @router.post("")
-async def create_blogger(
+def create_blogger(
     data: BloggerCreate,
     db: Session = Depends(get_db)
 ):

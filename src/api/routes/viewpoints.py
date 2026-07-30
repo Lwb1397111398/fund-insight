@@ -91,7 +91,7 @@ def _serialize_detail(row: Viewpoint) -> dict:
 
 
 @router.get("")
-async def get_viewpoints(
+def get_viewpoints(
     page: int = 1,
     page_size: int = 20,
     keyword: Optional[str] = None,
@@ -151,7 +151,7 @@ def _run_fetch_task(task_id: int):
 
 
 @router.post("/fetch")
-async def fetch_viewpoints(
+def fetch_viewpoints(
     payload: ViewpointFetchRequest = Body(default=ViewpointFetchRequest()),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
@@ -172,7 +172,7 @@ async def fetch_viewpoints(
 
 
 @router.get("/tasks/latest")
-async def latest_viewpoint_task(db: Session = Depends(get_db)):
+def latest_viewpoint_task(db: Session = Depends(get_db)):
     task = db.query(BatchAnalysisTask).filter(
         BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary", "viewpoint_batch")),
     ).order_by(BatchAnalysisTask.created_at.desc()).first()
@@ -180,7 +180,7 @@ async def latest_viewpoint_task(db: Session = Depends(get_db)):
 
 
 @router.post("/tasks/{task_id}/retry")
-async def retry_viewpoint_task(
+def retry_viewpoint_task(
     task_id: int,
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
@@ -195,7 +195,7 @@ async def retry_viewpoint_task(
 
 
 @router.get("/insights")
-async def viewpoint_insights(db: Session = Depends(get_db)):
+def viewpoint_insights(db: Session = Depends(get_db)):
     today = date.today()
     active = db.query(Viewpoint).filter(
         Viewpoint.is_deleted.is_(False),
@@ -280,7 +280,7 @@ def _viewpoint_batch_analyze_background(task_id: int, viewpoint_ids: List[int]):
 
 
 @router.post("/batch-analyze")
-async def batch_analyze_viewpoints(
+def batch_analyze_viewpoints(
     background_tasks: BackgroundTasks,
     data: ViewpointBatchRequest = Body(default=ViewpointBatchRequest()),
     db: Session = Depends(get_db),
@@ -346,7 +346,7 @@ async def batch_analyze_viewpoints(
 
 
 @router.get("/summary/stats")
-async def get_summary_stats(db: Session = Depends(get_db)):
+def get_summary_stats(db: Session = Depends(get_db)):
     """获取汇总统计信息（待汇总日期 / 待汇总数 / 已汇总数）"""
     today = date.today()
     pending = db.query(
@@ -376,7 +376,7 @@ async def get_summary_stats(db: Session = Depends(get_db)):
 
 
 @router.post("/summary/execute")
-async def execute_summary(
+def execute_summary(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
@@ -422,7 +422,7 @@ async def execute_summary(
 
 
 @router.get("/{viewpoint_id}")
-async def get_viewpoint_detail(viewpoint_id: int, db: Session = Depends(get_db)):
+def get_viewpoint_detail(viewpoint_id: int, db: Session = Depends(get_db)):
     viewpoint = db.query(Viewpoint).filter(
         Viewpoint.id == viewpoint_id,
         Viewpoint.is_deleted.is_(False),
@@ -433,7 +433,7 @@ async def get_viewpoint_detail(viewpoint_id: int, db: Session = Depends(get_db))
 
 
 @router.delete("/{viewpoint_id}")
-async def delete_viewpoint(viewpoint_id: int, request: Request, db: Session = Depends(get_db)):
+def delete_viewpoint(viewpoint_id: int, request: Request, db: Session = Depends(get_db)):
     confirmation = request.headers.get("X-Danger-Confirm") or request.headers.get("x-danger-confirm")
     if confirmation != "delete-viewpoint":
         raise HTTPException(status_code=403, detail="永久删除观点需要确认头 X-Danger-Confirm: delete-viewpoint")
@@ -454,7 +454,7 @@ async def delete_viewpoint(viewpoint_id: int, request: Request, db: Session = De
 
 # 保留隐藏的兼容入口，避免旧前端误调用时绕过安全开关；新页面不再展示它。
 @router.post("/cleanup", include_in_schema=False)
-async def deprecated_viewpoint_cleanup(db: Session = Depends(get_db)):
+def deprecated_viewpoint_cleanup(db: Session = Depends(get_db)):
     if not destructive_cleanup_enabled():
         raise HTTPException(status_code=403, detail="数据清理功能已禁用")
     raise HTTPException(status_code=410, detail="观点专用清理接口已停用")

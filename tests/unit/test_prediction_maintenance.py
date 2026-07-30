@@ -1,4 +1,3 @@
-import asyncio
 from datetime import date, timedelta
 
 import pytest
@@ -205,10 +204,10 @@ def _request(headers=None):
 
 def test_mapping_execute_route_requires_confirmation(test_db):
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(prediction_routes.sync_sector_mapping(
+        prediction_routes.sync_sector_mapping(
             request=_request(),
             dry_run=False,
             db=test_db,
-        ))
+        )
 
     assert exc.value.status_code == 403

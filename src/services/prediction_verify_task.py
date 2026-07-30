@@ -116,7 +116,26 @@ class PredictionVerifyTask:
         if db is None:
             return self._memory_status()
         task = self._latest(db)
-        return self._serialize(task) if task else self._empty_status()
+        if task is None:
+            return self._empty_status()
+        # 自愈：用户中途关网页导致后台任务失联时，DB 里会残留 status='running'。
+        # 只在 start() 判超时不够——前端轮询 status 会永远拿到 in_progress=True，
+        # 按钮卡在"验证中"且无法再次点击。这里顺手把超时任务标记失败。
+        if task.status in _ACTIVE_STATUSES and self._is_stale(task, datetime.now()):
+            self._mark_stale_failed(db, task)
+        return self._serialize(task)
+
+    def _mark_stale_failed(self, db: Session, task: BatchAnalysisTask) -> None:
+        now = datetime.now()
+        try:
+            task.status = "failed"
+            task.error_message = "任务运行超时，已自动终止"
+            task.completed_at = now
+            task.updated_at = now
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
     def _start_in_memory(self, total: int) -> Dict:
         if not self._lock.acquire(blocking=False):

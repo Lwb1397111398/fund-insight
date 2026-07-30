@@ -154,7 +154,7 @@ def test_stats_error_hides_traceback_in_production(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setattr(stats, "StatsService", BrokenStatsService)
 
-    result = importlib.import_module("asyncio").run(stats.get_stats(db=object()))
+    result = stats.get_stats(db=object())
 
     assert result["success"] is False
     assert result["error"] == "统计数据获取失败"
