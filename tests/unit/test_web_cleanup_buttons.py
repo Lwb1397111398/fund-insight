@@ -52,8 +52,21 @@ def test_cleanup_actions_are_responsive_grid():
     assert "grid-template-columns: 1fr" in content
 
 
-def test_cleanup_page_mentions_long_term_fund_and_accuracy_guard():
+def test_cleanup_page_explains_fund_history_rules_and_accuracy_guard():
     content = Path("web/index.html").read_text(encoding="utf-8")
-    assert "预测窗口完整保留" in content
+    # 净值两桶的规则要在页面上讲清楚：整只删 vs 只删早于预测起点的部分
+    assert "其全部净值跟着删" in content
+    assert "早于最早未结预测起点" in content
     assert "归档累计" in content
-    assert "long_term_fund_history" in content
+    assert "fund_history_keep_recent" in content
+    assert "fund_history_rows_kept" in content
+
+
+def test_cleanup_page_offers_space_reclaim():
+    content = Path("web/index.html").read_text(encoding="utf-8")
+    # Postgres 删行不还空间，页面必须有独立的回收入口并解释原因
+    assert "回收磁盘空间" in content
+    assert "/api/config/cleanup/reclaim-space" in content
+    assert "reclaimSpace" in content
+    assert "cascade_counts" in content
+    assert "total_rows_removed" in content

@@ -488,6 +488,7 @@
                     <div class="section-title">安全清理</div>
                     <div class="cleanup-actions">
                         <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing || !retentionPreview || !retentionPreview.total"><i class="ri-delete-bin-line"></i> {{ analyzing ? '安全清理中...' : '安全清理' }}</button>
+                        <button class="action-btn small" @click="reclaimSpace" :disabled="analyzing || !cleanupEnabled" title="删除后数据库文件不会自动变小，点这里回收磁盘空间"><i class="ri-hard-drive-2-line"></i> {{ reclaiming ? '回收空间中...' : '回收磁盘空间' }}</button>
                         <span v-if="!cleanupEnabled && !retentionPreviewError" class="text-xs text-danger">清理开关已关闭（ENABLE_DATA_CLEANUP=false）。需要清理时改为 true 或删除该配置后重启</span>
                         <button v-if="retentionPreviewError" class="action-btn small" @click="fetchRetentionPreview">清单加载失败，点击重试</button>
                         <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">保留分析加载失败，点击重试</button>
@@ -501,19 +502,39 @@
                                 <span v-for="(count, bucket) in retentionPreview.counts" :key="bucket" v-show="count > 0">
                                     {{ retentionBucketLabel(bucket) }} <strong>{{ count }}</strong>
                                 </span>
+                                <span v-for="(count, table) in retentionPreview.cascade_counts" :key="'cascade-' + table" v-show="count > 0">
+                                    连带{{ retentionTableLabel(table) }} <strong>{{ count }}</strong>
+                                </span>
                                 <span v-if="retentionPreview.total === 0">当前没有可清理资料</span>
                             </div>
-                            <div class="cleanup-total">合计 <strong>{{ retentionPreview.total }}</strong> 条<span v-if="retentionPreview.truncated_by_global_cap" class="text-xs text-tertiary">（已触达单次上限 {{ retentionPreview.policy?.max_total_per_run }}，剩余下次再清）</span></div>
-                        </div>
-                        <div class="cleanup-summary keep-summary">
-                            <h4><i class="ri-shield-check-line"></i> 台账护栏</h4>
-                            <div class="cleanup-metrics">
-                                <span>已有结论不删 <strong>{{ retentionPreview.protected_counts?.verified_ledger_excluded || 0 }}</strong></span>
-                                <span>回收站保留 <strong>{{ retentionPreview.policy?.deleted_hard_delete_days || 0 }}</strong> 天</span>
-                                <span>过窗预测保留 <strong>{{ retentionPreview.policy?.unverifiable_days || 0 }}</strong> 天</span>
-                                <span>历史汇总保留 <strong>{{ retentionPreview.policy?.summary_viewpoint_days || 0 }}</strong> 天</span>
+                            <div class="cleanup-total">
+                                实际删除 <strong>{{ retentionPreview.total_rows_removed || retentionPreview.total }}</strong> 行
+                                <span v-if="retentionPreview.truncated_by_global_cap" class="text-xs text-tertiary">（已触达单次上限，剩余下次再清）</span>
                             </div>
                         </div>
+                        <div class="cleanup-summary keep-summary">
+                            <h4><i class="ri-shield-check-line"></i> 保护规则</h4>
+                            <div class="cleanup-metrics">
+                                <span>已有结论不删 <strong>{{ retentionPreview.protected_counts?.verified_ledger_excluded || 0 }}</strong></span>
+                                <span>仍被引用基金 <strong>{{ retentionPreview.protected_counts?.referenced_funds_kept || 0 }}</strong></span>
+                                <span>保留净值 <strong>{{ retentionPreview.protected_counts?.fund_history_rows_kept || 0 }}</strong></span>
+                                <span>每基金保底 <strong>{{ retentionPreview.policy?.fund_history_keep_recent || 0 }}</strong> 条</span>
+                                <span>回收站保留 <strong>{{ retentionPreview.policy?.deleted_hard_delete_days || 0 }}</strong> 天</span>
+                                <span>已验证回溯 <strong>{{ retentionPreview.policy?.verified_lookback_days || 0 }}</strong> 天</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-if="retentionPreview?.table_sizes" class="cleanup-warnings mb-20">
+                        <h4><i class="ri-database-2-line"></i> 当前各表行数（找出最占空间的表）</h4>
+                        <span v-for="(rows, table) in retentionPreview.table_sizes" :key="'size-' + table">
+                            {{ retentionTableLabel(table) }} <strong>{{ rows }}</strong>
+                        </span>
+                    </div>
+
+                    <div v-if="spaceReclaimResult" class="cleanup-warnings mb-20">
+                        <h4><i class="ri-hard-drive-2-line"></i> 空间回收结果</h4>
+                        <span>{{ spaceReclaimResult }}</span>
                     </div>
 
                     <div v-if="cleanupTask" class="cleanup-progress mb-20">
@@ -529,18 +550,19 @@
                     
                     <!-- 基金历史数据统计 -->
                     <div class="mb-20 p-15 bg-warning-light rounded-lg">
-                        <h4 class="text-warning mb-10"><i class="ri-funds-line"></i> 基金历史净值数据</h4>
+                        <h4 class="text-warning mb-10"><i class="ri-funds-line"></i> 基金净值清理规则</h4>
                         <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
-                            清理规则：最近30天完整保留；30-90天无预测依赖时每周保留1条；
-                            <strong>待验证/长期预测按预测窗口完整保留对应净值（可覆盖半年及以上）</strong>；
+                            净值是本库最大的表，也是腾空间的主力。规则：<strong>没有任何预测/映射/绑定/持仓/观点引用的基金整只删除，其全部净值跟着删</strong>；
+                            仍被引用的基金，只删「早于最早未结预测起点」且超出保底最近 {{ retentionPreview?.policy?.fund_history_keep_recent || 40 }} 条的净值；
+                            已验证预测在 {{ retentionPreview?.policy?.verified_lookback_days || 90 }} 天内的窗口也完整保留；
                             已验证预测删除后准确率进入归档累计，不会归零。
                         </p>
                         <div style="display: flex; gap: 20px; font-size: 13px; flex-wrap: wrap;">
-                            <span>总记录数: <strong>{{ stats.funds?.fund_history_count || 0 }}</strong></span>
-                            <span>基金数: <strong>{{ stats.funds?.fund_count || 0 }}</strong></span>
-                            <span>平均每基金: <strong>{{ stats.funds?.fund_count ? ((stats.funds?.fund_history_count || 0) / stats.funds.fund_count).toFixed(1) : 0 }}</strong> 条</span>
-                            <span v-if="cleanupPreview">长期窗保护基金: <strong>{{ cleanupPreview.protected_counts?.long_term_fund_windows || 0 }}</strong></span>
-                            <span v-if="cleanupPreview">长期窗保护净值: <strong>{{ cleanupPreview.protected_counts?.long_term_fund_history || 0 }}</strong></span>
+                            <span>总记录数: <strong>{{ retentionPreview?.table_sizes?.fund_history ?? (stats.funds?.fund_history_count || 0) }}</strong></span>
+                            <span>基金数: <strong>{{ retentionPreview?.table_sizes?.fund_info ?? (stats.funds?.fund_count || 0) }}</strong></span>
+                            <span v-if="retentionPreview">有净值的基金: <strong>{{ retentionPreview.protected_counts?.funds_with_history || 0 }}</strong></span>
+                            <span v-if="retentionPreview">本次保留净值: <strong>{{ retentionPreview.protected_counts?.fund_history_rows_kept || 0 }}</strong></span>
+                            <span v-if="retentionPreview">仍被引用基金: <strong>{{ retentionPreview.protected_counts?.referenced_funds_kept || 0 }}</strong></span>
                         </div>
                     </div>
                     
@@ -1980,6 +2002,7 @@ const fetchWeChatBatch = async () => {
                 };
                 const viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null), cleanupEnabled = ref(false), cleanupPreviewError = ref(''), cleanupTask = ref(null);
                 const retentionPreview = ref(null), retentionPreviewError = ref('');
+                const reclaiming = ref(false), spaceReclaimResult = ref('');
                 const CLEANUP_POLL_TIMEOUT_MS = 35 * 60 * 1000;
                 const postManager = window.createPostManager({
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
@@ -2099,6 +2122,36 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const retentionBucketLabel = (bucket) => retentionPreview.value?.labels?.[bucket] || bucket || '准备中';
+                const retentionTableLabels = {
+                    fund_history: '基金净值', fund_sync_retry: '同步重试', predictions: '预测',
+                    viewpoints: '观点', fund_info: '基金', cleanup_item_logs: '清理明细日志',
+                };
+                const retentionTableLabel = (table) => retentionTableLabels[table] || table;
+                const formatBytes = (value) => {
+                    if (!value) return '0 B';
+                    const units = ['B', 'KB', 'MB', 'GB'];
+                    let size = value, i = 0;
+                    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+                    return size.toFixed(1) + ' ' + units[i];
+                };
+                const reclaimSpace = async () => {
+                    if (!confirm('回收磁盘空间会重整数据库文件（Postgres 用 VACUUM FULL，过程中该表短暂只读）。\n\n本操作不删除任何数据。继续吗？')) return;
+                    reclaiming.value = true;
+                    spaceReclaimResult.value = '';
+                    try {
+                        const res = await axios.post('/api/config/cleanup/reclaim-space', null, {
+                            headers: { 'X-Danger-Confirm': 'cleanup-data' }
+                        });
+                        spaceReclaimResult.value = res.data.message || '完成';
+                        alert(res.data.message || '空间回收完成');
+                        await fetchRetentionPreview();
+                    } catch (e) {
+                        const msg = e.response?.data?.detail?.message || e.response?.data?.detail || e.message;
+                        spaceReclaimResult.value = '失败：' + msg;
+                        alert('空间回收失败: ' + msg);
+                    }
+                    reclaiming.value = false;
+                };
                 const cleanupCategoryLabels = {
                     predictions: '预测', posts: '帖子', viewpoints: '观点', fund_history: '基金净值',
                     funds: '基金', advice: '投资建议', crawler_records: '抓取记录', analysis_logs: '分析日志',
@@ -2250,7 +2303,12 @@ const fetchWeChatBatch = async () => {
                         .map(([bucket, count]) => `${retentionBucketLabel(bucket)} ${count} 条`)
                         .join('\n');
                     const excluded = preview.protected_counts?.verified_ledger_excluded || 0;
-                    const message = `将永久删除 ${preview.total} 条资料：\n\n${detail}\n\n台账护栏：${excluded} 条已有验证结论的预测永不删除。\n单次上限 ${preview.policy?.max_total_per_run || 0} 条${preview.truncated_by_global_cap ? '（本次已触达上限，剩余部分下次再清）' : ''}。\n\n确定执行清理吗？`;
+                    const cascade = Object.entries(preview.cascade_counts || {})
+                        .filter(([, count]) => count > 0)
+                        .map(([table, count]) => `连带${retentionTableLabel(table)} ${count} 行`)
+                        .join('\n');
+                    const totalRows = preview.total_rows_removed || preview.total;
+                    const message = `将永久删除 ${totalRows} 行数据（真删除，不可恢复）：\n\n${detail}${cascade ? '\n' + cascade : ''}\n\n保护规则：${excluded} 条已有验证结论的预测永不删除；仍被引用的基金及其预测窗口净值全部保留；每只基金保底留最近 ${preview.policy?.fund_history_keep_recent || 0} 条净值。\n\n删除后会自动回收磁盘空间。确定执行吗？`;
                     if (!confirm(message)) return;
                     analyzing.value = true;
                     cleanupTask.value = { status: 'pending', progress: 0, current_item: 0, total_items: preview.total };
@@ -2271,7 +2329,21 @@ const fetchWeChatBatch = async () => {
                                     .filter(([, count]) => count > 0)
                                     .map(([bucket, count]) => `${retentionBucketLabel(bucket)} ${count}`)
                                     .join('，');
-                                alert(`清理完成，共删除 ${task.result?.total_deleted || 0} 条${summary ? '（' + summary + '）' : ''}`);
+                                const cascadeDone = Object.entries(task.result?.cascade_counts || {})
+                                    .filter(([, count]) => count > 0)
+                                    .map(([table, count]) => `${retentionTableLabel(table)} ${count}`)
+                                    .join('，');
+                                const reclaim = task.result?.space_reclaim;
+                                const freed = reclaim?.bytes_freed;
+                                spaceReclaimResult.value = freed
+                                    ? `本次清理释放 ${formatBytes(freed)}`
+                                    : (reclaim ? '本次清理已回收空间（未测得可量化释放量）' : '');
+                                alert(
+                                    `清理完成，共删除 ${task.result?.total_rows_removed || task.result?.total_deleted || 0} 行\n` +
+                                    (summary ? `${summary}\n` : '') +
+                                    (cascadeDone ? `连带删除：${cascadeDone}\n` : '') +
+                                    (freed ? `释放空间：${formatBytes(freed)}` : '空间回收已执行')
+                                );
                             }
                         }
                         await fetchStats();
@@ -2443,6 +2515,7 @@ const fetchWeChatBatch = async () => {
                     predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, cleanupTask,
                     cleanupEnabled, cleanupPreviewError, fetchCleanupPreview, expiredPredictionsList, expiredViewpointsList,
                     retentionPreview, retentionPreviewError, fetchRetentionPreview, retentionBucketLabel,
+                    retentionTableLabel, reclaimSpace, reclaiming, spaceReclaimResult, formatBytes,
                     expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting,
                     testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError,
                     authReady, submitPassword, loadView, addBlogger, addPost, addFund,

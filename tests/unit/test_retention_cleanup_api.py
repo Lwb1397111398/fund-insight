@@ -5,7 +5,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.api.deps import get_db
-from src.models.database import Base, Blogger, CleanupTask, Post, Prediction, Viewpoint
+from src.models.database import (
+    Base,
+    Blogger,
+    CleanupTask,
+    FundHistory,
+    FundInfo,
+    Post,
+    Prediction,
+    Viewpoint,
+)
 
 
 AUTH_HEADERS = {"X-Access-Password": "cleanup-api-test"}
@@ -424,3 +433,114 @@ def test_three_bucket_execute_is_disabled_when_cleanup_switch_off(monkeypatch, t
 
     assert response.status_code == 403
     assert "已禁用" in response.json()["detail"]
+
+
+def _seed_orphan_fund(session_factory, *, code: str = "APIORPH", history_rows: int = 6):
+    with session_factory() as db:
+        db.add(FundInfo(
+            fund_code=code,
+            fund_name="接口孤儿基金",
+            updated_at=datetime.now() - timedelta(days=200),
+        ))
+        for i in range(history_rows):
+            db.add(FundHistory(
+                fund_code=code,
+                fund_name="接口孤儿基金",
+                nav_date=date.today() - timedelta(days=i + 1),
+                nav=1.0 + i / 100,
+            ))
+        db.commit()
+
+
+def test_three_bucket_preview_reports_cascade_rows_and_table_sizes(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    _seed_orphan_fund(session_factory)
+    app, client = _client(monkeypatch, session_factory)
+
+    try:
+        response = client.get(
+            "/api/config/cleanup/three-buckets/preview", headers=AUTH_HEADERS
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    data = response.json()["data"]
+    assert data["counts"]["orphan_funds"] == 1
+    # 净值不计入 counts，但必须以 cascade 报出，否则用户看不出真实删除量
+    assert data["cascade_counts"]["fund_history"] == 6
+    assert data["total_rows_removed"] == data["total"] + 6
+    assert data["table_sizes"]["fund_history"] == 6
+    assert data["labels"]["stale_fund_history"]
+
+
+def test_three_bucket_execute_removes_orphan_fund_and_reclaims_space(
+    monkeypatch, tmp_path
+):
+    session_factory = _database(tmp_path)
+    _seed_orphan_fund(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    monkeypatch.setattr("src.models.database.SessionLocal", session_factory)
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        preview = client.get(
+            "/api/config/cleanup/three-buckets/preview", headers=AUTH_HEADERS
+        ).json()["data"]
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=headers,
+            json={"preview_fingerprint": preview["preview_fingerprint"]},
+        )
+        task_id = response.json()["data"]["task_id"]
+        status = client.get(
+            f"/api/config/cleanup/tasks/{task_id}", headers=AUTH_HEADERS
+        ).json()["data"]
+    finally:
+        app.dependency_overrides.clear()
+
+    assert status["status"] == "completed", status.get("error")
+    assert status["result"]["deleted_counts"]["orphan_funds"] == 1
+    assert status["result"]["cascade_counts"]["fund_history"] == 6
+    assert status["result"]["total_rows_removed"] >= 7
+    # 落盘的 sqlite 能真正 VACUUM，应报出释放量
+    reclaim = status["result"]["space_reclaim"]
+    assert reclaim["dialect"] == "sqlite"
+    assert reclaim["success"] is True
+    with session_factory() as db:
+        assert db.query(FundInfo).filter_by(fund_code="APIORPH").first() is None
+        assert db.query(FundHistory).filter_by(fund_code="APIORPH").count() == 0
+
+
+def test_reclaim_space_endpoint_requires_confirmation(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+
+    try:
+        response = client.post("/api/config/cleanup/reclaim-space", headers=AUTH_HEADERS)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert "确认" in response.json()["detail"]
+
+
+def test_reclaim_space_endpoint_vacuums_without_deleting(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    _seed_orphan_fund(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        response = client.post("/api/config/cleanup/reclaim-space", headers=headers)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"]["dialect"] == "sqlite"
+    # 只回收空间，不动数据
+    with session_factory() as db:
+        assert db.query(FundInfo).filter_by(fund_code="APIORPH").first() is not None
+        assert db.query(FundHistory).filter_by(fund_code="APIORPH").count() == 6

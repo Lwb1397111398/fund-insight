@@ -365,19 +365,55 @@ def _three_bucket_preview_payload(db: Session) -> dict:
 
     service = ThreeBucketRetentionService(db)
     plan = service.build_plan()
+    counts = {name: len(ids) for name, ids in plan.candidate_ids.items()}
+    cascade = service.estimate_cascade_rows(plan)
     return {
         "cleanup_enabled": destructive_cleanup_enabled(),
         "rule_version": POLICY_NAME,
         "as_of": plan.as_of.isoformat(),
         "preview_fingerprint": plan.fingerprint,
         "policy": plan.policy.to_dict(),
-        "counts": {name: len(ids) for name, ids in plan.candidate_ids.items()},
+        "counts": counts,
         "total": plan.total,
+        # 连带删除（删基金时跟着走的净值/重试行），不计入 total 但会真的消失
+        "cascade_counts": cascade,
+        "total_rows_removed": plan.total + sum(cascade.values()),
         "truncated_by_global_cap": plan.truncated,
         "protected_counts": plan.protected_counts,
         "labels": dict(ThreeBucketRetentionService.BUCKET_LABELS),
         "notes": plan.notes,
         "samples": plan.samples,
+        "table_sizes": service.table_sizes(),
+    }
+
+
+@router.post("/cleanup/reclaim-space")
+def reclaim_database_space(request: Request, db: Session = Depends(get_db)):
+    """单独对大表回收磁盘空间（Postgres VACUUM FULL / SQLite VACUUM）。
+
+    用于「之前已经删过但空间没还」的情况；本身不删任何数据。
+    """
+    from src.services.db_space import format_bytes, reclaim_space
+    from src.services.retention_three_buckets import ThreeBucketRetentionService
+
+    _require_destructive_cleanup(request)
+    tables = sorted(
+        {
+            table
+            for buckets in ThreeBucketRetentionService.BUCKET_TABLES.values()
+            for table in buckets
+        }
+    )
+    result = reclaim_space(db, tables)
+    freed = result.get("bytes_freed")
+    return {
+        "success": bool(result.get("success", False)) or bool(result.get("skipped")),
+        "message": (
+            f"空间回收完成，释放 {format_bytes(freed)}"
+            if freed
+            else "空间回收完成（本次未释放可测量空间）"
+        ),
+        "data": result,
     }
 
 
@@ -417,9 +453,12 @@ def _run_three_bucket_background(
         task.result = {
             "success": True,
             "total_deleted": result.get("total_deleted", 0),
+            "total_rows_removed": result.get("total_rows_removed", 0),
             "deleted_counts": result.get("deleted_counts", {}),
+            "cascade_counts": result.get("cascade_counts", {}),
             "protected_counts": result.get("protected_counts", {}),
             "truncated_by_global_cap": result.get("truncated_by_global_cap", False),
+            "space_reclaim": result.get("space_reclaim"),
             "cleanup_log_id": result.get("cleanup_log_id"),
         }
         task.completed_at = datetime.now()

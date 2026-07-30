@@ -131,18 +131,23 @@ def run_weekly_retention() -> dict:
                 dry_run=False,
                 confirm_token=CONFIRM_TOKEN,
                 plan=plan,
+                # 每轮删完就 VACUUM 太重，统一放到最后一次
+                reclaim_space=False,
             )
             round_info["execute"] = {
                 "deleted_counts": result.get("deleted_counts"),
+                "cascade_counts": result.get("cascade_counts"),
                 "total_deleted": result.get("total_deleted"),
+                "total_rows_removed": result.get("total_rows_removed"),
                 "cleanup_log_id": result.get("cleanup_log_id"),
                 "protected_counts": result.get("protected_counts"),
             }
             rounds.append(round_info)
             logger.info(
-                "weekly retention round %s deleted=%s protected=%s",
+                "weekly retention round %s deleted=%s cascade=%s protected=%s",
                 i,
                 result.get("deleted_counts"),
+                result.get("cascade_counts"),
                 plan.protected_counts,
             )
         else:
@@ -160,13 +165,30 @@ def run_weekly_retention() -> dict:
             )
 
         summary_path = report_dir / f"three_buckets_{stamp}_summary.json"
+        total_deleted = sum(
+            (r.get("execute") or {}).get("total_deleted") or 0 for r in rounds
+        )
+        # 所有轮次删完后统一回收空间：Postgres 不 VACUUM 文件不会变小
+        space_reclaim = None
+        if total_deleted:
+            tables = sorted(
+                {
+                    table
+                    for buckets in ThreeBucketRetentionService.BUCKET_TABLES.values()
+                    for table in buckets
+                }
+            )
+            space_reclaim = service.reclaim_space(tables)
+            logger.info("weekly retention space reclaim: %s", space_reclaim)
         payload = {
             "started_at": started_at.isoformat(),
             "finished_at": datetime.now().isoformat(),
             "rounds": rounds,
-            "total_deleted": sum(
-                (r.get("execute") or {}).get("total_deleted") or 0 for r in rounds
+            "total_deleted": total_deleted,
+            "total_rows_removed": sum(
+                (r.get("execute") or {}).get("total_rows_removed") or 0 for r in rounds
             ),
+            "space_reclaim": space_reclaim,
         }
         summary_path.write_text(
             __import__("json").dumps(payload, ensure_ascii=False, indent=2, default=str),
