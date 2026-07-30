@@ -16,8 +16,8 @@ def test_cleanup_view_guards_all_hard_delete_buttons():
     assert "温和清理" not in cleanup_actions
     assert "一键清理测试数据" in cleanup_actions
     assert 'v-if="cleanupEnabled"' not in cleanup_actions
-    # 可点：仅 analyzing / 无预览时禁用；开关关闭时用 alert 说明，避免“无反应”
-    assert ':disabled="analyzing || !cleanupPreview"' in cleanup_actions
+    # 可点：仅 analyzing / 无清单 / 清单为空时禁用；开关关闭时用 alert 说明，避免“无反应”
+    assert ':disabled="analyzing || !retentionPreview || !retentionPreview.total"' in cleanup_actions
     assert "清理开关已关闭" in content
     assert 'v-if="testData && testData.cleanup_enabled"' in cleanup_actions
 
@@ -33,8 +33,9 @@ def test_cleanup_requests_send_the_danger_confirmation_header():
     assert "'X-Danger-Confirm': 'cleanup-data'" in content
     assert "preview_fingerprint" in content
     assert "/config/cleanup/tasks/" in content
-    assert "await fetchCleanupPreview(); await loadTestData();" in content
-    assert "blogger_accuracy_guard" in content
+    assert "await fetchRetentionPreview(); await fetchCleanupPreview(); await loadTestData();" in content
+    # 三桶清理的核心护栏：已有验证结论的预测永不删
+    assert "verified_ledger_excluded" in content
 
 
 def test_cleanup_actions_are_responsive_grid():

@@ -155,29 +155,51 @@ class TaskScheduler:
             return {"success": False, "error": str(e)}
 
     def _run_cleanup(self):
-        """执行清理任务"""
+        """执行清理任务。
+
+        旧 retention-v2 硬删已下线，本地调度只做只读预览；真删统一走
+        weekly-retention cron（三桶 + 确认口令）或前端「安全清理」。
+        """
         if not destructive_cleanup_enabled():
             logger.info("定时清理任务已禁用（ENABLE_DATA_CLEANUP=false）")
             return {"success": True, "skipped": True, "reason": "cleanup_disabled"}
+
+        from src.services.retention_cleanup_service import (
+            HARD_DELETE_DISABLED,
+            HARD_DELETE_DISABLED_REASON,
+        )
+
+        if HARD_DELETE_DISABLED:
+            # 本地调度不做删除：真删只走 weekly-retention cron 或前端确认后的三桶清理
+            logger.info("旧执行器硬删已下线，本地调度跳过清理: %s", HARD_DELETE_DISABLED_REASON)
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "hard_delete_disabled",
+                "message": HARD_DELETE_DISABLED_REASON,
+            }
+
         try:
             from src.tasks.cleanup_tasks import run_cleanup_task
 
             logger.info("开始执行定时清理任务...")
             result = run_cleanup_task()
-            
+
             if result.get("success"):
                 pred_deleted = (result.get("predictions") or {}).get("deleted", 0)
                 vp_deleted = (result.get("viewpoints") or {}).get("deleted", 0)
                 if result.get("skipped"):
-                    logger.info("清理任务已跳过（未启用或无数据）")
+                    logger.info("清理任务已跳过（未启用或硬删已下线）")
                 else:
                     logger.info(f"清理任务完成: 删除预测 {pred_deleted} 个, "
                               f"删除观点 {vp_deleted} 个")
             else:
                 logger.error(f"清理任务失败: {result}")
-                
+            return result
+
         except Exception as e:
             logger.error(f"执行清理任务失败: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
     
     def _run_prediction_verify(self):
         """执行预测验证任务"""

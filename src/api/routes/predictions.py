@@ -43,11 +43,13 @@ def get_predictions(
     end_date: Optional[date] = None,
     archive: str = "active",
     is_expired: Optional[bool] = None,
+    lifecycle: Optional[str] = None,
+    sort: Optional[str] = None,
     skip: Annotated[Optional[int], Query(ge=0)] = None,
     limit: Annotated[Optional[int], Query(ge=1)] = None,
     db: Session = Depends(get_db)
 ):
-    """分页查询预测列表；保留 skip/limit 作为兼容参数。"""
+    """分页查询预测列表；默认按到期优先排序，保留 skip/limit 作为兼容参数。"""
     if limit is not None:
         page_size = min(limit, 200)
     if skip is not None:
@@ -67,6 +69,8 @@ def get_predictions(
         end_date=end_date,
         archive=archive,
         is_expired=is_expired,
+        lifecycle=lifecycle,
+        sort=sort,
     )
     
     return {

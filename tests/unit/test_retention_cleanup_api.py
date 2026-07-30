@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.api.deps import get_db
-from src.models.database import Base, Blogger, CleanupTask, Post, Prediction
+from src.models.database import Base, Blogger, CleanupTask, Post, Prediction, Viewpoint
 
 
 AUTH_HEADERS = {"X-Access-Password": "cleanup-api-test"}
@@ -192,3 +192,235 @@ def test_cleanup_background_task_reaches_completed(monkeypatch, tmp_path):
         assert task.status == "completed"
         assert task.progress == 100
         assert task.result["success"] is True
+
+
+def _seed_three_bucket_rows(session_factory):
+    """一条可删软删预测 + 一条已有结论的软删预测（护栏）+ 一条软删观点。"""
+    with session_factory() as db:
+        blogger = Blogger(name="三桶 API", platform="test")
+        db.add(blogger)
+        db.flush()
+        post = Post(
+            blogger_id=blogger.id,
+            content="three bucket api",
+            post_date=date.today() - timedelta(days=120),
+            analyzed=True,
+        )
+        db.add(post)
+        db.flush()
+        deletable = Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            fund_code="TBAPI1",
+            prediction_type="up",
+            prediction_date=date.today() - timedelta(days=120),
+            target_date=date.today() - timedelta(days=100),
+            status="pending",
+            is_deleted=True,
+            deleted_at=datetime.now() - timedelta(days=60),
+            is_correct=None,
+        )
+        ledger = Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            fund_code="TBAPI2",
+            prediction_type="up",
+            prediction_date=date.today() - timedelta(days=120),
+            target_date=date.today() - timedelta(days=100),
+            status="failed",
+            is_deleted=True,
+            deleted_at=datetime.now() - timedelta(days=60),
+            is_correct=False,
+            verify_count=1,
+        )
+        viewpoint = Viewpoint(
+            blogger_id=blogger.id,
+            content="soft deleted viewpoint",
+            author="t",
+            source="test",
+            viewpoint_date=date.today() - timedelta(days=90),
+            valid_until=date.today() + timedelta(days=200),
+            is_deleted=True,
+            deleted_at=datetime.now() - timedelta(days=45),
+            is_summary=False,
+        )
+        db.add_all([deletable, ledger, viewpoint])
+        db.commit()
+        return {
+            "deletable_id": deletable.id,
+            "ledger_id": ledger.id,
+            "viewpoint_id": viewpoint.id,
+        }
+
+
+def test_three_bucket_preview_lists_candidates_and_ledger_guard(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    ids = _seed_three_bucket_rows(session_factory)
+    app, client = _client(monkeypatch, session_factory)
+
+    try:
+        response = client.get(
+            "/api/config/cleanup/three-buckets/preview", headers=AUTH_HEADERS
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["rule_version"] == "three-buckets-v2"
+    assert len(data["preview_fingerprint"]) == 64
+    assert data["counts"]["deleted_predictions"] == 1
+    assert data["counts"]["deleted_viewpoints"] == 1
+    assert data["protected_counts"]["verified_ledger_excluded"] == 1
+    assert data["labels"]["deleted_predictions"]
+    sample_ids = [row["id"] for row in data["samples"]["deleted_predictions"]]
+    assert ids["deletable_id"] in sample_ids
+    assert ids["ledger_id"] not in sample_ids
+
+
+def test_three_bucket_execute_requires_confirmation_header(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    _seed_three_bucket_rows(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+
+    try:
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=AUTH_HEADERS,
+            json={"preview_fingerprint": "whatever"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert "确认" in response.json()["detail"]
+    with session_factory() as db:
+        assert db.query(CleanupTask).count() == 0
+
+
+def test_three_bucket_execute_rejects_stale_fingerprint(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    _seed_three_bucket_rows(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=headers,
+            json={"preview_fingerprint": "stale"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["current_fingerprint"]
+    with session_factory() as db:
+        assert db.query(CleanupTask).count() == 0
+
+
+def test_three_bucket_execute_deletes_only_unverified_rows(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    ids = _seed_three_bucket_rows(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    monkeypatch.setattr("src.models.database.SessionLocal", session_factory)
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        preview = client.get(
+            "/api/config/cleanup/three-buckets/preview", headers=AUTH_HEADERS
+        ).json()["data"]
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=headers,
+            json={"preview_fingerprint": preview["preview_fingerprint"]},
+        )
+        task_id = response.json()["data"]["task_id"]
+        status = client.get(
+            f"/api/config/cleanup/tasks/{task_id}", headers=AUTH_HEADERS
+        ).json()["data"]
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert status["status"] == "completed", status.get("error")
+    assert status["result"]["total_deleted"] == 2
+    assert status["result"]["deleted_counts"]["deleted_predictions"] == 1
+    assert status["result"]["deleted_counts"]["deleted_viewpoints"] == 1
+    with session_factory() as db:
+        assert db.get(Prediction, ids["deletable_id"]) is None
+        assert db.get(Prediction, ids["ledger_id"]) is not None
+        assert db.get(Viewpoint, ids["viewpoint_id"]) is None
+
+
+def test_three_bucket_execute_returns_completed_when_nothing_to_delete(
+    monkeypatch, tmp_path
+):
+    session_factory = _database(tmp_path)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        preview = client.get(
+            "/api/config/cleanup/three-buckets/preview", headers=AUTH_HEADERS
+        ).json()["data"]
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=headers,
+            json={"preview_fingerprint": preview["preview_fingerprint"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"]["task_id"] is None
+    assert response.json()["data"]["total_items"] == 0
+
+
+def test_three_bucket_execute_rejects_unknown_bucket(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    _seed_three_bucket_rows(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        preview = client.get(
+            "/api/config/cleanup/three-buckets/preview", headers=AUTH_HEADERS
+        ).json()["data"]
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=headers,
+            json={
+                "preview_fingerprint": preview["preview_fingerprint"],
+                "buckets": ["nope"],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+
+
+def test_three_bucket_execute_is_disabled_when_cleanup_switch_off(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    _seed_three_bucket_rows(session_factory)
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "false")
+    app, client = _client(monkeypatch, session_factory)
+    headers = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+    try:
+        response = client.post(
+            "/api/config/cleanup/three-buckets",
+            headers=headers,
+            json={"preview_fingerprint": "x"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert "已禁用" in response.json()["detail"]

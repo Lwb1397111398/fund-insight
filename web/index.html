@@ -52,7 +52,7 @@
                         <div class="label">基金</div>
                     </div>
                     <div class="stat-mini" @click="loadView('cleanup')">
-                        <div class="value">{{ cleanupPreview?.summary?.total || 0 }}</div>
+                        <div class="value">{{ retentionPreview?.total || 0 }}</div>
                         <div class="label">待清理</div>
                     </div>
                 </div>
@@ -190,6 +190,10 @@
                     <div class="sub-actions">
                         <button class="action-btn small" :class="predictionFilter === 'all' ? 'primary' : 'default'"
                             @click="setPredictionFilter('all')">全部 ({{ predictionMeta.facets.all }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'due' ? 'danger' : 'default'"
+                            @click="setPredictionFilter('due')" title="已到目标日、仍在验证窗口内，可立即验证">待验证到期 ({{ predictionMeta.facets.due }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'upcoming' ? 'warning' : 'default'"
+                            @click="setPredictionFilter('upcoming')" title="尚未到目标日">未到期 ({{ predictionMeta.facets.upcoming }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
                             @click="setPredictionFilter('pending')">待验证 ({{ predictionMeta.facets.pending }})</button>
                         <button class="action-btn small"
@@ -210,6 +214,12 @@
                         <input v-model="predictionFilters.fund_code" placeholder="基金代码">
                         <input v-model="predictionFilters.sector" placeholder="板块">
                         <select v-model="predictionFilters.direction"><option value="">全部方向</option><option value="up">看涨</option><option value="down">看跌</option><option value="flat">观望</option></select>
+                        <select v-model="predictionFilters.sort" @change="setPredictionSort(predictionFilters.sort)" title="排序方式">
+                            <option value="due_first">到期优先（默认）</option>
+                            <option value="target_asc">目标日期从近到远</option>
+                            <option value="target_desc">目标日期从远到近</option>
+                            <option value="latest">最新录入优先</option>
+                        </select>
                         <input type="date" v-model="predictionFilters.start_date" title="开始日期">
                         <input type="date" v-model="predictionFilters.end_date" title="结束日期">
                         <button class="row-btn primary" @click="applyPredictionFilters">筛选</button>
@@ -262,7 +272,12 @@
                                     <td>{{ p.prediction_type === 'up' ? '看涨' : p.prediction_type === 'down' ? '看跌' :
                                         '观望' }}</td>
                                     <td>{{ p.confidence !== null && p.confidence !== undefined ? p.confidence + '%' : '-' }}</td>
-                                    <td>{{ p.target_date || '-' }}</td>
+                                    <td>
+                                        {{ p.target_date || '-' }}
+                                        <span v-if="p.lifecycle === 'due_unverified'" class="text-xs text-danger">· 待验证</span>
+                                        <span v-else-if="p.lifecycle === 'active' && p.days_to_target !== null" class="text-xs text-tertiary">· {{ p.days_to_target }}天后</span>
+                                        <span v-else-if="p.lifecycle === 'unverifiable'" class="text-xs text-tertiary">· 已过窗</span>
+                                    </td>
                                     <td><span class="status-badge"
                                             :class="p.lifecycle_status === 'archived' ? 'status-failed' : p.verification_result === 'correct' ? 'status-success' : p.verification_result === 'wrong' ? 'status-failed' : 'status-pending'">{{
                                             p.lifecycle_status === 'archived' ? '已归档' : p.prediction_type === 'flat' ? '观望' : p.verification_result === 'correct' ? '正确' : p.verification_result === 'wrong' ? '错误' : '待验证' }}</span></td>
@@ -472,10 +487,33 @@
                 <div v-if="currentView === 'cleanup'">
                     <div class="section-title">安全清理</div>
                     <div class="cleanup-actions">
-                        <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing || !cleanupPreview"><i class="ri-delete-bin-line"></i> {{ analyzing ? '安全清理中...' : '安全清理' }}</button>
-                        <span v-if="!cleanupEnabled && !cleanupPreviewError" class="text-xs text-danger">清理开关已关闭（ENABLE_DATA_CLEANUP=false）。需要清理时改为 true 或删除该配置后重启</span>
-                        <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">预览加载失败，点击重试</button>
+                        <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing || !retentionPreview || !retentionPreview.total"><i class="ri-delete-bin-line"></i> {{ analyzing ? '安全清理中...' : '安全清理' }}</button>
+                        <span v-if="!cleanupEnabled && !retentionPreviewError" class="text-xs text-danger">清理开关已关闭（ENABLE_DATA_CLEANUP=false）。需要清理时改为 true 或删除该配置后重启</span>
+                        <button v-if="retentionPreviewError" class="action-btn small" @click="fetchRetentionPreview">清单加载失败，点击重试</button>
+                        <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">保留分析加载失败，点击重试</button>
                         <button v-if="testData && testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
+                    </div>
+
+                    <div v-if="retentionPreview" class="cleanup-summary-grid mb-20">
+                        <div class="cleanup-summary delete-summary">
+                            <h4><i class="ri-delete-bin-line"></i> 本次将永久删除</h4>
+                            <div class="cleanup-metrics">
+                                <span v-for="(count, bucket) in retentionPreview.counts" :key="bucket" v-show="count > 0">
+                                    {{ retentionBucketLabel(bucket) }} <strong>{{ count }}</strong>
+                                </span>
+                                <span v-if="retentionPreview.total === 0">当前没有可清理资料</span>
+                            </div>
+                            <div class="cleanup-total">合计 <strong>{{ retentionPreview.total }}</strong> 条<span v-if="retentionPreview.truncated_by_global_cap" class="text-xs text-tertiary">（已触达单次上限 {{ retentionPreview.policy?.max_total_per_run }}，剩余下次再清）</span></div>
+                        </div>
+                        <div class="cleanup-summary keep-summary">
+                            <h4><i class="ri-shield-check-line"></i> 台账护栏</h4>
+                            <div class="cleanup-metrics">
+                                <span>已有结论不删 <strong>{{ retentionPreview.protected_counts?.verified_ledger_excluded || 0 }}</strong></span>
+                                <span>回收站保留 <strong>{{ retentionPreview.policy?.deleted_hard_delete_days || 0 }}</strong> 天</span>
+                                <span>过窗预测保留 <strong>{{ retentionPreview.policy?.unverifiable_days || 0 }}</strong> 天</span>
+                                <span>历史汇总保留 <strong>{{ retentionPreview.policy?.summary_viewpoint_days || 0 }}</strong> 天</span>
+                            </div>
+                        </div>
                     </div>
 
                     <div v-if="cleanupTask" class="cleanup-progress mb-20">
@@ -508,12 +546,12 @@
                     
                     <div v-if="cleanupPreview" class="cleanup-summary-grid mb-20">
                         <div class="cleanup-summary delete-summary">
-                            <h4><i class="ri-delete-bin-line"></i> 将删除</h4>
+                            <h4><i class="ri-file-search-line"></i> 保留分析（只读，不会被本次清理删除）</h4>
                             <div class="cleanup-metrics">
                                 <span v-for="(count, category) in cleanupPreview.counts" :key="category" v-show="count > 0">
                                     {{ cleanupCategoryLabel(category) }} <strong>{{ count }}</strong>
                                 </span>
-                                <span v-if="cleanupPreview.total === 0">当前没有可清理资料</span>
+                                <span v-if="cleanupPreview.total === 0">当前没有超期资料</span>
                             </div>
                             <div class="cleanup-total">合计 <strong>{{ cleanupPreview.total }}</strong> 条</div>
                         </div>
@@ -529,6 +567,32 @@
                         </div>
                     </div>
 
+                    <div v-if="retentionPreview" class="mb-20">
+                        <h4 class="text-danger mb-10"><i class="ri-list-check-2"></i> 本次删除清单样本（每桶最多15条）</h4>
+                        <p class="text-xs text-tertiary mb-10">规则：回收站预测/观点按删除时间满窗、已错过验证窗口的预测按目标日龄、历史每日汇总按发布日；已有验证结论的预测永不进入清单。</p>
+                        <div v-for="(rows, bucket) in retentionPreview.samples" :key="bucket" v-show="rows.length > 0" class="mb-12">
+                            <div class="text-xs text-tertiary mb-10">{{ retentionBucketLabel(bucket) }}（{{ retentionPreview.counts[bucket] }} 条）· {{ retentionPreview.notes?.[bucket] }}</div>
+                            <div class="data-table">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>关键日期</th>
+                                            <th>说明</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="row in rows" :key="row.id">
+                                            <td>{{ row.id }}</td>
+                                            <td>{{ row.deleted_at || row.target_date || row.viewpoint_date || row.created_at || '-' }}</td>
+                                            <td>{{ row.lifecycle || row.source || row.data_type || '-' }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
                     <div v-if="cleanupPreview && cleanupPreview.health_warnings.length" class="cleanup-warnings mb-20">
                         <h4><i class="ri-error-warning-line"></i> 待处理提醒</h4>
                         <span v-for="warning in cleanupPreview.health_warnings" :key="warning.code">
@@ -537,8 +601,8 @@
                     </div>
                     
                     <div v-if="cleanupPreview && cleanupPreview.predictions && cleanupPreview.predictions.length > 0" class="mb-20">
-                        <h4 class="text-danger mb-10">⏰ 过期预测样本 ({{ cleanupPreview.predictions.length }}，最多20条)</h4>
-                        <p class="text-xs text-tertiary mb-10">条件：已验证且超过保留窗口；长期待验证预测不会出现在此列表</p>
+                        <h4 class="text-danger mb-10">⏰ 超期预测样本（只读分析，{{ cleanupPreview.predictions.length }}，最多20条）</h4>
+                        <p class="text-xs text-tertiary mb-10">条件：已验证且超过保留窗口；长期待验证预测不会出现在此列表。本列表不参与在线清理。</p>
                         <div class="data-table">
                             <table>
                                 <thead>
@@ -613,8 +677,7 @@
                             </table>
                         </div>
                     </div>
-                    <div v-if="cleanupPreview && (cleanupPreview.total === 0 || (cleanupPreview.summary && cleanupPreview.summary.total === 0))"
-                        class="empty-state">✅ 暂无待清理数据</div>
+                    <div v-if="retentionPreview && retentionPreview.total === 0" class="empty-state">✅ 暂无待清理数据</div>
 
                     <!-- 测试数据区域 -->
                     <div v-if="testData && testData.summary && testData.summary.total > 0" style="margin-top: 30px;">
@@ -1916,6 +1979,7 @@ const fetchWeChatBatch = async () => {
                     } catch { return isoStr; }
                 };
                 const viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null), cleanupEnabled = ref(false), cleanupPreviewError = ref(''), cleanupTask = ref(null);
+                const retentionPreview = ref(null), retentionPreviewError = ref('');
                 const CLEANUP_POLL_TIMEOUT_MS = 35 * 60 * 1000;
                 const postManager = window.createPostManager({
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
@@ -1953,6 +2017,7 @@ const fetchWeChatBatch = async () => {
                     predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
                     showPredictionMaintenance, maintenancePreview,
                     fetchPredictions, applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
+                    setPredictionSort,
                     predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,
                     viewPredictionDetail, editPrediction, savePrediction, batchAnalyzePredictions,
                     restorePredictionVerifyTask, previewPredictionMaintenance, executePredictionMaintenance,
@@ -2014,13 +2079,33 @@ const fetchWeChatBatch = async () => {
                         console.error(e);
                     }
                 };
+                const fetchRetentionPreview = async () => {
+                    retentionPreviewError.value = '';
+                    try {
+                        const res = await axios.get('/api/config/cleanup/three-buckets/preview');
+                        if (res.data.success) {
+                            const d = res.data.data || {};
+                            d.counts = d.counts || {};
+                            d.labels = d.labels || {};
+                            d.protected_counts = d.protected_counts || {};
+                            d.samples = d.samples || {};
+                            retentionPreview.value = d;
+                            cleanupEnabled.value = Boolean(d.cleanup_enabled);
+                        }
+                    } catch (e) {
+                        retentionPreview.value = null;
+                        retentionPreviewError.value = '三桶预览加载失败';
+                        console.error(e);
+                    }
+                };
+                const retentionBucketLabel = (bucket) => retentionPreview.value?.labels?.[bucket] || bucket || '准备中';
                 const cleanupCategoryLabels = {
                     predictions: '预测', posts: '帖子', viewpoints: '观点', fund_history: '基金净值',
                     funds: '基金', advice: '投资建议', crawler_records: '抓取记录', analysis_logs: '分析日志',
                     batch_tasks: '分析任务', sync_logs: '同步日志', fund_sync_retries: '同步重试',
                     cleanup_tasks: '清理任务记录', cleanup_logs: '清理审计'
                 };
-                const cleanupCategoryLabel = (category) => cleanupCategoryLabels[category] || category || '准备中';
+                const cleanupCategoryLabel = (category) => cleanupCategoryLabels[category] || retentionPreview.value?.labels?.[category] || category || '准备中';
                 const cleanupWarningLabels = {
                     overdue_predictions: '逾期待验证预测', unresolved_prediction_funds: '无法匹配基金的预测', stale_funds: '长期未更新基金'
                 };
@@ -2146,40 +2231,56 @@ const fetchWeChatBatch = async () => {
                     throw new Error('清理任务等待超时，请刷新预览后重新执行');
                 };
                 const cleanupData = async () => {
-                    if (!cleanupPreview.value) {
-                        alert('预览尚未加载，请先打开清理页或点击重试');
-                        await fetchCleanupPreview();
+                    if (!retentionPreview.value) {
+                        alert('清理清单尚未加载，请先打开清理页或点击重试');
+                        await fetchRetentionPreview();
                         return;
                     }
                     if (!cleanupEnabled.value) {
                         alert('清理开关已关闭（ENABLE_DATA_CLEANUP=false）。\n改为 true，或删除该配置使用默认开启，然后重启服务。');
                         return;
                     }
-                    const kept = cleanupPreview.value.protected_counts || {};
-                    const message = `将删除 ${cleanupPreview.value.total || 0} 条资料。\n\n明确保留：${kept.pending_predictions || 0} 条待验证预测、${kept.long_term_predictions || 0} 条长期预测、${kept.fund_history || 0} 条预测所需净值（其中长期窗 ${kept.long_term_fund_history || 0} 条）。\n\n已验证预测删除后准确率会归档累计，不会归零。\n\n确定执行安全清理吗？`;
+                    const preview = retentionPreview.value;
+                    if (!preview.total) {
+                        alert('当前没有可清理资料');
+                        return;
+                    }
+                    const detail = Object.entries(preview.counts)
+                        .filter(([, count]) => count > 0)
+                        .map(([bucket, count]) => `${retentionBucketLabel(bucket)} ${count} 条`)
+                        .join('\n');
+                    const excluded = preview.protected_counts?.verified_ledger_excluded || 0;
+                    const message = `将永久删除 ${preview.total} 条资料：\n\n${detail}\n\n台账护栏：${excluded} 条已有验证结论的预测永不删除。\n单次上限 ${preview.policy?.max_total_per_run || 0} 条${preview.truncated_by_global_cap ? '（本次已触达上限，剩余部分下次再清）' : ''}。\n\n确定执行清理吗？`;
                     if (!confirm(message)) return;
                     analyzing.value = true;
-                    cleanupTask.value = { status: 'pending', progress: 0, current_item: 0, total_items: cleanupPreview.value.total || 0 };
+                    cleanupTask.value = { status: 'pending', progress: 0, current_item: 0, total_items: preview.total };
                     try {
-                        const res = await axios.post('/api/config/cleanup', {
-                            preview_fingerprint: cleanupPreview.value.preview_fingerprint
+                        const res = await axios.post('/api/config/cleanup/three-buckets', {
+                            preview_fingerprint: preview.preview_fingerprint
                         }, { headers: { 'X-Danger-Confirm': 'cleanup-data' } });
-                        const task = await pollCleanupTask(res.data.data.task_id);
-                        if (task.status === 'failed') alert('清理失败：' + (task.error || '未知错误'));
-                        else if (task.status === 'partial') alert('清理部分完成，请查看失败分类');
-                        else {
-                            const guard = task.result?.blogger_accuracy_guard;
-                            const guardMsg = guard
-                                ? `\n博主准确率保护：触及 ${guard.bloggers_touched || 0} 人，最大变化 ${guard.max_abs_delta ?? 0}%${guard.stable === false ? '（请检查）' : '（稳定）'}`
-                                : '';
-                            alert(`安全清理完成，共删除 ${task.result?.total_deleted || 0} 条资料${guardMsg}`);
+                        const taskId = res.data.data?.task_id;
+                        if (!taskId) {
+                            cleanupTask.value = null;
+                            alert(res.data.message || '当前没有可清理资料');
+                        } else {
+                            const task = await pollCleanupTask(taskId);
+                            if (task.status === 'failed') alert('清理失败：' + (task.error || '未知错误'));
+                            else {
+                                const counts = task.result?.deleted_counts || {};
+                                const summary = Object.entries(counts)
+                                    .filter(([, count]) => count > 0)
+                                    .map(([bucket, count]) => `${retentionBucketLabel(bucket)} ${count}`)
+                                    .join('，');
+                                alert(`清理完成，共删除 ${task.result?.total_deleted || 0} 条${summary ? '（' + summary + '）' : ''}`);
+                            }
                         }
                         await fetchStats();
+                        await fetchRetentionPreview();
                         await fetchCleanupPreview();
                     } catch (e) {
                         if (e.response?.status === 409) {
-                            await fetchCleanupPreview();
-                            alert('资料已发生变化，预览已刷新，请重新确认');
+                            await fetchRetentionPreview();
+                            alert('资料已发生变化，清单已刷新，请重新确认');
                         } else {
                             alert('清理失败: ' + (e.response?.data?.detail?.message || e.response?.data?.detail || e.message));
                         }
@@ -2195,7 +2296,7 @@ const fetchWeChatBatch = async () => {
                 const loadTestData = async () => { try { const res = await axios.get('/api/test-data/find'); if (res.data.success) testData.value = res.data.data; } catch (e) { console.error('加载测试数据失败:', e); } };
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); msg += '\n'; } if (testData.value.predictions && testData.value.predictions.length > 0) { msg += `测试预测 (${testData.value.predictions.length}):\n`; testData.value.predictions.forEach(p => msg += `  - ${p.fund_name || p.fund_code || p.prediction_content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup', null, { headers: { 'X-Danger-Confirm': 'cleanup-test-data' } }); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
-                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await loadViewpoints(); else if (view === 'funds') await fetchFunds(); else if (view === 'cleanup') { await fetchCleanupPreview(); await loadTestData(); } else if (view === 'advice') { await loadAdviceHistory(); } };
+                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await loadViewpoints(); else if (view === 'funds') await fetchFunds(); else if (view === 'cleanup') { await fetchRetentionPreview(); await fetchCleanupPreview(); await loadTestData(); } else if (view === 'advice') { await loadAdviceHistory(); } };
                 // ===== 板块别名管理 =====
                 const configTab = ref('llm');
                 const aliases = ref({ builtin: [], custom: [], standard_sectors: [] });
@@ -2341,6 +2442,7 @@ const fetchWeChatBatch = async () => {
                     newBlogger, newPost, newFund, postDetail, viewpointDetail, fundDetail,
                     predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, cleanupTask,
                     cleanupEnabled, cleanupPreviewError, fetchCleanupPreview, expiredPredictionsList, expiredViewpointsList,
+                    retentionPreview, retentionPreviewError, fetchRetentionPreview, retentionBucketLabel,
                     expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting,
                     testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError,
                     authReady, submitPassword, loadView, addBlogger, addPost, addFund,
@@ -2355,7 +2457,7 @@ const fetchWeChatBatch = async () => {
                     summarizing, summaryStats, showSummaryConfirmModal, loadViewpoints,
                     batchAnalyzeViewpoints, showSummaryModal, executeSummary,
                     sourceLabel, directionLabel, taskStatusLabel,
-                    applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
+                    applyPredictionFilters, resetPredictionFilters, setPredictionFilter, setPredictionSort,
                     predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,
                     batchAnalyzePredictions, previewPredictionMaintenance, executePredictionMaintenance,
                     updateAllFunds, fetchWeChatBatch, generateAdvice,

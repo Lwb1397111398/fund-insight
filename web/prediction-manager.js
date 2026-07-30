@@ -10,13 +10,16 @@
         const editingPrediction = options.editingPrediction || ref(null);
         const predictionFilter = ref('all');
         const predictionMeta = reactive({
-            page: 1, page_size: 50, total: 0, has_more: false,
-            facets: { all: 0, pending: 0, verified: 0, correct: 0, wrong: 0, flat: 0, archived: 0 },
+            page: 1, page_size: 50, total: 0, has_more: false, sort: 'due_first',
+            facets: {
+                all: 0, pending: 0, verified: 0, correct: 0, wrong: 0, flat: 0, archived: 0,
+                due: 0, upcoming: 0, unverifiable: 0,
+            },
         });
         const predictionFilters = reactive({
             keyword: '', blogger_id: '', fund_code: '', sector: '', direction: '',
             start_date: '', end_date: '', page: 1, page_size: 50,
-            status: '', result: '', archive: 'active',
+            status: '', result: '', archive: 'active', lifecycle: '', sort: 'due_first',
         });
         const verifyTask = ref(null);
         const showPredictionMaintenance = ref(false);
@@ -40,6 +43,8 @@
                 start_date: predictionFilters.start_date || undefined,
                 end_date: predictionFilters.end_date || undefined,
                 archive: predictionFilters.archive,
+                lifecycle: predictionFilters.lifecycle || undefined,
+                sort: predictionFilters.sort || undefined,
             };
             const response = await axios.get('/api/predictions', { params });
             if (response.data.success) {
@@ -57,19 +62,29 @@
             Object.assign(predictionFilters, {
                 keyword: '', blogger_id: '', fund_code: '', sector: '', direction: '',
                 start_date: '', end_date: '', page: 1, status: '', result: '', archive: 'active',
+                lifecycle: '', sort: 'due_first',
             });
             predictionFilter.value = 'all';
             await fetchPredictions();
         };
         const setPredictionFilter = async (filter) => {
             predictionFilter.value = filter;
-            Object.assign(predictionFilters, { page: 1, status: '', result: '', direction: '', archive: 'active' });
+            Object.assign(predictionFilters, {
+                page: 1, status: '', result: '', direction: '', archive: 'active', lifecycle: '',
+            });
+            if (filter === 'due') predictionFilters.lifecycle = 'due';
+            if (filter === 'upcoming') predictionFilters.lifecycle = 'active';
             if (filter === 'pending') predictionFilters.status = 'pending';
             if (filter === 'verified') predictionFilters.status = 'verified';
             if (filter === 'correct') predictionFilters.result = 'correct';
             if (filter === 'wrong') predictionFilters.result = 'wrong';
             if (filter === 'flat') predictionFilters.direction = 'flat';
             if (filter === 'archived') predictionFilters.archive = 'archived';
+            await fetchPredictions();
+        };
+        const setPredictionSort = async (sort) => {
+            predictionFilters.sort = sort;
+            predictionFilters.page = 1;
             await fetchPredictions();
         };
         const predictionPrevPage = async () => {
@@ -222,6 +237,7 @@
             predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
             showPredictionMaintenance, maintenancePreview,
             fetchPredictions, applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
+            setPredictionSort,
             predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,
             viewPredictionDetail, editPrediction, savePrediction, batchAnalyzePredictions,
             restorePredictionVerifyTask, previewPredictionMaintenance, executePredictionMaintenance,

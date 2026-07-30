@@ -35,9 +35,21 @@ protected_counts：{'verified_ledger_excluded': 53}
 
 ## 旧执行器
 
-`RetentionCleanupService.execute` / API POST cleanup / 定时 `run_cleanup_task`：**硬删已下线**；`build_plan` preview 仍只读可用。
+`RetentionCleanupService.execute` / API `POST /api/config/cleanup` / 定时 `run_cleanup_task`：**硬删已下线**；`build_plan` preview 仍只读可用（前端「保留分析」区块读它）。
 
-## 真删（需你明确确认）
+## 在线执行入口（前端「安全清理」按钮）
+
+前端 `web/index.html` 的安全清理已改走三桶：
+
+| 步骤 | 接口 |
+| --- | --- |
+| 预览 | `GET /api/config/cleanup/three-buckets/preview` |
+| 执行 | `POST /api/config/cleanup/three-buckets`（需 `X-Danger-Confirm: cleanup-data` + 未过期 `preview_fingerprint`） |
+| 进度 | `GET /api/config/cleanup/tasks/{task_id}`（复用 `CleanupTask`） |
+
+护栏叠三层：`ENABLE_DATA_CLEANUP` 开关 → 确认头 → 指纹比对（数据变了返回 409）；执行时服务内再复算 plan 并对 `is_correct IS NOT NULL` 做台账断言。
+
+## 命令行真删（需你明确确认）
 
 ```bash
 PYTHONPATH=. python scripts/run_three_bucket_retention.py --execute --confirm three-buckets-hard-delete

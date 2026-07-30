@@ -8,14 +8,16 @@
 5. summary_viewpoints — is_summary，锚点 **viewpoint_date** 满窗口（默认 90 天）
 
 全局单次上限 max_total_per_run；真删需 dry_run=False + confirm_token。
+在线入口：`POST /api/config/cleanup/three-buckets`（开关 + 确认头 + 预览指纹）。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Callable, Dict, List, Optional, Sequence, Set
 
 from sqlalchemy.orm import Session, load_only
 
@@ -29,6 +31,14 @@ from src.utils.blogger_stats import recalculate_blogger_stats
 
 POLICY_NAME = "three-buckets-v2"
 CONFIRM_TOKEN = "three-buckets-hard-delete"
+
+
+class BucketPlanChanged(Exception):
+    """预览指纹与当前数据不一致（用户看到的清单已过期）。"""
+
+    def __init__(self, current_fingerprint: str):
+        self.current_fingerprint = current_fingerprint
+        super().__init__("three-bucket plan is stale")
 
 
 @dataclass(frozen=True)
@@ -64,6 +74,7 @@ class BucketPlan:
     samples: Dict[str, List[dict]] = field(default_factory=dict)
     notes: Dict[str, str] = field(default_factory=dict)
     truncated: bool = False
+    fingerprint: str = ""
 
     @property
     def total(self) -> int:
@@ -81,6 +92,7 @@ class BucketPlan:
             "candidate_ids": self.candidate_ids,
             "samples": self.samples,
             "notes": self.notes,
+            "fingerprint": self.fingerprint,
             "default_mode": "dry-run",
             "confirm_token_required_for_execute": CONFIRM_TOKEN,
             "invariants": [
@@ -103,6 +115,15 @@ class ThreeBucketRetentionService:
         BUCKET_DELETED_VP,
         BUCKET_SUMMARY_VP,
     )
+
+    # 前端可读标签（与 web/index.html 的清理分类标签共用一套口径）
+    BUCKET_LABELS = {
+        BUCKET_DELETED: "回收站预测",
+        BUCKET_LOGS: "清理明细日志",
+        BUCKET_UNVERIFIABLE: "已错过验证窗口的预测",
+        BUCKET_DELETED_VP: "回收站观点",
+        BUCKET_SUMMARY_VP: "历史每日汇总",
+    }
 
     def __init__(
         self,
@@ -169,7 +190,20 @@ class ThreeBucketRetentionService:
                 "（前端列表可读历史汇总，窗口宜偏大）"
             ),
         }
+        plan.fingerprint = self._fingerprint(plan)
         return plan
+
+    def _fingerprint(self, plan: BucketPlan) -> str:
+        """预览指纹：数据变了就失配，避免用户点确认时删到没看过的行。"""
+        payload = {
+            "policy_name": POLICY_NAME,
+            "as_of": plan.as_of.isoformat(),
+            "policy": plan.policy.to_dict(),
+            "candidate_ids": plan.candidate_ids,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
 
     def write_dry_run_report(self, path: Path, plan: Optional[BucketPlan] = None) -> Path:
         plan = plan or self.build_plan()
@@ -190,9 +224,25 @@ class ThreeBucketRetentionService:
         dry_run: bool = True,
         confirm_token: Optional[str] = None,
         plan: Optional[BucketPlan] = None,
+        expected_fingerprint: Optional[str] = None,
+        buckets: Optional[Set[str]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> dict:
-        plan = plan or self.build_plan()
+        if expected_fingerprint is not None:
+            # 复算当前 plan，只要候选集变了就拒绝（前端预览已过期）
+            plan = self.build_plan()
+            if plan.fingerprint != expected_fingerprint:
+                raise BucketPlanChanged(plan.fingerprint)
+        else:
+            plan = plan or self.build_plan()
+
+        selected = set(buckets) if buckets else set(self.BUCKETS)
+        unknown = selected - set(self.BUCKETS)
+        if unknown:
+            raise ValueError(f"unknown retention buckets: {sorted(unknown)}")
+
         report = plan.to_report_dict()
+        report["selected_buckets"] = sorted(selected)
         if dry_run:
             report["mode"] = "dry-run"
             report["deleted_counts"] = {k: 0 for k in self.BUCKETS}
@@ -204,30 +254,42 @@ class ThreeBucketRetentionService:
                 f"真删需要 confirm_token={CONFIRM_TOKEN!r} 且 dry_run=False"
             )
 
+        def ids_for(bucket: str) -> List[int]:
+            if bucket not in selected:
+                return []
+            return list(plan.candidate_ids.get(bucket, []))
+
         # 执行前再拦一层 verified 台账
-        pred_ids = list(plan.candidate_ids.get(self.BUCKET_DELETED, [])) + list(
-            plan.candidate_ids.get(self.BUCKET_UNVERIFIABLE, [])
+        self._assert_no_verified_ledger(
+            ids_for(self.BUCKET_DELETED) + ids_for(self.BUCKET_UNVERIFIABLE)
         )
-        self._assert_no_verified_ledger(pred_ids)
+
+        selected_total = sum(len(ids_for(bucket)) for bucket in self.BUCKETS)
+        processed = 0
+
+        def report_progress(bucket: str, done_in_bucket: int) -> None:
+            if progress_callback:
+                progress_callback(processed + done_in_bucket, selected_total, bucket)
 
         started_at = datetime.now()
-        deleted_counts = {
-            self.BUCKET_DELETED: self._hard_delete_predictions(
-                plan.candidate_ids.get(self.BUCKET_DELETED, [])
-            ),
-            self.BUCKET_LOGS: self._hard_delete_cleanup_logs(
-                plan.candidate_ids.get(self.BUCKET_LOGS, [])
-            ),
-            self.BUCKET_UNVERIFIABLE: self._hard_delete_predictions(
-                plan.candidate_ids.get(self.BUCKET_UNVERIFIABLE, [])
-            ),
-            self.BUCKET_DELETED_VP: self._hard_delete_viewpoints(
-                plan.candidate_ids.get(self.BUCKET_DELETED_VP, [])
-            ),
-            self.BUCKET_SUMMARY_VP: self._hard_delete_viewpoints(
-                plan.candidate_ids.get(self.BUCKET_SUMMARY_VP, [])
-            ),
-        }
+        deleted_counts: Dict[str, int] = {}
+        for bucket in self.BUCKETS:
+            ids = ids_for(bucket)
+            if bucket == self.BUCKET_LOGS:
+                deleted = self._hard_delete_cleanup_logs(
+                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
+                )
+            elif bucket in (self.BUCKET_DELETED_VP, self.BUCKET_SUMMARY_VP):
+                deleted = self._hard_delete_viewpoints(
+                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
+                )
+            else:
+                deleted = self._hard_delete_predictions(
+                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
+                )
+            deleted_counts[bucket] = deleted
+            processed += len(ids)
+            report_progress(bucket, 0)
         total_deleted = sum(deleted_counts.values())
         finished_at = datetime.now()
         # 摘要归档：一条 CleanupLog，便于周 cron 审计（不写逐条 item，避免再堆 2600 行）
@@ -245,6 +307,7 @@ class ThreeBucketRetentionService:
                 "policy": self.policy.to_dict(),
                 "as_of": self.today.isoformat(),
                 "protected_counts": plan.protected_counts,
+                "selected_buckets": sorted(selected),
             },
             details={
                 "deleted_counts": deleted_counts,
@@ -440,7 +503,12 @@ class ThreeBucketRetentionService:
         for i in range(0, len(ids), size):
             yield ids[i : i + size]
 
-    def _hard_delete_predictions(self, ids: List[int]) -> int:
+    def _hard_delete_predictions(
+        self,
+        ids: List[int],
+        *,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> int:
         if not ids:
             return 0
         self._assert_no_verified_ledger(ids)
@@ -474,9 +542,18 @@ class ThreeBucketRetentionService:
             self.db.flush()
             for bid in blogger_ids:
                 recalculate_blogger_stats(self.db, bid, commit=False)
+            # 每批提交：释放写锁，让外部进度查询能读到中间状态
+            self.db.commit()
+            if on_progress:
+                on_progress(deleted)
         return deleted
 
-    def _hard_delete_cleanup_logs(self, ids: List[int]) -> int:
+    def _hard_delete_cleanup_logs(
+        self,
+        ids: List[int],
+        *,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> int:
         if not ids:
             return 0
         deleted = 0
@@ -490,9 +567,17 @@ class ThreeBucketRetentionService:
                 self.db.delete(row)
                 deleted += 1
             self.db.flush()
+            self.db.commit()
+            if on_progress:
+                on_progress(deleted)
         return deleted
 
-    def _hard_delete_viewpoints(self, ids: List[int]) -> int:
+    def _hard_delete_viewpoints(
+        self,
+        ids: List[int],
+        *,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> int:
         if not ids:
             return 0
         from src.models.database import CrawlerArticleRecord
@@ -510,4 +595,7 @@ class ThreeBucketRetentionService:
                 self.db.delete(row)
                 deleted += 1
             self.db.flush()
+            self.db.commit()
+            if on_progress:
+                on_progress(deleted)
         return deleted

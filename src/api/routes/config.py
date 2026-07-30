@@ -52,6 +52,11 @@ class CleanupExecuteRequest(BaseModel):
     preview_fingerprint: str
 
 
+class ThreeBucketExecuteRequest(BaseModel):
+    preview_fingerprint: str
+    buckets: Optional[list[str]] = None
+
+
 @router.get("")
 def get_config():
     """获取配置信息"""
@@ -212,18 +217,18 @@ def _queue_cleanup(
         RetentionCleanupService,
     )
 
-    # 旧执行器硬删下线：API 直接拒绝，preview 仍可用
+    # 旧执行器硬删下线：先走统一开关/确认头校验，再给出改道提示（preview 仍可用）
+    _require_destructive_cleanup(request)
     if HARD_DELETE_DISABLED:
         raise HTTPException(
             status_code=403,
             detail={
                 "message": HARD_DELETE_DISABLED_REASON,
-                "use": "scripts/run_three_bucket_retention.py",
+                "use": "POST /api/config/cleanup/three-buckets",
                 "hard_delete_disabled": True,
             },
         )
 
-    _require_destructive_cleanup(request)
     if payload is None or not payload.preview_fingerprint:
         raise HTTPException(status_code=400, detail="必须携带预览指纹")
     plan = RetentionCleanupService(db).build_plan()
@@ -349,6 +354,165 @@ def get_cleanup_preview(db: Session = Depends(get_db)):
             "protected_counts": plan.protected_counts,
             "health_warnings": plan.health_warnings,
         },
+    }
+
+
+def _three_bucket_preview_payload(db: Session) -> dict:
+    from src.services.retention_three_buckets import (
+        POLICY_NAME,
+        ThreeBucketRetentionService,
+    )
+
+    service = ThreeBucketRetentionService(db)
+    plan = service.build_plan()
+    return {
+        "cleanup_enabled": destructive_cleanup_enabled(),
+        "rule_version": POLICY_NAME,
+        "as_of": plan.as_of.isoformat(),
+        "preview_fingerprint": plan.fingerprint,
+        "policy": plan.policy.to_dict(),
+        "counts": {name: len(ids) for name, ids in plan.candidate_ids.items()},
+        "total": plan.total,
+        "truncated_by_global_cap": plan.truncated,
+        "protected_counts": plan.protected_counts,
+        "labels": dict(ThreeBucketRetentionService.BUCKET_LABELS),
+        "notes": plan.notes,
+        "samples": plan.samples,
+    }
+
+
+def _run_three_bucket_background(
+    task_id: str,
+    fingerprint: str,
+    buckets: Optional[list[str]] = None,
+):
+    from src.models.database import CleanupTask, SessionLocal
+    from src.services.retention_three_buckets import (
+        CONFIRM_TOKEN,
+        BucketPlanChanged,
+        ThreeBucketRetentionService,
+    )
+
+    db = SessionLocal()
+    try:
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if not task:
+            return
+        task.status = "running"
+        task.started_at = datetime.now()
+        db.commit()
+        result = ThreeBucketRetentionService(db).execute(
+            dry_run=False,
+            confirm_token=CONFIRM_TOKEN,
+            expected_fingerprint=fingerprint,
+            buckets=set(buckets) if buckets else None,
+            progress_callback=lambda done, total, bucket: _set_cleanup_task_progress(
+                task_id, done, total, bucket
+            ),
+        )
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        task.status = "completed"
+        task.progress = 100
+        task.current_item = task.total_items
+        task.result = {
+            "success": True,
+            "total_deleted": result.get("total_deleted", 0),
+            "deleted_counts": result.get("deleted_counts", {}),
+            "protected_counts": result.get("protected_counts", {}),
+            "truncated_by_global_cap": result.get("truncated_by_global_cap", False),
+            "cleanup_log_id": result.get("cleanup_log_id"),
+        }
+        task.completed_at = datetime.now()
+        db.commit()
+    except BucketPlanChanged as exc:
+        db.rollback()
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error = f"预览已过期，请刷新后重试。当前指纹: {exc.current_fingerprint}"
+            task.completed_at = datetime.now()
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        task = db.query(CleanupTask).filter(CleanupTask.task_id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error = str(exc)
+            task.completed_at = datetime.now()
+            db.commit()
+    finally:
+        db.close()
+
+
+@router.get("/cleanup/three-buckets/preview")
+def preview_three_bucket_cleanup(db: Session = Depends(get_db)):
+    """三桶保留策略只读预览（唯一在线硬删路径的预览入口）。"""
+    return {"success": True, "data": _three_bucket_preview_payload(db)}
+
+
+@router.post("/cleanup/three-buckets")
+def run_three_bucket_cleanup(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: ThreeBucketExecuteRequest,
+    db: Session = Depends(get_db),
+):
+    """按三桶策略执行受控硬删：需清理开关 + 确认头 + 未过期预览指纹。"""
+    from src.models.database import CleanupTask
+    from src.services.retention_three_buckets import ThreeBucketRetentionService
+
+    _require_destructive_cleanup(request)
+
+    service = ThreeBucketRetentionService(db)
+    plan = service.build_plan()
+    if plan.fingerprint != payload.preview_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "预览已过期，请刷新后重试",
+                "current_fingerprint": plan.fingerprint,
+            },
+        )
+
+    selected = set(payload.buckets) if payload.buckets else set(service.BUCKETS)
+    unknown = selected - set(service.BUCKETS)
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"未知清理桶: {sorted(unknown)}"
+        )
+    selected_total = sum(len(plan.candidate_ids.get(name, [])) for name in selected)
+    if selected_total == 0:
+        return {
+            "success": True,
+            "message": "当前没有可清理资料",
+            "data": {"task_id": None, "status": "completed", "total_items": 0},
+        }
+
+    task_id = str(uuid.uuid4())
+    task = CleanupTask(
+        task_id=task_id,
+        status="pending",
+        progress=0,
+        current_item=0,
+        total_items=selected_total,
+        cleanup_types=sorted(selected),
+        cleanup_params={
+            "preview_fingerprint": plan.fingerprint,
+            "rule_version": "three-buckets-v2",
+        },
+    )
+    db.add(task)
+    db.commit()
+    background_tasks.add_task(
+        _run_three_bucket_background,
+        task_id,
+        plan.fingerprint,
+        sorted(selected),
+    )
+    return {
+        "success": True,
+        "message": "三桶清理任务已创建",
+        "data": {"task_id": task_id, "status": "pending", "total_items": selected_total},
     }
 
 

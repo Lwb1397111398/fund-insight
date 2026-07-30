@@ -44,8 +44,10 @@ POLICY_VERSION = "retention-v2"
 # 硬删统一走 three-buckets 脚本；本服务 execute 永久只读下线（preview/build_plan 仍可用）
 HARD_DELETE_DISABLED = True
 HARD_DELETE_DISABLED_REASON = (
-    "retention-v2 硬删路径已下线；请使用 scripts/run_three_bucket_retention.py "
-    "（默认 dry-run，含 verified 台账护栏）。preview/build_plan 仍只读可用。"
+    "retention-v2 硬删路径已下线；在线请用「安全清理（三桶）」"
+    "POST /api/config/cleanup/three-buckets，命令行用 "
+    "scripts/run_three_bucket_retention.py（默认 dry-run，含 verified 台账护栏）。"
+    "preview/build_plan 仍只读可用。"
 )
 
 

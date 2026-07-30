@@ -168,6 +168,9 @@ def test_prediction_query_keeps_flat_predictions_and_reports_facets(test_db):
         "wrong": 0,
         "flat": 1,
         "archived": 1,
+        "due": 0,
+        "upcoming": 0,
+        "unverifiable": 0,
     }
     assert len(archived["data"]) == 1
     assert archived["data"][0]["is_deleted"] is True
@@ -221,3 +224,135 @@ def test_pending_prediction_detail_includes_source_and_lifecycle(test_db):
     assert detail["post_title"] == "人工智能与医药观察"
     assert detail["post_source_url"] == "https://example.com/post/1"
     assert detail["next_verify_date"] == "2026-07-08"
+
+
+def _seed_ordering_predictions(db):
+    """构造四类预测：到期待验证、未到期近/远、已过窗、已验证。"""
+    from src.services.prediction_lifecycle import current_as_of, max_end_nav_age_days
+
+    blogger, _, post, _ = _seed_context(db)
+    today = current_as_of()
+    max_age = max_end_nav_age_days()
+    rows = {
+        # 到期待验证：目标日已过但仍在净值窗口内
+        "due_old": today - timedelta(days=max_age - 1),
+        "due_today": today,
+        # 未到期
+        "upcoming_near": today + timedelta(days=3),
+        "upcoming_far": today + timedelta(days=200),
+        # 已错过验证窗口
+        "unverifiable": today - timedelta(days=max_age + 40),
+    }
+    created = {}
+    for key, target in rows.items():
+        prediction = Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            fund_code=key,
+            prediction_type="up",
+            prediction_date=target - timedelta(days=7),
+            target_date=target,
+            status="pending",
+            is_deleted=False,
+        )
+        db.add(prediction)
+        created[key] = prediction
+    verified = Prediction(
+        post_id=post.id,
+        blogger_id=blogger.id,
+        fund_code="verified",
+        prediction_type="up",
+        prediction_date=today - timedelta(days=20),
+        target_date=today - timedelta(days=13),
+        status="success",
+        is_correct=True,
+        is_deleted=False,
+    )
+    db.add(verified)
+    created["verified"] = verified
+    db.commit()
+    return created
+
+
+def test_default_sort_puts_due_predictions_first(test_db):
+    from src.services.prediction_query_service import PredictionQueryService
+
+    created = _seed_ordering_predictions(test_db)
+    result = PredictionQueryService(test_db).search()
+
+    assert result["meta"]["sort"] == "due_first"
+    codes = [row["fund_code"] for row in result["data"]]
+    # 到期待验证在最前，且内部按目标日升序
+    assert codes[:2] == ["due_old", "due_today"]
+    # 未到期紧随其后，近的在前
+    assert codes[2:4] == ["upcoming_near", "upcoming_far"]
+    # 已过窗与已验证排在最后
+    assert set(codes[4:]) == {"unverifiable", "verified"}
+    assert created["due_old"].fund_code == "due_old"
+
+
+def test_default_sort_marks_lifecycle_and_days_to_target(test_db):
+    from src.services.prediction_query_service import PredictionQueryService
+
+    _seed_ordering_predictions(test_db)
+    rows = {
+        row["fund_code"]: row
+        for row in PredictionQueryService(test_db).search()["data"]
+    }
+
+    assert rows["due_today"]["lifecycle"] == "due_unverified"
+    assert rows["due_today"]["days_to_target"] == 0
+    assert rows["upcoming_near"]["lifecycle"] == "active"
+    assert rows["upcoming_near"]["days_to_target"] == 3
+    assert rows["unverifiable"]["lifecycle"] == "unverifiable"
+    assert rows["verified"]["lifecycle"] == "verified_correct"
+
+
+def test_lifecycle_filter_and_facets_expose_due_queue(test_db):
+    from src.services.prediction_query_service import PredictionQueryService
+
+    _seed_ordering_predictions(test_db)
+    service = PredictionQueryService(test_db)
+
+    due = service.search(lifecycle="due")
+    upcoming = service.search(lifecycle="active")
+    unverifiable = service.search(lifecycle="unverifiable")
+
+    assert {row["fund_code"] for row in due["data"]} == {"due_old", "due_today"}
+    assert {row["fund_code"] for row in upcoming["data"]} == {"upcoming_near", "upcoming_far"}
+    assert {row["fund_code"] for row in unverifiable["data"]} == {"unverifiable"}
+    facets = due["meta"]["facets"]
+    assert facets["due"] == 2
+    assert facets["upcoming"] == 2
+    assert facets["unverifiable"] == 1
+
+
+def test_explicit_sort_options_override_due_first(test_db):
+    from src.services.prediction_query_service import PredictionQueryService
+
+    _seed_ordering_predictions(test_db)
+    service = PredictionQueryService(test_db)
+
+    target_asc = [row["target_date"] for row in service.search(sort="target_asc")["data"]]
+    target_desc = [row["target_date"] for row in service.search(sort="target_desc")["data"]]
+    latest = service.search(sort="latest")
+
+    assert target_asc == sorted(target_asc)
+    assert target_desc == sorted(target_desc, reverse=True)
+    assert latest["meta"]["sort"] == "latest"
+    dates = [row["prediction_date"] for row in latest["data"]]
+    assert dates == sorted(dates, reverse=True)
+    # 未知排序值回落默认
+    assert service.search(sort="nonsense")["meta"]["sort"] == "due_first"
+
+
+def test_route_passes_lifecycle_and_sort_through(test_db):
+    from src.api.routes.predictions import get_predictions
+
+    _seed_ordering_predictions(test_db)
+
+    response = get_predictions(lifecycle="due", sort="target_asc", db=test_db)
+
+    assert response["success"] is True
+    assert {row["fund_code"] for row in response["data"]} == {"due_old", "due_today"}
+    assert response["meta"]["sort"] == "target_asc"
