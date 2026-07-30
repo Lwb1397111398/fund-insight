@@ -176,6 +176,9 @@ def latest_viewpoint_task(db: Session = Depends(get_db)):
     task = db.query(BatchAnalysisTask).filter(
         BatchAnalysisTask.task_type.in_(("viewpoint_fetch", "viewpoint_summary", "viewpoint_batch")),
     ).order_by(BatchAnalysisTask.created_at.desc()).first()
+    # 僵尸自愈：进程被 Render 重启杀死后任务会停在 running，
+    # 不自愈则前端按钮永久卡在"抓取分析中"且禁用（恢复入口恰好就是该按钮）。
+    ViewpointWorkflowService.heal_stale_task(db, task)
     return {"success": True, "data": ViewpointWorkflowService.serialize_task(task) if task else None}
 
 
@@ -190,7 +193,22 @@ def retry_viewpoint_task(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if background_tasks is not None:
-        background_tasks.add_task(_run_fetch_task, task.id)
+        # 按任务类型分发：run_fetch_task 只认 viewpoint_fetch，
+        # 无差别调用会让 batch/summary 任务的重试静默空转。
+        if task.task_type == "viewpoint_batch":
+            params = dict(task.task_params or {})
+            viewpoint_ids = list(params.get("retry_viewpoint_ids") or params.get("viewpoint_ids") or [])
+            if not viewpoint_ids:
+                from src.services.viewpoint_service import ViewpointService as _VS
+                candidates = _VS(db).get_viewpoints_for_batch_analyze(
+                    limit=params.get("limit") or 10, source=params.get("source") or "all", days=7
+                )
+                viewpoint_ids = [v.id for v in candidates]
+            background_tasks.add_task(_viewpoint_batch_analyze_background, task.id, viewpoint_ids)
+        elif task.task_type == "viewpoint_summary":
+            background_tasks.add_task(ViewpointWorkflowService.run_daily_summary_task)
+        else:
+            background_tasks.add_task(_run_fetch_task, task.id)
     return {"success": True, "data": ViewpointWorkflowService.serialize_task(task)}
 
 
@@ -293,6 +311,9 @@ def batch_analyze_viewpoints(
         BatchAnalysisTask.task_type == "viewpoint_batch",
         BatchAnalysisTask.status.in_(("running", "pending")),
     ).first()
+    if existing and ViewpointWorkflowService.heal_stale_task(db, existing):
+        # 僵尸任务已自愈为 failed，不再阻塞新任务
+        existing = None
     if existing:
         return {
             "success": True,
@@ -325,7 +346,8 @@ def batch_analyze_viewpoints(
         task_type="viewpoint_batch",
         status="pending",
         total_count=total,
-        task_params={"limit": data.limit, "source": data.source},
+        # 存入 viewpoint_ids：任务中断后被重试时，retry 路由靠它恢复分析范围
+        task_params={"limit": data.limit, "source": data.source, "viewpoint_ids": viewpoint_ids},
     )
     db.add(task)
     db.commit()

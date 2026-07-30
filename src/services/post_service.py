@@ -169,7 +169,21 @@ class PostService(BaseService[Post]):
         if post.analyzed:
             return "succeeded"
         result = post.analysis_result if isinstance(post.analysis_result, dict) else {}
-        status = (result.get("_meta") or {}).get("status")
+        meta = result.get("_meta") or {}
+        status = meta.get("status")
+        if status == "running":
+            # 僵尸自愈（显示层）：进程中断后 meta 会停在 running，
+            # 超时的按待分析显示，否则首页"分析中"徽章永久虚挂。
+            # 阈值与 PostAnalysisService._claim 的接管窗口一致；
+            # 解析失败时显示层宁可判 stale（_claim 执行层另有保守判断防双写）。
+            from src.services.post_analysis_service import PostAnalysisService
+
+            try:
+                updated_at = datetime.fromisoformat(meta.get("updated_at", ""))
+            except (TypeError, ValueError):
+                return "pending"
+            if datetime.now() - updated_at > PostAnalysisService.INTERRUPTED_AFTER:
+                return "pending"
         return status if status in {"pending", "running", "failed", "skipped", "succeeded"} else "pending"
 
     def get_posts_page(

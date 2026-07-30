@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Iterable, Optional
 
@@ -345,6 +348,50 @@ class PostAnalysisService:
             }
 
     @classmethod
+    def _running_meta_is_fresh(cls, meta: Dict[str, Any]) -> bool:
+        """帖子的"分析中"心跳是否仍在接管窗口内。
+
+        心跳解析失败时视作不新鲜（僵尸）：候选选取与 pending 标记宁可
+        重新接管，_claim 内部还有 with_for_update + 15 分钟窗口兜底防双写。
+        """
+        if meta.get("status") != "running":
+            return False
+        try:
+            updated_at = datetime.fromisoformat(meta.get("updated_at", ""))
+        except (TypeError, ValueError):
+            return False
+        return datetime.now() - updated_at <= cls.INTERRUPTED_AFTER
+
+    @staticmethod
+    def heal_stale_job(
+        db: Session,
+        task: Optional[BatchAnalysisTask],
+        stale_after: timedelta = timedelta(minutes=30),
+    ) -> bool:
+        """把心跳超时的帖子分析任务自愈为 failed（前端随之解除"分析中"）。
+
+        阈值 30 分钟刻意大于前端 15 分钟自动 resume：先让 resume 尝试救活，
+        救不活（进程确实死了）才由服务端兜底标失败。活任务每条帖子完成都
+        刷新 updated_at，健康任务不可能 30 分钟无心跳。
+        """
+        if task is None or task.status not in ("pending", "running"):
+            return False
+        reference = task.updated_at or task.started_at or task.created_at
+        if not reference or datetime.now() - reference <= stale_after:
+            return False
+        try:
+            task.status = "failed"
+            task.error_message = "检测到任务中断（超时未更新心跳，可能是服务重启），请重新发起分析"
+            task.completed_at = datetime.now()
+            db.commit()
+            logger.warning("帖子分析任务 %s 心跳超时已自愈为 failed", task.id)
+            return True
+        except Exception:
+            db.rollback()
+            logger.exception("帖子分析任务 %s 自愈失败", getattr(task, "id", None))
+            return False
+
+    @classmethod
     def create_job(
         cls,
         db: Session,
@@ -374,7 +421,11 @@ class PostAnalysisService:
             ).order_by(Post.created_at.desc()).yield_per(200)
             for candidate in candidates:
                 meta = cls._normalize_result(candidate.analysis_result).get("_meta") or {}
-                if meta.get("status") in ("failed", "skipped", "running", "succeeded"):
+                if meta.get("status") in ("failed", "skipped", "succeeded"):
+                    continue
+                # 分析中但心跳超时（进程中断的僵尸帖）：重新纳入候选，
+                # 交给 _claim 的 15 分钟接管逻辑；新鲜 running 仍跳过防重复。
+                if cls._running_meta_is_fresh(meta):
                     continue
                 selected_ids.append(candidate.id)
                 if len(selected_ids) >= limit:
@@ -403,8 +454,10 @@ class PostAnalysisService:
         db.flush()
         for post in db.query(Post).filter(Post.id.in_(selected_ids)).all() if selected_ids else []:
             meta = cls._normalize_result(post.analysis_result).get("_meta") or {}
-            if meta.get("status") not in ("running", "succeeded"):
-                post.analysis_result = cls._with_meta(post.analysis_result, "pending", task_id=task.id)
+            # 已成功或仍在新鲜分析中的不改；僵尸 running 改回 pending 与选取保持一致
+            if meta.get("status") == "succeeded" or cls._running_meta_is_fresh(meta):
+                continue
+            post.analysis_result = cls._with_meta(post.analysis_result, "pending", task_id=task.id)
         db.commit()
         db.refresh(task)
         return task, True
@@ -473,6 +526,30 @@ class PostAnalysisService:
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
 
+    @staticmethod
+    def _resolve_workers(session_factory: Callable[[], Session], count: int) -> int:
+        """决定批量分析的并发线程数。
+
+        - POST_ANALYSIS_MAX_WORKERS 默认 3（设 1 即回退到旧的串行行为）；
+        - 内存 SQLite 强制串行：SingletonThreadPool 下每个线程拿到的是独立空库；
+        - 不超过待处理数量。
+        """
+        if count <= 1:
+            return 1
+        try:
+            configured = int(os.environ.get("POST_ANALYSIS_MAX_WORKERS", "3"))
+        except (TypeError, ValueError):
+            configured = 3
+        workers = max(1, min(configured, 5))
+        probe = session_factory()
+        try:
+            url = probe.get_bind().url
+            if url.get_backend_name() == "sqlite" and url.database in (None, ":memory:"):
+                return 1
+        finally:
+            probe.close()
+        return max(1, min(workers, count))
+
     @classmethod
     def run_job(
         cls,
@@ -482,7 +559,11 @@ class PostAnalysisService:
         analyzer_factory: Optional[Callable[[], Any]] = None,
         fund_auto_manager: Any = None,
     ) -> None:
-        """运行任务。每次数据库操作都使用独立短会话。"""
+        """运行任务。每次数据库操作都使用独立短会话。
+
+        帖子间并发分析（默认 3 线程，POST_ANALYSIS_MAX_WORKERS 可调），
+        进度/日志写回集中在主线程串行执行，任务行零竞争。
+        """
         session_factory = session_factory or cls._session_local()
         # 延迟求值，便于测试 monkeypatch get_analyzer
         analyzer_factory = analyzer_factory or get_analyzer
@@ -510,75 +591,109 @@ class PostAnalysisService:
         finally:
             db.close()
 
-        try:
-            for post_id in post_ids:
-                state_db = session_factory()
-                try:
-                    task = state_db.get(BatchAnalysisTask, task_id)
-                    if not task or task.status == "cancelled":
-                        return
-                    if post_id in set(task.processed_ids or []):
-                        continue
-                finally:
-                    state_db.close()
+        stop = threading.Event()
 
-                started = time.monotonic()
+        def process_one(post_id: int):
+            """worker：跳过检查 → 分析。不碰任务行，返回结果交主线程记账。"""
+            state_db = session_factory()
+            try:
+                task = state_db.get(BatchAnalysisTask, task_id)
+                if not task or task.status == "cancelled":
+                    stop.set()
+                    return post_id, None, 0.0
+                if post_id in set(task.processed_ids or []):
+                    return post_id, None, 0.0
+            finally:
+                # 调用 LLM 前必须零活动会话（既有测试断言）
+                state_db.close()
+
+            started = time.monotonic()
+            try:
                 result = cls(
                     session_factory=session_factory,
                     analyzer_factory=analyzer_factory,
                     fund_auto_manager=fund_auto_manager,
                 ).analyze_post(post_id, task_id=task_id)
+            except Exception as exc:
+                # 二道防线：analyze_post 内部已兜底，这里确保 worker 永不抛出
+                logger.exception("帖子 %s 分析出现未捕获异常", post_id)
+                result = {"success": False, "status": "failed", "error": str(exc)}
+            return post_id, result, time.monotonic() - started
 
-                progress_db = session_factory()
-                try:
-                    task = progress_db.query(BatchAnalysisTask).filter(
-                        BatchAnalysisTask.id == task_id
-                    ).with_for_update().first()
-                    if not task:
+        def write_progress(post_id: int, result: Dict[str, Any], duration: float):
+            """主线程串行记账：进度、失败清单与分析日志。"""
+            progress_db = session_factory()
+            try:
+                task = progress_db.query(BatchAnalysisTask).filter(
+                    BatchAnalysisTask.id == task_id
+                ).with_for_update().first()
+                if not task:
+                    return
+
+                processed_ids = list(task.processed_ids or [])
+                failed_ids = [
+                    item for item in list(task.failed_ids or [])
+                    if int(item.get("id", -1)) != post_id
+                ]
+                summary = dict(task.result_summary or {})
+                status = result.get("status")
+                if status in ("succeeded", "skipped"):
+                    if post_id not in processed_ids:
+                        processed_ids.append(post_id)
+                        if status == "succeeded":
+                            task.success_count = (task.success_count or 0) + 1
+                            summary["analyzed"] = (summary.get("analyzed") or 0) + 1
+                        else:
+                            summary["skipped"] = (summary.get("skipped") or 0) + 1
+                else:
+                    failed_ids.append({"id": post_id, "error": result.get("error") or result.get("message")})
+
+                task.processed_ids = processed_ids
+                task.failed_ids = failed_ids
+                task.failed_count = len(failed_ids)
+                task.processed_count = len(processed_ids) + len(failed_ids)
+                summary.update({
+                    "failed": len(failed_ids),
+                    "total": task.total_count,
+                })
+                task.result_summary = summary
+                log_post_id = post_id if progress_db.get(Post, post_id) is not None else None
+                progress_db.add(AnalysisLog(
+                    task_id=task_id,
+                    post_id=log_post_id,
+                    llm_model=result.get("llm_model"),
+                    llm_response=json.dumps(result.get("analysis_result"), ensure_ascii=False)
+                    if result.get("analysis_result") else None,
+                    parse_success=status in ("succeeded", "skipped"),
+                    parse_method=status,
+                    parse_error=result.get("error"),
+                    analysis_duration=duration,
+                ))
+                progress_db.commit()
+            finally:
+                progress_db.close()
+
+        try:
+            workers = cls._resolve_workers(session_factory, len(post_ids))
+            if workers <= 1:
+                for post_id in post_ids:
+                    pid, result, duration = process_one(post_id)
+                    if stop.is_set():
                         return
-
-                    processed_ids = list(task.processed_ids or [])
-                    failed_ids = [
-                        item for item in list(task.failed_ids or [])
-                        if int(item.get("id", -1)) != post_id
-                    ]
-                    summary = dict(task.result_summary or {})
-                    status = result.get("status")
-                    if status in ("succeeded", "skipped"):
-                        if post_id not in processed_ids:
-                            processed_ids.append(post_id)
-                            if status == "succeeded":
-                                task.success_count = (task.success_count or 0) + 1
-                                summary["analyzed"] = (summary.get("analyzed") or 0) + 1
-                            else:
-                                summary["skipped"] = (summary.get("skipped") or 0) + 1
-                    else:
-                        failed_ids.append({"id": post_id, "error": result.get("error") or result.get("message")})
-
-                    task.processed_ids = processed_ids
-                    task.failed_ids = failed_ids
-                    task.failed_count = len(failed_ids)
-                    task.processed_count = len(processed_ids) + len(failed_ids)
-                    summary.update({
-                        "failed": len(failed_ids),
-                        "total": task.total_count,
-                    })
-                    task.result_summary = summary
-                    log_post_id = post_id if progress_db.get(Post, post_id) is not None else None
-                    progress_db.add(AnalysisLog(
-                        task_id=task_id,
-                        post_id=log_post_id,
-                        llm_model=result.get("llm_model"),
-                        llm_response=json.dumps(result.get("analysis_result"), ensure_ascii=False)
-                        if result.get("analysis_result") else None,
-                        parse_success=status in ("succeeded", "skipped"),
-                        parse_method=status,
-                        parse_error=result.get("error"),
-                        analysis_duration=time.monotonic() - started,
-                    ))
-                    progress_db.commit()
-                finally:
-                    progress_db.close()
+                    if result is not None:
+                        write_progress(pid, result, duration)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=workers, thread_name_prefix="post-analysis"
+                ) as executor:
+                    futures = [executor.submit(process_one, post_id) for post_id in post_ids]
+                    for future in as_completed(futures):
+                        post_id, result, duration = future.result()
+                        if result is not None:
+                            write_progress(post_id, result, duration)
+                        if stop.is_set():
+                            # 任务被取消：在途结果不再记账，保持 cancelled 终态
+                            return
 
             final_db = session_factory()
             try:

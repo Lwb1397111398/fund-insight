@@ -351,6 +351,90 @@ def test_job_log_drops_post_foreign_key_if_post_was_deleted(monkeypatch, tmp_pat
         check.close()
 
 
+def _running_meta(minutes_ago: float) -> dict:
+    from datetime import datetime
+
+    return {
+        "_meta": {
+            "status": "running",
+            "updated_at": (datetime.now() - timedelta(minutes=minutes_ago)).isoformat(),
+        }
+    }
+
+
+def test_create_job_reselects_stale_running_post_but_skips_fresh(test_db):
+    """僵尸帖（分析中心跳超时）要能重新入选；正在分析的新鲜帖不重复选。"""
+    from src.services.post_analysis_service import PostAnalysisService
+
+    stale = _create_post(test_db, content="分析中断的僵尸帖子，内容足够长，等待被重新选取分析。")
+    fresh = Post(
+        blogger_id=stale.blogger_id,
+        title="正在分析",
+        content="这条帖子正在被另一个活任务分析，不能被重复选取，否则会产生重复预测。",
+        post_date=date(2026, 7, 10),
+        analyzed=False,
+        analysis_result=_running_meta(minutes_ago=1),
+    )
+    stale.analysis_result = _running_meta(minutes_ago=20)
+    test_db.add(fresh)
+    test_db.commit()
+    stale_id, fresh_id = stale.id, fresh.id
+
+    task, _ = PostAnalysisService.create_job(test_db, limit=100)
+
+    assert task.task_params["post_ids"] == [stale_id]
+    assert fresh_id not in task.task_params["post_ids"]
+    test_db.expire_all()
+    # 入选的僵尸帖状态应被改回 pending，与显示层一致
+    assert test_db.get(Post, stale_id).analysis_result["_meta"]["status"] == "pending"
+
+
+def test_get_analysis_status_downgrades_stale_running_to_pending(test_db):
+    from src.services.post_service import PostService
+
+    stale = _create_post(test_db)
+    stale.analysis_result = _running_meta(minutes_ago=20)
+    fresh = Post(
+        blogger_id=stale.blogger_id,
+        title="新鲜",
+        content="正在分析中的帖子，心跳新鲜，应继续显示分析中。",
+        post_date=date(2026, 7, 10),
+        analyzed=False,
+        analysis_result=_running_meta(minutes_ago=1),
+    )
+    test_db.add(fresh)
+    test_db.commit()
+
+    assert PostService.get_analysis_status(stale) == "pending"
+    assert PostService.get_analysis_status(fresh) == "running"
+
+
+def test_heal_stale_job_marks_failed_but_keeps_fresh_running(test_db):
+    from datetime import datetime
+    from src.services.post_analysis_service import PostAnalysisService
+
+    stale = BatchAnalysisTask(
+        task_type="posts", status="running", total_count=5,
+        started_at=datetime.now() - timedelta(hours=1),
+        updated_at=datetime.now() - timedelta(minutes=31),
+    )
+    fresh = BatchAnalysisTask(
+        task_type="posts", status="running", total_count=5,
+        started_at=datetime.now() - timedelta(hours=1),
+        updated_at=datetime.now() - timedelta(seconds=20),
+    )
+    test_db.add_all([stale, fresh])
+    test_db.commit()
+
+    assert PostAnalysisService.heal_stale_job(test_db, stale) is True
+    assert PostAnalysisService.heal_stale_job(test_db, fresh) is False
+    test_db.refresh(stale)
+    test_db.refresh(fresh)
+    assert stale.status == "failed"
+    assert "中断" in (stale.error_message or "")
+    assert fresh.status == "running"
+
+
 def test_duplicate_runner_does_not_reprocess_fresh_running_job(tmp_path):
     from datetime import datetime
     from src.services.post_analysis_service import PostAnalysisService

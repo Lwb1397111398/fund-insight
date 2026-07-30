@@ -112,6 +112,9 @@ def get_analysis_job(task_id: int, db: Session = Depends(get_db)):
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+    # 兜底自愈：前端 15 分钟会自动 resume，30 分钟仍无心跳说明进程确实死了，
+    # 标失败让前端解除"分析中"，避免按钮永久卡死。
+    PostAnalysisService.heal_stale_job(db, task)
     return {"success": True, "data": PostAnalysisService.serialize_job(task)}
 
 

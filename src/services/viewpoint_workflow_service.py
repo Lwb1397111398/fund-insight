@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_SOURCES = ("sina_blog", "stock_guba", "fund_guba")
 ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES)
 
+# 任务心跳超时：后台任务跑在 Web 进程内，Render 休眠/重启会直接杀死它，
+# 在 DB 里留下 status='running' 的僵尸任务。轮询端点发现超时任务即自愈为
+# failed（前端随即显示重试按钮），避免按钮永久卡在"抓取分析中"。
+# 阈值与 create_fetch_task 的中断恢复保持一致；活任务逐项 commit 刷新
+# updated_at，正常心跳间隔远小于该值。
+STALE_TASK_AFTER = timedelta(minutes=20)
+
 # 观点内容门禁：内容必须包含至少一个，才视为"博主市场观点"。
 _VIEWPOINT_KEYWORDS = (
     # 方向判断（核心）
@@ -296,10 +303,15 @@ class ViewpointWorkflowService:
             total_to_fetch = 0
             for source in sources:
                 task = db.get(BatchAnalysisTask, task_id)
-                if not task or task.status == "cancelled":
+                if not task or task.status in ("cancelled", "failed"):
                     return
                 summary = dict(task.result_summary or {})
                 source_stats = dict((summary.get("sources") or {}).get(source) or {})
+                # 抓取前心跳：fetcher 是慢 HTTP，期间没有 commit，
+                # 不写这次心跳会让轮询端点的超时自愈误判任务已死。
+                summary["phase"] = f"fetching:{source}"
+                task.result_summary = summary
+                db.commit()
                 try:
                     articles = list(fetchers[source](limit) or [])
                     source_articles[source] = articles
@@ -331,7 +343,9 @@ class ViewpointWorkflowService:
 
             for source, articles in source_articles.items():
                 task = db.get(BatchAnalysisTask, task_id)
-                if not task or task.status == "cancelled":
+                # failed：任务在运行中被轮询端点自愈（进程中断）→ 停止推进，
+                # 否则活过来的慢任务会把自己写成 succeeded，自愈白做。
+                if not task or task.status in ("cancelled", "failed"):
                     return
                 for article in articles:
                     try:
@@ -499,7 +513,7 @@ class ViewpointWorkflowService:
 
         for vid in ids:
             task = db.get(BatchAnalysisTask, task.id)
-            if not task or task.status == "cancelled":
+            if not task or task.status in ("cancelled", "failed"):
                 return
             viewpoint = db.get(Viewpoint, vid)
             if not viewpoint or viewpoint.is_deleted or viewpoint.is_summary:
@@ -564,6 +578,37 @@ class ViewpointWorkflowService:
         db.commit()
         db.refresh(task)
         return task
+
+    @staticmethod
+    def heal_stale_task(
+        db: Session,
+        task: Optional[BatchAnalysisTask],
+        stale_after: timedelta = STALE_TASK_AFTER,
+    ) -> bool:
+        """把心跳超时的活跃任务自愈为 failed。返回是否发生了自愈。
+
+        参考时间戳取 updated_at（每次进度 commit 都会经 onupdate 刷新），
+        尊重运行中任务的心跳；绝不能误杀仍在推进的慢任务。
+        自愈失败不得让高频轮询的 GET 端点 500，因此整段吞异常。
+        """
+        if task is None or task.status not in ("pending", "running"):
+            return False
+        reference = task.updated_at or task.started_at or task.created_at
+        if not reference or datetime.now() - reference <= stale_after:
+            return False
+        try:
+            task.status = "failed"
+            task.error_message = "检测到进程中断（Render 重启/休眠），任务已自动标记失败，可点击重试"
+            task.completed_at = datetime.now()
+            db.commit()
+            logger.warning(
+                "观点任务 %s 心跳超时已自愈为 failed（最后更新 %s）", task.id, reference
+            )
+            return True
+        except Exception:
+            db.rollback()
+            logger.exception("观点任务 %s 自愈失败", getattr(task, "id", None))
+            return False
 
     @staticmethod
     def serialize_task(task: BatchAnalysisTask) -> Dict[str, Any]:

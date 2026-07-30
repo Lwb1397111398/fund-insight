@@ -687,7 +687,9 @@ class LLMAnalyzer:
         
         for attempt in range(retry_count):
             try:
-                result_text = self._call_llm(prompt, task_type='core', max_tokens=2000, temperature=0.3, use_cache=False)
+                # 内层 retry_count=1：重试统一由本外层循环负责，
+                # 否则内外两层相乘最坏会发起 retry_count*3 次调用，批量分析时严重拖慢。
+                result_text = self._call_llm(prompt, task_type='core', max_tokens=2000, temperature=0.3, use_cache=False, retry_count=1)
                 
                 result = self._parse_json_with_fallback(result_text)
                 if result:

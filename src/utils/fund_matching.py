@@ -5,7 +5,12 @@
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
+from src.constants.sector_fund_map import get_fund_for_sector as get_mapped_fund
 from src.models.database import FundInfo
+
+# 与 fund_auto_manager._verify_fund_exists 同源的本地过滤词：
+# 快速路径跳过 HTTP 验证，但债基排除语义必须保留。
+_EXCLUDED_FUND_KEYWORDS = ("债券", "债", "货币", "理财", "短债", "纯债", "利率债", "信用债")
 
 
 def match_fund_with_fallback(
@@ -34,6 +39,26 @@ def match_fund_with_fallback(
     Returns:
         (fund_code, fund_name)
     """
+    # 第零级：零网络快速路径。
+    # 与第一级 auto_add 内部同源的硬编码映射表查 code，若该基金已入库则直接返回，
+    # 省掉 auto_add 每次都发起的 fund_api.get_fund_info HTTP 验证
+    # （Render 海外访问中国基金站点极慢，是批量分析的主要延迟来源）。
+    # 映射表未命中或基金未入库时原样落到第一级，新基金自动入库语义完全保留。
+    if sector:
+        try:
+            mapped = get_mapped_fund(sector)
+            if mapped and mapped.get("code"):
+                existing = db.query(FundInfo).filter(
+                    FundInfo.fund_code == str(mapped["code"])
+                ).first()
+                if existing and not any(
+                    keyword in (existing.fund_name or "")
+                    for keyword in _EXCLUDED_FUND_KEYWORDS
+                ):
+                    return existing.fund_code, existing.fund_name
+        except Exception as e:
+            print(f"[Fund Match] Level 0 (Fast Path) failed: {e}")
+
     # 第一级：使用 fund_auto_manager 自动匹配（优先查本地映射表）
     try:
         success, message, fund = fund_auto_manager.auto_add_fund_for_prediction(sector, db)

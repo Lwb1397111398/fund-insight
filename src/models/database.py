@@ -43,6 +43,8 @@ def _create_sqlite_engine(database_url: str):
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys = ON")
+        # 并发写等待窗口（pysqlite 默认仅 5 秒）：批量分析多线程提交时避免 database is locked
+        cursor.execute("PRAGMA busy_timeout = 15000")
         cursor.close()
 
     return sqlite_engine
