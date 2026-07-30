@@ -43,10 +43,6 @@
                         <div class="value">{{ stats.overall?.total_predictions || 0 }}</div>
                         <div class="label">预测 <span class="stat-extra">({{ stats.overall?.pending_predictions || 0 }}待验)</span></div>
                     </div>
-                    <div class="stat-mini" title="存活命中率 = 方向判对 / 已有验证结论（未删）">
-                        <div class="value">{{ stats.overall?.avg_accuracy != null ? stats.overall.avg_accuracy.toFixed(1) + '%' : '-' }}</div>
-                        <div class="label">准确率 <span class="stat-extra">命中</span></div>
-                    </div>
                     <div class="stat-mini" @click="loadView('viewpoints')">
                         <div class="value">{{ stats.overall?.total_viewpoints || 0 }}</div>
                         <div class="label">观点</div>
@@ -1707,6 +1703,15 @@
             if (savedPassword) {
                 axios.defaults.headers.common['X-Access-Password'] = savedPassword;
             }
+            // 请求拦截器：给 GET 查询兜底超时，避免网络/服务假死时页面永远停在"加载中"。
+            // POST 不设超时——LLM 分析、批量汇总等本身耗时较长。
+            axios.interceptors.request.use(function(cfg) {
+                const method = (cfg.method || 'get').toLowerCase();
+                if (method === 'get' && cfg.timeout == null) {
+                    cfg.timeout = 60000;
+                }
+                return cfg;
+            });
             // 响应拦截器：401 时清除密码并触发重新输入
             axios.interceptors.response.use(
                 function(response) { return response; },
@@ -1975,7 +1980,9 @@ const fetchWeChatBatch = async () => {
                             }
                         }
                     } catch (e) {
-                        fundError.value = '基金加载失败，请稍后重试';
+                        fundError.value = e.code === 'ECONNABORTED'
+                            ? '基金加载超时（服务可能正在唤醒），请点击重新加载'
+                            : '基金加载失败，请稍后重试';
                     } finally {
                         fundLoading.value = false;
                     }

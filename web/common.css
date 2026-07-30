@@ -205,7 +205,7 @@
 
         .stats-mini-grid {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
+            grid-template-columns: repeat(6, minmax(0, 1fr));
             gap: var(--space-3);
             margin-bottom: var(--space-4);
         }
@@ -246,10 +246,33 @@
         }
 
         .action-bar {
-            display: flex;
-            gap: var(--space-2);
+            display: grid;
+            /* 按钮数量可变（清理按钮按开关显隐）：自动等分整行，
+               与上方统计卡网格同宽同 gap，两行左右边缘对齐 */
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(0, 1fr);
+            gap: var(--space-3);
             margin-bottom: var(--space-4);
-            flex-wrap: wrap;
+        }
+
+        .action-bar .action-btn {
+            width: 100%;
+            min-width: 0;
+            justify-content: center;
+        }
+
+        /* 六列时逐列对齐统计卡（清理按钮隐藏时为 5 个，末个跨 2 列补齐末尾）。
+           限定 769px 以上：:has() 选择器优先级高于媒体查询里的 .action-bar，
+           不加宽度限制会把手机端的两列网格压回一行。 */
+        @media (min-width: 769px) {
+            .action-bar:has(.action-btn:nth-child(5)):not(:has(.action-btn:nth-child(6))) {
+                grid-auto-flow: row;
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+            }
+
+            .action-bar:has(.action-btn:nth-child(5)):not(:has(.action-btn:nth-child(6))) .action-btn:last-child {
+                grid-column: span 2;
+            }
         }
 
         .cleanup-actions {
@@ -1665,15 +1688,23 @@
             }
 
             .stats-mini-grid {
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(3, minmax(0, 1fr));
             }
 
+            /* 平板：主操作按钮三列，与上方三列统计卡逐列对齐 */
             .action-bar {
-                flex-direction: column;
+                grid-auto-flow: row;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: var(--space-2);
             }
 
-            .action-btn {
-                min-width: 100%;
+            /* 按钮数不是 3 的倍数时，末个按钮补齐末行，右缘不留缺口 */
+            .action-bar .action-btn:last-child:nth-child(3n + 2) {
+                grid-column: span 2;
+            }
+
+            .action-bar .action-btn {
+                min-width: 0;
             }
 
             .cleanup-actions {
@@ -1775,14 +1806,14 @@
                 font-size: 12px;
             }
 
-            /* 表格响应式 */
+            /* 表格响应式：所有页面的宽表统一横滑，且提示可滑动 */
             .data-table {
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
             }
 
             .data-table table {
-                min-width: 500px;
+                min-width: 560px;
             }
 
             th, td {
@@ -1801,24 +1832,28 @@
                 padding: var(--space-2);
             }
 
-            /* 操作按钮优化 */
+            /* 操作按钮优化：手机两列网格，指腹可点且不出屏 */
             .action-bar {
-                flex-direction: column;
+                grid-auto-flow: row;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: var(--space-2);
             }
 
-            .action-btn {
-                min-width: 100%;
+            .action-bar .action-btn {
+                min-width: 0;
                 padding: var(--space-3);
             }
 
             .sub-actions {
                 flex-wrap: wrap;
-                gap: var(--space-1);
+                gap: var(--space-2);
             }
 
+            /* 页内小按钮：两列铺满，避免长文案挤出屏幕 */
             .action-btn.small {
                 flex: 1 1 calc(50% - var(--space-1));
                 min-width: calc(50% - var(--space-1));
+                min-height: 40px;
                 font-size: 12px;
                 padding: var(--space-2);
             }
@@ -1956,9 +1991,9 @@
         .stat-mini:nth-child(1) { border-top: 3px solid var(--color-primary); }
         .stat-mini:nth-child(2) { border-top: 3px solid var(--color-success); }
         .stat-mini:nth-child(3) { border-top: 3px solid var(--color-warning); }
-        .stat-mini:nth-child(4) { border-top: 3px solid var(--color-danger); }
-        .stat-mini:nth-child(5) { border-top: 3px solid var(--color-info); }
-        .stat-mini:nth-child(6) { border-top: 3px solid #8b5cf6; }
+        .stat-mini:nth-child(4) { border-top: 3px solid var(--color-info); }
+        .stat-mini:nth-child(5) { border-top: 3px solid #8b5cf6; }
+        .stat-mini:nth-child(6) { border-top: 3px solid var(--color-danger); }
 
         /* 状态徽章优化 */
         .status-badge {
@@ -2163,8 +2198,8 @@
             border: 1px solid rgba(220, 38, 38, 0.2);
         }
 
-        .viewpoint-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-        .viewpoint-fetch-control { display: flex; gap: 6px; position: relative; }
+        .viewpoint-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .viewpoint-fetch-control { display: flex; gap: 6px; position: relative; flex-wrap: wrap; }
         .viewpoint-source-menu { position: absolute; z-index: 20; top: 40px; right: 0; width: 210px; padding: 10px; background: var(--bg-card); border: 1px solid var(--border-color); box-shadow: var(--shadow-lg); border-radius: 6px; }
         .viewpoint-source-menu label { display: block; padding: 7px 4px; cursor: pointer; font-size: 13px; }
         .viewpoint-metrics { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); border-block: 1px solid var(--border-color); margin: 12px 0; }
@@ -2196,7 +2231,24 @@
             .viewpoint-task-progress { grid-column: 1 / -1; grid-row: 2; }
         }
         @media (max-width: 560px) {
-            .viewpoint-heading { align-items: flex-start; }
+            .viewpoint-heading { align-items: flex-start; flex-direction: column; }
+            /* 三个抓取/分析/汇总按钮 + 来源下拉：手机上 2×2 网格，不再横向溢出 */
+            .viewpoint-fetch-control {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: var(--space-2);
+                width: 100%;
+            }
+            .viewpoint-fetch-control .action-btn.small,
+            .viewpoint-fetch-control > .row-btn {
+                width: 100%;
+                min-width: 0;
+                min-height: 40px;
+                flex: none;
+                justify-content: center;
+                font-size: 12px;
+            }
+            .viewpoint-source-menu { top: calc(100% + 6px); right: 0; width: min(280px, calc(100vw - 32px)); }
             .viewpoint-metrics { grid-template-columns: 1fr 1fr; }
             .viewpoint-metrics > div { padding: 10px; }
             .viewpoint-filters { grid-template-columns: 1fr 1fr; }
@@ -2291,20 +2343,21 @@
     }
 }
 
-/* 平板及以下：顶部操作按钮改为自动换行，避免 6 个主按钮纵向堆叠过长 */
+/* 平板及以下：主操作按钮三列网格，与三列统计卡对齐（.action-bar 现为 grid） */
 @media (max-width: 768px) {
     .action-bar {
-        flex-wrap: wrap;
-        flex-direction: row;
+        grid-auto-flow: row;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: var(--space-2);
     }
     .action-bar .action-btn {
         min-width: 0;
-        flex: 1 1 calc(50% - var(--space-1));
+        width: 100%;
         justify-content: center;
     }
-    .action-bar .action-btn.small {
-        flex: 1 1 calc(50% - var(--space-1));
+    /* 末行不足 3 个时末个按钮跨列，右缘不留缺口 */
+    .action-bar .action-btn:last-child:nth-child(3n + 2) {
+        grid-column: span 2;
     }
 }
 
@@ -2322,10 +2375,15 @@
     }
     /* 主操作按钮:两列网格,指腹可点 */
     .action-bar .action-btn {
-        flex: 1 1 calc(50% - var(--space-1));
+        min-width: 0;
+        width: 100%;
         min-height: 44px;
         padding: var(--space-3);
         font-size: 13px;
+    }
+    /* 按钮数为奇数时，末个按钮横跨两列，末行不留缺口 */
+    .action-bar .action-btn:last-child:nth-child(odd) {
+        grid-column: 1 / -1;
     }
     /* 行内按钮加大可点区域 */
     .row-btn {
