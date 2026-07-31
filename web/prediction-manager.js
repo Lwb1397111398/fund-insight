@@ -198,6 +198,7 @@
                 const response = await axios.get('/api/predictions/verify-all/status');
                 verifyTask.value = response.data.data || null;
                 if (verifyTask.value?.in_progress) await pollVerifyTask();
+                // 非进行中也保留 verifyTask，用于展示上次验证的失败原因汇总
             } catch (error) { console.error('恢复预测验证任务失败', error); }
         };
 
@@ -214,13 +215,13 @@
         };
         const executePredictionMaintenance = async () => {
             const type = maintenancePreview.value?.type;
-            if (!['mapping', 'rollback'].includes(type)) return;
-            const label = type === 'mapping' ? '板块映射同步' : '无效验证回溯';
+            if (!['duplicates', 'mapping', 'rollback'].includes(type)) return;
+            const label = type === 'duplicates' ? '重复预测去重' : type === 'mapping' ? '板块映射同步' : '无效验证回溯';
             if (!confirm(`确认执行${label}？系统将按预览清单修改资料。`)) return;
             analyzing.value = true;
             try {
-                const endpoint = type === 'mapping' ? 'sync-sector-mapping' : 'rollback-invalid';
-                const confirmValue = type === 'mapping' ? 'sync-prediction-mapping' : 'rollback-predictions';
+                const endpoint = type === 'duplicates' ? 'dedupe-duplicates' : type === 'mapping' ? 'sync-sector-mapping' : 'rollback-invalid';
+                const confirmValue = type === 'duplicates' ? 'dedupe-predictions' : type === 'mapping' ? 'sync-prediction-mapping' : 'rollback-predictions';
                 const response = await axios.post(`/api/predictions/${endpoint}`, null, {
                     params: { dry_run: false },
                     headers: { 'X-Danger-Confirm': confirmValue },

@@ -35,3 +35,11 @@ def test_fund_update_starts_polling_before_blocking_alert():
     assert "clearFundUpdatePoll" in content
     assert "FUND_UPDATE_POLL_TIMEOUT_MS" in content
     assert "consecutiveErrors" in content
+
+
+def test_fund_update_result_alert_is_consumed_only_once():
+    """同一批更新结果只应弹一次窗：按 finished_at 记录已消费结果，防止连环弹窗"""
+    content = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert "lastFundUpdateFinishedAt" in content
+    assert "status.finished_at === lastFundUpdateFinishedAt" in content

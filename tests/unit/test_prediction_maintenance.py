@@ -73,9 +73,51 @@ def test_duplicate_scan_never_groups_cross_blogger_or_missing_fund(test_db):
 
     assert result["duplicate_groups"] == 1
     assert result["candidate_predictions"] == 2
+    assert result["removable_predictions"] == 1
     assert result["groups"][0]["prediction_ids"] == [first.id, second.id]
+    assert result["groups"][0]["keep_id"] == first.id
+    assert result["groups"][0]["remove_ids"] == [second.id]
     assert cross_blogger.id not in result["groups"][0]["prediction_ids"]
     assert test_db.query(Prediction).filter(Prediction.is_deleted == True).count() == 0
+
+
+def test_dedupe_keeps_verified_prediction_and_soft_deletes_rest(test_db):
+    blogger, post = _blogger_post(test_db, "去重博主")
+    plain = _prediction(test_db, blogger, post)
+    verified = _prediction(test_db, blogger, post, verified=True)
+    test_db.commit()
+
+    scan = PredictionMaintenanceService(test_db).scan_duplicate_groups()
+    assert scan["groups"][0]["keep_id"] == verified.id
+
+    result = PredictionMaintenanceService(test_db).deduplicate_predictions()
+
+    assert result["removed_count"] == 1
+    assert result["removed"] == [{"prediction_id": plain.id, "keep_id": verified.id}]
+    test_db.refresh(plain)
+    test_db.refresh(verified)
+    assert plain.is_deleted is True
+    assert plain.delete_reason == f"duplicate_of_{verified.id}"
+    assert verified.is_deleted is False
+    assert verified.is_correct is True
+    log = test_db.query(PredictionChangeLog).one()
+    assert log.action == "archived"
+    assert log.source == "duplicate_cleanup"
+
+    # 幂等：再跑一次不再归档任何记录
+    again = PredictionMaintenanceService(test_db).deduplicate_predictions()
+    assert again["removed_count"] == 0
+    assert test_db.query(PredictionChangeLog).count() == 1
+
+
+def test_dedupe_route_requires_confirmation(test_db):
+    with pytest.raises(HTTPException) as exc:
+        prediction_routes.dedupe_duplicate_predictions(
+            request=_request(),
+            db=test_db,
+        )
+
+    assert exc.value.status_code == 403
 
 
 def test_sector_mapping_preview_uses_only_reviewed_mapping_and_does_not_write(test_db):

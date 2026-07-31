@@ -191,6 +191,25 @@ def _count_due_predictions(db: Session, today: date) -> int:
     ).count()
 
 
+def _due_skipped_predictions(db: Session, today: date) -> list:
+    """已到期但不会进入验证队列的预测及原因（观望 / 已过验证窗口）。"""
+    from src.services.prediction_lifecycle import due_skip_reason
+
+    rows = db.query(Prediction).filter(
+        Prediction.is_deleted == False,
+        Prediction.target_date.isnot(None),
+        Prediction.is_correct.is_(None),
+        Prediction.target_date <= today,
+    ).order_by(Prediction.target_date.asc()).all()
+
+    skipped = []
+    for prediction in rows:
+        reason = due_skip_reason(prediction, as_of=today)
+        if reason:
+            skipped.append({"prediction_id": prediction.id, "reason": reason})
+    return skipped
+
+
 def _verify_all_background(task_id: int):
     """后台验证所有待验证预测（逐条上报进度，供前端进度条轮询）"""
     from src.models.database import SessionLocal
@@ -231,8 +250,19 @@ def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depe
 
     today = date.today()
     pending_count = _count_due_predictions(db, today)
-    
+
     if pending_count == 0:
+        skipped = _due_skipped_predictions(db, today)
+        if skipped:
+            preview = "；".join(
+                f"预测#{item['prediction_id']}：{item['reason']}" for item in skipped[:3]
+            )
+            more = f" 等 {len(skipped)} 条" if len(skipped) > 3 else ""
+            return {
+                "success": True,
+                "message": f"没有可验证的到期预测。{len(skipped)} 条到期未验证：{preview}{more}",
+                "data": {"total": 0, "skipped": skipped},
+            }
         return {"success": True, "message": "没有需要验证的预测", "data": {"total": 0}}
     
     start_result = prediction_verify_task.start(pending_count, db=db)
@@ -263,6 +293,25 @@ def merge_similar_predictions(db: Session = Depends(get_db)):
     return {
         "success": True,
         "message": f"重复检查完成：发现 {result['duplicate_groups']} 组候选，未修改任何预测",
+        "data": result,
+    }
+
+
+@router.post("/dedupe-duplicates")
+def dedupe_duplicate_predictions(request: Request, db: Session = Depends(get_db)):
+    """收敛重复预测：每组保留一条，其余软删除（回收站可恢复）。"""
+    if request.headers.get("X-Danger-Confirm") != "dedupe-predictions":
+        raise HTTPException(
+            status_code=403,
+            detail="执行去重需要确认头 X-Danger-Confirm: dedupe-predictions",
+        )
+    result = PredictionMaintenanceService(db).deduplicate_predictions()
+    return {
+        "success": True,
+        "message": (
+            f"去重完成：{result['duplicate_groups']} 组重复，"
+            f"已归档 {result['removed_count']} 条，每组保留一条（可在回收站恢复）"
+        ),
         "data": result,
     }
 

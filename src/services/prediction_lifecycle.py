@@ -222,6 +222,22 @@ def filter_due_for_verify(
     return [p for p in rows if classify(p, as_of=as_of, max_age_days=max_age) == DUE_UNVERIFIED]
 
 
+def due_skip_reason(prediction: Prediction, as_of: Optional[date] = None) -> Optional[str]:
+    """已到期但未进入验证队列的原因；可验证时返回 None。
+
+    与 filter_due_for_verify 同口径，用于向用户解释"为什么不验证"。
+    """
+    as_of = _as_date(as_of) or current_as_of()
+    if getattr(prediction, "prediction_type", None) == "flat":
+        return "中性预测（观望）不参与验证"
+    if classify(prediction, as_of=as_of) == UNVERIFIABLE:
+        return (
+            f"已超过验证窗口（目标日后 {max_end_nav_age_days()} 天），无法验证；"
+            "可在回收站归档或删除"
+        )
+    return None
+
+
 def filter_unverifiable(
     db: Session,
     as_of: Optional[date] = None,

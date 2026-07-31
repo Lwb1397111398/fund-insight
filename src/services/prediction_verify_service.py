@@ -1023,10 +1023,16 @@ class PredictionVerifyService:
             progress_callback: 可选回调，每验证完一条调用
                 progress_callback(processed, success_count, failed_count, prediction_id, ok)
             max_age_days: 可选的验证窗口天数覆盖，默认走配置 VERIFY_MAX_END_NAV_AGE_DAYS。
+
+        Returns:
+            data.results 逐条结果（成功含验证结论，失败含具体未验证原因）；
+            data.skipped 为已到期但未进入验证队列的预测（观望/已过窗口）及原因。
         """
         from src.services.prediction_lifecycle import (
             current_as_of,
+            due_skip_reason,
             filter_due_for_verify,
+            filter_unverifiable,
         )
 
         today = as_of or current_as_of()
@@ -1034,7 +1040,22 @@ class PredictionVerifyService:
         # 统一入口：due_unverified（is_correct is null 且未超过 NAV 年龄窗口）
         all_pending = filter_due_for_verify(self.db, as_of=today, max_age_days=max_age_days)
 
-        logger.info(f"[Verify] 找到 {len(all_pending)} 个已到期待验证预测")
+        # 解释"已到期但不验证"：观望预测与已过窗口预测（与队列同口径的宽查 + 推导原因）
+        # 注意：过窗预测不在 broad_due 里（窗口下限过滤），需单独扫描补充。
+        broad_due = filter_due_for_verify(
+            self.db, as_of=today, exclude_flat=False, max_age_days=max_age_days,
+        )
+        overdue = filter_unverifiable(self.db, as_of=today, max_age_days=max_age_days)
+        pending_ids = {p.id for p in all_pending}
+        skipped = []
+        for prediction in broad_due + overdue:
+            if prediction.id in pending_ids:
+                continue
+            reason = due_skip_reason(prediction, as_of=today)
+            if reason:
+                skipped.append({"prediction_id": prediction.id, "reason": reason})
+
+        logger.info(f"[Verify] 找到 {len(all_pending)} 个已到期待验证预测，{len(skipped)} 个到期不验证")
 
         # 预热：收集所有涉及的 fund_code，批量查询 FundHistory 并填充缓存
         self._warm_cache(all_pending, today)
@@ -1073,14 +1094,16 @@ class PredictionVerifyService:
         self._nav_cache.clear()
         self._cache_order.clear()
 
+        skipped_note = f"，另有 {len(skipped)} 个到期不验证" if skipped else ""
         return {
             "success": True,
-            "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个",
+            "message": f"验证完成：成功 {success_count} 个，失败 {failed_count} 个{skipped_note}",
             "data": {
                 "total": len(all_pending),
                 "success_count": success_count,
                 "failed_count": failed_count,
-                "results": results
+                "results": results,
+                "skipped": skipped,
             }
         }
 

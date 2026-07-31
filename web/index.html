@@ -236,6 +236,9 @@
                         <div><strong>批量验证中</strong><span>{{ verifyTask.processed_count || 0 }} / {{ verifyTask.total || 0 }}</span></div>
                         <div class="viewpoint-task-progress"><span :style="{ width: (verifyTask.progress || 0) + '%' }"></span></div>
                     </div>
+                    <div v-else-if="verifyTask?.failure_summary" class="viewpoint-task-band">
+                        <div><strong>上次验证未成功原因</strong><span class="text-xs">{{ verifyTask.failure_summary }}</span></div>
+                    </div>
                     <div v-if="showPredictionMaintenance" class="prediction-maintenance-band">
                         <div class="sub-actions">
                             <button class="row-btn" @click="previewPredictionMaintenance('duplicates')" :disabled="analyzing"><i class="ri-file-search-line"></i> 扫描重复候选</button>
@@ -244,10 +247,10 @@
                         </div>
                         <div v-if="maintenancePreview" class="maintenance-result">
                             <strong>{{ maintenancePreview.message }}</strong>
-                            <span v-if="maintenancePreview.type === 'duplicates'">候选组 {{ maintenancePreview.data.duplicate_groups || 0 }}，涉及 {{ maintenancePreview.data.candidate_predictions || 0 }} 条</span>
+                            <span v-if="maintenancePreview.type === 'duplicates'">候选组 {{ maintenancePreview.data.duplicate_groups || 0 }}，涉及 {{ maintenancePreview.data.candidate_predictions || 0 }} 条，可清理 {{ maintenancePreview.data.removable_predictions || 0 }} 条（每组保留一条，移入回收站）</span>
                             <span v-if="maintenancePreview.type === 'mapping'">预计更新 {{ maintenancePreview.data.would_update || 0 }} 条</span>
                             <span v-if="maintenancePreview.type === 'rollback'">预计回溯 {{ maintenancePreview.data.would_rollback || 0 }} 条</span>
-                            <button v-if="maintenancePreview.type === 'mapping' || maintenancePreview.type === 'rollback'" class="row-btn danger" @click="executePredictionMaintenance" :disabled="analyzing">确认执行</button>
+                            <button v-if="(maintenancePreview.type === 'duplicates' && (maintenancePreview.data.removable_predictions || 0) > 0) || maintenancePreview.type === 'mapping' || maintenancePreview.type === 'rollback'" class="row-btn danger" @click="executePredictionMaintenance" :disabled="analyzing">确认执行</button>
                         </div>
                     </div>
                     <div class="data-table" v-if="filteredPredictions.length > 0">
@@ -2188,6 +2191,7 @@ const fetchWeChatBatch = async () => {
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
                 const showTopBloggers = async () => { try { const res = await axios.get('/api/bloggers/top?limit=10'); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('获取失败'); } };
                 let fundUpdatePollTimer = null;
+                let lastFundUpdateFinishedAt = null;
                 const clearFundUpdatePoll = () => {
                     if (fundUpdatePollTimer) {
                         clearInterval(fundUpdatePollTimer);
@@ -2213,11 +2217,17 @@ const fetchWeChatBatch = async () => {
                             if (!status.in_progress) {
                                 clearFundUpdatePoll();
                                 analyzing.value = false;
+                                // 后端每次 start() 都会清空 last_result；前端再记录已消费的
+                                // finished_at，防止弹窗被关掉后轮询再次读到同一结果重复弹。
                                 if (status.last_result === null) {
                                     alert('更新状态已丢失，请重新触发更新');
+                                } else if (status.finished_at && status.finished_at === lastFundUpdateFinishedAt) {
+                                    // 同一批更新结果已提示过，不再重复弹窗
                                 } else if (status.last_result?.success === false) {
+                                    lastFundUpdateFinishedAt = status.finished_at || null;
                                     alert(status.last_result.message || '更新失败');
                                 } else {
+                                    lastFundUpdateFinishedAt = status.finished_at || null;
                                     alert(status.last_result?.message || '更新完成');
                                     await fetchFunds();
                                 }

@@ -252,9 +252,30 @@ class PredictionVerifyTask:
         }
 
     @staticmethod
+    def _summarize_failures(result: Dict) -> str:
+        """汇总批量验证未成功条目的原因（相同原因合并计数），供前端直接展示。"""
+        data = result.get("data") or {}
+        entries = list(data.get("results") or []) + [
+            dict(item, success=False) for item in (data.get("skipped") or [])
+        ]
+        counts: Dict[str, int] = {}
+        for entry in entries:
+            if entry.get("success"):
+                continue
+            reason = entry.get("message") or entry.get("reason") or "未知原因"
+            counts[reason] = counts.get(reason, 0) + 1
+        return "；".join(f"{reason}（{count} 条）" for reason, count in counts.items())
+
+    @staticmethod
     def _serialize(task: BatchAnalysisTask) -> Dict:
         total = task.total_count or 0
         processed = task.processed_count or 0
+        last_result = task.result_summary
+        failure_summary = None
+        if last_result and task.status not in _ACTIVE_STATUSES:
+            summary = PredictionVerifyTask._summarize_failures(last_result)
+            if summary:
+                failure_summary = summary
         return {
             "task_id": task.id,
             "in_progress": task.status in _ACTIVE_STATUSES,
@@ -265,7 +286,8 @@ class PredictionVerifyTask:
             "progress": round(processed * 100 / total, 1) if total else 0,
             "started_at": task.started_at.isoformat() if task.started_at else None,
             "finished_at": task.completed_at.isoformat() if task.completed_at else None,
-            "last_result": task.result_summary,
+            "last_result": last_result,
+            "failure_summary": failure_summary,
         }
 
 

@@ -332,6 +332,92 @@ def test_verify_all_pending_reports_progress_via_callback(test_db, monkeypatch):
     assert [c[3] for c in calls] == [p.id for p in predictions]
 
 
+def test_verify_all_pending_reports_due_but_skipped_with_reasons(test_db):
+    """到期但不进入验证队列的预测（观望/已过窗）应带原因出现在 skipped 里。"""
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    today = date(2026, 7, 3)
+    blogger = Blogger(name="跳过原因博主", platform="eastmoney")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(blogger_id=blogger.id, title="测试", content="内容", post_date=today)
+    test_db.add(post)
+    test_db.flush()
+    flat_prediction = Prediction(
+        post_id=post.id,
+        blogger_id=blogger.id,
+        prediction_type="flat",
+        prediction_date=today - timedelta(days=30),
+        target_date=today,
+        status="pending",
+        is_deleted=False,
+    )
+    stale_prediction = Prediction(
+        post_id=post.id,
+        blogger_id=blogger.id,
+        prediction_type="up",
+        prediction_date=today - timedelta(days=60),
+        target_date=today - timedelta(days=31),
+        status="pending",
+        is_deleted=False,
+    )
+    test_db.add_all([flat_prediction, stale_prediction])
+    test_db.commit()
+
+    service = PredictionVerifyService.__new__(PredictionVerifyService)
+    service.db = test_db
+    service._nav_cache = {}
+    service._cache_order = []
+    service._warm_cache = lambda predictions, today: None
+    service.verify_prediction = lambda prediction_id, force=False: {
+        "success": True, "message": "ok",
+    }
+
+    result = service.verify_all_pending(as_of=today, max_age_days=10)
+
+    skipped = {item["prediction_id"]: item["reason"] for item in result["data"]["skipped"]}
+    assert result["data"]["total"] == 0
+    assert "观望" in skipped[flat_prediction.id]
+    assert "验证窗口" in skipped[stale_prediction.id]
+    assert "另有 2 个到期不验证" in result["message"]
+
+
+def test_verify_all_status_surfaces_failure_summary(test_db):
+    """批量验证结束后，状态接口应给出按原因合并的失败汇总。"""
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    service = PredictionVerifyTask()
+    started = service.start(total=3, db=test_db)
+    task_id = started["data"]["task_id"]
+    service.finish(
+        {
+            "success": True,
+            "message": "验证完成：成功 1 个，失败 1 个，另有 1 个到期不验证",
+            "data": {
+                "total": 2,
+                "success_count": 1,
+                "failed_count": 1,
+                "results": [
+                    {"prediction_id": 1, "success": True, "message": "验证成功"},
+                    {"prediction_id": 2, "success": False, "message": "基金 000001 无历史数据，请先更新基金数据"},
+                ],
+                "skipped": [
+                    {"prediction_id": 3, "reason": "已超过验证窗口（目标日后 10 天），无法验证"},
+                ],
+            },
+        },
+        db=test_db,
+        task_id=task_id,
+    )
+
+    status = PredictionVerifyTask().status(db=test_db)
+
+    assert status["in_progress"] is False
+    assert "基金 000001 无历史数据" in status["failure_summary"]
+    assert "已超过验证窗口" in status["failure_summary"]
+    assert "（1 条）" in status["failure_summary"]
+
+
 def test_prediction_and_blogger_stats_commit_atomically(test_db, monkeypatch):
     from src.services import prediction_verify_service
     from src.services.prediction_verify_service import PredictionVerifyService
