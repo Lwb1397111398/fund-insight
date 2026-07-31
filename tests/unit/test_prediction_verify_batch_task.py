@@ -178,16 +178,10 @@ def test_verification_status_rejects_prediction_before_target_date(test_db, monk
 
 
 def test_verify_all_pending_uses_force_for_old_pending_predictions(test_db, monkeypatch):
-    from src.services import prediction_verify_service
     from src.services.prediction_verify_service import PredictionVerifyService
 
-    class FixedDate(date):
-        @classmethod
-        def today(cls):
-            return date(2026, 7, 3)
-
-    monkeypatch.setattr(prediction_verify_service, "date", FixedDate)
-
+    # 直接用 as_of 固定"当前日期"；force 的阈值是 target_date 距今 > 30 天，
+    # 且预测须落在 due_unverified 窗口（默认 VERIFY_MAX_END_NAV_AGE_DAYS=10）内。
     today = date(2026, 7, 3)
     blogger = Blogger(name="测试博主", platform="eastmoney")
     test_db.add(blogger)
@@ -229,7 +223,9 @@ def test_verify_all_pending_uses_force_for_old_pending_predictions(test_db, monk
 
     service.verify_prediction = fake_verify
 
-    result = service.verify_all_pending()
+    result = service.verify_all_pending(
+        as_of=today, max_age_days=40  # 放宽窗口让 31 天前的预测仍是 due_unverified
+    )
 
     assert result["data"]["success_count"] == 2
     assert calls[old_prediction.id] is True
@@ -251,6 +247,89 @@ def test_expired_verification_entry_delegates_to_unified_scan():
 
     assert service.verify_expired_pending() is expected
     assert calls == ["verify_all_pending"]
+
+
+def test_prediction_verify_task_progress_updates_are_visible(test_db):
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    service = PredictionVerifyTask()
+    started = service.start(total=3, db=test_db)
+    task_id = started["data"]["task_id"]
+
+    service.update_progress(1, 1, 0, db=test_db, task_id=task_id)
+    status = PredictionVerifyTask().status(db=test_db)
+
+    assert status["in_progress"] is True
+    assert status["processed_count"] == 1
+    assert status["success_count"] == 1
+    assert status["failed_count"] == 0
+    assert status["progress"] == pytest.approx(33.3)
+
+    service.update_progress(3, 2, 1, db=test_db, task_id=task_id)
+    status = PredictionVerifyTask().status(db=test_db)
+
+    assert status["processed_count"] == 3
+    assert status["progress"] == 100.0
+
+
+def test_verify_all_pending_reports_progress_via_callback(test_db, monkeypatch):
+    from src.services import prediction_verify_service
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 3)
+
+    monkeypatch.setattr(prediction_verify_service, "date", FixedDate)
+
+    today = date(2026, 7, 3)
+    blogger = Blogger(name="进度回调博主", platform="eastmoney")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(blogger_id=blogger.id, title="测试", content="内容", post_date=today)
+    test_db.add(post)
+    test_db.flush()
+    predictions = [
+        Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            prediction_type="up",
+            prediction_date=today - timedelta(days=30),
+            target_date=today,
+            status="pending",
+            is_deleted=False,
+        )
+        for _ in range(3)
+    ]
+    test_db.add_all(predictions)
+    test_db.commit()
+
+    service = PredictionVerifyService.__new__(PredictionVerifyService)
+    service.db = test_db
+    service._nav_cache = {}
+    service._cache_order = []
+    service._warm_cache = lambda predictions, today: None
+
+    outcomes = iter([True, False, True])
+    service.verify_prediction = lambda prediction_id, force=False: {
+        "success": next(outcomes),
+        "message": "ok",
+    }
+
+    calls = []
+    result = service.verify_all_pending(
+        as_of=today,
+        progress_callback=lambda *args: calls.append(args),
+    )
+
+    assert result["data"]["success_count"] == 2
+    assert result["data"]["failed_count"] == 1
+    assert len(calls) == 3
+    assert [c[0] for c in calls] == [1, 2, 3]
+    assert calls[-1][1] == 2  # success_count
+    assert calls[-1][2] == 1  # failed_count
+    assert [c[3] for c in calls] == [p.id for p in predictions]
 
 
 def test_prediction_and_blogger_stats_commit_atomically(test_db, monkeypatch):

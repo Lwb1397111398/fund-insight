@@ -1010,17 +1010,29 @@ class PredictionVerifyService:
             }
         }
     
-    def verify_all_pending(self) -> Dict:
-        """验证所有待验证的预测（只验证已到期且仍在窗口内的，带缓存预热）"""
+    def verify_all_pending(
+        self,
+        as_of: Optional[date] = None,
+        progress_callback=None,
+        max_age_days: Optional[int] = None,
+    ) -> Dict:
+        """验证所有待验证的预测（只验证已到期且仍在窗口内的，带缓存预热）
+
+        Args:
+            as_of: 可选的"当前日期"覆盖（默认走 current_as_of 北京时间），主要供测试固定日期。
+            progress_callback: 可选回调，每验证完一条调用
+                progress_callback(processed, success_count, failed_count, prediction_id, ok)
+            max_age_days: 可选的验证窗口天数覆盖，默认走配置 VERIFY_MAX_END_NAV_AGE_DAYS。
+        """
         from src.services.prediction_lifecycle import (
             current_as_of,
             filter_due_for_verify,
         )
 
-        today = current_as_of()
+        today = as_of or current_as_of()
 
         # 统一入口：due_unverified（is_correct is null 且未超过 NAV 年龄窗口）
-        all_pending = filter_due_for_verify(self.db, as_of=today)
+        all_pending = filter_due_for_verify(self.db, as_of=today, max_age_days=max_age_days)
 
         logger.info(f"[Verify] 找到 {len(all_pending)} 个已到期待验证预测")
 
@@ -1036,17 +1048,26 @@ class PredictionVerifyService:
 
             force = bool(prediction.target_date and (today - prediction.target_date).days > 30)
             result = self.verify_prediction(prediction.id, force=force)
+            ok = bool(result.get("success"))
             results.append({
                 "prediction_id": prediction.id,
-                "success": result.get("success"),
+                "success": ok,
                 "message": result.get("message")
             })
 
-            if result.get("success"):
+            if ok:
                 success_count += 1
             else:
                 failed_count += 1
                 logger.warning(f"[Verify] 预测 {prediction.id} 验证失败: {result.get('message')}")
+
+            if progress_callback:
+                try:
+                    progress_callback(
+                        len(results), success_count, failed_count, prediction.id, ok
+                    )
+                except Exception as cb_error:  # 进度上报失败不得中断验证
+                    logger.warning(f"[Verify] 进度回调失败: {cb_error}")
 
         # 清理缓存，释放内存
         self._nav_cache.clear()

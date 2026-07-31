@@ -227,7 +227,19 @@ class TaskScheduler:
                 task_id = start_result["data"]["task_id"]
                 task_started = True
                 service = PredictionVerifyService(db)
-                result = service.verify_all_pending()
+
+                def on_progress(processed, success_count, failed_count, *_args):
+                    prediction_verify_task.update_progress(
+                        processed,
+                        success_count,
+                        failed_count,
+                        db=task_db,
+                        task_id=task_id,
+                    )
+
+                result = service.verify_all_pending(
+                    progress_callback=on_progress if task_id is not None else None
+                )
                 task_result = result
 
                 if result.get("success"):

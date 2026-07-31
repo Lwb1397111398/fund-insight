@@ -192,13 +192,23 @@ def _count_due_predictions(db: Session, today: date) -> int:
 
 
 def _verify_all_background(task_id: int):
-    """后台验证所有待验证预测"""
+    """后台验证所有待验证预测（逐条上报进度，供前端进度条轮询）"""
     from src.models.database import SessionLocal
     db = SessionLocal()
     result = None
     try:
         service = PredictionVerifyService(db)
-        result = service.verify_all_pending()
+
+        def on_progress(processed, success_count, failed_count, *_args):
+            prediction_verify_task.update_progress(
+                processed,
+                success_count,
+                failed_count,
+                db=db,
+                task_id=task_id,
+            )
+
+        result = service.verify_all_pending(progress_callback=on_progress)
         print(f"[Verify All] 后台验证完成: {result.get('message')}")
     except Exception as e:
         result = {"success": False, "message": f"后台验证失败: {e}"}

@@ -75,6 +75,39 @@ class PredictionVerifyTask:
         finally:
             _PROCESS_LOCK.release()
 
+    def update_progress(
+        self,
+        processed: int,
+        success_count: int,
+        failed_count: int,
+        total: Optional[int] = None,
+        db: Optional[Session] = None,
+        task_id: Optional[int] = None,
+    ) -> None:
+        """验证过程中更新已处理条数，让前端进度条随轮询增长。
+
+        每条提交一次并立即 expire，保证独立连接能看到最新计数，
+        也避免长时间运行累计大量未提交脏数据。
+        """
+        if db is None or task_id is None:
+            return
+
+        try:
+            task = db.get(BatchAnalysisTask, task_id)
+            if task is None:
+                return
+            task.processed_count = max(0, int(processed))
+            task.success_count = max(0, int(success_count))
+            task.failed_count = max(0, int(failed_count))
+            if total is not None:
+                task.total_count = max(0, int(total))
+            task.updated_at = datetime.now()
+            db.commit()
+            db.expire(task)
+        except Exception:
+            # 进度上报失败不得中断验证主流程
+            db.rollback()
+
     def finish(
         self,
         result: Dict,
