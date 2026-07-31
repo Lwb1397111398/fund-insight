@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -196,6 +197,18 @@ def build_advice_cache_key(
     pv = (prompt_version or "").strip() or "unknown_prompt"
     mv = (model_version or "").strip() or "unknown_model"
     return f"{eh}|{pv}|{mv}"
+
+
+def advice_cache_digest(cache_key: str) -> str:
+    """
+    缓存键的定长存储摘要（32 字符），用于写入 investment_advice.data_hash。
+
+    data_hash 列是 VARCHAR(32)，而 cache_key = evidence_hash(64位SHA256)
+    + prompt 版本 + 模型版本，整体约 100 字符，直接入库会触发
+    StringDataRightTruncation。故入库与其命中比较统一改用本 MD5 摘要；
+    可读的 cache_key 仍用于接口返回与日志展示。
+    """
+    return hashlib.md5((cache_key or "").encode("utf-8")).hexdigest()
 
 
 def validate_advice_output(

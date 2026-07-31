@@ -5,6 +5,7 @@ from src.services.advice_service import AdviceService
 from src.services.advice_validation import (
     ADVICE_PROMPT_VERSION,
     build_advice_cache_key,
+    advice_cache_digest,
 )
 from src.core.config import config
 
@@ -35,7 +36,7 @@ def test_check_data_changed_uses_evidence_cache_key(test_db, monkeypatch):
             advice_date=date.today(),
             advice_type="hold",
             advice_content="保持观察",
-            data_hash=cache_key,
+            data_hash=advice_cache_digest(cache_key),
         )
     )
     test_db.commit()

@@ -4,6 +4,8 @@ from datetime import date, timedelta
 from src.models.database import Blogger, InvestmentAdvice, Post, Prediction
 from src.services.advice_service import AdviceService
 from src.services.advice_validation import (
+    advice_cache_digest,
+    build_advice_cache_key,
     detect_stage_failures,
     validate_advice_output,
     validate_evidence_for_advice,
@@ -239,3 +241,26 @@ def test_three_stage_marks_stage2_failed_on_empty_predictions():
     assert result["_stage_status"] == "failed"
     # 输出校验应拒绝
     assert validate_advice_output(result).ok is False
+
+
+def test_advice_cache_digest_fits_varchar32():
+    """data_hash 列为 VARCHAR(32)：完整 cache_key（64位证据哈希+版本+模型）
+    约百字符，直接入库会 StringDataRightTruncation；摘要必须定长 32 且稳定。"""
+    evidence_hash = "482d07cbf030ff5904f1e69af662b574d85d470af56bccb6f6907dc1708c4821"
+    cache_key = build_advice_cache_key(
+        evidence_hash,
+        prompt_version="advice.three_stage.v1",
+        model_version="glm-5-2-260617",
+    )
+    # 完整 cache_key 确实超长（说明为什么不能直接入库）
+    assert len(cache_key) > 32
+
+    digest = advice_cache_digest(cache_key)
+    assert len(digest) == 32  # 恰好塞进 VARCHAR(32)
+    # 确定性：同样的键得到同样摘要，命中比较才成立
+    assert digest == advice_cache_digest(cache_key)
+    # 键变化 → 摘要变化（证据/版本/模型任一改动即重算）
+    other = build_advice_cache_key(
+        "另一证据", prompt_version="advice.three_stage.v1", model_version="glm-5-2-260617"
+    )
+    assert advice_cache_digest(other) != digest

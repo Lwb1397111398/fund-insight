@@ -115,6 +115,7 @@ class AdviceService(BaseService[InvestmentAdvice]):
         from src.services.advice_validation import (
             ADVICE_PROMPT_VERSION,
             build_advice_cache_key,
+            advice_cache_digest,
         )
         from src.core.config import config
 
@@ -131,8 +132,9 @@ class AdviceService(BaseService[InvestmentAdvice]):
         latest_advice = self.get_latest_advice()
 
         if latest_advice:
+            # data_hash 列存的是 cache_key 的 32 位摘要，命中比较需用同一摘要
             stored_hash = latest_advice.get("data_hash")
-            if stored_hash == cache_key:
+            if stored_hash == advice_cache_digest(cache_key):
                 return False, cache_key, latest_advice
 
         return True, cache_key, latest_advice

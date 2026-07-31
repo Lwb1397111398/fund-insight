@@ -17,6 +17,7 @@ from src.services.advice_validation import (
     validate_evidence_for_advice,
     validate_advice_output,
     build_advice_cache_key,
+    advice_cache_digest,
     ADVICE_PROMPT_VERSION,
 )
 from src.core.config import config
@@ -66,10 +67,12 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             prompt_version=ADVICE_PROMPT_VERSION,
             model_version=_model_version(),
         )
+        # data_hash 列为 VARCHAR(32)，存缓存键的 32 位摘要而非完整 cache_key
+        data_hash = advice_cache_digest(cache_key)
 
         if not force_generate:
             latest_advice = service.get_latest_advice()
-            if latest_advice and latest_advice.get("data_hash") == cache_key:
+            if latest_advice and latest_advice.get("data_hash") == data_hash:
                 logger.info("[Advice API] 缓存命中 cache_key 前缀=%s", cache_key[:16])
                 return {
                     "success": True,
@@ -158,7 +161,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             market_sentiment=normalized.get("market_sentiment"),
             confidence=normalized.get("confidence"),
             referenced_bloggers=[b["name"] for b in data["bloggers"] if b.get("name")],
-            data_hash=cache_key,
+            data_hash=data_hash,
             advice_date=request.date if request else None,
             reasoning=normalized.get("reasoning"),
             risk_warning=normalized.get("risk_warning"),
@@ -178,6 +181,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
         )
         result["evidence_hash"] = evidence_hash
         result["cache_key"] = cache_key
+        result["data_hash"] = data_hash
         result["stage_statuses"] = (
             advice.get("_stage_statuses") if isinstance(advice, dict) else None
         )
