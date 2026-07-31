@@ -1788,7 +1788,9 @@ class LLMAnalyzer:
 {{"summary":"预测摘要(80字)","near_term_trend":"bullish/bearish/neutral","mid_term_trend":"bullish/bearish/neutral","high_confidence_predictions":[{{"b":"博主","s":"板块","t":"U/D","c":80}}],"sector_predictions":{{"板块":{{"bullish":3,"bearish":1,"neutral":2}}}},"key_insights":["洞察1","洞察2"]}}"""
         
         try:
-            result_text = self._call_llm(prompt, task_type='analysis', max_tokens=1000, temperature=0.3)
+            # max_tokens 需给足：sector_predictions 会逐板块展开，思考型/verbose 模型
+            # （如火山 GLM-5.2）输出带缩进，1000 token 会截断 JSON 导致解析失败（finish_reason=length）
+            result_text = self._call_llm(prompt, task_type='analysis', max_tokens=3000, temperature=0.3)
             result = self._parse_json_with_fallback(result_text)
             if result:
                 result.setdefault("_stage_status", "ok")
@@ -1882,7 +1884,8 @@ class LLMAnalyzer:
 """
         
         try:
-            result_text = self._call_llm(prompt, task_type='advice', max_tokens=1000, temperature=0.5)
+            # 同 stage2：verbose 模型的分层建议 JSON 可能较长，给足 token 避免截断
+            result_text = self._call_llm(prompt, task_type='advice', max_tokens=2000, temperature=0.5)
             result = self._parse_json_with_fallback(result_text)
             if result:
                 result.setdefault("_stage_status", "ok")
