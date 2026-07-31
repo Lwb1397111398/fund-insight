@@ -40,10 +40,11 @@ services:
         sync: false
       - key: VOLCENGINE_BASE_URL
         value: "https://ark.cn-beijing.volces.com/api/v3"
+      # 模型由 Render 网页环境变量管理（不在蓝图写死，避免部署时覆盖线上配置）
       - key: VOLCENGINE_MODEL
-        value: "ep-20260424143452-nhsrm"
+        sync: false
       - key: VOLCENGINE_LIGHT_MODEL
-        value: "ep-20260424143452-nhsrm"
+        sync: false
       # L1：正式加权默认关；shadow 双跑默认开（只记 log，服务 legacy）
       - key: ADVICE_L1_HIT_WEIGHTING
         value: "0"
@@ -90,10 +91,11 @@ services:
         sync: false
       - key: VOLCENGINE_BASE_URL
         value: "https://ark.cn-beijing.volces.com/api/v3"
+      # 模型由 Render 网页环境变量管理（不在蓝图写死，避免部署时覆盖线上配置）
       - key: VOLCENGINE_MODEL
-        value: "ep-20260424143452-nhsrm"
+        sync: false
       - key: VOLCENGINE_LIGHT_MODEL
-        value: "ep-20260424143452-nhsrm"
+        sync: false
 
   # 每周一 11:30 UTC ≈ 北京时间 19:30：三桶保留（cap 500 + verified 护栏 + 摘要归档）
   - type: cron
