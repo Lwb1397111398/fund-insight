@@ -100,6 +100,16 @@ class Config:
 
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "siliconflow")
 
+    # 火山方舟思考型模型（GLM-5.2/Doubao 等）默认开启深度思考，"内心独白"会吞掉
+    # 成百上千 token，本项目的结构化提取任务不需要思考、延迟会膨胀数倍
+    # （实测同一提示词 GLM-5.2：22s → 4.8s）。默认关闭；设 0 可恢复思考。
+    LLM_DISABLE_THINKING = os.getenv("LLM_DISABLE_THINKING", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
     VOLCENGINE_API_KEY = os.getenv("VOLCENGINE_API_KEY", "")
     VOLCENGINE_BASE_URL = os.getenv("VOLCENGINE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
     VOLCENGINE_MODEL = os.getenv("VOLCENGINE_MODEL", "doubao-seed-2-0-pro-260215")
