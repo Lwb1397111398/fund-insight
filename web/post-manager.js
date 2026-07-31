@@ -21,6 +21,7 @@
             post_date: new Date().toISOString().split('T')[0],
         });
         const analysisJob = ref(null);
+        const postAnalysisRunning = ref(false);
         let pollTimer = null;
         const resumeRequested = new Set();
 
@@ -61,6 +62,7 @@
         const clearJob = () => {
             if (analysisJob.value?.task_id) resumeRequested.delete(String(analysisJob.value.task_id));
             localStorage.removeItem('post_analysis_task_id');
+            postAnalysisRunning.value = false;
             analyzing.value = false;
             if (pollTimer) window.clearTimeout(pollTimer);
             pollTimer = null;
@@ -82,6 +84,7 @@
                     await refreshRelated();
                     return;
                 }
+                postAnalysisRunning.value = true;
                 analyzing.value = true;
                 pollTimer = window.setTimeout(() => pollAnalysisJob(taskId), 3000);
             } catch (error) {
@@ -93,7 +96,8 @@
         const rememberJob = (data) => {
             if (!data?.task_id) return;
             analysisJob.value = data;
-            analyzing.value = ['pending', 'running'].includes(data.status);
+            postAnalysisRunning.value = ['pending', 'running'].includes(data.status);
+            analyzing.value = postAnalysisRunning.value;
             localStorage.setItem('post_analysis_task_id', String(data.task_id));
             pollAnalysisJob(data.task_id);
         };
@@ -166,6 +170,7 @@
                 // alert 放在 rememberJob 之后，轮询已经启动，避免阻塞 UI 更新
                 if (res.data.message) alert(res.data.message);
             } catch (error) {
+                postAnalysisRunning.value = false;
                 analyzing.value = false;
                 alert('分析失败: ' + errorMessage(error));
             }
@@ -216,7 +221,7 @@
         }[status] || '待分析');
 
         return {
-            posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob,
+            posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
             showAddPost, showPostDetail, showEditPost,
             fetchPosts, applyPostFilters, resetPostFilters, postPrevPage, postNextPage,
             addPost, analyzePost, batchAnalyzePosts, viewPostDetail, openEditPost, savePostEdit,

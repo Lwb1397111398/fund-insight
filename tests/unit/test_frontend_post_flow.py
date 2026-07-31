@@ -29,6 +29,17 @@ def test_post_manager_is_split_and_uses_safe_management_apis():
     assert "axios.patch(`/api/posts/${editingPost.id}`" in script
 
 
+def test_post_progress_uses_dedicated_running_state():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    script = POST_MANAGER_JS.read_text(encoding="utf-8")
+
+    assert "const postAnalysisRunning = ref(false)" in script
+    assert "postAnalysisRunning.value = ['pending', 'running'].includes(data.status)" in script
+    assert 'v-if="analysisJob && postAnalysisRunning"' in html
+    assert ':disabled="postAnalysisRunning"' in html
+    assert 'v-if="analysisJob && analyzing"' not in html
+
+
 def test_post_view_has_filters_pagination_status_and_no_legacy_repair_buttons():
     html = INDEX_HTML.read_text(encoding="utf-8")
 

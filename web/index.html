@@ -111,10 +111,10 @@
                     <div class="sub-actions">
                         <button class="action-btn primary small" @click="showAddPost = true">＋ 手动新增</button>
                         <button class="action-btn success small" @click="showWeChatFetch = true">📱 微信文章抓取</button>
-                        <button class="action-btn warning small" @click="batchAnalyzePosts" :disabled="analyzing">{{
-                            analyzing ? '分析中...' : '🔄 批量分析未分析帖子' }}</button>
+                        <button class="action-btn warning small" @click="batchAnalyzePosts" :disabled="postAnalysisRunning">{{
+                            postAnalysisRunning ? '分析中...' : '🔄 批量分析未分析帖子' }}</button>
                     </div>
-                    <div v-if="analysisJob && analyzing" class="analysis-progress-panel mb-14">
+                    <div v-if="analysisJob && postAnalysisRunning" class="analysis-progress-panel mb-14">
                         <div class="ap-header">
                             <span class="ap-title"><i class="ri-loader-4-line ap-spin"></i> 帖子分析进行中</span>
                             <button class="row-btn danger" @click="cancelAnalysisJob" :disabled="analysisJob.status === 'cancelled'">取消</button>
@@ -2014,7 +2014,7 @@ const fetchWeChatBatch = async () => {
                     onPredictionsChanged: () => fetchPredictions(),
                 });
                 const {
-                    posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob,
+                    posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
                     showAddPost, showPostDetail, showEditPost,
                     fetchPosts, applyPostFilters, resetPostFilters, postPrevPage, postNextPage,
                     addPost, analyzePost, batchAnalyzePosts, viewPostDetail, openEditPost, savePostEdit,
@@ -2501,7 +2501,7 @@ const fetchWeChatBatch = async () => {
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
                 return {
                     theme, toggleTheme, loading, currentView, stats, bloggers,
-                    posts, postMeta, postFilters, analysisJob,
+                    posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
                     verifyTask, showPredictionMaintenance, maintenancePreview,
                     viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
