@@ -121,7 +121,7 @@
                 .filter((item) => sources.includes(item.value))
                 .map((item) => `${item.value}: ${item.label}`)
                 .join('\n');
-            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n新浪博客约20条，股吧/基金吧各约10条。`)) return;
+            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n仅抓取当天发布的内容：新浪博客当天全部（≤20条），股吧/基金吧各约15条。`)) return;
             try {
                 const response = await axios.post('/api/viewpoints/fetch', {
                     sources,

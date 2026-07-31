@@ -344,6 +344,10 @@
                             <i class="ri-restart-line"></i> 重试
                         </button>
                     </div>
+                    <div v-if="viewpointTask && viewpointTask.result_summary && viewpointTask.result_summary.low_volume" class="task-low-volume-note">
+                        <i class="ri-error-warning-line"></i>
+                        <span>{{ viewpointTask.result_summary.message }}</span>
+                    </div>
 
                     <div class="viewpoint-insights" v-if="viewpointInsights.sector_consensus?.length || Object.keys(viewpointInsights.source_quality || {}).length">
                         <div>

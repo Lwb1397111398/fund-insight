@@ -2213,6 +2213,7 @@
         .viewpoint-task-progress { height: 6px; overflow: hidden; background: var(--border-color); border-radius: 3px; }
         .viewpoint-task-progress span { display: block; height: 100%; background: var(--color-info); transition: width .2s ease; }
         .task-failed { border-left-color: var(--color-danger); }
+        .task-low-volume-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; color: var(--color-warning); background: var(--color-warning-light); border-left: 3px solid var(--color-warning); }
         .viewpoint-insights { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
         .viewpoint-insights h4 { margin: 0 0 8px; font-size: 13px; }
         .consensus-item { display: inline-flex; gap: 5px; margin: 0 10px 6px 0; color: var(--text-secondary); font-size: 12px; }

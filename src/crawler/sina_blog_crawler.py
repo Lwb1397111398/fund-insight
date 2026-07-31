@@ -4,11 +4,15 @@
 """
 import requests
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 import time
 import random
+
+# 博文发布时间为北京时间；判断"是否当天"必须用北京日期，
+# 否则 Render 的 UTC 系统时间会在北京时间凌晨误判。
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 class SinaBlogCrawler:
@@ -39,8 +43,11 @@ class SinaBlogCrawler:
 
         all_posts = []
         page = 1
+        # 列表按时间倒序：一旦遇到非当天文章，后面（含后续页）全是旧文章，
+        # 立即停止，避免继续逐篇请求详情页白白耗时。
+        reached_old = False
 
-        while len(all_posts) < max_posts:
+        while len(all_posts) < max_posts and not reached_old:
             # 构建URL
             url = f"{self.base_url}?lid=1001&page={page}"
             print(f"[SinaBlog] 抓取第 {page} 页: {url}")
@@ -63,24 +70,28 @@ class SinaBlogCrawler:
                 print(f"[SinaBlog] 找到 {len(blog_lists)} 个博文列表")
 
                 for blog_list in blog_lists:
-                    if len(all_posts) >= max_posts:
+                    if len(all_posts) >= max_posts or reached_old:
                         break
 
                     items = blog_list.find_all('li', recursive=False)
 
                     for item in items:
-                        if len(all_posts) >= max_posts:
+                        if len(all_posts) >= max_posts or reached_old:
                             break
 
                         post_detail = self._extract_post_info(item)
                         if post_detail:
+                            if self._is_before_today(post_detail.get('publish_time', '')):
+                                print(f"[SinaBlog] 遇到非当天文章，停止抓取: {post_detail.get('title', '')[:30]}")
+                                reached_old = True
+                                break
                             all_posts.append(post_detail)
 
                         # 随机延迟
                         time.sleep(random.uniform(0.2, 0.5))
 
                 # 检查是否还有下一页
-                if len(blog_lists) == 0 or len(all_posts) >= max_posts:
+                if len(blog_lists) == 0 or len(all_posts) >= max_posts or reached_old:
                     break
 
                 page += 1
@@ -93,8 +104,19 @@ class SinaBlogCrawler:
                 print(f"[SinaBlog] 抓取第 {page} 页失败: {e}")
                 break
 
-        print(f"[SinaBlog] 成功抓取 {len(all_posts)} 篇文章")
+        print(f"[SinaBlog] 成功抓取 {len(all_posts)} 篇当天文章")
         return all_posts
+
+    @staticmethod
+    def _is_before_today(publish_time: str) -> bool:
+        """发布时间是否早于当天（北京日期）。解析失败返回 False，宁可放行也不误终止。"""
+        if not publish_time:
+            return False
+        try:
+            dt = datetime.strptime(publish_time, "%Y年%m月%d日 %H:%M")
+        except ValueError:
+            return False
+        return dt.date() < datetime.now(_BEIJING_TZ).date()
 
     def _extract_post_info(self, item) -> Optional[Dict]:
         """
@@ -125,9 +147,16 @@ class SinaBlogCrawler:
                 match = re.search(r'\((\d{2}月\d{2}日 \d{2}:\d{2})\)', time_text)
                 if match:
                     time_str = match.group(1)
-                    # 转换为标准格式
-                    current_year = datetime.now().year
-                    publish_time = f"{current_year}年{time_str}"
+                    # 列表页只有月日，补当前年转标准格式。
+                    # 跨年修复：元旦后几天抓到 12 月底的文章会拼成未来日期，
+                    # 此时应退回上一年，否则同日过滤会把去年的文章当成"未来"放行。
+                    now = datetime.now()
+                    try:
+                        candidate = datetime.strptime(f"{now.year}年{time_str}", "%Y年%m月%d日 %H:%M")
+                        year = now.year - 1 if candidate > now + timedelta(days=1) else now.year
+                    except ValueError:
+                        year = now.year
+                    publish_time = f"{year}年{time_str}"
 
             # 提取文章ID
             article_id = self._extract_article_id(post_url)

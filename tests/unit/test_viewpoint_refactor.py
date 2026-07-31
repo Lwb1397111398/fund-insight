@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from src.api.routes import viewpoints as viewpoint_routes
 from src.models.database import CrawlerArticleRecord, Viewpoint
-from src.services.viewpoint_workflow_service import ViewpointWorkflowService
+from src.services.viewpoint_workflow_service import ViewpointWorkflowService, beijing_today
 
 
 def _add_viewpoint(db, **overrides):
@@ -56,7 +56,7 @@ def test_fetch_job_deduplicates_stable_articles_and_persists_progress(test_db):
         ),
         "author": "分析师",
         "url": "https://example.test/article/1",
-        "publish_time": date.today().isoformat(),
+        "publish_time": beijing_today().isoformat(),
     }
     task, created = ViewpointWorkflowService.create_fetch_task(
         test_db, sources=["sina_blog"], limit_per_source=10
@@ -236,7 +236,7 @@ def test_fetch_mode_does_not_invoke_llm_capture_or_deep_analyzer(test_db):
         ),
         "author": "分析师",
         "url": "https://example.test/fetch/1",
-        "publish_time": date.today().isoformat(),
+        "publish_time": beijing_today().isoformat(),
     }
     task, _ = ViewpointWorkflowService.create_fetch_task(
         test_db, sources=["sina_blog"], limit_per_source=5
@@ -248,19 +248,28 @@ def test_fetch_mode_does_not_invoke_llm_capture_or_deep_analyzer(test_db):
         deep_calls["n"] += 1
         return {"market_direction": "bullish", "confidence": 80, "summary": "x", "reasoning": "y"}
 
+    assistant_calls = {"n": 0}
+
+    def assistant(item, source):
+        assistant_calls["n"] += 1
+        return True
+
     ViewpointWorkflowService.run_fetch_task(
         task.id,
         session_factory=lambda: _NonClosingSession(test_db),
         fetchers={"sina_blog": lambda limit: [article]},
         deep_analyzer=deep,
+        assistant_judge=assistant,
     )
 
     test_db.refresh(task)
     vp = test_db.query(Viewpoint).one()
     assert deep_calls["n"] == 0             # fetch 模式不调 deep analysis
+    assert assistant_calls["n"] == 0        # 命中核心观点词 → 不触发辅助AI
     assert vp.analysis_summary == "pending"  # 仅入库, 等一键AI分析
     assert task.status == "succeeded"
     assert task.success_count == 1
+    assert task.result_summary["assistant_calls"] == 0
 
 
 def test_deep_retries_analyzes_pending_viewpoints_and_marks_succeeded(test_db):
@@ -531,3 +540,362 @@ def test_fetch_rejects_removed_sources(source):
 def test_fetch_request_rejects_ai_analysis_mode():
     with pytest.raises(ValidationError):
         viewpoint_routes.ViewpointFetchRequest(mode="fetch_and_analyze")
+
+
+# ===== 当天观点过滤 =====
+
+def _long_viewpoint_content():
+    return (
+        "看好半导体板块景气持续改善，订单与资金面共振，短期趋势偏强，"
+        "建议关注相关产业链龙头标的，中期行业上行空间仍存，"
+        "可逢低分批建仓，重点把握细分赛道龙头估值修复机会。"
+    )
+
+
+def test_fetch_skips_articles_published_before_today(test_db):
+    """非当天发布的观点直接跳过，不入库，跳过原因可审计。"""
+    yesterday = (beijing_today() - timedelta(days=1)).isoformat()
+    article = {
+        "title": "昨天的文章",
+        "content": _long_viewpoint_content(),
+        "url": "https://example.test/old",
+        "publish_time": yesterday,
+    }
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=5
+    )
+
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: [article]},
+        deep_analyzer=lambda item, source: (_ for _ in ()).throw(AssertionError("不应调deep")),
+    )
+
+    test_db.refresh(task)
+    assert test_db.query(Viewpoint).count() == 0
+    assert task.result_summary["skipped"] == 1
+    reasons = task.result_summary["sources"]["sina_blog"]["skipped_reasons"]
+    assert reasons.get("非当天观点") == 1
+    assert task.status == "succeeded"
+
+
+def test_fetch_adopts_same_day_and_tolerates_slightly_future_dates(test_db):
+    """当天观点正常入库；轻度未来时间（明天）容忍放行，防服务器时钟偏差误杀整源。"""
+    today = beijing_today().isoformat()
+    tomorrow = (beijing_today() + timedelta(days=1)).isoformat()
+    articles = [
+        {"title": "当天", "content": _long_viewpoint_content(),
+         "url": "https://example.test/today", "publish_time": today},
+        {"title": "明天时钟偏差", "content": _long_viewpoint_content(),
+         "url": "https://example.test/tomorrow", "publish_time": tomorrow},
+    ]
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=5
+    )
+
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: articles},
+    )
+
+    test_db.refresh(task)
+    assert test_db.query(Viewpoint).count() == 2
+    assert task.result_summary.get("skipped", 0) == 0
+
+
+# ===== 深度分析剔除非理性内容 =====
+
+def _run_batch_with_deep(test_db, raw, deep):
+    task = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=1
+    )[0]
+    task.task_type = "viewpoint_batch"
+    task.total_count = 0
+    task.processed_count = 0
+    task.success_count = 0
+    test_db.commit()
+    ViewpointWorkflowService._run_deep_retries(test_db, task, [raw.id], deep)
+    test_db.refresh(task)
+    return task
+
+
+def test_deep_analysis_rejects_emotional_content_via_soft_delete(test_db):
+    """AI 判定为情绪表达的观点：软删除 + rejected 标记，不进列表和每日汇总。"""
+    raw = _add_viewpoint(
+        test_db, reasoning=None, summary=None, market_direction=None,
+        analysis_summary="pending", content="又跌了真恶心，垃圾市场，全部清仓跑路！",
+    )
+
+    def deep(item, source):
+        return {
+            "viewpoint_type": "情绪表达",
+            "market_direction": "bearish", "confidence": 30,
+            "summary": "x", "reasoning": "纯情绪", "analysis": "无依据",
+        }
+
+    task = _run_batch_with_deep(test_db, raw, deep)
+
+    test_db.refresh(raw)
+    assert raw.is_deleted is True
+    assert (raw.analysis_summary or "").startswith("rejected:")
+    assert "情绪表达" in (raw.reassessment_reason or "")
+    assert raw.viewpoint_type == "情绪表达"
+    # 拒绝是正常处理而非错误：任务仍 succeeded
+    assert task.status == "succeeded"
+    assert task.success_count == 1
+
+
+@pytest.mark.parametrize("kept_type", ["明确预测", "深度分析", "行情复盘"])
+def test_deep_analysis_keeps_rational_analysis_types(test_db, kept_type):
+    """明确预测/深度分析/行情复盘属于理性市场分析，正常保留。"""
+    raw = _add_viewpoint(
+        test_db, reasoning=None, summary=None, market_direction=None,
+        analysis_summary="pending",
+    )
+
+    def deep(item, source):
+        return {
+            "viewpoint_type": kept_type,
+            "market_direction": "bullish", "confidence": 70,
+            "summary": "AI摘要", "reasoning": "理由", "analysis": "深度结论",
+        }
+
+    _run_batch_with_deep(test_db, raw, deep)
+
+    test_db.refresh(raw)
+    assert raw.is_deleted is False
+    assert raw.analysis_summary == "succeeded"
+    assert raw.viewpoint_type == kept_type
+
+
+def test_analysis_status_reports_rejected_rows():
+    row = Viewpoint(
+        content="广告内容",
+        source="stock_guba",
+        viewpoint_date=date.today(),
+        analysis_summary="rejected:广告引流",
+        is_deleted=True,
+        is_summary=False,
+    )
+    assert viewpoint_routes._analysis_status(row) == "rejected"
+
+
+def test_sina_is_before_today_uses_beijing_date():
+    from src.crawler.sina_blog_crawler import SinaBlogCrawler
+
+    now = datetime.now()
+    yesterday = (now - timedelta(days=1)).strftime("%Y年%m月%d日 10:00")
+    today_str = now.strftime("%Y年%m月%d日 10:00")
+
+    assert SinaBlogCrawler._is_before_today(yesterday) is True
+    assert SinaBlogCrawler._is_before_today(today_str) is False
+    # 解析失败/空值：放行，不误终止抓取
+    assert SinaBlogCrawler._is_before_today("乱七八糟的时间") is False
+    assert SinaBlogCrawler._is_before_today("") is False
+
+
+# ===== 关键词分层 + 辅助AI裁决 =====
+
+# 门禁关键词拆分前的原始集合：测试并集不能漏词、不能重叠。
+_ORIGINAL_GATE_KEYWORDS = (
+    '看多', '看空', '看涨', '看跌', '牛市', '熊市', '上涨', '下跌',
+    '板块', '科技', '医药', '消费', '新能源', '半导体', '芯片', '军工',
+    '金融', '地产', '银行', '券商', '白酒', '光伏', '锂电', 'AI',
+    '加仓', '减仓', '建仓', '清仓', '调仓', '持仓', '仓位',
+    '买入', '卖出', '观望', '抄底', '止盈', '止损',
+    '突破', '跌破', '反弹', '回调', '震荡', '调整',
+    '压力位', '支撑位', '目标位', '阻力位',
+    '观点', '预测', '判断', '分析', '逻辑', '策略', '建议',
+    '机会', '风险', '利好', '利空',
+)
+
+
+def test_keyword_split_union_equals_original_gate_without_overlap():
+    from src.services import viewpoint_workflow_service as vws
+
+    core = set(vws._CORE_VIEWPOINT_KEYWORDS)
+    general = set(vws._GENERAL_VIEWPOINT_KEYWORDS)
+
+    assert not (core & general), "核心词与泛化词不应重叠"
+    assert core | general == set(_ORIGINAL_GATE_KEYWORDS), "拆分不能漏词"
+    assert set(vws._VIEWPOINT_KEYWORDS) == core | general
+
+
+def test_needs_assistant_judge_flags_only_general_keyword_hits():
+    core_article = {
+        "title": "看多科技板块",
+        "content": "看多科技板块，建议逢低加仓半导体龙头，中期仍有上行空间。",
+    }
+    assert ViewpointWorkflowService._needs_assistant_judge(core_article) is False
+
+    # 只命中"分析/观点/风险/机会"等泛化词、零核心词 → 规则拿不准，交给辅助AI
+    general_article = {
+        "title": "市场分析",
+        "content": (
+            "本文分析当前基金市场的形势，作者观点认为后续风险与机会并存，"
+            "普通投资者应当注意风险管理，谨慎对待。"
+        ),
+    }
+    assert ViewpointWorkflowService._needs_assistant_judge(general_article) is True
+    # 同时确认它过得了质量门禁（否则轮不到辅助AI）
+    ok, _ = ViewpointWorkflowService._is_quality_viewpoint(general_article)
+    assert ok is True
+
+
+def _borderline_article(index: int) -> dict:
+    return {
+        "title": "市场分析",
+        "content": (
+            "本文分析当前基金市场的形势，作者观点认为后续风险与机会并存，"
+            "普通投资者应当注意风险管理，谨慎对待。"
+        ),
+        "url": f"https://example.test/borderline/{index}",
+    }
+
+
+def test_fetch_asks_assistant_ai_for_borderline_content(test_db):
+    """边界内容（仅泛化词命中）交给辅助AI：AI 判否则跳过并记原因，判是则入库。"""
+    calls = []
+
+    def judge_reject(article, source):
+        calls.append(article["url"])
+        return False
+
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=5
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: [_borderline_article(1)]},
+        assistant_judge=judge_reject,
+    )
+
+    test_db.refresh(task)
+    assert calls == ["https://example.test/borderline/1"]
+    assert test_db.query(Viewpoint).count() == 0
+    reasons = task.result_summary["sources"]["sina_blog"]["skipped_reasons"]
+    assert reasons.get("辅助AI判定非有效观点") == 1
+
+    # 换一个 AI 判"是"的裁决函数 → 入库
+    task2, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=5
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task2.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: [_borderline_article(2)]},
+        assistant_judge=lambda article, source: True,
+    )
+    assert test_db.query(Viewpoint).count() == 1
+
+
+def test_fetch_caps_assistant_ai_calls_and_falls_back_to_adopt(test_db):
+    """辅助AI每次任务最多调用15次；超限的边界内容按放行处理（深度分析二次兜底）。"""
+    calls = {"n": 0}
+
+    def judge(article, source):
+        calls["n"] += 1
+        return False
+
+    articles = [_borderline_article(i) for i in range(16)]
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=20
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: articles},
+        assistant_judge=judge,
+    )
+
+    test_db.refresh(task)
+    assert calls["n"] == 15
+    assert task.result_summary["assistant_calls"] == 15
+    # 第16篇超过上限 → 放行入库
+    assert test_db.query(Viewpoint).count() == 1
+
+
+def test_fetch_assistant_ai_failure_falls_back_to_adopt(test_db):
+    """辅助AI抛异常时按放行处理，不能因为AI抖动误杀观点。"""
+    def judge(article, source):
+        raise RuntimeError("LLM down")
+
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=5
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: [_borderline_article(0)]},
+        assistant_judge=judge,
+    )
+
+    test_db.refresh(task)
+    assert test_db.query(Viewpoint).count() == 1
+    assert task.status == "succeeded"
+
+
+def test_quick_judge_returns_none_when_llm_unavailable(monkeypatch):
+    from src.analyzer import viewpoint_analyzer as va
+
+    def boom():
+        raise RuntimeError("no llm configured")
+
+    monkeypatch.setattr(va, "get_analyzer", boom)
+    assert va.quick_judge_viewpoint("标题", "内容") is None
+
+
+# ===== 抓取量保底 =====
+
+def test_fetch_warns_when_adopted_count_below_ten(test_db):
+    """当天采纳不足10条时任务结果给出低量预警，但不影响成功状态。"""
+    articles = [
+        {
+            "title": f"看多科技板块{i}",
+            "content": "看多科技板块，建议逢低加仓半导体龙头，中期仍有上行空间与资金流入机会。",
+            "url": f"https://example.test/low{i}",
+            "publish_time": beijing_today().isoformat(),
+        }
+        for i in range(2)
+    ]
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=5
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: articles},
+    )
+
+    test_db.refresh(task)
+    assert task.status == "succeeded"
+    assert task.result_summary.get("low_volume") is True
+    assert "不足10条" in task.result_summary["message"]
+
+
+def test_fetch_no_low_volume_warning_at_ten_or_above(test_db):
+    articles = [
+        {
+            "title": f"看多科技板块{i}",
+            "content": "看多科技板块，建议逢低加仓半导体龙头，中期仍有上行空间与资金流入机会。",
+            "url": f"https://example.test/ok{i}",
+            "publish_time": beijing_today().isoformat(),
+        }
+        for i in range(10)
+    ]
+    task, _ = ViewpointWorkflowService.create_fetch_task(
+        test_db, sources=["sina_blog"], limit_per_source=20
+    )
+    ViewpointWorkflowService.run_fetch_task(
+        task.id,
+        session_factory=lambda: _NonClosingSession(test_db),
+        fetchers={"sina_blog": lambda limit: articles},
+    )
+
+    test_db.refresh(task)
+    assert task.status == "succeeded"
+    assert test_db.query(Viewpoint).count() == 10
+    assert "low_volume" not in (task.result_summary or {})

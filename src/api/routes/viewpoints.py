@@ -17,6 +17,7 @@ from src.services.viewpoint_workflow_service import (
     ALLOWED_SOURCES,
     DEFAULT_SOURCES,
     ViewpointWorkflowService,
+    beijing_today,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ def _is_analyzed(row: Viewpoint) -> bool:
 
 
 def _analysis_status(row: Viewpoint) -> str:
+    if (row.analysis_summary or "").startswith("rejected:"):
+        return "rejected"
     if row.is_summary or _is_analyzed(row):
         return "succeeded"
     if (row.analysis_summary or "").startswith("failed:"):
@@ -42,7 +45,7 @@ def _analysis_status(row: Viewpoint) -> str:
 
 
 def _serialize_list(row: Viewpoint) -> dict:
-    expired = bool(row.valid_until and row.valid_until < date.today())
+    expired = bool(row.valid_until and row.valid_until < beijing_today())
     # 未分析原始观点也返回 content 前缀，避免前端只显示“待生成摘要”
     summary = row.summary or ((row.content or "")[:160] if (row.is_summary or row.content) else "")
     return {
@@ -214,7 +217,9 @@ def retry_viewpoint_task(
 
 @router.get("/insights")
 def viewpoint_insights(db: Session = Depends(get_db)):
-    today = date.today()
+    # 共识面板统计"当前有效观点"：有效期与30天窗口都按北京日期算，
+    # 否则 Render 的 UTC 时间会在北京时间凌晨给出错位的窗口。
+    today = beijing_today()
     active = db.query(Viewpoint).filter(
         Viewpoint.is_deleted.is_(False),
         Viewpoint.is_summary.is_(False),
@@ -370,7 +375,7 @@ def batch_analyze_viewpoints(
 @router.get("/summary/stats")
 def get_summary_stats(db: Session = Depends(get_db)):
     """获取汇总统计信息（待汇总日期 / 待汇总数 / 已汇总数）"""
-    today = date.today()
+    today = beijing_today()
     pending = db.query(
         Viewpoint.viewpoint_date,
         func.count(Viewpoint.id).label("count"),

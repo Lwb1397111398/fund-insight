@@ -151,9 +151,8 @@ class TiantianCrawler:
         Returns:
             帖子列表
         """
-        # 不在这里再挡 CRAWLER_ENABLED：
-        # - /api/crawler 入口已在 CrawlerService 层统一门控
-        # - 观点流水线 fetch 是用户手动触发，需与 stock_guba/sina 行为一致
+        # 不在这里挡 CRAWLER_ENABLED：
+        # 观点流水线 fetch 是用户手动触发，需与 stock_guba/sina 行为一致。
         posts = []
 
         try:

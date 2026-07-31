@@ -3,9 +3,12 @@
 使用主LLM（DeepSeek V3.2）对抓取的观点进行深度分析
 """
 import json
+import logging
 import re
 from typing import Dict, Optional
 from src.analyzer.llm_analyzer import get_analyzer
+
+logger = logging.getLogger(__name__)
 
 
 class ViewpointAnalyzer:
@@ -39,6 +42,7 @@ class ViewpointAnalyzer:
 
 请深度分析并返回JSON格式（只返回JSON，不要其他内容）：
 {{
+    "viewpoint_type": "明确预测/深度分析/行情复盘/情绪表达/新闻转述/广告引流/无关内容",
     "market_direction": "bullish/bearish/neutral",
     "confidence": 0-100,
     "sentiment_score": 0.0-1.0,
@@ -55,6 +59,14 @@ class ViewpointAnalyzer:
 }}
 
 分析标准：
+0. viewpoint_type: 内容分类（决定该观点是否纳入市场观点汇总，务必严格判断）
+    - 明确预测：对大盘/板块/基金有明确涨跌判断或目标
+    - 深度分析：有分析逻辑、数据或论据支撑
+    - 行情复盘：客观回顾当日行情走势（属于理性市场分析，保留）
+    - 情绪表达：只有情绪发泄、抱怨、喊口号，没有分析依据
+    - 新闻转述：单纯转发新闻/公告/数据发布，没有个人观点
+    - 广告引流：推广、导流、荐股收费等营销内容
+    - 无关内容：与投资市场无关
 1. market_direction: 判断整体市场情绪（看涨/看跌/中性）
 2. confidence: 对判断的信心程度（0-100）
 3. sentiment_score: 情绪分数（0.0-1.0，0.5为中性）
@@ -125,6 +137,14 @@ class ViewpointAnalyzer:
         result['credibility'] = max(0, min(100, int(result.get('credibility', 50))))
         result['sentiment_score'] = max(0.0, min(1.0, float(result.get('sentiment_score', 0.5))))
         
+        # 规范化分类：只接受枚举值，LLM 跑偏时按"深度分析"保留，宁松勿误杀
+        allowed_types = {
+            "明确预测", "深度分析", "行情复盘",
+            "情绪表达", "新闻转述", "广告引流", "无关内容",
+        }
+        vtype = str(result.get('viewpoint_type') or "").strip()
+        result['viewpoint_type'] = vtype if vtype in allowed_types else "深度分析"
+
         if not isinstance(result.get('sectors_bullish'), list):
             result['sectors_bullish'] = []
         if not isinstance(result.get('sectors_bearish'), list):
@@ -144,6 +164,8 @@ class ViewpointAnalyzer:
     def _empty_result(self) -> Dict:
         """返回空结果"""
         return {
+            # 分析失败时按"深度分析"保留观点：LLM 抖动不应导致观点被误删
+            "viewpoint_type": "深度分析",
             "market_direction": "neutral",
             "confidence": 50,
             "sentiment_score": 0.5,
@@ -169,3 +191,37 @@ def get_viewpoint_analyzer() -> ViewpointAnalyzer:
     if _viewpoint_analyzer is None:
         _viewpoint_analyzer = ViewpointAnalyzer()
     return _viewpoint_analyzer
+
+
+def quick_judge_viewpoint(title: str, content: str) -> Optional[Dict]:
+    """辅助AI（轻量模型）快速裁决：这篇拿不准的内容是不是有效市场观点？
+
+    只用于关键词规则无法决定的边界内容（只命中"分析/观点/风险"等泛化词、
+    没有任何方向/板块/操作类核心词）。注重效率：极短 prompt、最低输出量、
+    轻量模型。返回 {"keep": bool, "reason": str}；任何失败返回 None，
+    调用方按"放行"处理——深度分析阶段还有第二道剔除防线。
+    """
+    try:
+        analyzer = get_analyzer()
+        prompt = f"""快速判断以下内容是不是“有效市场观点”。
+是：对大盘/板块/基金的涨跌预测、操作建议或理性市场分析。
+否：情绪发泄、单纯新闻或公告转述、广告导流、与投资无关。
+
+标题：{(title or "")[:80]}
+内容：{(content or "")[:400]}
+
+只返回JSON：{{"keep": true或false, "reason": "20字以内理由"}}"""
+        result_text = analyzer._call_llm(
+            prompt, task_type='simple', max_tokens=100, temperature=0
+        )
+        json_match = re.search(r'\{[\s\S]+\}', result_text)
+        if not json_match:
+            return None
+        data = json.loads(json_match.group())
+        return {
+            "keep": bool(data.get("keep")),
+            "reason": str(data.get("reason") or "")[:60],
+        }
+    except Exception as exc:
+        logger.warning(f"[ViewpointAnalyzer] 辅助AI裁决失败: {exc}")
+        return None

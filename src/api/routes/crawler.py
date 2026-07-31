@@ -10,7 +10,6 @@ import traceback
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from src.api.deps import get_db
-from src.services.crawler_service import CrawlerService
 
 router = APIRouter(prefix="/crawler", tags=["爬虫"])
 
@@ -41,19 +40,6 @@ def _normalize_article_url(url: str) -> str:
     ))
     path = parsed.path.rstrip("/") or "/"
     return urlunsplit((scheme, netloc, path, query, ""))
-
-
-class EastmoneyNewsRequest(BaseModel):
-    max_articles: int = 20
-    fetch_content: bool = False
-    concurrent: bool = True
-    max_workers: int = 5
-
-
-class SinaBlogRequest(BaseModel):
-    max_posts: int = 20
-    concurrent: bool = True
-    max_workers: int = 5
 
 
 @router.post("/wechat/fetch")

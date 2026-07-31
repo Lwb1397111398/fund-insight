@@ -9,7 +9,6 @@ from .prediction_service import PredictionService
 from .fund_service import FundService
 from .viewpoint_service import ViewpointService
 from .advice_service import AdviceService
-from .crawler_service import CrawlerService
 
 __all__ = [
     'BaseService',
@@ -19,5 +18,4 @@ __all__ = [
     'FundService',
     'ViewpointService',
     'AdviceService',
-    'CrawlerService',
 ]

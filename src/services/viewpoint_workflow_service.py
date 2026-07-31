@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -14,6 +14,16 @@ from src.services.viewpoint_service import get_source_authority
 
 
 logger = logging.getLogger(__name__)
+
+# 三个数据源的发布时间均为北京时间；Render 服务器默认 UTC，
+# 直接用 date.today() 会在北京时间 00:00-08:00 之间把"昨天"误当"今天"，
+# 导致"只抓当天"在北京时间凌晨失效。统一以北京日期为准。
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_today() -> date:
+    """当前北京日期（观点同日发布判断的唯一基准）。"""
+    return datetime.now(BEIJING_TZ).date()
 
 
 DEFAULT_SOURCES = ("sina_blog", "stock_guba", "fund_guba")
@@ -26,8 +36,8 @@ ALLOWED_SOURCES = frozenset(DEFAULT_SOURCES)
 # updated_at，正常心跳间隔远小于该值。
 STALE_TASK_AFTER = timedelta(minutes=20)
 
-# 观点内容门禁：内容必须包含至少一个，才视为"博主市场观点"。
-_VIEWPOINT_KEYWORDS = (
+# 核心观点词：命中任一即视为有实质市场态度（方向/板块/操作/行情动作）。
+_CORE_VIEWPOINT_KEYWORDS = (
     # 方向判断（核心）
     '看多', '看空', '看涨', '看跌', '牛市', '熊市', '上涨', '下跌',
     # 板块/行业（核心）
@@ -39,10 +49,19 @@ _VIEWPOINT_KEYWORDS = (
     # 行情判断（核心）
     '突破', '跌破', '反弹', '回调', '震荡', '调整',
     '压力位', '支撑位', '目标位', '阻力位',
+)
+
+# 泛化观点词：只命中这些（核心词零命中）的内容模棱两可——可能是新闻转述、
+# 资讯点评而非博主自己的观点，交给轻量辅助AI裁决，其余不调AI、注重效率。
+_GENERAL_VIEWPOINT_KEYWORDS = (
     # 分析逻辑
     '观点', '预测', '判断', '分析', '逻辑', '策略', '建议',
     '机会', '风险', '利好', '利空',
 )
+
+# 观点内容门禁：内容必须包含至少一个，才视为"博主市场观点"。
+# 并集 == 原门禁关键词集合（拆分不能漏词，测试有断言）。
+_VIEWPOINT_KEYWORDS = _CORE_VIEWPOINT_KEYWORDS + _GENERAL_VIEWPOINT_KEYWORDS
 
 # 命中即丢弃的垃圾关键词（广告、导流、非法荐股）。
 _SPAM_KEYWORDS = (
@@ -120,7 +139,8 @@ class ViewpointWorkflowService:
                 return datetime.strptime(text.replace("/", "-")[:10], "%Y-%m-%d").date()
             except ValueError:
                 pass
-        return date.today()
+        # 解析失败时按当天处理：宁可放行，也不要因为时间源异常把整源观点全部误杀
+        return beijing_today()
 
     @staticmethod
     def _normalize_sources(sources: Optional[Iterable[str]]) -> List[str]:
@@ -187,7 +207,20 @@ class ViewpointWorkflowService:
 
         # 热门指数和基金代码
         HOT_STOCKS = ['000001', '399001', '399006']  # 上证、深证、创业板
-        HOT_FUNDS = ['000001', '110022', '519772', '161725']  # 热门基金示例
+        # 覆盖主要板块的热门基金（场外混合 + 场内行业ETF，这些基金吧发帖活跃）。
+        # 覆盖面越广，当天样本越能代表"整个市场"而不是个别赛道。
+        HOT_FUNDS = [
+            '000001',  # 华夏成长（综合/大盘）
+            '110022',  # 易方达消费（消费）
+            '161725',  # 招商中证白酒（白酒）
+            '159915',  # 易方达创业板ETF（科技成长）
+            '512880',  # 国泰证券ETF（券商）
+            '512480',  # 国联安半导体ETF（芯片）
+            '512010',  # 易方达医药ETF（医药）
+            '512660',  # 国泰军工ETF（军工）
+            '515030',  # 华夏新能源车ETF（新能源）
+            '515790',  # 华泰柏瑞光伏ETF（光伏）
+        ]
 
         def _cap(limit: int, default: int) -> int:
             try:
@@ -197,9 +230,10 @@ class ViewpointWorkflowService:
             return max(1, min(value, 50))
 
         def fetch_stock_guba(limit: int) -> List[Dict[str, Any]]:
-            """抓取热门股吧。固定最多 10 条，会补详情正文。"""
-            # 前端统一传 limit_per_source=20（给新浪），股吧/基金吧刻意压到 10。
-            cap = min(_cap(limit, 10), 10)
+            """抓取热门股吧。最多 15 条，会补详情正文。"""
+            # 前端统一传 limit_per_source=20（给新浪）；股吧压到 15，
+            # 保证过滤后当天样本不至于太少（市场观点汇总至少需要 ~10 条）。
+            cap = min(_cap(limit, 15), 15)
             # 每个吧先抓一点列表，再统一截断，避免只打一个吧。
             per_board = max(3, (cap + len(HOT_STOCKS) - 1) // len(HOT_STOCKS))
             stock_guba.max_posts = per_board
@@ -210,8 +244,8 @@ class ViewpointWorkflowService:
             return all_posts[:cap]
 
         def fetch_fund_guba(limit: int) -> List[Dict[str, Any]]:
-            """抓取热门基金吧。固定最多 10 条，会补详情正文。"""
-            cap = min(_cap(limit, 10), 10)
+            """抓取热门基金吧。最多 15 条，会补详情正文。"""
+            cap = min(_cap(limit, 15), 15)
             fund_guba.max_posts = max(3, (cap + len(HOT_FUNDS) - 1) // len(HOT_FUNDS))
             all_posts: List[Dict[str, Any]] = []
             for fund_code in HOT_FUNDS:
@@ -239,7 +273,34 @@ class ViewpointWorkflowService:
         )
 
     @staticmethod
-    def _apply_deep_analysis(viewpoint: Viewpoint, analysis: Dict[str, Any]) -> None:
+    def _default_assistant_judge(article: Dict[str, Any], source: str) -> Optional[bool]:
+        """辅助AI（轻量模型）裁决边界内容。返回 True/False；None=拿不准，调用方放行。"""
+        from src.analyzer.viewpoint_analyzer import quick_judge_viewpoint
+
+        result = quick_judge_viewpoint(
+            str(article.get("title") or ""),
+            str(article.get("content") or article.get("title") or ""),
+        )
+        return None if result is None else bool(result.get("keep"))
+
+    @staticmethod
+    def _needs_assistant_judge(article: Dict[str, Any]) -> bool:
+        """过了关键词门禁、但核心观点词零命中（只命中"分析/观点/风险"等泛化词）。
+
+        这类内容规则拿不准（新闻转述/资讯点评也会命中泛化词），才值得花一次
+        轻量AI调用；命中任一核心词的内容直接采纳，不调AI，保证抓取效率。
+        """
+        title = str(article.get("title") or "").strip()
+        content = str(article.get("content") or "").strip()
+        text = f"{title}\n{content}" if content and content != title else (content or title)
+        return not any(keyword in text for keyword in _CORE_VIEWPOINT_KEYWORDS)
+
+    # 深度分析判定为这些类型的内容不属于"理性市场分析"，
+    # 不进入观点列表和每日市场汇总（软删除后可在回收站查看、恢复）。
+    _REJECT_VIEWPOINT_TYPES = ("情绪表达", "新闻转述", "广告引流", "无关内容")
+
+    @classmethod
+    def _apply_deep_analysis(cls, viewpoint: Viewpoint, analysis: Dict[str, Any]) -> None:
         horizon = analysis.get("time_horizon") or "medium"
         valid_days = {"short": 7, "medium": 30, "long": 90}.get(horizon, 30)
         viewpoint.market_direction = analysis.get("market_direction") or "neutral"
@@ -258,8 +319,22 @@ class ViewpointWorkflowService:
         viewpoint.action_suggestion = analysis.get("action_suggestion") or "观望"
         viewpoint.risk_level = analysis.get("risk_level") or "medium"
         viewpoint.source_authority = get_source_authority(viewpoint.source)
-        viewpoint.analysis_summary = "succeeded"
+        viewpoint.viewpoint_type = analysis.get("viewpoint_type") or "深度分析"
         viewpoint.calculate_weight()
+
+        viewpoint_type = str(analysis.get("viewpoint_type") or "").strip()
+        if viewpoint_type in cls._REJECT_VIEWPOINT_TYPES:
+            # 方向/板块等字段仍照常写入，回收站里可查看 AI 的完整判断
+            viewpoint.is_deleted = True
+            viewpoint.analysis_summary = f"rejected:{viewpoint_type}"
+            viewpoint.reassessment_reason = (
+                f"AI 判定为「{viewpoint_type}」，不属于理性市场分析，已自动排除出市场观点汇总"
+            )
+            logger.info(
+                "[观点分析] 观点 %s 被判定为「%s」，已软删除", viewpoint.id, viewpoint_type,
+            )
+        else:
+            viewpoint.analysis_summary = "succeeded"
 
     @classmethod
     def run_fetch_task(
@@ -269,10 +344,18 @@ class ViewpointWorkflowService:
         session_factory: Callable[[], Session] = SessionLocal,
         fetchers: Optional[Dict[str, Callable[[int], List[Dict[str, Any]]]]] = None,
         deep_analyzer: Optional[Callable[[Dict[str, Any], str], Dict[str, Any]]] = None,
+        assistant_judge: Optional[Callable[[Dict[str, Any], str], Optional[bool]]] = None,
     ) -> None:
-        """抓取新浪博客并直接入库，不调用 AI 筛选或深度分析。"""
+        """抓取观点并直接入库：不调用主力AI，只对规则拿不准的边界内容
+        调用轻量辅助AI裁决（每次任务最多 15 次，超限或失败一律放行）。"""
         fetchers = fetchers or cls._default_fetchers()
         deep_analyzer = deep_analyzer or cls._default_deep_analyzer
+        # 辅助AI裁决上下文：judge=裁决函数，calls=已调用次数，cap=本次任务上限。
+        assistant_ctx = {
+            "judge": assistant_judge or cls._default_assistant_judge,
+            "calls": 0,
+            "cap": 15,
+        }
         db = session_factory()
         try:
             task = db.query(BatchAnalysisTask).filter(
@@ -349,7 +432,7 @@ class ViewpointWorkflowService:
                     return
                 for article in articles:
                     try:
-                        cls._process_article(db, task_id, source, article)
+                        cls._process_article(db, task_id, source, article, assistant_ctx)
                     except Exception as exc:
                         db.rollback()
                         task = db.get(BatchAnalysisTask, task_id)
@@ -366,6 +449,19 @@ class ViewpointWorkflowService:
 
             task = db.get(BatchAnalysisTask, task_id)
             if task and task.status != "cancelled":
+                # 当天样本过少时给出诚实预警：不放松"仅当天"规则（用前一天补量
+                # 会与前一天已有的汇总冲突、破坏汇总幂等），只提示汇总可能偏差。
+                summary = dict(task.result_summary or {})
+                summary["assistant_calls"] = assistant_ctx["calls"]
+                adopted_total = summary.get("adopted") or 0
+                if not task.failed_count and adopted_total < 10:
+                    summary["low_volume"] = True
+                    summary["message"] = (
+                        f"当天仅采纳 {adopted_total} 条观点（不足10条），市场样本偏少，"
+                        f"汇总结果可能有偏差，可在发帖更活跃的时段重新抓取。"
+                    )
+                    logger.warning("[观点抓取] 当天样本不足：仅采纳 %d 条", adopted_total)
+                task.result_summary = summary
                 task.status = "failed" if task.failed_count else "succeeded"
                 task.completed_at = datetime.now()
                 db.commit()
@@ -412,7 +508,23 @@ class ViewpointWorkflowService:
         return True, "ok"
 
     @classmethod
-    def _process_article(cls, db, task_id, source, article):
+    def _record_skipped(cls, db, task, summary, source, source_stats, reason, article_id):
+        """记录一篇被跳过的文章（统计 + 心跳 commit），供各过滤环节共用。"""
+        source_stats["skipped"] = (source_stats.get("skipped") or 0) + 1
+        source_stats["skipped_reasons"] = source_stats.get("skipped_reasons") or {}
+        source_stats["skipped_reasons"][reason] = (
+            source_stats["skipped_reasons"].get(reason, 0) + 1
+        )
+        summary["skipped"] = (summary.get("skipped") or 0) + 1
+        task.processed_count = (task.processed_count or 0) + 1
+        processed = list(task.processed_ids or [])
+        processed.append(article_id)
+        task.processed_ids = processed
+        cls._save_source_stats(task, summary, source, source_stats)
+        db.commit()
+
+    @classmethod
+    def _process_article(cls, db, task_id, source, article, assistant_ctx=None):
         task = db.get(BatchAnalysisTask, task_id)
         article_id = cls._stable_article_id(source, article)
         summary = dict(task.result_summary or {})
@@ -428,21 +540,49 @@ class ViewpointWorkflowService:
             db.commit()
             return
 
+        # 只采纳当天发布的观点（北京时间）。三个源的列表页均按时间倒序，
+        # 往日内容混进来会污染"当日市场观点"汇总，直接跳过并记原因。
+        # 容忍轻度未来时间（<= 明天）：服务器时钟偏差时不要把整源误杀。
+        article_day = cls._article_date(article)
+        today = beijing_today()
+        if article_day < today:
+            logger.info(
+                "[观点抓取] 跳过非当天观点 %s（发布于 %s）: %s",
+                source, article_day.isoformat(), str(article.get("title") or "")[:40],
+            )
+            cls._record_skipped(
+                db, task, summary, source, source_stats,
+                "非当天观点", article_id,
+            )
+            return
+
         quality_ok, quality_reason = cls._is_quality_viewpoint(article)
         if not quality_ok:
-            source_stats["skipped"] = (source_stats.get("skipped") or 0) + 1
-            source_stats["skipped_reasons"] = source_stats.get("skipped_reasons") or {}
-            source_stats["skipped_reasons"][quality_reason] = (
-                source_stats["skipped_reasons"].get(quality_reason, 0) + 1
+            cls._record_skipped(
+                db, task, summary, source, source_stats,
+                quality_reason, article_id,
             )
-            summary["skipped"] = (summary.get("skipped") or 0) + 1
-            task.processed_count = (task.processed_count or 0) + 1
-            processed = list(task.processed_ids or [])
-            processed.append(article_id)
-            task.processed_ids = processed
-            cls._save_source_stats(task, summary, source, source_stats)
-            db.commit()
             return
+
+        # 辅助AI裁决（仅边界内容）：核心观点词零命中时才调用轻量模型。
+        # 三重保险——调用上限、异常容错、拿不准放行：宁可放进列表（深度分析
+        # 阶段还会二次剔除），也不能因为AI抖动误杀正常观点。
+        if assistant_ctx and cls._needs_assistant_judge(article):
+            keep = None
+            if assistant_ctx["calls"] < assistant_ctx["cap"]:
+                assistant_ctx["calls"] += 1
+                try:
+                    keep = assistant_ctx["judge"](article, source)
+                except Exception as exc:
+                    logger.warning("[观点抓取] 辅助AI裁决出错，按放行处理: %s", exc)
+            else:
+                logger.info("[观点抓取] 辅助AI调用达上限(%s次)，边界内容按放行处理", assistant_ctx["cap"])
+            if keep is False:
+                cls._record_skipped(
+                    db, task, summary, source, source_stats,
+                    "辅助AI判定非有效观点", article_id,
+                )
+                return
 
         record = CrawlerArticleRecord(
             article_id=article_id,
@@ -751,7 +891,9 @@ class ViewpointWorkflowService:
         dates = [
             row[0]
             for row in db.query(Viewpoint.viewpoint_date).filter(
-                Viewpoint.viewpoint_date < date.today(),
+                # 按北京日期界定"往日"：与抓取的同日过滤同一基准，
+                # 避免 UTC 凌晨把北京时间的当天观点提前送去汇总。
+                Viewpoint.viewpoint_date < beijing_today(),
                 Viewpoint.is_summary.is_(False),
                 Viewpoint.is_deleted.is_(False),
             ).distinct().order_by(Viewpoint.viewpoint_date.asc()).all()

@@ -25,9 +25,9 @@
 | `fund_service.py` | 基金 CRUD、活跃预测计数、最近历史 |
 | `fund_update_task.py` | 基金批量更新后台状态 |
 | `viewpoint_service.py` | 观点查询、采纳、批量分析、汇总 |
+| `viewpoint_workflow_service.py` | 观点抓取/深度分析/每日汇总持久化流水线（含同日过滤、辅助AI裁决） |
 | `viewpoint_stats_service.py` | 观点统计、告警、权重、关联 |
 | `advice_service.py` | 投资建议生成和历史 |
-| `crawler_service.py` | 爬虫采纳协调 |
 | `sector_flow_service.py` | 板块资金流抓取、计算、写库、状态 |
 | `sector_flow_calculator.py` | 板块资金流指标计算 |
 | `sector_fund_service.py` | 板块-基金映射和审核 |
