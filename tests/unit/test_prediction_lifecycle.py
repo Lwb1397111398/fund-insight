@@ -125,16 +125,17 @@ def test_active_and_actionable_filters(test_db, monkeypatch):
     assert future_far.id not in ids  # 超过 mid 30 天窗口
 
 
-def test_due_and_unverifiable_window(test_db, monkeypatch):
+def test_due_queue_has_no_time_ceiling(test_db, monkeypatch):
+    """到期未验证即可验：再旧的预测也是 due_unverified，不存在「超过窗口不可验证」。"""
     as_of = date(2026, 4, 20)
     max_age = max_end_nav_age_days()
     monkeypatch.setattr(lc, "current_as_of", lambda: as_of)
 
-    due = _seed_pred(test_db, target=as_of - timedelta(days=2))  # 仍在窗口
-    dead = _seed_pred(
-        test_db, target=as_of - timedelta(days=max_age + 1)
-    )  # 永久不可验证
-    # 数据不足多次尝试：is_correct 仍 null，status 即使 failed 也是 due/unverifiable
+    due = _seed_pred(test_db, target=as_of - timedelta(days=2))
+    very_old = _seed_pred(
+        test_db, target=as_of - timedelta(days=max_age + 100)
+    )  # 远超历史窗口下限，仍可验证
+    # 数据不足多次尝试：is_correct 仍 null，status 即使 failed 也是 due
     attempted = _seed_pred(
         test_db,
         target=as_of - timedelta(days=1),
@@ -144,16 +145,15 @@ def test_due_and_unverifiable_window(test_db, monkeypatch):
     )
 
     assert classify(due, as_of=as_of) == DUE_UNVERIFIED
-    assert classify(dead, as_of=as_of) == UNVERIFIABLE
+    assert classify(very_old, as_of=as_of) == DUE_UNVERIFIED
     assert classify(attempted, as_of=as_of) == DUE_UNVERIFIED
 
     due_ids = {p.id for p in filter_due_for_verify(test_db, as_of=as_of)}
     assert due.id in due_ids
     assert attempted.id in due_ids
-    assert dead.id not in due_ids
+    assert very_old.id in due_ids  # 时间上限已取消
 
-    dead_ids = {p.id for p in filter_unverifiable(test_db, as_of=as_of)}
-    assert dead.id in dead_ids
+    assert filter_unverifiable(test_db, as_of=as_of) == []
 
 
 def test_incomplete_and_deleted(test_db):

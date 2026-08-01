@@ -3,7 +3,7 @@
 桶：
 1. deleted_predictions — 软删且 deleted_at 满 N 天；**is_correct 非空永不进候选**
 2. cleanup_item_logs — created_at 满 M 天
-3. unverifiable_predictions — lifecycle=unverifiable 且目标日龄满 K 天；无结论
+3. unverifiable_predictions — 到期未验证且目标日龄满 K 天；无结论（用户可自行清理，验证不过期）
 4. deleted_viewpoints — 软删观点，锚点 **deleted_at** 满 30 天（不看 valid_until）
 5. summary_viewpoints — is_summary，锚点 **viewpoint_date** 满窗口（默认 90 天）
 6. orphan_funds — 没有任何预测/映射/绑定/持仓/观点引用的基金，连同其全部净值
@@ -40,11 +40,7 @@ from src.models.database import (
     UserFundBinding,
     Viewpoint,
 )
-from src.services.prediction_lifecycle import (
-    UNVERIFIABLE,
-    classify,
-    current_as_of,
-)
+from src.services.prediction_lifecycle import classify, current_as_of
 from src.utils.blogger_stats import recalculate_blogger_stats
 
 POLICY_NAME = "three-buckets-v2"
@@ -157,7 +153,7 @@ class ThreeBucketRetentionService:
     BUCKET_LABELS = {
         BUCKET_DELETED: "回收站预测",
         BUCKET_LOGS: "清理明细日志",
-        BUCKET_UNVERIFIABLE: "已错过验证窗口的预测",
+        BUCKET_UNVERIFIABLE: "长期未验证的预测",
         BUCKET_DELETED_VP: "回收站观点",
         BUCKET_SUMMARY_VP: "历史每日汇总",
         BUCKET_ORPHAN_FUNDS: "无引用基金（连带其全部净值）",
@@ -223,7 +219,7 @@ class ThreeBucketRetentionService:
                 f"cleanup_item_logs.created_at 满 {self.policy.cleanup_item_log_days} 天"
             ),
             self.BUCKET_UNVERIFIABLE: (
-                f"lifecycle=unverifiable 且目标日龄满 {self.policy.unverifiable_days} 天"
+                f"到期未验证且目标日龄满 {self.policy.unverifiable_days} 天"
             ),
             self.BUCKET_DELETED_VP: (
                 f"观点软删：deleted_at 满 {self.policy.deleted_viewpoint_days} 天"
@@ -554,6 +550,7 @@ class ThreeBucketRetentionService:
         return [r.id for r in rows]
 
     def _unverifiable_prediction_ids(self) -> List[int]:
+        """长期到期未验证、且无结论的预测（user 可自行清理；验证本身不过期）。"""
         min_age = self.policy.unverifiable_days
         target_cutoff = self.today - timedelta(days=min_age)
         rows = (
@@ -576,19 +573,11 @@ class ThreeBucketRetentionService:
                 Prediction.target_date <= target_cutoff,
             )
             .order_by(Prediction.target_date.asc(), Prediction.id.asc())
-            .limit(self.policy.max_per_bucket * 3)
+            .limit(self.policy.max_per_bucket)
             .all()
         )
-        ids: List[int] = []
-        for p in rows:
-            if p.is_correct is not None:
-                continue
-            if classify(p, as_of=self.today) != UNVERIFIABLE:
-                continue
-            ids.append(p.id)
-            if len(ids) >= self.policy.max_per_bucket:
-                break
-        return ids
+        # 双护栏：确无验证结论才进候选（不再用 classify 的 UNVERIFIABLE 时间闸门）
+        return [p.id for p in rows if p.is_correct is None]
 
     def _deleted_viewpoint_ids(self) -> List[int]:
         cutoff = datetime.combine(

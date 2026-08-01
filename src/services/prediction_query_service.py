@@ -5,7 +5,7 @@ from sqlalchemy import and_, case, func, nullslast, or_
 from sqlalchemy.orm import Session, joinedload
 
 from src.models.database import Blogger, Post, Prediction
-from src.services.prediction_lifecycle import classify, current_as_of, max_end_nav_age_days
+from src.services.prediction_lifecycle import classify, current_as_of
 
 
 class PredictionQueryService:
@@ -14,7 +14,7 @@ class PredictionQueryService:
     # 默认 due_first：到期待验证在最上面，其次即将到期，最后是已验证/无目标日
     SORT_OPTIONS = ("due_first", "target_asc", "target_desc", "latest")
     DEFAULT_SORT = "due_first"
-    LIFECYCLE_FILTERS = ("due", "active", "unverifiable")
+    LIFECYCLE_FILTERS = ("due", "active")
 
     def __init__(self, db: Session):
         self.db = db
@@ -123,17 +123,15 @@ class PredictionQueryService:
             return (Prediction.prediction_date.desc(), Prediction.id.desc())
 
         today = current_as_of()
-        window_floor = today - timedelta(days=max_end_nav_age_days())
         unverified = Prediction.is_correct.is_(None)
         has_target = Prediction.target_date.isnot(None)
         rank = case(
-            # 0 = 到期且仍可验证（用户最需要先看到的）
+            # 0 = 到期未验证（用户最需要先看到的；再旧也可验，按目标日升序）
             (
                 and_(
                     unverified,
                     has_target,
                     Prediction.target_date <= today,
-                    Prediction.target_date >= window_floor,
                 ),
                 0,
             ),
@@ -141,10 +139,8 @@ class PredictionQueryService:
             (and_(unverified, has_target, Prediction.target_date > today), 1),
             # 2 = 缺目标日，无法排期
             (and_(unverified, Prediction.target_date.is_(None)), 2),
-            # 3 = 已错过验证窗口
-            (unverified, 3),
-            # 4 = 已有结论
-            else_=4,
+            # 3 = 已有结论
+            else_=3,
         )
         # 未验证按目标日升序（先到期的先处理）；已验证按目标日降序（最近的在上）
         pending_key = case((unverified, Prediction.target_date), else_=None)
@@ -159,25 +155,17 @@ class PredictionQueryService:
     def _lifecycle_conditions(self, lifecycle: str) -> List[Any]:
         """把 lifecycle 语义翻译成 SQL 条件（与 prediction_lifecycle 同口径）。"""
         today = current_as_of()
-        window_floor = today - timedelta(days=max_end_nav_age_days())
         if lifecycle == "due":
             return [
                 Prediction.is_correct.is_(None),
                 Prediction.target_date.isnot(None),
                 Prediction.target_date <= today,
-                Prediction.target_date >= window_floor,
             ]
         if lifecycle == "active":
             return [
                 Prediction.is_correct.is_(None),
                 Prediction.target_date.isnot(None),
                 Prediction.target_date > today,
-            ]
-        if lifecycle == "unverifiable":
-            return [
-                Prediction.is_correct.is_(None),
-                Prediction.target_date.isnot(None),
-                Prediction.target_date < window_floor,
             ]
         return []
 
@@ -231,7 +219,6 @@ class PredictionQueryService:
 
     def _facets(self) -> Dict[str, int]:
         today = current_as_of()
-        window_floor = today - timedelta(days=max_end_nav_age_days())
         active = Prediction.is_deleted.is_(False)
         unverified = and_(active, Prediction.is_correct.is_(None), Prediction.target_date.isnot(None))
         row = self.db.query(
@@ -246,10 +233,8 @@ class PredictionQueryService:
                 and_(
                     unverified,
                     Prediction.target_date <= today,
-                    Prediction.target_date >= window_floor,
                 ), 1))).label("due"),
             func.count(case((and_(unverified, Prediction.target_date > today), 1))).label("upcoming"),
-            func.count(case((and_(unverified, Prediction.target_date < window_floor), 1))).label("unverifiable"),
         ).one()
         return {
             "all": row.all or 0,
@@ -261,7 +246,8 @@ class PredictionQueryService:
             "archived": row.archived or 0,
             "due": row.due or 0,
             "upcoming": row.upcoming or 0,
-            "unverifiable": row.unverifiable or 0,
+            # 已无「过期不可验证」概念；保留键避免前端访问 undefined
+            "unverifiable": 0,
         }
 
     @staticmethod

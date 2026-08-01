@@ -180,8 +180,8 @@ def test_verification_status_rejects_prediction_before_target_date(test_db, monk
 def test_verify_all_pending_uses_force_for_old_pending_predictions(test_db, monkeypatch):
     from src.services.prediction_verify_service import PredictionVerifyService
 
-    # 直接用 as_of 固定"当前日期"；force 的阈值是 target_date 距今 > 30 天，
-    # 且预测须落在 due_unverified 窗口（默认 VERIFY_MAX_END_NAV_AGE_DAYS=10）内。
+    # 直接用 as_of 固定"当前日期"；force 的阈值是 target_date 距今 > 30 天。
+    # 验证队列无时间上限：31 天前的预测同样入队（force=True）。
     today = date(2026, 7, 3)
     blogger = Blogger(name="测试博主", platform="eastmoney")
     test_db.add(blogger)
@@ -223,9 +223,7 @@ def test_verify_all_pending_uses_force_for_old_pending_predictions(test_db, monk
 
     service.verify_prediction = fake_verify
 
-    result = service.verify_all_pending(
-        as_of=today, max_age_days=40  # 放宽窗口让 31 天前的预测仍是 due_unverified
-    )
+    result = service.verify_all_pending(as_of=today)
 
     assert result["data"]["success_count"] == 2
     assert calls[old_prediction.id] is True
@@ -333,7 +331,7 @@ def test_verify_all_pending_reports_progress_via_callback(test_db, monkeypatch):
 
 
 def test_verify_all_pending_reports_due_but_skipped_with_reasons(test_db):
-    """到期但不进入验证队列的预测（观望/已过窗）应带原因出现在 skipped 里。"""
+    """到期但不进入验证队列的只有观望预测；再旧的预测也照常入队验证。"""
     from src.services.prediction_verify_service import PredictionVerifyService
 
     today = date(2026, 7, 3)
@@ -373,13 +371,15 @@ def test_verify_all_pending_reports_due_but_skipped_with_reasons(test_db):
         "success": True, "message": "ok",
     }
 
-    result = service.verify_all_pending(as_of=today, max_age_days=10)
+    result = service.verify_all_pending(as_of=today)
 
     skipped = {item["prediction_id"]: item["reason"] for item in result["data"]["skipped"]}
-    assert result["data"]["total"] == 0
+    # 观望预测跳过并给原因；陈旧预测照常入队（无时间上限）
+    assert result["data"]["total"] == 1
+    assert result["data"]["results"][0]["prediction_id"] == stale_prediction.id
     assert "观望" in skipped[flat_prediction.id]
-    assert "验证窗口" in skipped[stale_prediction.id]
-    assert "另有 2 个到期不验证" in result["message"]
+    assert stale_prediction.id not in skipped
+    assert "另有 1 个到期不验证" in result["message"]
 
 
 def test_verify_all_status_surfaces_failure_summary(test_db):
@@ -402,7 +402,7 @@ def test_verify_all_status_surfaces_failure_summary(test_db):
                     {"prediction_id": 2, "success": False, "message": "基金 000001 无历史数据，请先更新基金数据"},
                 ],
                 "skipped": [
-                    {"prediction_id": 3, "reason": "已超过验证窗口（目标日后 10 天），无法验证"},
+                    {"prediction_id": 3, "reason": "中性预测（观望）不参与验证"},
                 ],
             },
         },
@@ -414,7 +414,7 @@ def test_verify_all_status_surfaces_failure_summary(test_db):
 
     assert status["in_progress"] is False
     assert "基金 000001 无历史数据" in status["failure_summary"]
-    assert "已超过验证窗口" in status["failure_summary"]
+    assert "不参与验证" in status["failure_summary"]
     assert "（1 条）" in status["failure_summary"]
 
 

@@ -685,7 +685,7 @@ class PredictionVerifyService:
 
         Args:
             prediction_id: 预测 ID
-            force: 强制验证模式，跳过30天补救期检查（用于 verify_expired_pending）
+            force: 强制验证模式，跳过目标日净值的等待期（用于 verify_expired_pending）；验证本身无过期关闭
 
         Returns:
             验证结果
@@ -724,30 +724,15 @@ class PredictionVerifyService:
         if target_date:
             days_to_target = (target_date - today).days
             logger.info(f"[Verify] days_to_target={days_to_target}, window_days_before={config['window_days_before']}, window_days_after={config['window_days_after']}")
-            
+
             if days_to_target > config['window_days_before']:
                 return {
                     "success": False,
                     "message": f"验证通道尚未开放，请于目标日期前{config['window_days_before']}天验证"
                 }
-            
-            has_verified = (prediction.verify_count or 0) > 0
 
-            if not force:
-                if has_verified and prediction.status not in ('pending',):
-                    grace_period_days = 30
-                    if days_to_target < -grace_period_days:
-                        return {
-                            "success": False,
-                            "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
-                        }
-                elif not has_verified:
-                    grace_period_days = 30
-                    if days_to_target < -grace_period_days:
-                        return {
-                            "success": False,
-                            "message": f"验证通道已关闭（目标日期已过{abs(days_to_target)}天，超过{grace_period_days}天补救期）"
-                        }
+            # 无「过期补救期」：目标日再久远，只要区间内净值数据在就能验。
+            # 数据就绪与否由下方 _check_fund_data_availability 判断。
         
         # 验证窗口固定截止到 target_date，禁止使用目标日之后的行情。
         # 目标日为非交易日时，由 get_nav_by_date(nav_date <= target_date)
@@ -1016,17 +1001,17 @@ class PredictionVerifyService:
         progress_callback=None,
         max_age_days: Optional[int] = None,
     ) -> Dict:
-        """验证所有待验证的预测（只验证已到期且仍在窗口内的，带缓存预热）
+        """验证所有待验证的预测（到期未验证即可验，无时间上限，带缓存预热）
 
         Args:
             as_of: 可选的"当前日期"覆盖（默认走 current_as_of 北京时间），主要供测试固定日期。
             progress_callback: 可选回调，每验证完一条调用
                 progress_callback(processed, success_count, failed_count, prediction_id, ok)
-            max_age_days: 可选的验证窗口天数覆盖，默认走配置 VERIFY_MAX_END_NAV_AGE_DAYS。
+            max_age_days: 兼容参数（历史签名），不再用于限制目标日下限。
 
         Returns:
             data.results 逐条结果（成功含验证结论，失败含具体未验证原因）；
-            data.skipped 为已到期但未进入验证队列的预测（观望/已过窗口）及原因。
+            data.skipped 为已到期但不参与验证的预测（观望）及原因。
         """
         from src.services.prediction_lifecycle import (
             current_as_of,
@@ -1040,8 +1025,7 @@ class PredictionVerifyService:
         # 统一入口：due_unverified（is_correct is null 且未超过 NAV 年龄窗口）
         all_pending = filter_due_for_verify(self.db, as_of=today, max_age_days=max_age_days)
 
-        # 解释"已到期但不验证"：观望预测与已过窗口预测（与队列同口径的宽查 + 推导原因）
-        # 注意：过窗预测不在 broad_due 里（窗口下限过滤），需单独扫描补充。
+        # 解释"已到期但不验证"：仅观望预测（与队列同口径的宽查 + 推导原因）
         broad_due = filter_due_for_verify(
             self.db, as_of=today, exclude_flat=False, max_age_days=max_age_days,
         )

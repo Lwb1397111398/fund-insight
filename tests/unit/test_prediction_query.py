@@ -227,21 +227,19 @@ def test_pending_prediction_detail_includes_source_and_lifecycle(test_db):
 
 
 def _seed_ordering_predictions(db):
-    """构造四类预测：到期待验证、未到期近/远、已过窗、已验证。"""
+    """构造三类预测：到期待验证（新/旧）、未到期近/远、已验证。"""
     from src.services.prediction_lifecycle import current_as_of, max_end_nav_age_days
 
     blogger, _, post, _ = _seed_context(db)
     today = current_as_of()
     max_age = max_end_nav_age_days()
     rows = {
-        # 到期待验证：目标日已过但仍在净值窗口内
-        "due_old": today - timedelta(days=max_age - 1),
+        # 到期待验证：目标日已过（含超过历史窗口下限的，仍可验证）
+        "due_old": today - timedelta(days=max_age + 40),
         "due_today": today,
         # 未到期
         "upcoming_near": today + timedelta(days=3),
         "upcoming_far": today + timedelta(days=200),
-        # 已错过验证窗口
-        "unverifiable": today - timedelta(days=max_age + 40),
     }
     created = {}
     for key, target in rows.items():
@@ -282,12 +280,12 @@ def test_default_sort_puts_due_predictions_first(test_db):
 
     assert result["meta"]["sort"] == "due_first"
     codes = [row["fund_code"] for row in result["data"]]
-    # 到期待验证在最前，且内部按目标日升序
+    # 到期待验证在最前，且内部按目标日升序（最旧的先验）
     assert codes[:2] == ["due_old", "due_today"]
     # 未到期紧随其后，近的在前
     assert codes[2:4] == ["upcoming_near", "upcoming_far"]
-    # 已过窗与已验证排在最后
-    assert set(codes[4:]) == {"unverifiable", "verified"}
+    # 已验证排在最后
+    assert codes[4:] == ["verified"]
     assert created["due_old"].fund_code == "due_old"
 
 
@@ -302,9 +300,9 @@ def test_default_sort_marks_lifecycle_and_days_to_target(test_db):
 
     assert rows["due_today"]["lifecycle"] == "due_unverified"
     assert rows["due_today"]["days_to_target"] == 0
+    assert rows["due_old"]["lifecycle"] == "due_unverified"  # 旧预测不再归入 unverifiable
     assert rows["upcoming_near"]["lifecycle"] == "active"
     assert rows["upcoming_near"]["days_to_target"] == 3
-    assert rows["unverifiable"]["lifecycle"] == "unverifiable"
     assert rows["verified"]["lifecycle"] == "verified_correct"
 
 
@@ -316,15 +314,15 @@ def test_lifecycle_filter_and_facets_expose_due_queue(test_db):
 
     due = service.search(lifecycle="due")
     upcoming = service.search(lifecycle="active")
-    unverifiable = service.search(lifecycle="unverifiable")
+    unknown = service.search(lifecycle="unverifiable")  # 不再支持，回退无过滤
 
     assert {row["fund_code"] for row in due["data"]} == {"due_old", "due_today"}
     assert {row["fund_code"] for row in upcoming["data"]} == {"upcoming_near", "upcoming_far"}
-    assert {row["fund_code"] for row in unverifiable["data"]} == {"unverifiable"}
+    assert unknown["data"]  # 未知 lifecycle 不再过滤，返回全部
     facets = due["meta"]["facets"]
     assert facets["due"] == 2
     assert facets["upcoming"] == 2
-    assert facets["unverifiable"] == 1
+    assert facets["unverifiable"] == 0
 
 
 def test_explicit_sort_options_override_due_first(test_db):

@@ -279,7 +279,6 @@
                                         {{ p.target_date || '-' }}
                                         <span v-if="p.lifecycle === 'due_unverified'" class="text-xs text-danger">· 待验证</span>
                                         <span v-else-if="p.lifecycle === 'active' && p.days_to_target !== null" class="text-xs text-tertiary">· {{ p.days_to_target }}天后</span>
-                                        <span v-else-if="p.lifecycle === 'unverifiable'" class="text-xs text-tertiary">· 已过窗</span>
                                     </td>
                                     <td><span class="status-badge"
                                             :class="p.lifecycle_status === 'archived' ? 'status-failed' : p.verification_result === 'correct' ? 'status-success' : p.verification_result === 'wrong' ? 'status-failed' : 'status-pending'">{{
@@ -598,7 +597,7 @@
 
                     <div v-if="retentionPreview" class="mb-20">
                         <h4 class="text-danger mb-10"><i class="ri-list-check-2"></i> 本次删除清单样本（每桶最多15条）</h4>
-                        <p class="text-xs text-tertiary mb-10">规则：回收站预测/观点按删除时间满窗、已错过验证窗口的预测按目标日龄、历史每日汇总按发布日；已有验证结论的预测永不进入清单。</p>
+                        <p class="text-xs text-tertiary mb-10">规则：回收站预测/观点按删除时间满窗、长期到期未验证的预测按目标日龄、历史每日汇总按发布日；已有验证结论的预测永不进入清单。</p>
                         <div v-for="(rows, bucket) in retentionPreview.samples" :key="bucket" v-show="rows.length > 0" class="mb-12">
                             <div class="text-xs text-tertiary mb-10">{{ retentionBucketLabel(bucket) }}（{{ retentionPreview.counts[bucket] }} 条）· {{ retentionPreview.notes?.[bucket] }}</div>
                             <div class="data-table">

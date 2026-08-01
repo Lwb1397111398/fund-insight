@@ -59,14 +59,21 @@ def _as_date(value) -> Optional[date]:
 
 
 def max_end_nav_age_days() -> int:
-    """与净值就绪规则共用同一配置，不另写魔法数。"""
+    """
+    结束净值允许早于 target_date 的最大自然日数（陈旧度）。
+
+    仅衡量「结束净值距目标日有多远」，与「当前距目标日多久」无关；
+    到期预测不会因为今天离目标日很远而不可验证——只要区间内净值数据还在就能验证。
+    """
     return int(getattr(config, "VERIFY_MAX_END_NAV_AGE_DAYS", 10))
 
 
 def verify_window_end(target: date, max_age: Optional[int] = None) -> date:
     """
-    合规 end NAV 仍须 nav_date <= target；
-    但「是否还可能等到合规数据」的截止为 target + max_age（自然日）。
+    合规 end NAV 的取数范围仍须 nav_date <= target（不用目标日之后的行情）；
+    该值也允许比 target 早至多 max_age 天（周末/假日取前值）。
+
+    注：这不是「今天还能不能验证」的截止——时间上没有截止。
     """
     age = max_end_nav_age_days() if max_age is None else int(max_age)
     return target + timedelta(days=age)
@@ -75,7 +82,7 @@ def verify_window_end(target: date, max_age: Optional[int] = None) -> date:
 def classify(
     prediction: Prediction,
     as_of: Optional[date] = None,
-    max_age_days: Optional[int] = None,
+    max_age_days: Optional[int] = None,  # noqa: ARG001 保留签名兼容，不再参与时间闸门
 ) -> str:
     """
     推导单条预测生命周期。
@@ -84,10 +91,12 @@ def classify(
     1. deleted
     2. incomplete（无 target_date）
     3. verified_*（仅 is_correct is not None）
-    4. active / due_unverified / unverifiable（按 target 与窗口）
+    4. active / due_unverified（按 target 是否已过）
+
+    注：不再设「超过 N 天不可验证」的时间闸门——净值数据都在，
+    到期未验证的预测随时可以验，只是旧的排在待验证队列后面。
     """
     as_of = _as_date(as_of) or current_as_of()
-    max_age = max_end_nav_age_days() if max_age_days is None else int(max_age_days)
 
     if getattr(prediction, "is_deleted", False):
         return DELETED
@@ -106,10 +115,7 @@ def classify(
     if target > as_of:
         return ACTIVE
 
-    # target <= as_of
-    if as_of > verify_window_end(target, max_age):
-        return UNVERIFIABLE
-
+    # target <= as_of：到期未验证即可验，没有「过期不可验证」
     return DUE_UNVERIFIED
 
 
@@ -188,27 +194,23 @@ def filter_due_for_verify(
     as_of: Optional[date] = None,
     *,
     exclude_flat: bool = True,
-    max_age_days: Optional[int] = None,
+    max_age_days: Optional[int] = None,  # noqa: ARG001 保留签名兼容，不再限制目标日下限
 ) -> List[Prediction]:
     """
     到期待验证队列：due_unverified。
 
     - target_date <= as_of
     - is_correct is null
-    - 仍在验证窗口内（未进入 unverifiable）
+    - 无时间上限：到期未验证即可验，再旧的也入队（按目标日升序，最旧最前）
     - 默认排除 flat（与现有 verify_all_pending 一致）
     """
     as_of = _as_date(as_of) or current_as_of()
-    max_age = max_end_nav_age_days() if max_age_days is None else int(max_age_days)
-    window_floor = as_of - timedelta(days=max_age)
 
     filters = [
         Prediction.is_deleted == False,
         Prediction.target_date.isnot(None),
         Prediction.is_correct.is_(None),
         Prediction.target_date <= as_of,
-        # target + max_age >= as_of  ⟺  target >= as_of - max_age
-        Prediction.target_date >= window_floor,
     ]
     if exclude_flat:
         filters.append(Prediction.prediction_type != "flat")
@@ -219,22 +221,18 @@ def filter_due_for_verify(
         .order_by(Prediction.target_date.asc())
         .all()
     )
-    return [p for p in rows if classify(p, as_of=as_of, max_age_days=max_age) == DUE_UNVERIFIED]
+    return [p for p in rows if classify(p, as_of=as_of) == DUE_UNVERIFIED]
 
 
 def due_skip_reason(prediction: Prediction, as_of: Optional[date] = None) -> Optional[str]:
     """已到期但未进入验证队列的原因；可验证时返回 None。
 
     与 filter_due_for_verify 同口径，用于向用户解释"为什么不验证"。
+    到期未验证没有「超过时间不可验证」一说——只有观望预测会被跳过。
     """
-    as_of = _as_date(as_of) or current_as_of()
+    _ = _as_date(as_of) or current_as_of()
     if getattr(prediction, "prediction_type", None) == "flat":
         return "中性预测（观望）不参与验证"
-    if classify(prediction, as_of=as_of) == UNVERIFIABLE:
-        return (
-            f"已超过验证窗口（目标日后 {max_end_nav_age_days()} 天），无法验证；"
-            "可在回收站归档或删除"
-        )
     return None
 
 
@@ -242,28 +240,15 @@ def filter_unverifiable(
     db: Session,
     as_of: Optional[date] = None,
     *,
-    max_age_days: Optional[int] = None,
+    max_age_days: Optional[int] = None,  # noqa: ARG001 保留签名兼容
 ) -> List[Prediction]:
-    """已错过验证窗口、永久不可验证。"""
-    as_of = _as_date(as_of) or current_as_of()
-    max_age = max_end_nav_age_days() if max_age_days is None else int(max_age_days)
-    window_floor = as_of - timedelta(days=max_age)
+    """「永久不可验证」集合。
 
-    rows = (
-        db.query(Prediction)
-        .filter(
-            Prediction.is_deleted == False,
-            Prediction.target_date.isnot(None),
-            Prediction.is_correct.is_(None),
-            Prediction.target_date < window_floor,
-        )
-        .all()
-    )
-    return [
-        p
-        for p in rows
-        if classify(p, as_of=as_of, max_age_days=max_age) == UNVERIFIABLE
-    ]
+    不再按时间判定（到期再久也能验，只要净值数据在），因此恒为空。
+    保留函数与 UNVERIFIABLE 常量仅为签名兼容。
+    """
+    _ = _as_date(as_of) or current_as_of()
+    return []
 
 
 def count_by_lifecycle(

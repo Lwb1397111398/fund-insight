@@ -192,7 +192,7 @@ def _count_due_predictions(db: Session, today: date) -> int:
 
 
 def _due_skipped_predictions(db: Session, today: date) -> list:
-    """已到期但不会进入验证队列的预测及原因（观望 / 已过验证窗口）。"""
+    """已到期但不会进入验证队列的预测及原因（观望）。"""
     from src.services.prediction_lifecycle import due_skip_reason
 
     rows = db.query(Prediction).filter(
