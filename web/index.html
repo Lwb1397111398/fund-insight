@@ -976,8 +976,12 @@
                 <div class="form-group"><label>板块类型（可选）</label><input v-model="newFund.sector_type"
                         placeholder="如: 消费、科技"></div>
                 <div class="modal-footer"><button class="modal-btn default"
-                        @click="showAddFund = false">取消</button><button class="modal-btn primary"
+                        @click="showAddFund = false">取消</button><button class="modal-btn default"
+                        @click="verifyNewFund" :disabled="newFundVerifying">{{ newFundVerifying ? '验证中…' : '验证抓取' }}</button><button class="modal-btn primary"
                         @click="addFund">添加</button></div>
+                <div v-if="newFundVerifyResult" :style="{ marginTop: '8px', padding: '8px 10px', borderRadius: '6px', fontSize: '13px', background: newFundVerifyResult.ok ? '#f6ffed' : '#fff2f0', color: newFundVerifyResult.ok ? '#52c41a' : '#ff4d4f', border: '1px solid ' + (newFundVerifyResult.ok ? '#b7eb8f' : '#ffccc7') }">
+                    {{ newFundVerifyResult.message }}
+                </div>
             </div>
         </div>
         <div v-if="showPostDetail" class="modal-overlay" @click.self="showPostDetail = false">
@@ -1590,8 +1594,9 @@
                                     </td>
                                     <td class="table-cell-center">
                                         <template v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)">
+                                            <button @click="verifyMappingFund" :disabled="mappingVerifying" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">{{ mappingVerifying ? '验证中…' : '验证抓取' }}</button>
                                             <button @click="saveMappingEdit(m)" style="background: #52c41a; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 4px;">保存</button>
-                                            <button @click="editingMappingKey = null" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
+                                            <button @click="editingMappingKey = null; mappingVerifyResult = null;" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
                                         </template>
                                         <template v-else>
                                             <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
@@ -1606,6 +1611,9 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    <div v-if="mappingVerifyResult" :style="{ marginTop: '8px', padding: '8px 10px', borderRadius: '6px', fontSize: '13px', background: mappingVerifyResult.ok ? '#f6ffed' : '#fff2f0', color: mappingVerifyResult.ok ? '#52c41a' : '#ff4d4f', border: '1px solid ' + (mappingVerifyResult.ok ? '#b7eb8f' : '#ffccc7') }">
+                        {{ mappingVerifyResult.message }}
                     </div>
                 </div>
                 <div v-if="configTab === 'llm' && configData">
@@ -2170,7 +2178,31 @@ const fetchWeChatBatch = async () => {
                 };
                 const cleanupWarningLabel = (code) => cleanupWarningLabels[code] || code;
                 const addBlogger = async () => { try { await axios.post('/api/bloggers', newBlogger); showAddBlogger.value = false; newBlogger.name = ''; await fetchBloggers(); await fetchStats(); } catch (e) { alert('添加失败'); } };
-                const addFund = async () => { try { const res = await axios.post('/api/funds', newFund); if (res.data.success) { showAddFund.value = false; newFund.fund_code = ''; await fetchFunds(); await fetchStats(); alert('添加成功'); } else { alert(res.data.message || '添加失败'); } } catch (e) { alert('添加失败: ' + e.message); } };
+                const addFund = async () => { try { const res = await axios.post('/api/funds', newFund); if (res.data.success) { showAddFund.value = false; newFund.fund_code = ''; newFundVerifyResult.value = null; await fetchFunds(); await fetchStats(); alert('添加成功'); } else { alert(res.data.message || '添加失败'); } } catch (e) { alert('添加失败: ' + e.message); } };
+                const newFundVerifying = ref(false);
+                const newFundVerifyResult = ref(null);
+                const verifyNewFund = async () => {
+                    const code = (newFund.fund_code || '').trim();
+                    if (!code) { alert('请先填写基金代码'); return; }
+                    newFundVerifying.value = true;
+                    newFundVerifyResult.value = null;
+                    try {
+                        const res = await axios.get('/api/config/verify-fund', { params: { fund_code: code, fund_name: newFund.fund_name || '' } });
+                        const d = res.data && res.data.data;
+                        if (!d) { newFundVerifyResult.value = { ok: false, message: '验证接口返回异常' }; return; }
+                        // 验证通过且接口返回了官方名称时自动回填
+                        if (d.ok && d.api_name) {
+                            newFund.fund_name = d.api_name;
+                        }
+                        let msg = d.message || (d.ok ? '验证通过' : '验证失败');
+                        if (d.ok && d.nav_date) msg += `（净值日期 ${d.nav_date}，近7日记录 ${d.history_count} 条）`;
+                        newFundVerifyResult.value = { ok: d.ok, message: msg };
+                    } catch (e) {
+                        newFundVerifyResult.value = { ok: false, message: '验证请求失败: ' + (e.response?.data?.detail || e.message) };
+                    } finally {
+                        newFundVerifying.value = false;
+                    }
+                };
                 const deleteBlogger = async (id) => { if (!confirm('确定删除该博主？')) return; try { await axios.delete(`/api/bloggers/${id}`); await fetchBloggers(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
                 const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
                 const deleteFund = async (fundCode, fundName) => {
@@ -2395,6 +2427,8 @@ const fetchWeChatBatch = async () => {
                 const mappingSearchKeyword = ref('');
                 const editingMappingKey = ref(null);
                 const editingMapping = ref({ fund_name: '', fund_code: '', sector_name: '', source: null });
+                const mappingVerifying = ref(false);
+                const mappingVerifyResult = ref(null);
                 const filteredMappings = computed(() => {
                     const keyword = mappingSearchKeyword.value.trim().toLowerCase();
                     if (!keyword) return sectorMappings.value.mappings || [];
@@ -2405,7 +2439,30 @@ const fetchWeChatBatch = async () => {
                     );
                 });
                 const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await axios.get(url); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
-                const startEditMapping = (m) => { editingMappingKey.value = m.sector_name + m.fund_code; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code, sector_name: m.sector_name, source: m.source, id: m.id }; };
+                const startEditMapping = (m) => { editingMappingKey.value = m.sector_name + m.fund_code; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code, sector_name: m.sector_name, source: m.source, id: m.id }; mappingVerifyResult.value = null; };
+                const verifyMappingFund = async () => {
+                    const code = (editingMapping.value.fund_code || '').trim();
+                    if (!code) { alert('请先填写基金代码'); return; }
+                    mappingVerifying.value = true;
+                    mappingVerifyResult.value = null;
+                    try {
+                        const res = await axios.get('/api/config/verify-fund', { params: { fund_code: code, fund_name: editingMapping.value.fund_name || '' } });
+                        const d = res.data && res.data.data;
+                        if (!d) { mappingVerifyResult.value = { ok: false, message: '验证接口返回异常' }; return; }
+                        // 验证通过且接口返回了官方名称时自动回填，避免用户手写的名称与代码对不上
+                        if (d.ok && d.api_name) {
+                            editingMapping.value.fund_name = d.api_name;
+                        }
+                        let msg = d.message || (d.ok ? '验证通过' : '验证失败');
+                        if (d.ok && d.nav_date) msg += `（净值日期 ${d.nav_date}，近7日记录 ${d.history_count} 条）`;
+                        if (!d.ok && d.input_name && d.input_name.trim()) msg += `；你填写的名称"${d.input_name}"未被采用`;
+                        mappingVerifyResult.value = { ok: d.ok, message: msg };
+                    } catch (e) {
+                        mappingVerifyResult.value = { ok: false, message: '验证请求失败: ' + (e.response?.data?.detail || e.message) };
+                    } finally {
+                        mappingVerifying.value = false;
+                    }
+                };
                 const saveMappingEdit = async (m) => {
                     try {
                         let res;
@@ -2532,6 +2589,7 @@ const fetchWeChatBatch = async () => {
                     expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting,
                     testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError,
                     authReady, submitPassword, loadView, addBlogger, addPost, addFund,
+                    newFundVerifying, newFundVerifyResult, verifyNewFund,
                     deleteBlogger, deletePost, deletePrediction, deleteViewpoint,
                     viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund,
                     viewPredictionDetail, editPrediction, savePrediction, showTopBloggers,
@@ -2553,6 +2611,7 @@ const fetchWeChatBatch = async () => {
                     loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter,
                     mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping,
                     loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping,
+                    mappingVerifying, mappingVerifyResult, verifyMappingFund,
                     deleteMapping, batchReviewAll, exportLoading, exportConfigLoading,
                     exportResult, importFile, importLoading, importResult, importFileInput,
                     exportAllData, exportConfig, onImportFileChange, importData,

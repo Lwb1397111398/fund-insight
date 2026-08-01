@@ -21,6 +21,7 @@ from src.models.database import (
     SectorAlias, SectorFundMapping
 )
 from src.services.data_portability_service import DataPortabilityService
+from src.fund.fund_api import fund_api
 
 router = APIRouter(prefix="/config", tags=["配置"])
 
@@ -954,6 +955,13 @@ class BatchReviewRequest(BaseModel):
     """批量审查请求"""
     ids: list[int]
     reviewed: bool = True
+
+
+@router.get("/verify-fund")
+def verify_fund_fetchable(fund_code: str, fund_name: Optional[str] = None):
+    """验证基金代码能否从数据源抓取（板块映射/添加基金前的审查程序）"""
+    result = fund_api.verify_fund_fetchable(fund_code, fund_name)
+    return {"success": True, "data": result}
 
 
 @router.get("/sector-mappings")

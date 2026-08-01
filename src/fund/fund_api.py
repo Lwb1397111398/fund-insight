@@ -194,6 +194,73 @@ class FundAPI:
             logger.error(f"获取基金{fund_code}历史数据失败: {e}")
             return []
     
+    def verify_fund_fetchable(self, fund_code: str, input_name: Optional[str] = None) -> Dict:
+        """验证基金代码是否能从数据源正常抓取。
+
+        依次调用实时信息接口与历史净值接口，返回结构化验证结果。
+        供"板块映射审查 / 添加基金"流程在保存前做抓取可行性检查。
+
+        Args:
+            fund_code: 6 位数字基金代码
+            input_name: 用户填写的基金名称（可选，仅用于回填对比，不作为通过依据）
+
+        Returns:
+            dict 包含：
+            - ok: 是否可正常抓取（信息或历史至少其一有效）
+            - code/input_name/api_name/api_nav/nav_date/history_count
+            - message: 面向用户的一句话结论
+        """
+        code = (fund_code or '').strip()
+        if not re.fullmatch(r'\d{6}', code):
+            return {
+                'ok': False,
+                'code': code,
+                'input_name': input_name,
+                'api_name': None,
+                'api_nav': None,
+                'nav_date': None,
+                'history_count': 0,
+                'message': '基金代码格式不正确，应为 6 位数字'
+            }
+
+        info = None
+        try:
+            info = self.get_fund_info(code)
+        except Exception as e:
+            logger.warning(f"验证基金{code}时信息接口异常: {e}")
+
+        history: List[Dict] = []
+        try:
+            history = self.get_fund_history(code, days=7)
+        except Exception as e:
+            logger.warning(f"验证基金{code}时历史接口异常: {e}")
+
+        nav = (info or {}).get('nav')
+        api_name = (info or {}).get('fund_name')
+        nav_date = (info or {}).get('nav_date')
+        ok = bool((nav and nav > 0) or history)
+
+        if ok:
+            if api_name:
+                message = f'验证通过：{api_name}'
+            else:
+                message = '验证通过：可抓取净值数据（接口未返回名称）'
+        elif info is None and not history:
+            message = '验证失败：接口无有效数据，该基金可能已停牌/清盘或代码有误'
+        else:
+            message = '验证失败：未抓取到有效净值数据'
+
+        return {
+            'ok': ok,
+            'code': code,
+            'input_name': input_name,
+            'api_name': api_name,
+            'api_nav': nav,
+            'nav_date': nav_date,
+            'history_count': len(history),
+            'message': message
+        }
+
     def search_fund(self, keyword: str) -> List[Dict]:
         """搜索基金"""
         try:
