@@ -1561,6 +1561,41 @@
                         <button class="action-btn small" @click="loadSectorMappings(false)" :style="{ background: mappingFilter === false ? '#faad14' : '#f5f5f5', color: mappingFilter === false ? '#fff' : '#666' }">待审查</button>
                         <button class="action-btn small" @click="loadSectorMappings(true)" :style="{ background: mappingFilter === true ? '#52c41a' : '#f5f5f5', color: mappingFilter === true ? '#fff' : '#666' }">已审查</button>
                         <button v-if="sectorMappings.unreviewed_count > 0" class="action-btn small" @click="batchReviewAll" style="background: #52c41a; color: #fff;">全部标记已审查</button>
+                        <button class="action-btn small" @click="verifyAllFunds" :disabled="verifyAllVerifying" style="background: #722ed1; color: #fff;">{{ verifyAllVerifying ? '验证中…' : '验证全部抓取' }}</button>
+                    </div>
+                    <div v-if="verifyAllResult" style="margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid #d3adf7; background: #f9f0ff;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                            <strong style="color: #722ed1; font-size: 13px;">抓取验证结果</strong>
+                            <span class="text-sm text-muted">共 {{ verifyAllResult.total }} 条，检查 {{ verifyAllResult.checked_codes }} 个基金代码</span>
+                            <span style="font-size: 13px; color: #52c41a;">可抓取 {{ verifyAllResult.ok_count }}</span>
+                            <span style="font-size: 13px; color: #ff4d4f;">问题 {{ verifyAllResult.problem_count }}</span>
+                            <span class="flex-1"></span>
+                            <button class="action-btn small" @click="verifyAllResult = null" style="background: #f5f5f5; color: #666;">收起</button>
+                        </div>
+                        <div v-if="verifyAllResult.problem_count === 0" style="font-size: 13px; color: #52c41a;">✅ 全部基金均可正常抓取，没有发现问题基金。</div>
+                        <div v-else>
+                            <div class="text-sm text-muted" style="margin-bottom: 4px;">以下基金抓取失败，建议修正代码或删除对应板块映射：</div>
+                            <div style="max-height: 220px; overflow-y: auto; border: 1px solid #ffccc7; border-radius: 4px;">
+                                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                                    <thead>
+                                        <tr style="background: #fff2f0;">
+                                            <th style="padding: 4px 8px; text-align: left; border-bottom: 1px solid #ffccc7;">板块名</th>
+                                            <th style="padding: 4px 8px; text-align: left; border-bottom: 1px solid #ffccc7;">基金名称</th>
+                                            <th style="padding: 4px 8px; text-align: left; border-bottom: 1px solid #ffccc7;">代码</th>
+                                            <th style="padding: 4px 8px; text-align: left; border-bottom: 1px solid #ffccc7;">原因</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="p in verifyAllResult.problems" :key="p.sector_name + p.fund_code">
+                                            <td style="padding: 4px 8px; border-bottom: 1px solid #fff1f0;">{{ p.sector_name }}</td>
+                                            <td style="padding: 4px 8px; border-bottom: 1px solid #fff1f0;">{{ p.fund_name || '-' }}</td>
+                                            <td style="padding: 4px 8px; border-bottom: 1px solid #fff1f0;">{{ p.fund_code }}</td>
+                                            <td style="padding: 4px 8px; border-bottom: 1px solid #fff1f0; color: #ff4d4f;">{{ p.message }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                     <div style="max-height: 450px; overflow-y: auto; border: 1px solid #f0f0f0; border-radius: 6px;">
                         <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
@@ -2429,6 +2464,8 @@ const fetchWeChatBatch = async () => {
                 const editingMapping = ref({ fund_name: '', fund_code: '', sector_name: '', source: null });
                 const mappingVerifying = ref(false);
                 const mappingVerifyResult = ref(null);
+                const verifyAllVerifying = ref(false);
+                const verifyAllResult = ref(null);
                 const filteredMappings = computed(() => {
                     const keyword = mappingSearchKeyword.value.trim().toLowerCase();
                     if (!keyword) return sectorMappings.value.mappings || [];
@@ -2461,6 +2498,23 @@ const fetchWeChatBatch = async () => {
                         mappingVerifyResult.value = { ok: false, message: '验证请求失败: ' + (e.response?.data?.detail || e.message) };
                     } finally {
                         mappingVerifying.value = false;
+                    }
+                };
+                const verifyAllFunds = async () => {
+                    if (verifyAllVerifying.value) return;
+                    verifyAllVerifying.value = true;
+                    verifyAllResult.value = null;
+                    try {
+                        // 批量验证是一次性诊断操作（逐个抓取 + 节流间隔），可能耗时 1~2 分钟；
+                        // 这里单独放宽超时，与基金全量更新的"后台任务+轮询"机制无关。
+                        const res = await axios.post('/api/config/verify-all-funds', {}, { timeout: 180000 });
+                        const d = res.data && res.data.data;
+                        if (!d) { alert('验证接口返回异常'); return; }
+                        verifyAllResult.value = d;
+                    } catch (e) {
+                        alert('批量验证失败: ' + (e.response?.data?.detail || e.message));
+                    } finally {
+                        verifyAllVerifying.value = false;
                     }
                 };
                 const saveMappingEdit = async (m) => {
@@ -2612,6 +2666,7 @@ const fetchWeChatBatch = async () => {
                     mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping,
                     loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping,
                     mappingVerifying, mappingVerifyResult, verifyMappingFund,
+                    verifyAllVerifying, verifyAllResult, verifyAllFunds,
                     deleteMapping, batchReviewAll, exportLoading, exportConfigLoading,
                     exportResult, importFile, importLoading, importResult, importFileInput,
                     exportAllData, exportConfig, onImportFileChange, importData,

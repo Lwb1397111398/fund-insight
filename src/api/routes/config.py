@@ -964,6 +964,39 @@ def verify_fund_fetchable(fund_code: str, fund_name: Optional[str] = None):
     return {"success": True, "data": result}
 
 
+@router.post("/verify-all-funds")
+def verify_all_funds(db: Session = Depends(get_db)):
+    """一键验证所有板块映射基金能否抓取，列出抓取失败的问题基金。
+
+    复用与 GET /sector-mappings 相同的合并逻辑（DB 映射 + 内置映射），
+    相同基金代码只请求一次；相邻请求间加节流间隔，降低被数据源限流概率。
+    """
+    from src.services.sector_fund_service import get_sector_fund_service
+    from src.constants.sector_fund_map import SECTOR_FUND_MAP
+
+    service = get_sector_fund_service(db)
+    db_mappings = service.get_all_mappings_with_status(reviewed_filter=None)
+    db_sectors = {m['sector_name'] for m in db_mappings}
+
+    items = []
+    for m in db_mappings:
+        items.append({
+            'sector_name': m['sector_name'],
+            'fund_code': m['fund_code'],
+            'fund_name': m['fund_name'],
+        })
+    for sector_name, fund_info in sorted(SECTOR_FUND_MAP.items()):
+        if sector_name not in db_sectors:
+            items.append({
+                'sector_name': sector_name,
+                'fund_code': fund_info.get('code', ''),
+                'fund_name': fund_info.get('name', ''),
+            })
+
+    summary = fund_api.verify_funds_batch(items, delay=0.2)
+    return {"success": True, "data": summary}
+
+
 @router.get("/sector-mappings")
 def get_sector_mappings(
     reviewed: Optional[str] = None,

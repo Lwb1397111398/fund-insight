@@ -6,6 +6,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import json
 import re
+import time
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -85,7 +86,7 @@ class FundAPI:
             'day_growth': latest.get('growth'),
         }
 
-    def get_fund_info(self, fund_code: str) -> Optional[Dict]:
+    def get_fund_info(self, fund_code: str, allow_fallback: bool = True) -> Optional[Dict]:
         """获取基金实时信息
 
         返回数据包含：
@@ -95,6 +96,9 @@ class FundAPI:
 
         fundgz 实时接口失效（404 HTML / 超时 / 网络错误）时，
         自动用历史净值接口兜底，保证基金更新链路可用。
+
+        allow_fallback=False 时仅尝试实时接口，失效直接返回 None，
+        供抓取验证等场景复用，避免一次验证触发多次历史接口调用（防限流）。
         """
         try:
             url = f"{self.base_url}/js/{fund_code}.js"
@@ -128,15 +132,17 @@ class FundAPI:
 
             # fundgz 接口失效时（返回 404 页面等），用历史净值兜底
             logger.warning(f"基金{fund_code}实时接口无有效数据，尝试历史净值兜底")
-            return self._history_fallback_info(fund_code)
+            return self._history_fallback_info(fund_code) if allow_fallback else None
         except requests.exceptions.Timeout:
             logger.warning(f"获取基金{fund_code}信息超时，尝试历史净值兜底")
-            return self._history_fallback_info(fund_code)
+            return self._history_fallback_info(fund_code) if allow_fallback else None
         except requests.exceptions.RequestException as e:
             logger.warning(f"获取基金{fund_code}网络错误: {e}，尝试历史净值兜底")
-            return self._history_fallback_info(fund_code)
+            return self._history_fallback_info(fund_code) if allow_fallback else None
         except Exception as e:
             logger.error(f"获取基金{fund_code}信息失败: {e}，尝试历史净值兜底")
+            if not allow_fallback:
+                return None
             try:
                 return self._history_fallback_info(fund_code)
             except Exception:
@@ -225,12 +231,14 @@ class FundAPI:
 
         info = None
         try:
-            info = self.get_fund_info(code)
+            # 仅尝试实时接口（不触发历史兜底），用于补充官方名称/实时净值
+            info = self.get_fund_info(code, allow_fallback=False)
         except Exception as e:
             logger.warning(f"验证基金{code}时信息接口异常: {e}")
 
         history: List[Dict] = []
         try:
+            # 历史净值是判断"能否抓取"的权威依据，只调一次
             history = self.get_fund_history(code, days=7)
         except Exception as e:
             logger.warning(f"验证基金{code}时历史接口异常: {e}")
@@ -238,6 +246,14 @@ class FundAPI:
         nav = (info or {}).get('nav')
         api_name = (info or {}).get('fund_name')
         nav_date = (info or {}).get('nav_date')
+        # 实时接口没给净值日期时，用历史最新一条兜底展示
+        if not nav_date and history:
+            latest_date = history[0].get('date')
+            nav_date = (
+                latest_date.strftime('%Y-%m-%d')
+                if hasattr(latest_date, 'strftime')
+                else (str(latest_date) if latest_date else None)
+            )
         ok = bool((nav and nav > 0) or history)
 
         if ok:
@@ -259,6 +275,56 @@ class FundAPI:
             'nav_date': nav_date,
             'history_count': len(history),
             'message': message
+        }
+
+    def verify_funds_batch(self, items: List[Dict], delay: float = 0.3) -> Dict:
+        """批量验证多只基金能否从数据源抓取，用于一键排查问题基金。
+
+        Args:
+            items: [{'sector_name','fund_code','fund_name'}, ...]
+            delay: 相邻两次网络验证之间的间隔秒数，降低被数据源限流概率。
+
+        Returns:
+            dict：total / ok_count / problem_count / results / problems
+            - results: 每个输入条目一条（含验证结果与所属板块）
+            - problems: 仅抓取失败的条目
+        相同基金代码只发起一次网络验证，结果复用到所有引用它的板块。
+        """
+        cache: Dict[str, Dict] = {}
+        results: List[Dict] = []
+        for idx, item in enumerate(items or []):
+            code = (item.get('fund_code') or '').strip()
+            name = item.get('fund_name') or ''
+            sector = item.get('sector_name') or ''
+            if code in cache:
+                verify = dict(cache[code])
+            else:
+                # 仅在真正发起新的一次网络验证前做节流间隔
+                if cache and delay > 0:
+                    time.sleep(delay)
+                verify = self.verify_fund_fetchable(code, name)
+                cache[code] = verify
+            row = {
+                'sector_name': sector,
+                'fund_code': verify.get('code') or code,
+                'fund_name': name,
+                'ok': verify.get('ok', False),
+                'api_name': verify.get('api_name'),
+                'api_nav': verify.get('api_nav'),
+                'nav_date': verify.get('nav_date'),
+                'history_count': verify.get('history_count', 0),
+                'message': verify.get('message', ''),
+            }
+            results.append(row)
+
+        problems = [r for r in results if not r['ok']]
+        return {
+            'total': len(results),
+            'checked_codes': len(cache),
+            'ok_count': len(results) - len(problems),
+            'problem_count': len(problems),
+            'results': results,
+            'problems': problems,
         }
 
     def search_fund(self, keyword: str) -> List[Dict]:

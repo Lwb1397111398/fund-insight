@@ -87,3 +87,57 @@ class TestVerifyFundFetchable:
             result = api.verify_fund_fetchable('512480')
         assert result['ok'] is False
         assert '验证失败' in result['message']
+
+    def test_single_verify_calls_history_once(self):
+        """单次验证只调一次历史接口，且实时接口走 allow_fallback=False，避免重复请求被限流"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value=None) as mock_info, \
+             patch.object(api, 'get_fund_history', return_value=[{'date': '2026-07-31', 'nav': 1.0}]) as mock_hist:
+            result = api.verify_fund_fetchable('512480')
+        assert result['ok'] is True
+        assert result['history_count'] == 1
+        assert result['nav_date'] == '2026-07-31'  # 实时无日期时用历史最新兜底
+        assert mock_hist.call_count == 1
+        assert mock_info.call_args.kwargs.get('allow_fallback') is False
+
+    def test_batch_dedup_and_problems(self):
+        """批量验证：相同代码只请求一次，正确汇总问题基金"""
+        api = _make_api()
+        calls = {'info': 0, 'hist': 0}
+
+        def fake_info(code, allow_fallback=True):
+            calls['info'] += 1
+            if code == '512480':
+                return {'fund_code': code, 'fund_name': '半导体ETF', 'nav': 1.0, 'nav_date': '2026-07-31'}
+            return None
+
+        def fake_hist(code, days=7):
+            calls['hist'] += 1
+            return [{'date': '2026-07-31', 'nav': 1.0}] if code == '512480' else []
+
+        with patch.object(api, 'get_fund_info', side_effect=fake_info), \
+             patch.object(api, 'get_fund_history', side_effect=fake_hist):
+            items = [
+                {'sector_name': '半导体', 'fund_code': '512480', 'fund_name': '半导体ETF'},
+                {'sector_name': '芯片', 'fund_code': '512480', 'fund_name': '芯片ETF'},
+                {'sector_name': '幽灵板块', 'fund_code': '999999', 'fund_name': '不存在'},
+            ]
+            result = api.verify_funds_batch(items, delay=0)
+
+        assert result['total'] == 3
+        assert result['checked_codes'] == 2  # 512480、999999 各一次
+        assert calls['info'] == 2
+        assert calls['hist'] == 2
+        assert result['ok_count'] == 2
+        assert result['problem_count'] == 1
+        assert result['problems'][0]['fund_code'] == '999999'
+        assert result['problems'][0]['sector_name'] == '幽灵板块'
+        assert result['problems'][0]['ok'] is False
+
+    def test_batch_empty(self):
+        api = _make_api()
+        result = api.verify_funds_batch([], delay=0)
+        assert result['total'] == 0
+        assert result['problem_count'] == 0
+        assert result['results'] == []
+        assert result['problems'] == []
