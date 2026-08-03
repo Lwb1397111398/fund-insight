@@ -1112,7 +1112,9 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
             }
 
         # 不存在，创建新记录
-        from src.models.database import SectorFundMapping
+        # 注意：SectorFundMapping 使用模块顶部导入（第 21 行），
+        # 不要在此函数内局部 import，否则会把整个函数内的同名变量变成局部变量，
+        # 上面 db.query(SectorFundMapping) 会抛 UnboundLocalError
         new_mapping = SectorFundMapping(
             sector_name=mapping.sector_name,
             fund_code=mapping.fund_code,
