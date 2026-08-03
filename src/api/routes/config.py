@@ -1012,15 +1012,22 @@ def get_sector_mappings(
         reviewed_filter = reviewed.lower() in ('true', '1', 'yes')
 
     service = get_sector_fund_service(db)
-    db_mappings = service.get_all_mappings_with_status(reviewed_filter=reviewed_filter)
-
-    # 收集 DB 中已有的板块名
-    db_sectors = {m['sector_name'] for m in db_mappings}
+    # db_sectors 必须基于未过滤的全量列表计算，否则某板块的 DB 行被
+    # reviewed 过滤掉后，同名内置映射会错误地重新出现在筛选结果里
+    all_db_mappings = service.get_all_mappings_with_status(reviewed_filter=None)
+    db_sectors = {m['sector_name'] for m in all_db_mappings}
+    if reviewed_filter is None:
+        db_mappings = all_db_mappings
+    else:
+        db_mappings = [m for m in all_db_mappings if m['reviewed'] == reviewed_filter]
 
     # 合入硬编码映射中 DB 没有的条目
+    # 内置映射一律按"已审查"处理：筛选"待审查"时不能把它们混进来
     merged = list(db_mappings)
     for sector_name, fund_info in sorted(SECTOR_FUND_MAP.items()):
         if sector_name not in db_sectors:
+            if reviewed_filter is False:
+                continue
             merged.append({
                 'id': None,
                 'sector_name': sector_name,
@@ -1052,6 +1059,17 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = 
 
     try:
         service = get_sector_fund_service(db)
+
+        # 外键保障：改绑到新基金代码时，若该代码不在 fund_info 先补最小档案
+        # （先确认映射存在，避免为不存在的映射创建孤儿基金档案）
+        if update.fund_code:
+            exists = db.query(SectorFundMapping.id).filter(
+                SectorFundMapping.id == mapping_id
+            ).first()
+            if not exists:
+                return {"success": False, "message": "映射不存在"}
+            service.ensure_fund_info_exists(update.fund_code, update.fund_name)
+
         result = service.update_mapping(
             mapping_id=mapping_id,
             fund_code=update.fund_code,
@@ -1087,9 +1105,16 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
     try:
         service = get_sector_fund_service(db)
 
+        # 外键保障：基金代码不在 fund_info 时先补最小档案，避免 FK 报错
+        service.ensure_fund_info_exists(mapping.fund_code, mapping.fund_name, mapping.sector_name)
+
         # 检查是否已存在同板块的 DB 映射
+        # active 优先：同板块可能残留被级联清理置为 inactive 的历史行，
+        # 必须优先命中 active 行，避免更新到不可见的 inactive 行上
         existing_mapping = db.query(SectorFundMapping).filter(
             SectorFundMapping.sector_name == mapping.sector_name
+        ).order_by(
+            SectorFundMapping.is_active.desc(), SectorFundMapping.id.asc()
         ).first()
         if existing_mapping:
             # 已存在，更新

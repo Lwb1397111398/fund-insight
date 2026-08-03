@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
 from src.models.database import SectorFundMapping, FundInfo, SessionLocal
 
@@ -109,6 +110,9 @@ class SectorFundService:
                     'fund_code': m.fund_code,
                     'fund_name': m.fund_name,
                     'reviewed': m.reviewed or False,
+                    # 与 GET /sector-mappings 合入的 builtin 条目对齐，
+                    # 前端依赖 source 字段区分内置/自定义（此前 DB 行缺该字段）
+                    'source': 'custom',
                     'created_at': m.created_at.isoformat() if m.created_at else None,
                     'updated_at': m.updated_at.isoformat() if m.updated_at else None
                 }
@@ -118,11 +122,54 @@ class SectorFundService:
             if self._should_close(db):
                 db.close()
 
+    def ensure_fund_info_exists(self, fund_code: str, fund_name: str = None,
+                                sector_type: str = None) -> bool:
+        """保存映射前确保 fund_info 里存在该基金档案。
+
+        sector_fund_mapping.fund_code 有外键指向 fund_info.fund_code，
+        若用户为一个尚不在基金库里的代码保存映射，直接写会报
+        FOREIGN KEY constraint failed。这里先补一条最小档案
+        （代码+名称+板块），净值/历史由后续基金同步任务补全。
+
+        Returns:
+            True 表示本次新建了档案，False 表示已存在或未提供代码。
+        """
+        code = (fund_code or '').strip()
+        if not code:
+            return False
+
+        db = self._get_db()
+        try:
+            exists = db.query(FundInfo.fund_code).filter(FundInfo.fund_code == code).first()
+            if exists:
+                return False
+
+            db.add(FundInfo(
+                fund_code=code,
+                fund_name=(fund_name or '').strip() or None,
+                sector_type=sector_type,
+            ))
+            db.commit()
+            logger.info(f"[基金档案] 为板块映射自动创建最小基金档案: {code} ({fund_name})")
+            return True
+        except IntegrityError:
+            # 并发场景下别的请求已创建，视为已存在
+            db.rollback()
+            return False
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"[基金档案] 自动创建基金档案失败 {code}: {e}")
+            raise
+        finally:
+            if self._should_close(db):
+                db.close()
+
     def add_mapping(self, sector_name: str, fund_code: str, fund_name: str,
                     keywords: List[str] = None, reviewed: bool = False) -> SectorFundMapping:
         """添加或更新映射（upsert），并级联清理低优先级层的冲突数据"""
         db = self._get_db()
         try:
+            self.ensure_fund_info_exists(fund_code, fund_name, sector_type=sector_name)
             existing = db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == sector_name
             ).first()
@@ -228,6 +275,9 @@ class SectorFundService:
             if fund_name is not None:
                 mapping.fund_name = fund_name
             mapping.reviewed = True  # 编辑自动标记为已审查
+            # 编辑即激活：若该行曾被级联清理置为 inactive，保存后必须恢复可见，
+            # 否则更新会"成功"但列表按 is_active 过滤后凭空丢失该板块
+            mapping.is_active = True
             db.commit()
             db.refresh(mapping)
 

@@ -77,6 +77,79 @@ def test_create_sector_mapping_succeeds(monkeypatch, tmp_path):
         app.dependency_overrides.pop(get_db, None)
 
 
+def test_save_sector_with_inactive_duplicate_stays_visible(monkeypatch, tmp_path):
+    """同板块存在历史遗留的 inactive 记录时，保存不能把 active 记录弄丢
+
+    场景：级联清理等原因留下同板块一 active 一 inactive 两条记录，
+    用户再次保存该板块。若 existing 查询不按 active 优先、且更新不恢复
+    is_active，会把 inactive 行更新、把 active 行级联停用，导致该板块
+    从列表里凭空消失（用户视角=保存丢失）。
+    """
+    from src.models.database import SectorFundMapping
+
+    session_factory = _database(tmp_path)
+    seed_db = session_factory()
+    # 先插 inactive（更小的 id），再插 active，模拟历史遗留
+    inactive = SectorFundMapping(
+        sector_name="__遗留板块__", fund_code="111111", fund_name="遗留记录",
+        is_active=False, reviewed=True,
+    )
+    seed_db.add(inactive)
+    seed_db.flush()
+    active = SectorFundMapping(
+        sector_name="__遗留板块__", fund_code="222222", fund_name="现行记录",
+        is_active=True, reviewed=True,
+    )
+    seed_db.add(active)
+    seed_db.commit()
+    seed_db.close()
+
+    app, client = _client(monkeypatch, session_factory)
+    try:
+        res = client.post(
+            "/api/config/sector-mappings",
+            json={"sector_name": "__遗留板块__", "fund_code": "333333", "fund_name": "新基金"},
+            headers=AUTH_HEADERS,
+        ).json()
+        assert res["success"] is True, res.get("message")
+
+        listed = client.get("/api/config/sector-mappings", headers=AUTH_HEADERS).json()
+        rows = [m for m in listed["data"]["mappings"] if m["sector_name"] == "__遗留板块__"]
+        assert len(rows) == 1, f"该板块应只剩 1 条可见映射，实际 {len(rows)}"
+        assert rows[0]["fund_code"] == "333333", "保存后的新基金代码应可见"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_save_mapping_auto_creates_missing_fund_info(monkeypatch, tmp_path):
+    """基金代码不在 fund_info 时保存映射应自动补档案，而不是 FK 报错
+
+    sector_fund_mapping.fund_code 有外键指向 fund_info.fund_code，
+    生产 SQLite/PostgreSQL 均开启外键约束，缺档案会直接保存失败。
+    """
+    from src.models.database import FundInfo
+
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    try:
+        res = client.post(
+            "/api/config/sector-mappings",
+            json={"sector_name": "__外键测试板块__", "fund_code": "888888", "fund_name": "新基金888888"},
+            headers=AUTH_HEADERS,
+        ).json()
+        assert res["success"] is True, res.get("message")
+
+        db = session_factory()
+        try:
+            row = db.query(FundInfo).filter(FundInfo.fund_code == "888888").first()
+            assert row is not None, "fund_info 应自动创建 888888 的最小档案"
+            assert row.fund_name == "新基金888888"
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
 def test_update_sector_mapping_succeeds(monkeypatch, tmp_path):
     """PUT 更新已有 DB 映射应成功并标记已审查"""
     session_factory = _database(tmp_path)

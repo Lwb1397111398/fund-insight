@@ -1270,6 +1270,16 @@ class LLMAnalyzer:
                     )
                     return existing
 
+                # 外键保障：sector_fund_mapping.fund_code 指向 fund_info.fund_code，
+                # LLM 匹配出的新代码可能不在基金库，先补最小档案避免 FK 失败
+                try:
+                    from src.services.sector_fund_service import get_sector_fund_service
+                    get_sector_fund_service(db).ensure_fund_info_exists(
+                        fund_code, fund_name, sector_type=sector
+                    )
+                except Exception as e:
+                    logger.warning(f"[基金匹配] 自动补基金档案失败 {fund_code}: {e}")
+
                 mapping = SectorFundMapping(
                     sector_name=sector,
                     fund_code=fund_code,
