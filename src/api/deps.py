@@ -22,12 +22,20 @@ def get_db() -> Generator[Session, None, None]:
 
     Yields:
         数据库会话
+
+    注意：请求结束必须回滚未提交的事务。此前只 close()，而 close 不会回滚
+    处于事务中的连接——SQLAlchemy 连接池归还的是"仍在事务中"的连接，
+    在 PostgreSQL 上表现为 idle-in-transaction 会话长期持有 AccessShareLock，
+    曾导致覆盖导入的 TRUNCATE 永远等不到锁（线上诊断实测）。
     """
     db = SessionLocal()
     try:
         yield db
     finally:
-        db.close()
+        try:
+            db.rollback()  # 释放未提交事务持有的锁；无事务时是 no-op
+        finally:
+            db.close()
 
 
 @contextmanager
