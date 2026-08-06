@@ -2617,7 +2617,7 @@ const fetchWeChatBatch = async () => {
                             { data, replace: importReplace.value },
                             { timeout: 120000 });
                         importResult.value = { success: true, message: '⏳ 导入中，请耐心等待（约1~3分钟），请勿关闭页面...' };
-                        // 每3秒轮询一次任务状态
+                        // 每3秒轮询一次任务状态，running 时显示后端回报的实际进度
                         const finalResult = await new Promise((resolve) => {
                             const timer = setInterval(async () => {
                                 try {
@@ -2626,6 +2626,8 @@ const fetchWeChatBatch = async () => {
                                     if (job.status === 'done' || job.status === 'failed') {
                                         clearInterval(timer);
                                         resolve(job.result || { success: job.status === 'done', message: '导入结束' });
+                                    } else if (job.status === 'running' && job.message) {
+                                        importResult.value = { success: true, message: '⏳ ' + job.message };
                                     }
                                 } catch (pollErr) { /* 轮询失败忽略，继续等 */ }
                             }, 3000);

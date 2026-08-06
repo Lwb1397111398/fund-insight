@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence
 
 from sqlalchemy import Boolean, Date, DateTime, Float, Integer, JSON, Numeric, String, Text, text
 from sqlalchemy.orm import Session
@@ -97,13 +97,21 @@ class DataPortabilityService:
         }
         return exported
 
-    def import_data(self, data: Dict[str, Any], replace: bool = False) -> Dict[str, Any]:
+    def import_data(
+        self,
+        data: Dict[str, Any],
+        replace: bool = False,
+        progress_cb: Callable[[str, int, int], None] = None,
+    ) -> Dict[str, Any]:
         """导入 JSON 备份。
 
         Args:
             data: 导出格式的 JSON 对象
             replace: True 时先清空所有白名单表再导入（覆盖模式）；
                      False 为合并模式（按 natural key 跳过已存在记录）。
+            progress_cb: 可选进度回调 (table_key, done_rows, total_rows)，每张表
+                完成与每 500 行时调用。注意：回调必须用独立连接写状态，
+                不能触碰主事务会话（任何 commit 都会提前提交导入事务）。
         """
         imported = {spec.export_key: 0 for spec in TABLE_SPECS}
         skipped = {spec.export_key: 0 for spec in TABLE_SPECS}
@@ -180,7 +188,10 @@ class DataPortabilityService:
                             raise ValueError(f"{spec.export_key} 第 {index} 行必须是对象")
 
                         cleaned = self._clean_row(spec, item)
-                        if self._find_existing(spec, cleaned) is not None:
+                        # 覆盖模式：表已在进入循环前被 TRUNCATE/清空，逐行 _find_existing
+                        # 必为 None，纯属每行一次网络往返（线上实测 9.6k 行要 2+ 小时）。
+                        # 直接跳过，用无 SELECT 的批量 INSERT 灌入。
+                        if not replace and self._find_existing(spec, cleaned) is not None:
                             skipped_count += 1
                             continue
 
@@ -195,6 +206,11 @@ class DataPortabilityService:
                             logger.info(
                                 f"[Import] {spec.export_key} 已写入 {imported_count}/{len(rows)}"
                             )
+                            if progress_cb and imported_count % 500 == 0:
+                                progress_cb(spec.export_key, index, len(rows))
+
+                    if progress_cb:
+                        progress_cb(spec.export_key, len(rows), len(rows))
 
                     imported[spec.export_key] = imported_count
                     skipped[spec.export_key] = skipped_count
@@ -320,13 +336,41 @@ class DataPortabilityService:
     def run_import_background(self, data: Dict[str, Any], replace: bool) -> None:
         """后台线程执行导入，进度写入 system_config 供前端轮询。"""
         try:
+            job_started_at = datetime.now().isoformat()
             self._set_import_job_status({
                 "status": "running",
                 "replace": replace,
-                "started_at": datetime.now().isoformat(),
+                "started_at": job_started_at,
                 "message": "正在清空并导入数据...",
             })
-            result = self.import_data(data, replace=replace)
+
+            def progress_cb(table_key: str, done_rows: int, total_rows: int) -> None:
+                # 独立连接写进度：主事务会话在导入期间绝不能被 commit，
+                # 否则会提前提交导入事务、破坏整体回滚的原子性。
+                try:
+                    bind = self.db.get_bind()
+                    engine = bind.engine if hasattr(bind, "engine") else bind
+                    with engine.connect() as conn:
+                        conn.execute(text(
+                            "UPDATE system_config SET config_value = :value "
+                            "WHERE config_key = :key"
+                        ), {
+                            "value": json.dumps({
+                                "status": "running",
+                                "replace": replace,
+                                "started_at": job_started_at,
+                                "current_table": table_key,
+                                "processed_rows": done_rows,
+                                "total_rows": total_rows,
+                                "message": f"正在导入 {table_key} {done_rows}/{total_rows} 行...",
+                            }, ensure_ascii=False),
+                            "key": IMPORT_JOB_KEY,
+                        })
+                        conn.commit()
+                except Exception:
+                    pass
+
+            result = self.import_data(data, replace=replace, progress_cb=progress_cb)
             self._set_import_job_status({
                 "status": "done" if result.get("success") else "failed",
                 "replace": replace,

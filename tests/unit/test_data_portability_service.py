@@ -529,3 +529,43 @@ def test_import_replace_rolls_back_on_invalid_payload(test_db):
 
     # 原有数据必须还在（回滚生效）
     assert test_db.query(Blogger).one().name == "保留我"
+
+
+def test_import_replace_mode_skips_find_existing_queries(test_db):
+    """覆盖模式表已清空，不得逐行查 _find_existing（线上实测 9.6k 行拖成 2+ 小时的瓶颈）。"""
+    from src.services.data_portability_service import DataPortabilityService
+
+    service = DataPortabilityService(test_db)
+    calls = []
+    original = service._find_existing
+
+    def spy(spec, cleaned):
+        calls.append(spec.export_key)
+        return original(spec, cleaned)
+
+    service._find_existing = spy
+    result = service.import_data(_export_v1_payload(), replace=True)
+    assert result["success"] is True
+    assert calls == []  # 覆盖模式一查都不查，直接批量灌入
+
+
+def test_import_merge_mode_still_skips_existing_rows(test_db):
+    """合并模式必须继续逐行查重：覆盖模式跳过查询不能影响合并语义。"""
+    from src.services.data_portability_service import DataPortabilityService
+
+    service = DataPortabilityService(test_db)
+    first = service.import_data(_export_v1_payload())
+    assert first["data"]["total_imported"] == 9
+
+    calls = []
+    original = service._find_existing
+
+    def spy(spec, cleaned):
+        calls.append(spec.export_key)
+        return original(spec, cleaned)
+
+    service._find_existing = spy
+    second = service.import_data(_export_v1_payload())
+    assert second["data"]["total_imported"] == 0
+    assert second["data"]["total_skipped"] == 9
+    assert len(calls) == 9  # 合并模式逐行查重仍在
