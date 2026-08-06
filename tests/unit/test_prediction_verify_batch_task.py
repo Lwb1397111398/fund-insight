@@ -486,3 +486,83 @@ def test_prediction_and_blogger_stats_commit_atomically(test_db, monkeypatch):
 
     assert prediction.status == "pending"
     assert prediction.verify_count in (None, 0)
+
+
+def test_backfill_and_cache_invalidation():
+    """修复①：补拉后必须失效缓存，重查应返回补拉后的新数据。"""
+    import os
+    import sys
+    from datetime import date
+    from unittest.mock import patch
+
+    os.environ["DATABASE_URL"] = "sqlite:///" + os.path.abspath("data/fund_insight.db").replace(os.sep, "/")
+    sys.path.insert(0, ".")
+
+    from src.core import config  # noqa: F401
+    from src.models.database import FundHistory, SessionLocal, init_db
+    from src.fund.fund_api import fund_data_manager
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    init_db()
+    db = SessionLocal()
+    svc = PredictionVerifyService(db)
+
+    # 构造库内数据：最早净值晚于预测起点（512400 补拉前的状态）
+    db.query(FundHistory).filter(FundHistory.fund_code == "TEST_BF").delete()
+    db.add(FundHistory(fund_code="TEST_BF", fund_name="测试基金", nav_date=date(2026, 7, 1), nav=1.0))
+    db.commit()
+
+    mock_history = [{"date": date(2026, 6, 15), "nav": 1.0, "growth": 0.0},
+                    {"date": date(2026, 6, 16), "nav": 1.01, "growth": 1.0}]
+    with patch.object(fund_data_manager.api, "get_fund_history_range", return_value=mock_history):
+        added = fund_data_manager.backfill_history_range("TEST_BF", date(2026, 6, 15), date(2026, 7, 1), db=db)
+        assert added == 2
+        svc._invalidate_fund_cache("TEST_BF")
+        nav = svc.get_nav_by_date("TEST_BF", date(2026, 6, 16))
+        assert nav == 1.01
+
+    db.query(FundHistory).filter(FundHistory.fund_code == "TEST_BF").delete()
+    db.commit()
+    db.close()
+    print("OK: 补拉+缓存失效测试通过")
+
+
+def test_adjust_to_trading_day():
+    """修复③：周末目标日顺延到下周一。"""
+    from datetime import date
+    from src.utils.prediction_utils import adjust_to_trading_day
+
+    assert adjust_to_trading_day(date(2026, 8, 1)) == date(2026, 8, 3)   # 周六 -> 周一
+    assert adjust_to_trading_day(date(2026, 8, 2)) == date(2026, 8, 3)   # 周日 -> 周一
+    assert adjust_to_trading_day(date(2026, 8, 3)) == date(2026, 8, 3)   # 周一不变
+    print("OK: 周末顺延测试通过")
+
+
+def test_due_facets_exclude_flat(test_db):
+    """修复④：facets.due 不含观望预测，与 due 过滤器同口径。"""
+    from datetime import date, timedelta
+    from src.models.database import Prediction, Blogger, Post
+    from src.services.prediction_query_service import PredictionQueryService
+
+    blogger = Blogger(name="测试博主", platform="eastmoney")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(blogger_id=blogger.id, title="测试帖", content="", post_date=date.today())
+    test_db.add(post)
+    test_db.flush()
+    today = date.today()
+    test_db.add_all([
+        Prediction(post_id=post.id, blogger_id=blogger.id, prediction_type="flat",
+                   prediction_date=today - timedelta(days=5), target_date=today - timedelta(days=1), status="pending"),
+        Prediction(post_id=post.id, blogger_id=blogger.id, prediction_type="up",
+                   prediction_date=today - timedelta(days=5), target_date=today - timedelta(days=1), status="pending"),
+    ])
+    test_db.commit()
+
+    svc = PredictionQueryService(test_db)
+    facets = svc.search()["meta"]["facets"]
+    assert facets["due"] == 1          # 只算 up，不算 flat
+    assert facets["flat"] == 1
+    due_rows = svc.search(lifecycle="due")["data"]
+    assert len(due_rows) == 1 and due_rows[0]["prediction_type"] == "up"
+    print("OK: 观望不计入待验证到期测试通过")

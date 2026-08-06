@@ -86,7 +86,14 @@ class DataPortabilityService:
         }
         return exported
 
-    def import_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def import_data(self, data: Dict[str, Any], replace: bool = False) -> Dict[str, Any]:
+        """导入 JSON 备份。
+
+        Args:
+            data: 导出格式的 JSON 对象
+            replace: True 时先清空所有白名单表再导入（覆盖模式）；
+                     False 为合并模式（按 natural key 跳过已存在记录）。
+        """
         imported = {spec.export_key: 0 for spec in TABLE_SPECS}
         skipped = {spec.export_key: 0 for spec in TABLE_SPECS}
         failed = {spec.export_key: 0 for spec in TABLE_SPECS}
@@ -102,6 +109,15 @@ class DataPortabilityService:
             )
             for key in unsupported_keys:
                 warnings.append(f"忽略未知数据区块: {key}")
+
+            if replace:
+                # 覆盖模式：先按外键依赖逆序清空所有白名单表。
+                # 用 ORM delete 保证触发外键约束；整个导入在同一事务内，
+                # 任一步失败都会整体回滚，不会出现"清空后导入失败"的中间态。
+                for spec in reversed(TABLE_SPECS):
+                    self.db.query(spec.model).delete(synchronize_session=False)
+                self.db.flush()
+                warnings.append("覆盖模式：已清空原有数据后导入。")
 
             with self.db.no_autoflush:
                 for spec in TABLE_SPECS:

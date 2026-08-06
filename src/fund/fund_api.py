@@ -195,11 +195,88 @@ class FundAPI:
                 logger.warning(f"基金 {fund_code} API返回数据格式异常")
             
             return results
-            
+
         except Exception as e:
             logger.error(f"获取基金{fund_code}历史数据失败: {e}")
             return []
-    
+
+    def get_fund_history_range(
+        self,
+        fund_code: str,
+        start_date: date,
+        end_date: date,
+        max_pages: int = 40,
+    ) -> List[Dict]:
+        """按日期区间分页获取基金历史净值（用于补拉数据库缺失的早期数据）。
+
+        与 get_fund_history 不同：这里显式传 startDate/endDate 并自动翻页，
+        直到取完区间内全部数据（或达到 max_pages 上限，防止异常情况下死循环）。
+
+        Args:
+            fund_code: 基金代码
+            start_date: 区间起始日（含）
+            end_date: 区间结束日（含）
+            max_pages: 最大翻页数兜底（每页 60 条，40 页约 2400 个交易日）
+
+        Returns:
+            [{'date': date, 'nav': float, 'growth': float}, ...]，按接口返回顺序
+        """
+        if not start_date or not end_date or start_date > end_date:
+            return []
+
+        # 注意：东财 lsjz 接口实测每页最多返回 20 条（请求更大的 pageSize 也会被截断），
+        # 因此按 20 条/页翻页，并以"返回不足 20 条"作为结束标志。
+        page_size = 20
+        results: List[Dict] = []
+        for page_index in range(1, max_pages + 1):
+            try:
+                params = {
+                    'fundCode': fund_code,
+                    'pageIndex': page_index,
+                    'pageSize': page_size,
+                    'startDate': start_date.strftime('%Y-%m-%d'),
+                    'endDate': end_date.strftime('%Y-%m-%d'),
+                    'perFundType': ''
+                }
+
+                headers = self.headers.copy()
+                headers['Referer'] = f'https://fund.eastmoney.com/f10/jjjz_{fund_code}.html'
+
+                response = self.session.get(
+                    self.history_url,
+                    params=params,
+                    headers=headers,
+                    timeout=self.timeout
+                )
+                response.encoding = 'utf-8'
+                data = response.json()
+
+                lsjz_list = (data.get('Data') or {}).get('LSJZList') or []
+                if not lsjz_list:
+                    break
+
+                for item in lsjz_list:
+                    try:
+                        nav_date = datetime.strptime(item.get('FSRQ'), '%Y-%m-%d').date()
+                        results.append({
+                            'date': nav_date,
+                            'nav': float(item.get('DWJZ', 0) or 0),
+                            'growth': float(item.get('JZZZL', 0) or 0)
+                        })
+                    except Exception as e:
+                        logger.warning(f"解析基金 {fund_code} 补拉净值失败: {e}, 数据项: {item}")
+                        continue
+
+                # 不足一页说明已到末尾；同时做节流，降低被限流概率
+                if len(lsjz_list) < page_size:
+                    break
+                time.sleep(0.2)
+            except Exception as e:
+                logger.error(f"补拉基金{fund_code}历史数据失败(第{page_index}页): {e}")
+                break
+
+        return results
+
     def verify_fund_fetchable(self, fund_code: str, input_name: Optional[str] = None) -> Dict:
         """验证基金代码是否能从数据源正常抓取。
 
@@ -515,7 +592,93 @@ class FundDataManager:
         finally:
             if close_db:
                 db.close()
-    
+
+    def backfill_history_range(
+        self,
+        fund_code: str,
+        start_date: date,
+        end_date: date,
+        db: Session = None,
+    ) -> int:
+        """按需补拉数据库缺失的早期历史净值。
+
+        只有当库内最早一条净值仍晚于 start_date（即区间起点缺数据）时才发起
+        网络补拉；否则直接返回 0，避免对每笔验证都打数据源接口。
+
+        Args:
+            fund_code: 基金代码
+            start_date: 需要覆盖的最早日期（含）
+            end_date: 需要覆盖的最晚日期（含）
+            db: 可选外部会话；不传则自建会话并提交
+
+        Returns:
+            新增入库的记录数（0 表示无需补拉或补拉无结果）
+        """
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
+
+        try:
+            oldest = db.query(FundHistory.nav_date).filter(
+                FundHistory.fund_code == fund_code
+            ).order_by(FundHistory.nav_date.asc()).first()
+
+            if oldest and oldest[0] is not None:
+                oldest_date = oldest[0]
+                if isinstance(oldest_date, datetime):
+                    oldest_date = oldest_date.date()
+                if oldest_date <= start_date:
+                    # 库内数据已覆盖区间起点，无需补拉
+                    return 0
+
+            history = self.api.get_fund_history_range(fund_code, start_date, end_date)
+            if not history:
+                return 0
+
+            fund_info = db.query(FundInfo).filter(FundInfo.fund_code == fund_code).first()
+            fund_name = fund_info.fund_name if fund_info else ''
+
+            existing_dates = set(
+                r[0] for r in db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code
+                ).all()
+            )
+
+            count = 0
+            for item in history:
+                item_date = item['date']
+                if isinstance(item_date, datetime):
+                    item_date = item_date.date()
+                if item_date in existing_dates:
+                    continue
+                db.add(FundHistory(
+                    fund_code=fund_code,
+                    fund_name=fund_name,
+                    nav_date=item_date,
+                    nav=item['nav'],
+                    day_growth=item['growth']
+                ))
+                existing_dates.add(item_date)
+                count += 1
+
+            if close_db:
+                db.commit()
+            else:
+                db.flush()
+
+            if count:
+                logger.info(f"[FundData] 基金 {fund_code} 补拉历史净值 {count} 条 ({start_date} ~ {end_date})")
+            return count
+        except Exception as e:
+            logger.error(f"补拉基金{fund_code}历史净值失败: {e}")
+            if close_db:
+                db.rollback()
+            return 0
+        finally:
+            if close_db:
+                db.close()
+
     def _calculate_growth_rates(self, fund_code: str, db: Session):
         """计算周涨跌幅和月涨跌幅"""
         try:

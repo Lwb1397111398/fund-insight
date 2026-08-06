@@ -195,7 +195,7 @@
                         <button class="action-btn small" :class="predictionFilter === 'upcoming' ? 'warning' : 'default'"
                             @click="setPredictionFilter('upcoming')" title="尚未到目标日">未到期 ({{ predictionMeta.facets.upcoming }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
-                            @click="setPredictionFilter('pending')">待验证 ({{ predictionMeta.facets.pending }})</button>
+                            @click="setPredictionFilter('pending')" title="包含未到期与观望预测；可立即验证的请看「待验证到期」">待验证 ({{ predictionMeta.facets.pending }})</button>
                         <button class="action-btn small"
                             :class="predictionFilter === 'verified' ? 'success' : 'default'"
                             @click="setPredictionFilter('verified')">已验证 ({{ predictionMeta.facets.verified }})</button>
@@ -1734,9 +1734,16 @@
                                    style="font-size: 13px; padding: 6px; border: 1px solid #d9d9d9; border-radius: 4px; width: 100%;">
                         </div>
 
+                        <div class="mb-12" style="display: flex; align-items: center; gap: 6px;">
+                            <input type="checkbox" id="importReplace" v-model="importReplace" style="margin: 0;">
+                            <label for="importReplace" style="font-size: 13px; color: #d46b08; cursor: pointer;">
+                                ⚠️ 覆盖模式：先清空现有数据再导入（用于本地清洗后同步线上）
+                            </label>
+                        </div>
+
                         <button class="action-btn" @click="importData" :disabled="importLoading || !importFile"
-                                style="background: #fa8c16; color: #fff;">
-                            {{ importLoading ? '导入中...' : '📥 开始导入' }}
+                                :style="importReplace ? 'background: #ff4d4f; color: #fff;' : 'background: #fa8c16; color: #fff;'">
+                            {{ importLoading ? '导入中...' : (importReplace ? '🗑️ 覆盖导入' : '📥 开始导入') }}
                         </button>
 
                         <div v-if="importResult" class="mt-10 p-8 bg-white rounded text-sm">
@@ -2548,6 +2555,7 @@ const fetchWeChatBatch = async () => {
                 const importLoading = ref(false);
                 const importResult = ref(null);
                 const importFileInput = ref(null);
+                const importReplace = ref(false);
                 const _parseBlobError = async (e) => {
                     if (e.response?.data instanceof Blob) {
                         try { return JSON.parse(await e.response.data.text()).message || e.message; } catch { return e.message; }
@@ -2598,12 +2606,13 @@ const fetchWeChatBatch = async () => {
                 };
                 const importData = async () => {
                     if (!importFile.value) { alert('请先选择导入文件'); return; }
+                    if (importReplace.value && !confirm('确认覆盖导入？\n\n将先清空线上所有数据，再导入所选文件。此操作不可撤销，建议先导出备份。')) { return; }
                     importLoading.value = true;
                     importResult.value = null;
                     try {
                         const text = await importFile.value.text();
                         const data = JSON.parse(text);
-                        const res = await axios.post('/api/config/import', { data });
+                        const res = await axios.post('/api/config/import', { data, replace: importReplace.value });
                         importResult.value = res.data;
                         if (res.data.success) {
                             await fetchStats();
@@ -2668,7 +2677,7 @@ const fetchWeChatBatch = async () => {
                     mappingVerifying, mappingVerifyResult, verifyMappingFund,
                     verifyAllVerifying, verifyAllResult, verifyAllFunds,
                     deleteMapping, batchReviewAll, exportLoading, exportConfigLoading,
-                    exportResult, importFile, importLoading, importResult, importFileInput,
+                    exportResult, importFile, importLoading, importResult, importFileInput, importReplace,
                     exportAllData, exportConfig, onImportFileChange, importData,
                 };
             }

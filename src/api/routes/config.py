@@ -1332,11 +1332,15 @@ def export_config(db: Session = Depends(get_db)):
 class ImportDataRequest(BaseModel):
     """导入数据请求"""
     data: dict
+    replace: bool = False  # True=覆盖模式（先清空再导入），False=合并模式
 
 
 @router.post("/import")
 def import_data(req: ImportDataRequest, db: Session = Depends(get_db)):
     """
-    导入 JSON 数据（合并模式：跳过已存在的记录，按 natural key 判断）
+    导入 JSON 数据。
+
+    默认合并模式（按 natural key 跳过已存在记录）；
+    replace=True 时先清空所有数据表再导入（覆盖模式，用于本地清洗后整体同步到线上）。
     """
-    return DataPortabilityService(db).import_data(req.data)
+    return DataPortabilityService(db).import_data(req.data, replace=req.replace)

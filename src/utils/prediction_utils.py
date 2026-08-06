@@ -330,20 +330,35 @@ def get_period_display_info(period_str: str) -> Dict:
     }
 
 
+def adjust_to_trading_day(target: date) -> date:
+    """目标日落在周末时顺延到下周一。
+
+    周末没有净值数据，验证窗口会缺少目标日一侧的数据点，
+    导致 1 天等短周期预测永远凑不够最少数据点。法定节假日不在此处理，
+    由验证侧的"目标日缺净值取前值"逻辑兜底。
+    """
+    from datetime import timedelta
+    if target.weekday() == 5:  # 周六 -> 下周一
+        return target + timedelta(days=2)
+    if target.weekday() == 6:  # 周日 -> 周一
+        return target + timedelta(days=1)
+    return target
+
+
 def calculate_target_date(prediction_date: date, period_str: str) -> date:
     """
     计算目标验证日期
-    
+
     Args:
         prediction_date: 预测发布日期
         period_str: 预测周期
-        
+
     Returns:
-        目标日期
+        目标日期（落在周末时顺延到下周一）
     """
     from datetime import timedelta
     days = parse_period_to_days(period_str)
-    return prediction_date + timedelta(days=days)
+    return adjust_to_trading_day(prediction_date + timedelta(days=days))
 
 
 def get_verify_schedule(period_days: int) -> List[int]:

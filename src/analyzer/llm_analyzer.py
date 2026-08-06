@@ -1299,9 +1299,10 @@ class LLMAnalyzer:
             logger.warning(f"[基金匹配] 保存映射失败: {e}")
     
     def calculate_target_date(self, prediction_date: date, period: str) -> date:
-        """根据预测周期计算目标验证日期"""
+        """根据预测周期计算目标验证日期（落在周末时顺延到下周一）"""
+        from src.utils.prediction_utils import adjust_to_trading_day
         days = PERIOD_MAP.get(period, 30)
-        return prediction_date + timedelta(days=days)
+        return adjust_to_trading_day(prediction_date + timedelta(days=days))
     
     def calculate_next_verify_date(self, prediction_date: date, target_date: date) -> date:
         """计算下次验证日期（每5天验证一次）"""

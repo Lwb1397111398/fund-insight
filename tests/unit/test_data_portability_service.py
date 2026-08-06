@@ -458,3 +458,46 @@ def test_config_import_export_routes_preserve_v1_contract(monkeypatch):
         db.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+
+def test_import_replace_mode_clears_then_imports(test_db):
+    """覆盖模式：先清空白名单表再导入，合并模式语义不变。"""
+    from datetime import date
+    from src.models.database import Blogger, FundInfo, Prediction, Post
+    from src.services.data_portability_service import DataPortabilityService
+
+    # 预置脏数据
+    test_db.add(Blogger(name="旧博主", platform="wechat"))
+    test_db.add(FundInfo(fund_code="999999", fund_name="旧基金"))
+    test_db.commit()
+
+    payload = {
+        "bloggers": [{"id": 1, "name": "新博主", "platform": "wechat"}],
+        "fund_info": [{"fund_code": "510050", "fund_name": "50ETF"}],
+    }
+    result = DataPortabilityService(test_db).import_data(payload, replace=True)
+    assert result["success"] is True
+
+    assert test_db.query(Blogger).count() == 1
+    assert test_db.query(Blogger).one().name == "新博主"
+    assert test_db.query(FundInfo).count() == 1
+    assert test_db.query(FundInfo).one().fund_code == "510050"
+
+
+def test_import_replace_rolls_back_on_invalid_payload(test_db):
+    """覆盖模式导入中途失败必须整体回滚，不能留下被清空的库。"""
+    from src.models.database import Blogger
+    from src.services.data_portability_service import DataPortabilityService
+
+    test_db.add(Blogger(name="保留我", platform="wechat"))
+    test_db.commit()
+
+    payload = {
+        "bloggers": [{"id": 1, "name": "新博主", "platform": "wechat"}],
+        "predictions": [{"id": 1, "prediction_date": "not-a-date"}],  # 触发解析失败
+    }
+    result = DataPortabilityService(test_db).import_data(payload, replace=True)
+    assert result["success"] is False
+
+    # 原有数据必须还在（回滚生效）
+    assert test_db.query(Blogger).one().name == "保留我"

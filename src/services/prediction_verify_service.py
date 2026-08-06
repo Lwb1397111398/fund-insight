@@ -133,6 +133,29 @@ class PredictionVerifyService:
         self._nav_cache[key] = value
         self._cache_order.append(key)
 
+    def _invalidate_fund_cache(self, fund_code: str):
+        """失效某只基金的全部净值缓存（历史补拉入库后必须调用）。
+
+        缓存分两部分：
+        1. '_history' 预热缓存（批量验证开始时一次性装载）
+        2. (fund_code, date_str, strict) -> nav 的单点缓存（LRU）
+        补拉新数据后若不清理，验证会继续读到"数据不足/无净值"的旧结论。
+        """
+        history_cache = self._nav_cache.get('_history')
+        if isinstance(history_cache, dict):
+            history_cache.pop(fund_code, None)
+
+        stale_keys = [
+            key for key in self._cache_order
+            if isinstance(key, tuple) and key and key[0] == fund_code
+        ]
+        for key in stale_keys:
+            self._nav_cache.pop(key, None)
+            try:
+                self._cache_order.remove(key)
+            except ValueError:
+                pass
+
     @staticmethod
     def _parse_api_nav_date(raw_value) -> Optional[date]:
         """解析外部 API 返回的净值日期，失败时返回 None。
@@ -748,6 +771,26 @@ class PredictionVerifyService:
 
         # 所有预测都使用预测日期作为净值起始点，确保覆盖完整周期
         nav_start_date = prediction.prediction_date
+
+        # 自动补拉：库内最早净值晚于预测起始日时（基金录入晚于预测、历史只留近期等），
+        # 先按区间从数据源补齐再检查；补拉失败不阻断，继续用现有数据走原判断。
+        try:
+            from src.fund.fund_api import fund_data_manager
+            if fund_data_manager.backfill_history_range(
+                fund_code, nav_start_date, window_end, db=self.db
+            ):
+                self._invalidate_fund_cache(fund_code)
+                # 补拉到的是数据源事实数据，独立提交保存；
+                # 否则本次验证若失败回滚，下次又要重新拉一遍。
+                try:
+                    self.db.commit()
+                except Exception as commit_error:
+                    logger.warning(f"[Verify] 基金 {fund_code} 补拉数据提交失败: {commit_error}")
+                    self.db.rollback()
+        except Exception as backfill_error:
+            logger.warning(
+                f"[Verify] 基金 {fund_code} 历史净值补拉异常，按现有数据检查: {backfill_error}"
+            )
 
         data_check = self._check_fund_data_availability(
             fund_code=fund_code,

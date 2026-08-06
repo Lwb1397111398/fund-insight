@@ -158,6 +158,7 @@ class PredictionQueryService:
         if lifecycle == "due":
             return [
                 Prediction.is_correct.is_(None),
+                Prediction.prediction_type != "flat",  # 观望不参与验证，不算可行动队列
                 Prediction.target_date.isnot(None),
                 Prediction.target_date <= today,
             ]
@@ -221,6 +222,8 @@ class PredictionQueryService:
         today = current_as_of()
         active = Prediction.is_deleted.is_(False)
         unverified = and_(active, Prediction.is_correct.is_(None), Prediction.target_date.isnot(None))
+        # 到期待验证队列不含观望预测（与 lifecycle='due' 过滤、验证队列同口径）
+        unverified_actionable = and_(unverified, Prediction.prediction_type != "flat")
         row = self.db.query(
             func.count(case((active, 1))).label("all"),
             func.count(case((and_(active, Prediction.status == "pending"), 1))).label("pending"),
@@ -231,7 +234,7 @@ class PredictionQueryService:
             func.count(case((Prediction.is_deleted.is_(True), 1))).label("archived"),
             func.count(case((
                 and_(
-                    unverified,
+                    unverified_actionable,
                     Prediction.target_date <= today,
                 ), 1))).label("due"),
             func.count(case((and_(unverified, Prediction.target_date > today), 1))).label("upcoming"),

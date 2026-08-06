@@ -3,7 +3,7 @@
 处理基金相关的业务逻辑
 """
 from typing import List, Optional, Dict, Any
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import json
@@ -472,7 +472,14 @@ class FundService(BaseService[FundInfo]):
         
         history_count = 0
         try:
-            history_count = fund_data_manager.update_fund_history(fund_code, days=10, db=self.db)
+            # 新增基金直接补拉近一年历史（旧逻辑只拉最近10天，
+            # 导致早于入库时间的预测验证时"基金数据不足"）
+            history_count = fund_data_manager.backfill_history_range(
+                fund_code,
+                date.today() - timedelta(days=365),
+                date.today(),
+                db=self.db,
+            )
             self.db.commit()
         except Exception as e:
             print(f"[FundService] 获取历史净值失败: {e}")
