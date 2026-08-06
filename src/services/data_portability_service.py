@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -34,6 +36,8 @@ from src.models.database import (
     VerificationTask,
     Viewpoint,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -137,11 +141,32 @@ class DataPortabilityService:
                     ]
                     table_list = ", ".join(f'"{t}"' for t in tables)
                     engine = bind.engine if hasattr(bind, "engine") else bind
-                    with engine.connect() as conn:
-                        conn.execute(text("SET statement_timeout = '120s'"))
-                        conn.execute(text("SET lock_timeout = '60s'"))
-                        conn.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
-                        conn.commit()
+                    truncate_sql = f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"
+                    # 线上有并发查询持锁时 TRUNCATE 会等锁；Supabase 默认
+                    # statement_timeout=8s 会直接把等锁的 TRUNCATE cancel 掉。
+                    # 这里放大超时并做有限重试，给并发查询留出自然结束的时间窗。
+                    last_error: Exception | None = None
+                    for attempt in range(1, 4):
+                        try:
+                            with engine.connect() as conn:
+                                conn.execute(text("SET statement_timeout = '180s'"))
+                                conn.execute(text("SET lock_timeout = '120s'"))
+                                conn.execute(text(truncate_sql))
+                                conn.commit()
+                            last_error = None
+                            break
+                        except Exception as exc:  # 锁超时/语句超时才重试
+                            last_error = exc
+                            message = str(exc).lower()
+                            retriable = "lock timeout" in message or "statement timeout" in message
+                            if not retriable or attempt == 3:
+                                raise
+                            logger.warning(
+                                f"[Import] TRUNCATE 第 {attempt} 次等锁超时，{attempt * 2}s 后重试"
+                            )
+                            time.sleep(attempt * 2)
+                    if last_error is not None:
+                        raise last_error
                 else:
                     # SQLite 无 TRUNCATE，逐表删（仅本地/测试用，量级小）
                     self.db.query(AdviceReasoning).delete(synchronize_session=False)
