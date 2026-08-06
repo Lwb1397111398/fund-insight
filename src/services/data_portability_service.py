@@ -14,6 +14,7 @@ from sqlalchemy import Boolean, Date, DateTime, Float, Integer, JSON, Numeric, S
 from sqlalchemy.orm import Session
 
 from src.models.database import (
+    AdviceReasoning,
     AnalysisLog,
     BatchAnalysisTask,
     Blogger,
@@ -125,12 +126,21 @@ class DataPortabilityService:
                 dialect_name = bind.dialect.name if bind is not None else ""
                 if dialect_name == "postgresql":
                     tables = [spec.model.__tablename__ for spec in TABLE_SPECS]
-                    tables += ["cleanup_item_logs", "cleanup_logs", "cleanup_tasks"]
+                    # advice_reasoning 引用 investment_advice；cleanup_* 三张引用
+                    # bloggers/posts/predictions。这些表不在导出范围内但必须一并清掉，
+                    # 否则 CASCADE 清主表时会被行锁/触发器拖住。
+                    tables += [
+                        "advice_reasoning",
+                        "cleanup_item_logs",
+                        "cleanup_logs",
+                        "cleanup_tasks",
+                    ]
                     table_list = ", ".join(f'"{t}"' for t in tables)
                     self.db.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
                     self.db.flush()
                 else:
                     # SQLite 无 TRUNCATE，逐表删（仅本地/测试用，量级小）
+                    self.db.query(AdviceReasoning).delete(synchronize_session=False)
                     self.db.query(CleanupItemLog).delete(synchronize_session=False)
                     self.db.query(CleanupLog).delete(synchronize_session=False)
                     self.db.query(CleanupTask).delete(synchronize_session=False)
