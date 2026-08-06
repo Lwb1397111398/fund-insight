@@ -142,34 +142,8 @@ class DataPortabilityService:
                         "cleanup_logs",
                         "cleanup_tasks",
                     ]
-                    table_list = ", ".join(f'"{t}"' for t in tables)
                     engine = bind.engine if hasattr(bind, "engine") else bind
-                    truncate_sql = f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"
-                    # 线上有并发查询持锁时 TRUNCATE 会等锁；Supabase 默认
-                    # statement_timeout=8s 会直接把等锁的 TRUNCATE cancel 掉。
-                    # 这里放大超时并做有限重试，给并发查询留出自然结束的时间窗。
-                    last_error: Exception | None = None
-                    for attempt in range(1, 4):
-                        try:
-                            with engine.connect() as conn:
-                                conn.execute(text("SET statement_timeout = '180s'"))
-                                conn.execute(text("SET lock_timeout = '120s'"))
-                                conn.execute(text(truncate_sql))
-                                conn.commit()
-                            last_error = None
-                            break
-                        except Exception as exc:  # 锁超时/语句超时才重试
-                            last_error = exc
-                            message = str(exc).lower()
-                            retriable = "lock timeout" in message or "statement timeout" in message
-                            if not retriable or attempt == 3:
-                                raise
-                            logger.warning(
-                                f"[Import] TRUNCATE 第 {attempt} 次等锁超时，{attempt * 2}s 后重试"
-                            )
-                            time.sleep(attempt * 2)
-                    if last_error is not None:
-                        raise last_error
+                    self._truncate_postgres(engine, tables)
                 else:
                     # SQLite 无 TRUNCATE，逐表删（仅本地/测试用，量级小）
                     self.db.query(AdviceReasoning).delete(synchronize_session=False)
@@ -240,6 +214,72 @@ class DataPortabilityService:
             )
 
     # ========== 后台任务状态（用于大数据量覆盖导入） ==========
+
+    @staticmethod
+    def _truncate_postgres(engine, tables: Sequence[str]) -> None:
+        """清表：先杀掉持锁的僵尸会话，再逐表 TRUNCATE（带重试）。
+
+        线上发现两类阻塞源：
+        1. Web 服务连接泄漏出的 idle-in-transaction 会话（持 AccessShareLock
+           且长时间不结束），直接 pg_terminate_backend 清掉；
+        2. 正常的并发查询，逐表 TRUNCATE 只需等该表当前的锁释放即可，
+           比一次性 TRUNCATE 19 张表（需要同时拿到所有排他锁）成功率高得多。
+        """
+        table_list = ", ".join(f'"{t}"' for t in tables)
+
+        def _kill_blockers(conn) -> int:
+            rows = conn.execute(text("""
+                SELECT a.pid, now() - a.query_start AS age
+                FROM pg_locks l
+                JOIN pg_stat_activity a ON a.pid = l.pid
+                WHERE l.relation::regclass::text = ANY(:tables)
+                  AND a.state = 'idle in transaction'
+                  AND a.pid <> pg_backend_pid()
+                  AND now() - a.query_start > interval '60 seconds'
+            """), {"tables": list(tables)}).fetchall()
+            for row in rows:
+                logger.warning(f"[Import] 终止僵尸事务会话 pid={row[0]} age={row[1]}")
+                conn.execute(text("SELECT pg_terminate_backend(:pid)"), {"pid": row[0]})
+            return len(rows)
+
+        with engine.connect() as conn:
+            conn.execute(text("SET statement_timeout = '180s'"))
+            conn.execute(text("SET lock_timeout = '90s'"))
+            killed = _kill_blockers(conn)
+            if killed:
+                conn.commit()
+                time.sleep(1)  # 等被杀会话真正释放锁
+
+        # 逐表 TRUNCATE：每张表独立重试，避免"19 张表同时拿排他锁"的强条件
+        for tbl in tables:
+            last_error: Exception | None = None
+            for attempt in range(1, 4):
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("SET statement_timeout = '180s'"))
+                        conn.execute(text("SET lock_timeout = '90s'"))
+                        conn.execute(text(f'TRUNCATE TABLE "{tbl}" RESTART IDENTITY CASCADE'))
+                        conn.commit()
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    message = str(exc).lower()
+                    retriable = "lock timeout" in message or "statement timeout" in message
+                    if not retriable or attempt == 3:
+                        raise
+                    logger.warning(f"[Import] TRUNCATE {tbl} 第 {attempt} 次等锁超时，重试")
+                    # 再清一次可能新出现的僵尸会话，然后退避
+                    try:
+                        with engine.connect() as conn:
+                            _kill_blockers(conn)
+                            conn.commit()
+                    except Exception:
+                        pass
+                    time.sleep(attempt * 2)
+            if last_error is not None:
+                raise last_error
+        logger.info(f"[Import] 覆盖模式清表完成: {table_list}")
 
     def get_import_job_status(self) -> Dict[str, Any]:
         """读取导入任务状态（持久化在 system_config，跨请求可见）。"""
