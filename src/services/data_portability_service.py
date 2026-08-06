@@ -36,8 +36,11 @@ from src.models.database import (
     VerificationTask,
     Viewpoint,
 )
+from src.models.database import SystemConfig
 
 logger = logging.getLogger(__name__)
+
+IMPORT_JOB_KEY = "data_import_job"
 
 
 @dataclass(frozen=True)
@@ -235,6 +238,63 @@ class DataPortabilityService:
                 created_dependencies,
                 warnings,
             )
+
+    # ========== 后台任务状态（用于大数据量覆盖导入） ==========
+
+    def get_import_job_status(self) -> Dict[str, Any]:
+        """读取导入任务状态（持久化在 system_config，跨请求可见）。"""
+        row = self.db.query(SystemConfig).filter(
+            SystemConfig.config_key == IMPORT_JOB_KEY
+        ).first()
+        if not row or not row.config_value:
+            return {"status": "idle"}
+        try:
+            return json.loads(row.config_value)
+        except Exception:
+            return {"status": "idle"}
+
+    def _set_import_job_status(self, payload: Dict[str, Any]):
+        row = self.db.query(SystemConfig).filter(
+            SystemConfig.config_key == IMPORT_JOB_KEY
+        ).first()
+        if row:
+            row.config_value = json.dumps(payload, ensure_ascii=False)
+        else:
+            row = SystemConfig(
+                config_key=IMPORT_JOB_KEY,
+                config_value=json.dumps(payload, ensure_ascii=False),
+                description="数据导入后台任务状态",
+            )
+            self.db.add(row)
+        self.db.commit()
+
+    def run_import_background(self, data: Dict[str, Any], replace: bool) -> None:
+        """后台线程执行导入，进度写入 system_config 供前端轮询。"""
+        try:
+            self._set_import_job_status({
+                "status": "running",
+                "replace": replace,
+                "started_at": datetime.now().isoformat(),
+                "message": "正在清空并导入数据...",
+            })
+            result = self.import_data(data, replace=replace)
+            self._set_import_job_status({
+                "status": "done" if result.get("success") else "failed",
+                "replace": replace,
+                "finished_at": datetime.now().isoformat(),
+                "result": result,
+            })
+        except Exception as exc:
+            logger.exception("[Import] 后台导入异常")
+            try:
+                self._set_import_job_status({
+                    "status": "failed",
+                    "replace": replace,
+                    "finished_at": datetime.now().isoformat(),
+                    "result": {"success": False, "message": f"后台导入异常: {exc}"},
+                })
+            except Exception:
+                pass
 
     def _create_mapping_fund_dependencies(
         self,

@@ -2612,12 +2612,26 @@ const fetchWeChatBatch = async () => {
                     try {
                         const text = await importFile.value.text();
                         const data = JSON.parse(text);
-                        // 覆盖导入需清表+写入约10万条，给足超时（默认30s会触发 Network Error）
-                        const res = await axios.post('/api/config/import',
+                        // 启动后台导入（立即返回），然后轮询状态直到完成
+                        await axios.post('/api/config/import',
                             { data, replace: importReplace.value },
-                            { timeout: 600000 });
-                        importResult.value = res.data;
-                        if (res.data.success) {
+                            { timeout: 120000 });
+                        importResult.value = { success: true, message: '⏳ 导入中，请耐心等待（约1~3分钟），请勿关闭页面...' };
+                        // 每3秒轮询一次任务状态
+                        const finalResult = await new Promise((resolve) => {
+                            const timer = setInterval(async () => {
+                                try {
+                                    const st = await axios.get('/api/config/import/status');
+                                    const job = st.data?.data || {};
+                                    if (job.status === 'done' || job.status === 'failed') {
+                                        clearInterval(timer);
+                                        resolve(job.result || { success: job.status === 'done', message: '导入结束' });
+                                    }
+                                } catch (pollErr) { /* 轮询失败忽略，继续等 */ }
+                            }, 3000);
+                        });
+                        importResult.value = finalResult;
+                        if (finalResult.success) {
                             await fetchStats();
                             await fetchBloggers();
                         }

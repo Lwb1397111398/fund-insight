@@ -1335,12 +1335,39 @@ class ImportDataRequest(BaseModel):
     replace: bool = False  # True=覆盖模式（先清空再导入），False=合并模式
 
 
+def _run_import_background(payload: dict, replace: bool):
+    """后台线程入口：自建会话跑导入，避免占用请求会话。"""
+    from src.models.database import SessionLocal
+    db = SessionLocal()
+    try:
+        DataPortabilityService(db).run_import_background(payload, replace)
+    finally:
+        db.close()
+
+
 @router.post("/import")
-def import_data(req: ImportDataRequest, db: Session = Depends(get_db)):
+def import_data(req: ImportDataRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
-    导入 JSON 数据。
+    导入 JSON 数据（后台异步，立即返回，前端轮询 /import/status 拿结果）。
 
     默认合并模式（按 natural key 跳过已存在记录）；
     replace=True 时先清空所有数据表再导入（覆盖模式，用于本地清洗后整体同步到线上）。
     """
-    return DataPortabilityService(db).import_data(req.data, replace=req.replace)
+    # 防重入：已有任务在跑就直接返回当前状态
+    status = DataPortabilityService(db).get_import_job_status()
+    if status.get("status") == "running":
+        return {"success": True, "message": "导入正在进行中", "data": status, "async": True}
+
+    background_tasks.add_task(_run_import_background, req.data, req.replace)
+    return {
+        "success": True,
+        "message": "已开始后台导入，请稍后查看结果",
+        "data": {"status": "running"},
+        "async": True,
+    }
+
+
+@router.get("/import/status")
+def get_import_status(db: Session = Depends(get_db)):
+    """查询数据导入后台任务状态（前端轮询用）。"""
+    return {"success": True, "data": DataPortabilityService(db).get_import_job_status()}
