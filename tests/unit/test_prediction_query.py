@@ -176,6 +176,72 @@ def test_prediction_query_keeps_flat_predictions_and_reports_facets(test_db):
     assert archived["data"][0]["is_deleted"] is True
 
 
+def test_exclude_flat_hides_flat_predictions(test_db):
+    """默认隐藏观望：exclude_flat=True 时列表不含 flat，其余筛选语义不变。"""
+    from src.services.prediction_query_service import PredictionQueryService
+
+    blogger, _, post, _ = _seed_context(test_db)
+    test_db.add_all([
+        Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            prediction_type="flat",
+            prediction_content="维持观望",
+            prediction_date=date(2026, 7, 1),
+            status="pending",
+            is_deleted=False,
+        ),
+        Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            prediction_type="up",
+            prediction_date=date(2026, 7, 2),
+            status="pending",
+            is_deleted=False,
+        ),
+    ])
+    test_db.commit()
+
+    hidden = PredictionQueryService(test_db).search(exclude_flat=True)
+    shown = PredictionQueryService(test_db).search()
+
+    assert [p["prediction_type"] for p in hidden["data"]] == ["up"]
+    assert {p["prediction_type"] for p in shown["data"]} == {"flat", "up"}  # 后端默认不隐藏，前端才传参
+
+
+def test_exclude_flat_yields_to_explicit_flat_direction(test_db):
+    """主动选择观望（direction=flat）时，即使带 exclude_flat 也必须显示 flat。"""
+    from src.services.prediction_query_service import PredictionQueryService
+
+    blogger, _, post, _ = _seed_context(test_db)
+    test_db.add_all([
+        Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            prediction_type="flat",
+            prediction_content="维持观望",
+            prediction_date=date(2026, 7, 1),
+            status="pending",
+            is_deleted=False,
+        ),
+        Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            prediction_type="up",
+            prediction_date=date(2026, 7, 2),
+            status="pending",
+            is_deleted=False,
+        ),
+    ])
+    test_db.commit()
+
+    result = PredictionQueryService(test_db).search(
+        exclude_flat=True,
+        prediction_type="flat",
+    )
+    assert [p["prediction_type"] for p in result["data"]] == ["flat"]
+
+
 def test_prediction_route_returns_data_array_and_pagination_meta(test_db):
     from src.api.routes.predictions import get_predictions
 

@@ -38,6 +38,8 @@
                 fund_code: predictionFilters.fund_code.trim() || undefined,
                 sector: predictionFilters.sector.trim() || undefined,
                 prediction_type: predictionFilters.direction || undefined,
+                // 观望预测默认隐藏，主动点"观望"筛选（direction=flat）时才显示
+                exclude_flat: predictionFilters.direction ? undefined : true,
                 status: predictionFilters.status || undefined,
                 result: predictionFilters.result || undefined,
                 start_date: predictionFilters.start_date || undefined,

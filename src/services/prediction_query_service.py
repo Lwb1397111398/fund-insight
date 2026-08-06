@@ -37,6 +37,7 @@ class PredictionQueryService:
         is_expired: Optional[bool] = None,
         lifecycle: Optional[str] = None,
         sort: Optional[str] = None,
+        exclude_flat: bool = False,
     ) -> Dict[str, Any]:
         page = max(1, int(page))
         page_size = min(200, max(1, int(page_size)))
@@ -56,6 +57,7 @@ class PredictionQueryService:
             end_date=end_date,
             is_expired=is_expired,
             lifecycle=lifecycle,
+            exclude_flat=exclude_flat,
         )
 
         total = query.order_by(None).with_entities(func.count(Prediction.id)).scalar() or 0
@@ -216,6 +218,9 @@ class PredictionQueryService:
         lifecycle = filters.get("lifecycle")
         if lifecycle in self.LIFECYCLE_FILTERS:
             query = query.filter(*self._lifecycle_conditions(lifecycle))
+        # 默认隐藏观望预测：用户主动指定 direction=flat 时显示（主动选择优先）
+        if filters.get("exclude_flat") and filters.get("prediction_type") != "flat":
+            query = query.filter(Prediction.prediction_type != "flat")
         return query
 
     def _facets(self) -> Dict[str, int]:

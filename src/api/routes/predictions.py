@@ -45,6 +45,7 @@ def get_predictions(
     is_expired: Optional[bool] = None,
     lifecycle: Optional[str] = None,
     sort: Optional[str] = None,
+    exclude_flat: bool = False,
     skip: Annotated[Optional[int], Query(ge=0)] = None,
     limit: Annotated[Optional[int], Query(ge=1)] = None,
     db: Session = Depends(get_db)
@@ -71,6 +72,7 @@ def get_predictions(
         is_expired=is_expired,
         lifecycle=lifecycle,
         sort=sort,
+        exclude_flat=exclude_flat,
     )
     
     return {
