@@ -96,6 +96,22 @@ def get_prediction_detail(prediction_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.put("/{prediction_id}")
+def update_prediction(prediction_id: int, req: PredictionUpdate, db: Session = Depends(get_db)):
+    """编辑预测（前端编辑表单）：验证依据已生效的预测不可原地覆盖。"""
+    service = PredictionService(db)
+    try:
+        prediction = service.update_prediction_fields(
+            prediction_id,
+            req.model_dump(exclude_none=True),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if prediction is None:
+        raise HTTPException(status_code=404, detail="预测不存在或已删除")
+    return {"success": True, "message": "预测已更新", "data": {"id": prediction.id}}
+
+
 @router.delete("/{prediction_id}")
 def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
     """删除预测"""
