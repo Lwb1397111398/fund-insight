@@ -146,6 +146,103 @@ def test_batch_analysis_auto_deletes_no_prediction_post(monkeypatch, test_db):
     assert result["skipped"] == 1
 
 
+def test_analysis_discards_flat_predictions_keeps_actionable(monkeypatch, test_db):
+    """分析结果里的观望（flat）预测不落库，可行动预测正常保存。"""
+    from src.services.post_analysis_service import PostAnalysisService
+
+    class _MixedAnalyzer(_FakeAnalyzer):
+        def analyze_post(self, title, content, post_date=None):
+            return {
+                "predictions": [
+                    {
+                        "sector": "人工智能",
+                        "sector_type": "tech",
+                        "prediction_type": "up",
+                        "prediction_content": "看好人工智能",
+                        "confidence": 80,
+                        "prediction_period": "1周",
+                    },
+                    {
+                        "sector": "白酒",
+                        "sector_type": "消费",
+                        "prediction_type": "flat",
+                        "prediction_content": "维持观望",
+                        "confidence": 60,
+                        "prediction_period": "1个月",
+                    },
+                ],
+                "summary": "部分观望",
+            }
+
+    blogger = Blogger(name="混合分析博主", platform="wechat")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(
+        blogger_id=blogger.id,
+        content="先观望白酒，但人工智能继续看好。",
+        post_date=date(2026, 7, 10),
+    )
+    test_db.add(post)
+    test_db.commit()
+
+    service = PostAnalysisService(
+        db=test_db,
+        analyzer_factory=lambda: _MixedAnalyzer(),
+        fund_auto_manager=_FakeFundAutoManager(),
+    )
+    result = service.analyze_post(post.id)
+
+    predictions = test_db.query(Prediction).all()
+    assert result["success"] is True
+    assert len(predictions) == 1  # flat 被丢弃
+    assert predictions[0].prediction_type == "up"
+    assert predictions[0].sector == "人工智能"
+
+
+def test_analysis_all_flat_predictions_auto_deletes_post(monkeypatch, test_db):
+    """分析结果全部是观望：无可行动预测，帖子按无预测逻辑自动删除。"""
+    from src.services.post_analysis_service import PostAnalysisService
+
+    class _FlatOnlyAnalyzer(_FakeAnalyzer):
+        def analyze_post(self, title, content, post_date=None):
+            return {
+                "predictions": [
+                    {
+                        "sector": "白酒",
+                        "sector_type": "消费",
+                        "prediction_type": "flat",
+                        "prediction_content": "维持观望",
+                        "confidence": 60,
+                        "prediction_period": "1个月",
+                    }
+                ],
+                "summary": "观望",
+            }
+
+    blogger = Blogger(name="观望博主", platform="wechat")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(
+        blogger_id=blogger.id,
+        content="白酒暂时观望，等趋势明朗再说。",
+        post_date=date(2026, 7, 10),
+    )
+    test_db.add(post)
+    test_db.commit()
+    post_id = post.id
+
+    service = PostAnalysisService(
+        db=test_db,
+        analyzer_factory=lambda: _FlatOnlyAnalyzer(),
+        fund_auto_manager=_FakeFundAutoManager(),
+    )
+    result = service.analyze_post(post.id)
+
+    assert result["success"] is True
+    assert test_db.query(Post).filter(Post.id == post_id).one_or_none() is None  # 帖子已删
+    assert test_db.query(Prediction).filter(Prediction.post_id == post_id).count() == 0
+
+
 def test_fund_auto_manager_does_not_commit_an_external_session(monkeypatch, test_db):
     from src.fund.fund_auto_manager import FundAutoManager
     from src.fund.fund_api import fund_data_manager

@@ -203,8 +203,6 @@
                             @click="setPredictionFilter('correct')">正确 ({{ predictionMeta.facets.correct }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'wrong' ? 'danger' : 'default'"
                             @click="setPredictionFilter('wrong')">错误 ({{ predictionMeta.facets.wrong }})</button>
-                        <button class="action-btn small" :class="predictionFilter === 'flat' ? 'warning' : 'default'"
-                            @click="setPredictionFilter('flat')">观望 ({{ predictionMeta.facets.flat }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'archived' ? 'danger' : 'default'"
                             @click="setPredictionFilter('archived')"><i class="ri-archive-line"></i> 回收站 ({{ predictionMeta.facets.archived }})</button>
                     </div>
@@ -213,7 +211,7 @@
                         <select v-model="predictionFilters.blogger_id"><option value="">全部博主</option><option v-for="b in bloggers" :key="b.id" :value="b.id">{{ b.name }}</option></select>
                         <input v-model="predictionFilters.fund_code" placeholder="基金代码">
                         <input v-model="predictionFilters.sector" placeholder="板块">
-                        <select v-model="predictionFilters.direction"><option value="">全部方向</option><option value="up">看涨</option><option value="down">看跌</option><option value="flat">观望</option></select>
+                        <select v-model="predictionFilters.direction"><option value="">全部方向</option><option value="up">看涨</option><option value="down">看跌</option></select>
                         <select v-model="predictionFilters.sort" @change="setPredictionSort(predictionFilters.sort)" title="排序方式">
                             <option value="due_first">到期优先（默认）</option>
                             <option value="target_asc">目标日期从近到远</option>
@@ -1342,7 +1340,6 @@
                         <select v-model="editingPrediction.prediction_type">
                             <option value="up">看涨</option>
                             <option value="down">看跌</option>
-                            <option value="flat">观望</option>
                         </select>
                     </div>
                     <div class="form-group">

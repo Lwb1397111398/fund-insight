@@ -223,10 +223,16 @@ class PostAnalysisService:
                 "predictions_created": 0,
             }
 
-        predictions = list(result.get("predictions") or [])
+        # 观望预测（flat）已从产品中废弃：无方向性、无法验证对错，只干扰列表。
+        # 分析结果里的 flat 一律不落库，直接丢弃。
+        predictions = [
+            p for p in (result.get("predictions") or [])
+            if (p.get("prediction_type") or "up") != "flat"
+        ]
         if not predictions:
-            # LLM 正常返回但未提取到任何预测：说明该帖子并非真正的预测内容
-            # （可能是公众号心得/经验/日记等分享）。直接删除该帖，避免占用分析队列。
+            # LLM 未提取到任何可行动预测（无预测或全部是观望）：说明该帖子
+            # 并非真正的预测内容（可能是公众号心得/经验/日记等分享）。
+            # 直接删除该帖，避免占用分析队列。
             db.rollback()
             return self._auto_delete_no_prediction(db, post_id, result, analyzer, task_id)
 

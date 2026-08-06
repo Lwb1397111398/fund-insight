@@ -213,7 +213,11 @@ class ConcurrentAnalyzer:
                     db_post.analyzed = True
                     db_post.analysis_result = result
 
-                    for pred in result.get("predictions", []):
+                    # 观望预测（flat）已废弃：一律不落库
+                    for pred in (
+                        p for p in result.get("predictions", [])
+                        if (p.get("prediction_type") or "up") != "flat"
+                    ):
                         sector = pred.get("sector", "")
 
                         fund_code, fund_name = None, None

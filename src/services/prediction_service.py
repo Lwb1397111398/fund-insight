@@ -434,6 +434,9 @@ class PredictionService(BaseService[Prediction]):
                 prediction.fund_name = matched_fund.get("name") or None
 
         if "prediction_type" in values:
+            if values["prediction_type"] == "flat":
+                # 观望预测已废弃（无验证价值），编辑兜底拒绝落库
+                raise ValueError("观望预测已废弃，不支持保存 flat 类型")
             prediction.prediction_type = values["prediction_type"]
         if "confidence" in values:
             prediction.confidence = values["confidence"]
