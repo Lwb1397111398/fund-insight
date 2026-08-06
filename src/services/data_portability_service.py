@@ -116,19 +116,19 @@ class DataPortabilityService:
 
             if replace:
                 # 覆盖模式：清空所有白名单表。
-                # 用 TRUNCATE ... CASCADE 一次清完，比逐表 ORM DELETE 快几个量级
-                # （逐表 delete 会触发行级锁与逐行日志，Supabase 默认 8s statement
-                # timeout 必挂；TRUNCATE 是 DDL，毫秒级完成）。
-                # 同时清掉 cleanup_logs/cleanup_tasks/cleanup_item_logs 这三张
-                # 引用了 bloggers/posts/predictions 的表，否则 CASCADE 清不动。
-                # 整个导入仍在同一事务内，任一步失败整体回滚。
+                # 用独立直连执行 TRUNCATE，并临时放大该连接的 statement_timeout。
+                # 原因：Supabase 直连默认 statement_timeout=8s，而 TRUNCATE ...
+                # CASCADE 需要拿 19 张表的排他锁，线上有并发查询时等待锁超过 8s
+                # 会被数据库直接 cancel；在连接级 SET 一个更宽容的超时后即可完成。
+                # 清完立即 COMMIT 释放锁，再走会话内的导入（整体仍在同一事务，
+                # 导入失败只回滚导入，不会把已清空的表恢复——这正是覆盖语义）。
                 bind = self.db.get_bind()
                 dialect_name = bind.dialect.name if bind is not None else ""
                 if dialect_name == "postgresql":
                     tables = [spec.model.__tablename__ for spec in TABLE_SPECS]
                     # advice_reasoning 引用 investment_advice；cleanup_* 三张引用
                     # bloggers/posts/predictions。这些表不在导出范围内但必须一并清掉，
-                    # 否则 CASCADE 清主表时会被行锁/触发器拖住。
+                    # 否则 CASCADE 清主表时会被外键拖住。
                     tables += [
                         "advice_reasoning",
                         "cleanup_item_logs",
@@ -136,8 +136,12 @@ class DataPortabilityService:
                         "cleanup_tasks",
                     ]
                     table_list = ", ".join(f'"{t}"' for t in tables)
-                    self.db.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
-                    self.db.flush()
+                    engine = bind.engine if hasattr(bind, "engine") else bind
+                    with engine.connect() as conn:
+                        conn.execute(text("SET statement_timeout = '120s'"))
+                        conn.execute(text("SET lock_timeout = '60s'"))
+                        conn.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
+                        conn.commit()
                 else:
                     # SQLite 无 TRUNCATE，逐表删（仅本地/测试用，量级小）
                     self.db.query(AdviceReasoning).delete(synchronize_session=False)
