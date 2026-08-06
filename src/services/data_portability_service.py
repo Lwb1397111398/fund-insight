@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Callable, Dict, Iterable, List, Sequence
 
@@ -306,17 +306,34 @@ class DataPortabilityService:
                 raise last_error
         logger.info(f"[Import] 覆盖模式清表完成: {table_list}")
 
+    # 任务超时未心跳视为已死：进程重启/崩溃会留下"假 running"，
+    # 不处理的话防重入检查会永远挡住下一次导入（线上实测踩过）。
+    STALE_JOB_MINUTES = 15
+
     def get_import_job_status(self) -> Dict[str, Any]:
-        """读取导入任务状态（持久化在 system_config，跨请求可见）。"""
+        """读取导入任务状态（持久化在 system_config，跨请求可见）。
+
+        running 状态若无心跳（heartbeat_at，缺省回退 started_at）超过
+        STALE_JOB_MINUTES，视为任务已死，返回 idle 放行重新导入。
+        """
         row = self.db.query(SystemConfig).filter(
             SystemConfig.config_key == IMPORT_JOB_KEY
         ).first()
         if not row or not row.config_value:
             return {"status": "idle"}
         try:
-            return json.loads(row.config_value)
+            payload = json.loads(row.config_value)
         except Exception:
             return {"status": "idle"}
+        if payload.get("status") == "running":
+            heartbeat = payload.get("heartbeat_at") or payload.get("started_at")
+            try:
+                last_activity = datetime.fromisoformat(heartbeat)
+                if datetime.now() - last_activity > timedelta(minutes=self.STALE_JOB_MINUTES):
+                    payload["status"] = "idle"
+            except Exception:
+                pass
+        return payload
 
     def _set_import_job_status(self, payload: Dict[str, Any]):
         row = self.db.query(SystemConfig).filter(
@@ -359,6 +376,7 @@ class DataPortabilityService:
                                 "status": "running",
                                 "replace": replace,
                                 "started_at": job_started_at,
+                                "heartbeat_at": datetime.now().isoformat(),
                                 "current_table": table_key,
                                 "processed_rows": done_rows,
                                 "total_rows": total_rows,

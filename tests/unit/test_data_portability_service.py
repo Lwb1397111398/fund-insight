@@ -549,6 +549,45 @@ def test_import_replace_mode_skips_find_existing_queries(test_db):
     assert calls == []  # 覆盖模式一查都不查，直接批量灌入
 
 
+def test_import_job_stale_running_treated_as_idle(test_db):
+    """假 running（线程已死、超过心跳阈值）必须被判定为 idle，否则防重入挡住后续导入。"""
+    from datetime import datetime, timedelta
+    from src.models.database import SystemConfig
+    from src.services.data_portability_service import (
+        IMPORT_JOB_KEY,
+        DataPortabilityService,
+    )
+
+    service = DataPortabilityService(test_db)
+    stale = datetime.now() - timedelta(minutes=16)
+    test_db.add(SystemConfig(
+        config_key=IMPORT_JOB_KEY,
+        config_value='{"status": "running", "started_at": "%s"}' % stale.isoformat(),
+    ))
+    test_db.commit()
+
+    status = service.get_import_job_status()
+    assert status["status"] == "idle"  # 陈旧 running 放行重试
+
+
+def test_import_job_fresh_running_kept_as_running(test_db):
+    """有心跳的 running（任务在正常推进）必须保持 running。"""
+    from src.models.database import SystemConfig
+    from src.services.data_portability_service import (
+        IMPORT_JOB_KEY,
+        DataPortabilityService,
+    )
+
+    service = DataPortabilityService(test_db)
+    test_db.add(SystemConfig(
+        config_key=IMPORT_JOB_KEY,
+        config_value='{"status": "running", "heartbeat_at": "%s"}' % datetime.now().isoformat(),
+    ))
+    test_db.commit()
+
+    assert service.get_import_job_status()["status"] == "running"
+
+
 def test_import_merge_mode_still_skips_existing_rows(test_db):
     """合并模式必须继续逐行查重：覆盖模式跳过查询不能影响合并语义。"""
     from src.services.data_portability_service import DataPortabilityService

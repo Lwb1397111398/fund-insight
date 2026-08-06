@@ -2626,6 +2626,10 @@ const fetchWeChatBatch = async () => {
                                     if (job.status === 'done' || job.status === 'failed') {
                                         clearInterval(timer);
                                         resolve(job.result || { success: job.status === 'done', message: '导入结束' });
+                                    } else if (job.status === 'idle') {
+                                        // 任务超时无心跳被判定已死（服务重启等），放行重试
+                                        clearInterval(timer);
+                                        resolve({ success: false, message: '⏸️ 导入任务已中断（可能服务重启），请重新点击导入' });
                                     } else if (job.status === 'running' && job.message) {
                                         importResult.value = { success: true, message: '⏳ ' + job.message };
                                     }
