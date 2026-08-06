@@ -1335,10 +1335,15 @@ class ImportDataRequest(BaseModel):
     replace: bool = False  # True=覆盖模式（先清空再导入），False=合并模式
 
 
-def _run_import_background(payload: dict, replace: bool):
-    """后台线程入口：自建会话跑导入，避免占用请求会话。"""
-    from src.models.database import SessionLocal
-    db = SessionLocal()
+def _run_import_background(payload: dict, replace: bool, session_factory=None):
+    """后台线程入口：自建会话跑导入，避免占用请求会话。
+
+    session_factory 仅供测试注入内存库会话工厂；生产默认用全局 SessionLocal。
+    """
+    if session_factory is None:
+        from src.models.database import SessionLocal
+        session_factory = SessionLocal
+    db = session_factory()
     try:
         DataPortabilityService(db).run_import_background(payload, replace)
     finally:

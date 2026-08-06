@@ -435,6 +435,12 @@ def test_config_import_export_routes_preserve_v1_contract(monkeypatch):
         client = TestClient(app)
         headers = {"X-Access-Password": "data_portability_test_password"}
 
+        # 让后台导入任务用同一个内存库（生产用全局 SessionLocal）
+        import src.api.routes.config as config_routes
+        TestSession = sessionmaker(bind=engine)
+        original_runner = config_routes._run_import_background
+        config_routes._run_import_background = lambda payload, replace: original_runner(payload, replace, session_factory=TestSession)
+
         imported = client.post(
             "/api/config/import",
             headers=headers,
@@ -443,8 +449,30 @@ def test_config_import_export_routes_preserve_v1_contract(monkeypatch):
 
         assert imported.status_code == 200
         assert imported.json()["success"] is True
-        assert imported.json()["data"]["total_imported"] == 9
-        assert imported.json()["data"]["failed"]["fund_history"] == 0
+        # 导入已改为后台异步：启动后返回 running
+        assert imported.json()["data"]["status"] == "running"
+        # 后台任务在独立会话跑，这里用全新会话（新连接）轮询才能看到已提交的状态
+        import time as _time
+        from src.models.database import SystemConfig
+        from src.services.data_portability_service import IMPORT_JOB_KEY
+        final = None
+        for _ in range(20):
+            check_db = sessionmaker(bind=engine)()
+            try:
+                row = check_db.query(SystemConfig).filter(
+                    SystemConfig.config_key == IMPORT_JOB_KEY
+                ).first()
+                if row and row.config_value:
+                    import json as _json
+                    final = _json.loads(row.config_value)
+                    if final.get("status") in ("done", "failed"):
+                        break
+            finally:
+                check_db.close()
+            _time.sleep(0.2)
+        assert final is not None and final["status"] == "done"
+        assert final["result"]["data"]["total_imported"] == 9
+        assert final["result"]["data"]["failed"]["fund_history"] == 0
 
         exported = client.get("/api/config/export", headers=headers)
         assert exported.status_code == 200
