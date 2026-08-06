@@ -187,6 +187,15 @@ class DataPortabilityService:
                         self.db.add(spec.model(**cleaned))
                         imported_count += 1
 
+                        # 每 200 行向数据库 flush 一批：
+                        # 1. 尽早暴露外键/约束错误（不必等全部 add 完）；
+                        # 2. 给导入日志提供"活着"的信号，避免大批量时看起来卡死。
+                        if imported_count % 200 == 0:
+                            self.db.flush()
+                            logger.info(
+                                f"[Import] {spec.export_key} 已写入 {imported_count}/{len(rows)}"
+                            )
+
                     imported[spec.export_key] = imported_count
                     skipped[spec.export_key] = skipped_count
                     failed[spec.export_key] = 0
