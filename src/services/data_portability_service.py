@@ -17,6 +17,9 @@ from src.models.database import (
     AnalysisLog,
     BatchAnalysisTask,
     Blogger,
+    CleanupItemLog,
+    CleanupLog,
+    CleanupTask,
     CrawlerArticleRecord,
     FundHistory,
     FundInfo,
@@ -27,8 +30,8 @@ from src.models.database import (
     PredictionGroup,
     SectorAlias,
     SectorFundMapping,
-    Viewpoint,
     VerificationTask,
+    Viewpoint,
 )
 
 
@@ -111,12 +114,29 @@ class DataPortabilityService:
                 warnings.append(f"忽略未知数据区块: {key}")
 
             if replace:
-                # 覆盖模式：先按外键依赖逆序清空所有白名单表。
-                # 用 ORM delete 保证触发外键约束；整个导入在同一事务内，
-                # 任一步失败都会整体回滚，不会出现"清空后导入失败"的中间态。
-                for spec in reversed(TABLE_SPECS):
-                    self.db.query(spec.model).delete(synchronize_session=False)
-                self.db.flush()
+                # 覆盖模式：清空所有白名单表。
+                # 用 TRUNCATE ... CASCADE 一次清完，比逐表 ORM DELETE 快几个量级
+                # （逐表 delete 会触发行级锁与逐行日志，Supabase 默认 8s statement
+                # timeout 必挂；TRUNCATE 是 DDL，毫秒级完成）。
+                # 同时清掉 cleanup_logs/cleanup_tasks/cleanup_item_logs 这三张
+                # 引用了 bloggers/posts/predictions 的表，否则 CASCADE 清不动。
+                # 整个导入仍在同一事务内，任一步失败整体回滚。
+                bind = self.db.get_bind()
+                dialect_name = bind.dialect.name if bind is not None else ""
+                if dialect_name == "postgresql":
+                    tables = [spec.model.__tablename__ for spec in TABLE_SPECS]
+                    tables += ["cleanup_item_logs", "cleanup_logs", "cleanup_tasks"]
+                    table_list = ", ".join(f'"{t}"' for t in tables)
+                    self.db.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
+                    self.db.flush()
+                else:
+                    # SQLite 无 TRUNCATE，逐表删（仅本地/测试用，量级小）
+                    self.db.query(CleanupItemLog).delete(synchronize_session=False)
+                    self.db.query(CleanupLog).delete(synchronize_session=False)
+                    self.db.query(CleanupTask).delete(synchronize_session=False)
+                    for spec in reversed(TABLE_SPECS):
+                        self.db.query(spec.model).delete(synchronize_session=False)
+                    self.db.flush()
                 warnings.append("覆盖模式：已清空原有数据后导入。")
 
             with self.db.no_autoflush:
