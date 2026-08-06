@@ -2612,7 +2612,10 @@ const fetchWeChatBatch = async () => {
                     try {
                         const text = await importFile.value.text();
                         const data = JSON.parse(text);
-                        const res = await axios.post('/api/config/import', { data, replace: importReplace.value });
+                        // 覆盖导入需清表+写入约10万条，给足超时（默认30s会触发 Network Error）
+                        const res = await axios.post('/api/config/import',
+                            { data, replace: importReplace.value },
+                            { timeout: 600000 });
                         importResult.value = res.data;
                         if (res.data.success) {
                             await fetchStats();
