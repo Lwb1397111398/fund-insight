@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 # 超过这个秒数没有任何进展就认为线程已被杀（Render 重启/异常退出），
 # 否则会出现"永远 running 挡住后续跑批"的老毛病。
 STALE_AFTER_SECONDS = 600
+PACE_SECONDS = 2.0            # 板块之间的限速间隔，避免把 LLM 侧打到 429 熔断
+RETRY_ROUNDS = 2              # "LLM 不可用"的板块最多再重试两轮
+RETRY_BACKOFF_SECONDS = 120   # 每轮重试前等待，给熔断器恢复时间
 
 
 class SectorAiMatchTask:
@@ -31,6 +34,8 @@ class SectorAiMatchTask:
         self.results: List[dict] = []
         self.current_sector: Optional[str] = None
         self.error: Optional[str] = None
+        self.retry_round = 0
+        self.pending_retry: List[str] = []
         self.started_at: Optional[datetime] = None
         self.finished_at: Optional[datetime] = None
         self.last_progress_at = time.monotonic()
@@ -53,6 +58,8 @@ class SectorAiMatchTask:
             'done': self.done,
             'counts': dict(self.counts),
             'current_sector': self.current_sector,
+            'retry_round': self.retry_round,
+            'pending_retry': len(self.pending_retry),
             'error': self.error,
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
@@ -108,37 +115,64 @@ class SectorAiMatchManager:
         task.started_at = datetime.now()
         task.touch()
         db = SessionLocal()
+        # 实测：连续快跑会触发 LLM 侧 429 → 熔断器开启 → 后面几十个板块全部"判定不可用"。
+        # 所以每板块之间要限速，并且把"LLM 不可用"的板块留到后面的退避轮次重试，
+        # 让它们和"确实找不到对口基金"区分开。
+        pending = list(task.sectors)
+        results: dict = {}
         try:
-            for sector in task.sectors:
-                task.current_sector = sector
-                try:
-                    decision = resolve_sector_fund(sector, budget_ms=45000, db=db)
-                    applied = apply_decision(db, decision) if task.apply else {'applied': False}
-                    key = decision.status if decision.status in task.counts else 'needs_review'
-                    task.counts[key] += 1
-                    task.results.append({
-                        'sector': sector,
-                        'status': decision.status,
-                        'confidence': round(decision.confidence, 3),
-                        'fund_code': decision.chosen.code if decision.chosen else None,
-                        'fund_name': decision.chosen.display_name if decision.chosen else None,
-                        'match_kind': (decision.chosen.t3_proxy and 'proxy') or 'direct'
-                        if decision.chosen else None,
-                        'applied': bool(applied.get('applied')),
-                        'note': applied.get('reason') or '',
-                        'elapsed_ms': decision.elapsed_ms,
-                        'degraded': decision.degraded,
-                        'timed_out': decision.timed_out,
-                    })
-                except Exception as exc:
-                    logger.exception('[AI批量匹配] 板块 %s 失败', sector)
-                    db.rollback()
-                    task.counts['needs_review'] += 1
-                    task.results.append({'sector': sector, 'status': 'error',
-                                         'note': str(exc)[:200]})
-                task.done += 1
-                task.touch()
-            task.status = 'completed'
+            for attempt in range(1, RETRY_ROUNDS + 2):
+                if not pending:
+                    break
+                if attempt > 1:
+                    task.retry_round = attempt - 1
+                    logger.info('[AI批量匹配] 第 %d 轮重试 %d 个 LLM 不可用的板块',
+                                attempt - 1, len(pending))
+                    time.sleep(RETRY_BACKOFF_SECONDS)
+                retry_next = []
+                for sector in pending:
+                    task.current_sector = sector
+                    try:
+                        decision = resolve_sector_fund(sector, budget_ms=45000, db=db)
+                        applied = apply_decision(db, decision) if task.apply \
+                            else {'applied': False}
+                        results[sector] = {
+                            'sector': sector,
+                            'status': decision.status,
+                            'confidence': round(decision.confidence, 3),
+                            'fund_code': decision.chosen.code if decision.chosen else None,
+                            'fund_name': decision.chosen.display_name if decision.chosen else None,
+                            'match_kind': ('proxy' if (decision.chosen and decision.chosen.t3_proxy)
+                                           else ('direct' if decision.chosen else None)),
+                            'applied': bool(applied.get('applied')),
+                            'note': applied.get('reason') or '',
+                            'elapsed_ms': decision.elapsed_ms,
+                            'degraded': decision.degraded,
+                            'llm_unavailable': decision.llm_unavailable,
+                            'timed_out': decision.timed_out,
+                            'attempts': attempt,
+                        }
+                        if decision.llm_unavailable:
+                            retry_next.append(sector)
+                    except Exception as exc:
+                        logger.exception('[AI批量匹配] 板块 %s 失败', sector)
+                        db.rollback()
+                        results[sector] = {'sector': sector, 'status': 'error',
+                                           'note': str(exc)[:200], 'attempts': attempt}
+                        retry_next.append(sector)
+                    task.done = sum(1 for v in results.values() if not v.get('llm_unavailable'))
+                    task.touch()
+                    time.sleep(PACE_SECONDS)
+                pending = retry_next
+            task.results = [results[s] for s in task.sectors if s in results]
+            counts = {'matched': 0, 'proxy': 0, 'needs_review': 0, 'conflict': 0, 'no_fund': 0}
+            for row in task.results:
+                key = row['status'] if row['status'] in counts else 'needs_review'
+                counts[key] += 1
+            task.counts = counts
+            task.done = len(task.results)
+            task.pending_retry = pending
+            task.status = 'completed' if not pending else 'completed_with_retries'
         except Exception as exc:
             logger.exception('[AI批量匹配] 任务异常终止')
             task.status = 'failed'

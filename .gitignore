@@ -66,3 +66,11 @@ predictions_check.json
 .worktrees/
 .codegraph/
 .audit_tmp/
+
+# Flutter / Android 壳工程产物
+mobile/**/build/
+mobile/**/.dart_tool/
+mobile/**/android/.gradle/
+mobile/**/android/app/.cxx/
+mobile/**/android/local.properties
+mobile/**/.flutter-plugins*

@@ -182,8 +182,15 @@ async def password_auth_middleware(request: Request, call_next):
     if request.url.path == "/api/health":
         return await call_next(request)
     
-    # 从环境变量获取密码
-    expected_password = os.getenv("ACCESS_PASSWORD", "Lwb1397111398")
+    # 从环境变量获取密码。
+    # 这里原来写着 os.getenv("ACCESS_PASSWORD", "<真实口令>")：默认值一旦进仓库，
+    # 公开仓库等于把口令公开，所以改成无默认值 + 未配置时拒绝服务（fail-closed）。
+    expected_password = os.getenv("ACCESS_PASSWORD", "")
+    if not expected_password:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "服务端未配置 ACCESS_PASSWORD，已拒绝访问 /api/"}
+        )
     
     # 从请求头获取密码
     provided_password = request.headers.get("X-Access-Password")

@@ -8,6 +8,14 @@
 import os
 import sys
 
+# 本机控制台默认 GBK，中文/符号（如 ✗）会直接抛 UnicodeEncodeError。
+# 所有脚本统一在导入本模块时把 stdout/stderr 切成 UTF-8 + 替换模式。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB = os.path.join(ROOT, "data", "fund_insight.db")
 

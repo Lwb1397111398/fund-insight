@@ -37,6 +37,32 @@ MAX_LLM_CALLS_PER_SECTOR = 6   # T1 提案 1 次 + 每轮 T3 复判 1 次（最�
 BONDED_TYPES = ('债券', '债', '货币', '理财', '短债', '纯债')
 BOND_SECTOR_HINTS = ('债', '货币', '理财', '同业存单')
 
+# 宽基指数不能充当行业板块的标的。实测跑批里出现过 豆粕→中证500ETF、
+# 中药→沪深300ETF联接、低空经济→中证A50ETF 这类"买不到就给你一只大盘"的假命中，
+# 语义模型会把它判成相关，所以这条要写成硬规则，不能交给 LLM 自由裁量。
+BROAD_INDEX_TOKENS = (
+    '沪深300', '中证500', '中证1000', '中证2000', '中证A50', '中证A500', '上证50',
+    '深证50', '创业板', '科创50', '科创100', '科创创业', '中证全指', '全指',
+    '国证2000', '万得微盘', '微盘', 'A50', 'A500', 'MSCI', '上证指数', '沪深交易所',
+)
+# 板块本身就是宽基/市场（日股→日经225ETF、沪深300→300ETF、亚太→亚太精选）时允许
+BROAD_ALLOWED_FOR_SECTORS = (
+    '沪深300', '中证500', '中证1000', '中证2000', '中证A50', 'A50', 'A500', '上证50',
+    '深证50', '创业', '科创', '全指', '微盘', '宽基', '中小盘',
+    '日', '美', '港', '德国', '法国', '英国', '印度', '越南', '沙特', '全球', '海外',
+    '纳指', '纳斯达克', '标普', '日经', '东证', '恒指', '恒生', '中概', '亚太', '亚洲',
+    '欧洲', 'QDII', '科创创业', '北证', '新三板', '红利', '自由现金流',
+)
+
+def is_broad_index_fund(name: str) -> bool:
+    n = (name or '').upper().replace(' ', '')
+    return any(tok.upper() in n for tok in BROAD_INDEX_TOKENS)
+
+
+def sector_allows_broad_index(sector: str) -> bool:
+    s = (sector or '').upper().replace(' ', '')
+    return any(tok.upper() in s for tok in BROAD_ALLOWED_FOR_SECTORS)
+
 COMPANY_PREFIXES = (
     '华夏', '易方达', '南方', '国泰', '华宝', '招商', '广发', '嘉实', '富国', '天弘',
     '银华', '博时', '鹏华', '汇添富', '华安', '建信', '工银', '兴业', '永赢', '摩根',
@@ -137,6 +163,7 @@ class SectorDecision:
     direct_exhausted: bool = False
     elapsed_ms: int = 0
     degraded: bool = False      # LLM 完全没跑成（熔断/无密钥/解析失败）
+    llm_unavailable: bool = False  # 跑批靠它决定"这条要重试"，与"确实没有对口基金"区分
     timed_out: bool = False     # 超出预算被截断，与"判定不可用"分开看
 
     def to_dict(self) -> dict:
@@ -299,6 +326,8 @@ class SectorFundAgent:
                 cand.rejected = '该代码是股票，不是基金'
             elif not res.get('ok') and not res.get('is_strict_ok'):
                 cand.rejected = '抓不到数据（可能已清盘/代码不存在）'
+            elif is_broad_index_fund(cand.official_name) and not sector_allows_broad_index(sector):
+                cand.rejected = f'宽基指数基金不能代表行业板块「{sector}」'
             elif cand.official_name and cand.claim_sim < CLAIM_SIM_REJECT:
                 # LLM 记错"代码↔名称"极其常见。此时**官方名才是权威**：基金真实存在、
                 # 抓得到净值，就不该淘汰掉，只是要标记出来让 T3 用官方名判断，并在
@@ -333,8 +362,11 @@ class SectorFundAgent:
 - suitable：true/false
 - proxy：该板块没有对口基金、这只只是"关联度最大的替代"时为 true
 - score：0-100，它作为该板块跟踪标的的贴切程度
-字面重合低不代表不贴切（例如 半导体→芯片ETF、债券→证券ETF 都属合理替代），
+字面重合低不代表不贴切（例如 半导体→芯片ETF、债券→国债ETF 都属合理替代），
 但如果候选跟踪的是别的行业，就必须给低分。
+**宽基指数基金（沪深300/中证500/中证A50/创业板/科创50 等）一律判 suitable=false**，
+除非板块本身就是该宽基或某个市场（日股/美股/亚太 等）——"买不到行业基金就拿大盘凑数"
+不是可接受的替代标的。
 
 只返回 JSON：{{"judgements":[{{"code":"159995","suitable":true,"proxy":false,"score":88,"reason":"跟踪同指数"}}]}}"""
         data = self.llm(prompt, max_tokens=1200) or {}
@@ -343,6 +375,7 @@ class SectorFundAgent:
             # LLM 熔断/超预算/解析失败时，不能把"没判定"当成"判定不合格"，
             # 否则一次网络抖动就会让整批板块被误判为无解。
             decision.degraded = True
+            decision.llm_unavailable = True
             decision.evidence.append({'stage': 'T3', 'verdict': 'unavailable'})
             for cand in cands:
                 cand.rejected = '语义判定不可用（LLM 无响应或超预算）'
@@ -492,7 +525,10 @@ class SectorFundAgent:
 
         decision.elapsed_ms = elapsed()
         decision.timed_out = over_budget()
-        decision.degraded = bool(allow_llm and self._llm_calls == 0)
+        # 不能覆盖 T3 已经标记的"判定不可用"，否则跑批分不清"没基金"和"LLM 挂了"
+        decision.degraded = decision.degraded or bool(allow_llm and self._llm_calls == 0)
+        decision.llm_unavailable = decision.llm_unavailable or bool(
+            allow_llm and self._llm_calls == 0)
         return decision
 
 
