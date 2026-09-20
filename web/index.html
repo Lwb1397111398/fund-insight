@@ -1558,6 +1558,8 @@
                         <button class="action-btn small" @click="loadSectorMappings(false)" :style="{ background: mappingFilter === false ? '#faad14' : '#f5f5f5', color: mappingFilter === false ? '#fff' : '#666' }">待审查</button>
                         <button class="action-btn small" @click="loadSectorMappings(true)" :style="{ background: mappingFilter === true ? '#52c41a' : '#f5f5f5', color: mappingFilter === true ? '#fff' : '#666' }">已审查</button>
                         <button v-if="sectorMappings.unreviewed_count > 0" class="action-btn small" @click="batchReviewAll" style="background: #52c41a; color: #fff;">全部标记已审查</button>
+                        <button class="action-btn small" @click="aiBatchMatch('pending')" :disabled="aiBatch.running" style="background: #13c2c2; color: #fff;">{{ aiBatch.running ? 'AI 匹配中 ' + aiBatch.done + '/' + aiBatch.total : 'AI 匹配待审查' }}</button>
+                        <button class="action-btn small" @click="aiBatchMatch('gap')" :disabled="aiBatch.running" style="background: #08979c; color: #fff;">AI 补齐缺失板块</button>
                         <button class="action-btn small" @click="verifyAllFunds" :disabled="verifyAllVerifying" style="background: #722ed1; color: #fff;">{{ verifyAllVerifying ? '验证中…' : '验证全部抓取' }}</button>
                     </div>
                     <div v-if="verifyAllResult" style="margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid #d3adf7; background: #f9f0ff;">
@@ -1631,6 +1633,7 @@
                                             <button @click="editingMappingKey = null; mappingVerifyResult = null;" style="background: #999; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">取消</button>
                                         </template>
                                         <template v-else>
+                                            <button @click="aiMatchMapping(m)" :disabled="!!aiMatchBusy" style="color: #13c2c2; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">{{ aiMatchBusy === m.sector_name ? 'AI 匹配中…' : 'AI 匹配' }}</button>
                                             <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
                                             <button v-if="!m.reviewed && m.source !== 'builtin'" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
                                             <button v-if="m.source !== 'builtin'" @click="deleteMapping(m.id, m.sector_name)" style="color: #ff4d4f; background: none; border: none; cursor: pointer; font-size: 12px;">删除</button>
@@ -1643,6 +1646,55 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    <div v-if="aiBatch.running || aiBatch.status === 'completed'" style="margin-bottom: 10px; padding: 8px 10px; border: 1px solid #87e8de; border-radius: 6px; background: #e6fffb; font-size: 13px;">
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <strong style="color: #08979c;">AI 批量匹配</strong>
+                            <span v-if="aiBatch.running">进度 {{ aiBatch.done }}/{{ aiBatch.total }}：{{ aiBatch.current || '准备中…' }}</span>
+                            <span v-else>完成 {{ aiBatch.done }}/{{ aiBatch.total }}</span>
+                            <span>直接对应 {{ aiBatch.counts?.matched || 0 }}</span>
+                            <span>替代标的 {{ aiBatch.counts?.proxy || 0 }}</span>
+                            <span style="color: #d46b08;">待复核 {{ aiBatch.counts?.needs_review || 0 }}</span>
+                            <span style="color: #ff4d4f;">冲突 {{ aiBatch.counts?.conflict || 0 }}</span>
+                            <span class="flex-1"></span>
+                            <button class="action-btn small" @click="aiBatch = { running:false, status:'idle', total:0, done:0, counts:{}, current:'', results:[] }" style="background: #f5f5f5; color: #666;">收起</button>
+                        </div>
+                        <div style="max-height: 160px; overflow-y: auto; margin-top: 6px;">
+                            <div v-for="r in (aiBatch.results || [])" :key="r.sector" style="padding: 2px 0; border-bottom: 1px solid #b5f5ec;">
+                                <b>{{ r.sector }}</b> → {{ r.fund_code || '—' }} {{ r.fund_name || '' }}
+                                <span :style="{ color: r.status === 'matched' ? '#52c41a' : (r.status === 'proxy' ? '#1890ff' : '#d46b08') }">（{{ r.status }}，置信 {{ r.confidence }}{{ r.note ? '，' + r.note : '' }}）</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="aiResult" style="margin-bottom: 8px; padding: 10px 12px; border: 1px solid #91d5ff; border-radius: 6px; background: #f0faff; font-size: 13px;">
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <strong>{{ aiResult.sector }}</strong>
+                            <span v-if="aiResult.decision">
+                                结论 <b>{{ aiResult.decision.status }}</b>，置信 {{ (aiResult.decision.confidence || 0).toFixed(2) }}，
+                                轮数 {{ aiResult.decision.rounds }}，耗时 {{ aiResult.decision.elapsed_ms }}ms
+                            </span>
+                            <span v-else style="color: #ff4d4f;">{{ aiResult.error || '无结论' }}</span>
+                            <span class="flex-1"></span>
+                            <button v-if="aiResult.decision && aiResult.decision.chosen" @click="applyAiMatch" style="background: #1890ff; color: #fff; border: none; padding: 2px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;">采纳并写入</button>
+                            <button class="action-btn small" @click="aiResult = null" style="background: #f5f5f5; color: #666;">收起</button>
+                        </div>
+                        <div v-if="aiResult.decision && aiResult.decision.chosen" style="margin-top: 6px;">
+                            推荐：<b>{{ aiResult.decision.chosen.code }} {{ aiResult.decision.chosen.display_name || aiResult.decision.chosen.official_name || aiResult.decision.chosen.name }}</b>
+                            <span v-if="aiResult.decision.chosen.t3_proxy" style="color: #1890ff;">［替代标的：该板块无对口基金，取关联度最大的可选标的］</span>
+                            <span v-if="aiResult.decision.chosen.reason" class="text-muted"> — {{ aiResult.decision.chosen.reason }}</span>
+                        </div>
+                        <div v-if="aiResult.decision && aiResult.decision.evidence && aiResult.decision.evidence.length" style="margin-top: 6px; max-height: 200px; overflow-y: auto; border-top: 1px dashed #91d5ff; padding-top: 4px;">
+                            <div class="text-2xs text-muted" style="margin-bottom: 2px;">证据链（每一步做了什么、拿到什么、为什么淘汰）</div>
+                            <div v-for="(ev, i) in aiResult.decision.evidence" :key="i" class="text-2xs" style="padding: 1px 0;">
+                                <b>{{ ev.stage }}</b> {{ ev.code || ev.keyword || '' }}
+                                <span v-if="ev.verdict">→ {{ ev.verdict }}</span>
+                                <span v-if="ev.official_name">{{ ev.official_name }}</span>
+                                <span v-if="ev.reason" style="color: #ff4d4f;">{{ ev.reason }}</span>
+                                <span v-if="ev.score !== undefined && ev.score !== null">score {{ ev.score }}</span>
+                                <span v-if="ev.candidates">[{{ ev.candidates.join(', ') }}]</span>
+                                <span v-if="ev.hits">[{{ ev.hits.join(', ') }}]</span>
+                            </div>
+                        </div>
                     </div>
                     <div v-if="mappingVerifyResult" :style="{ marginTop: '8px', padding: '8px 10px', borderRadius: '6px', fontSize: '13px', background: mappingVerifyResult.ok ? '#f6ffed' : '#fff2f0', color: mappingVerifyResult.ok ? '#52c41a' : '#ff4d4f', border: '1px solid ' + (mappingVerifyResult.ok ? '#b7eb8f' : '#ffccc7') }">
                         {{ mappingVerifyResult.message }}
@@ -2468,6 +2520,9 @@ const fetchWeChatBatch = async () => {
                 const editingMapping = ref({ fund_name: '', fund_code: '', sector_name: '', source: null });
                 const mappingVerifying = ref(false);
                 const mappingVerifyResult = ref(null);
+                const aiMatchBusy = ref('');
+                const aiResult = ref(null);
+                const aiBatch = ref({ running: false, status: 'idle', total: 0, done: 0, counts: {}, current: '', results: [] });
                 const verifyAllVerifying = ref(false);
                 const verifyAllResult = ref(null);
                 const filteredMappings = computed(() => {
@@ -2480,6 +2535,71 @@ const fetchWeChatBatch = async () => {
                     );
                 });
                 const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await axios.get(url); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
+                const aiMatchMapping = async (m) => {
+                    if (aiMatchBusy.value) return;
+                    aiMatchBusy.value = m.sector_name;
+                    aiResult.value = null;
+                    try {
+                        const res = await axios.post('/api/config/sector-mappings/ai-match',
+                            { sector_name: m.sector_name, apply: false }, { timeout: 120000 });
+                        aiResult.value = Object.assign({ sector: m.sector_name }, res.data?.data || {});
+                    } catch (e) {
+                        aiResult.value = { sector: m.sector_name, decision: null,
+                            error: e.response?.data?.detail || e.message };
+                    } finally {
+                        aiMatchBusy.value = '';
+                    }
+                };
+
+                const applyAiMatch = async () => {
+                    if (!aiResult.value || !aiResult.value.decision) return;
+                    const sector = aiResult.value.decision.sector;
+                    try {
+                        const res = await axios.post('/api/config/sector-mappings/ai-match',
+                            { sector_name: sector, apply: true }, { timeout: 120000 });
+                        const applied = res.data?.data?.apply || {};
+                        if (!applied.applied) {
+                            alert('未写入：' + (applied.reason || res.data?.data?.decision?.status || '未知原因'));
+                        }
+                        await loadSectorMappings(mappingFilter.value);
+                        aiResult.value = Object.assign({}, aiResult.value, { apply: applied });
+                    } catch (e) {
+                        alert('写入失败：' + (e.response?.data?.detail || e.message));
+                    }
+                };
+
+                const aiBatchMatch = async (mode) => {
+                    if (aiBatch.value.running) return;
+                    const body = mode === 'pending'
+                        ? { only_pending: true, apply: true }
+                        : { only_gap: true, apply: true };
+                    try {
+                        const res = await axios.post('/api/config/sector-mappings/ai-batch', body);
+                        aiBatch.value = Object.assign({ running: true }, res.data?.data || {});
+                        pollAiBatch();
+                    } catch (e) {
+                        alert('启动失败：' + (e.response?.data?.detail || e.message));
+                    }
+                };
+
+                const pollAiBatch = () => {
+                    const timer = setInterval(async () => {
+                        try {
+                            const res = await axios.get('/api/config/sector-mappings/ai-batch/status');
+                            const d = res.data?.data || {};
+                            aiBatch.value = Object.assign({}, d, {
+                                running: d.status === 'running' || d.status === 'pending' });
+                            if (!aiBatch.value.running) {
+                                clearInterval(timer);
+                                await loadSectorMappings(mappingFilter.value);
+                            }
+                        } catch (e) {
+                            clearInterval(timer);
+                            aiBatch.value = Object.assign({}, aiBatch.value, { running: false });
+                        }
+                    }, 2500);
+                };
+
                 const startEditMapping = (m) => { editingMappingKey.value = m.sector_name + m.fund_code; editingMapping.value = { fund_name: m.fund_name, fund_code: m.fund_code, sector_name: m.sector_name, source: m.source, id: m.id }; mappingVerifyResult.value = null; };
                 const verifyMappingFund = async () => {
                     const code = (editingMapping.value.fund_code || '').trim();
@@ -2543,7 +2663,7 @@ const fetchWeChatBatch = async () => {
                 };
                 const reviewMapping = async (id) => { try { const res = await axios.post(`/api/config/sector-mappings/${id}/review`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
-                const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
+                const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定将 ${unreviewed.length} 个映射全部标记为已审查？`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true, owner_confirm: true }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 // ===== 数据导入导出 =====
                 const exportLoading = ref(false);
                 const exportConfigLoading = ref(false);
@@ -2696,6 +2816,7 @@ const fetchWeChatBatch = async () => {
                     loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping,
                     mappingVerifying, mappingVerifyResult, verifyMappingFund,
                     verifyAllVerifying, verifyAllResult, verifyAllFunds,
+                    aiMatchBusy, aiResult, aiBatch, aiMatchMapping, applyAiMatch, aiBatchMatch,
                     deleteMapping, batchReviewAll, exportLoading, exportConfigLoading,
                     exportResult, importFile, importLoading, importResult, importFileInput, importReplace,
                     exportAllData, exportConfig, onImportFileChange, importData,

@@ -175,3 +175,163 @@ def test_update_sector_mapping_succeeds(monkeypatch, tmp_path):
         assert body["data"]["fund_code"] == "510050"
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+# ===== AI 匹配接口（板块→基金 agent） =====
+
+def _fake_decision(sector, code='159995', name='芯片ETF', status='matched', conf=0.92):
+    from src.services.sector_fund_agent import FundCandidate, SectorDecision
+    cand = FundCandidate(code=code, name=name, source='llm', official_name=name,
+                         t3_suitable=True, t3_proxy=False, t3_score=95,
+                         confidence=conf, verify={'is_strict_ok': True}, kind='etf')
+    return SectorDecision(sector=sector, chosen=cand, status=status, confidence=conf,
+                          rounds=1, evidence=[{'stage': 'T1', 'candidates': [code]}])
+
+
+def test_ai_match_preview_does_not_write(monkeypatch, tmp_path):
+    """apply=false 只返回证据，绝不写库——老板要能先看再决定。"""
+    from src.models.database import SectorFundMapping
+    from src.services import sector_fund_agent as agent_mod
+
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    monkeypatch.setattr(agent_mod, 'resolve_sector_fund',
+                        lambda sector, **kw: _fake_decision(sector))
+    captured = {}
+    monkeypatch.setattr(agent_mod, 'apply_decision',
+                        lambda db, decision, **kw: captured.setdefault('called', True))
+    try:
+        res = client.post('/api/config/sector-mappings/ai-match',
+                          json={'sector_name': 'AI测试板块', 'apply': False},
+                          headers=AUTH_HEADERS)
+        body = res.json()
+        assert res.status_code == 200
+        assert body['data']['decision']['chosen']['code'] == '159995'
+        assert body['data']['apply']['applied'] is False
+        assert 'called' not in captured
+        db = session_factory()
+        try:
+            assert db.query(SectorFundMapping).count() == 0
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ai_match_apply_writes_evidence(monkeypatch, tmp_path):
+    """apply=true 落库带 match_source/confidence/verified_at，供审查门禁复核。"""
+    from src.models.database import FundInfo, SectorFundMapping
+    from src.services import sector_fund_agent as agent_mod
+
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    monkeypatch.setattr(agent_mod, 'resolve_sector_fund',
+                        lambda sector, **kw: _fake_decision(sector))
+    try:
+        seed = session_factory()
+        seed.add(FundInfo(fund_code='159995', fund_name='芯片ETF'))
+        seed.commit()
+        seed.close()
+
+        res = client.post('/api/config/sector-mappings/ai-match',
+                          json={'sector_name': 'AI写入板块', 'apply': True},
+                          headers=AUTH_HEADERS)
+        assert res.status_code == 200, res.text
+        assert res.json()['data']['apply']['applied'] is True
+        db = session_factory()
+        try:
+            row = db.query(SectorFundMapping).filter_by(sector_name='AI写入板块').first()
+            assert row is not None and row.match_source == 'agent'
+            assert row.confidence and row.confidence > 0.8
+            assert row.verified_at is not None
+            assert row.reviewed is True   # 证据齐才允许自动已审查
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_batch_review_refuses_rows_without_evidence(monkeypatch, tmp_path):
+    """一键"全部标记已审查"不得把没证据的行变成已审查（门禁唯一护栏）。"""
+    from src.models.database import FundInfo, SectorFundMapping
+    from src.services.sector_fund_service import SectorFundService
+
+    session_factory = _database(tmp_path)
+    db = session_factory()
+    db.add(FundInfo(fund_code='512480', fund_name='半导体ETF'))
+    db.add(SectorFundMapping(sector_name='无证据板块', fund_code='512480',
+                             fund_name='半导体ETF', reviewed=False, is_active=True))
+    db.commit()
+    mapping_id = db.query(SectorFundMapping).first().id
+    db.close()
+
+    db_for_service = session_factory()
+    service = SectorFundService(db_for_service)
+    assert service.batch_mark_reviewed([mapping_id], reviewed=True) == 0
+    check = session_factory()
+    try:
+        assert check.query(SectorFundMapping).get(mapping_id).reviewed is False
+    finally:
+        check.close()
+    assert service.batch_mark_reviewed([mapping_id], reviewed=True,
+                                       owner_confirm=True) == 1
+    check = session_factory()
+    try:
+        row = check.query(SectorFundMapping).get(mapping_id)
+        assert row.reviewed is True and row.owner_locked is True
+        assert row.reviewed_by == 'owner'
+    finally:
+        check.close()
+
+
+def test_fund_search_endpoint(monkeypatch, tmp_path):
+    from src.fund.fund_api import fund_api as api_instance
+
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    monkeypatch.setattr(api_instance, 'search_fund',
+                        lambda kw: [{'fund_code': '159995', 'fund_name': '芯片ETF',
+                                     'fund_type': ''}])
+    try:
+        res = client.get('/api/config/fund-search', params={'keyword': '芯片'},
+                         headers=AUTH_HEADERS)
+        assert res.status_code == 200
+        assert res.json()['data'][0]['fund_code'] == '159995'
+        assert client.get('/api/config/fund-search', params={'keyword': '  '},
+                          headers=AUTH_HEADERS).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ai_endpoints_require_password(tmp_path):
+    session_factory = _database(tmp_path)
+    app, client = _client(__import__('pytest').MonkeyPatch(), session_factory) \
+        if False else (None, None)
+    from src.api.main import app as real_app
+    from src.api.deps import get_db as _get_db
+    from fastapi.testclient import TestClient as _TC
+
+    def override():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    real_app.dependency_overrides[_get_db] = override
+    try:
+        monkeyenv = {'ACCESS_PASSWORD': 'secteur-nopass'}
+        import os
+        old = os.environ.get('ACCESS_PASSWORD')
+        os.environ['ACCESS_PASSWORD'] = 'secteur-nopass'
+        client = _TC(real_app)
+        try:
+            assert client.post('/api/config/sector-mappings/ai-match',
+                               json={'sector_name': 'x'}).status_code == 401
+            assert client.get('/api/config/sector-mappings/ai-batch/status').status_code == 401
+        finally:
+            os.environ.pop('ACCESS_PASSWORD', None)
+            if old is not None:
+                os.environ['ACCESS_PASSWORD'] = old
+    finally:
+        real_app.dependency_overrides.clear()

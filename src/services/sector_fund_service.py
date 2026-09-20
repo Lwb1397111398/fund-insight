@@ -245,16 +245,39 @@ class SectorFundService:
             if self._should_close(db):
                 db.close()
 
-    def batch_mark_reviewed(self, mapping_ids: List[int], reviewed: bool = True) -> int:
-        """批量标记映射为已审查/未审查"""
+    def batch_mark_reviewed(self, mapping_ids: List[int], reviewed: bool = True,
+                           owner_confirm: bool = False) -> int:
+        """批量标记已审查。
+
+        没有证据的行（`match_source`/`verified_at` 均为空）默认拒绝：否则"一键全部标记
+        已审查"就能把审查门禁清零，而门禁是这轮迭代唯一的护栏。老板在弹窗里明确确认
+        （`owner_confirm=True`）时允许，但会记成 `reviewed_by='owner'` + 锁定，
+        与 agent 的结论可区分、可追溯。
+        """
+        from datetime import datetime as _dt
         db = self._get_db()
         try:
-            count = db.query(SectorFundMapping).filter(
-                SectorFundMapping.id.in_(mapping_ids)
-            ).update({'reviewed': reviewed}, synchronize_session='fetch')
+            rows = db.query(SectorFundMapping).filter(
+                SectorFundMapping.id.in_(mapping_ids)).all()
+            flipped, skipped = 0, []
+            for row in rows:
+                has_evidence = bool(row.match_source and row.verified_at)
+                if reviewed and not has_evidence and not owner_confirm:
+                    skipped.append(row.sector_name)
+                    continue
+                row.reviewed = reviewed
+                if reviewed:
+                    row.reviewed_by = 'owner'
+                    row.owner_locked = True
+                    row.match_source = row.match_source or 'manual'
+                    row.updated_at = _dt.now()
+                flipped += 1
             db.commit()
+            if skipped:
+                logger.info('[批量审查] %d 条因无证据被跳过：%s', len(skipped), skipped[:10])
             self.refresh_cache()
-            return count
+            self._last_batch_review_skipped = skipped
+            return flipped
         finally:
             if self._should_close(db):
                 db.close()
@@ -280,6 +303,11 @@ class SectorFundService:
             if fund_name is not None:
                 mapping.fund_name = fund_name
             mapping.reviewed = True if mark_reviewed is None else mark_reviewed
+            if mapping.reviewed:
+                # 手工编辑/确认 = 老板的决定：记来源并锁定，agent 之后不得覆盖
+                mapping.reviewed_by = 'owner'
+                mapping.owner_locked = True
+                mapping.match_source = mapping.match_source or 'manual'
             # 编辑即激活：若该行曾被级联清理置为 inactive，保存后必须恢复可见，
             # 否则更新会"成功"但列表按 is_active 过滤后凭空丢失该板块
             mapping.is_active = True

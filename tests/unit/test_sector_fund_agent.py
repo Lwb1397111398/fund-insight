@@ -330,3 +330,21 @@ def test_confidence_formula_prefers_etf_and_strict_fetch():
     weak = FundCandidate(code='512690', kind='etf', source='llm', t3_score=90,
                          sector_overlap=0.3, verify={'is_strict_ok': False})
     assert compute_confidence(weak) < compute_confidence(etf)
+
+
+def test_ai_batch_manager_start_does_not_deadlock(monkeypatch):
+    """start() 持锁期间又调用 is_running()，用非重入锁会自锁死（实测会挂住请求）。"""
+    import time
+    from src.services import sector_fund_agent as agent_mod
+    from src.services.sector_ai_match_task import SectorAiMatchManager
+
+    monkeypatch.setattr(agent_mod, 'resolve_sector_fund',
+                        lambda sector, **kw: SectorDecision(sector=sector, status='no_fund'))
+    manager = SectorAiMatchManager()
+    started = time.monotonic()
+    first = manager.start(['T-测试批量A'], apply=False)
+    assert first['success'] is True
+    assert time.monotonic() - started < 2.0, 'start() 阻塞，疑似锁重入死锁'
+    second = manager.start(['T-测试批量B'], apply=False)
+    assert time.monotonic() - started < 4.0, '第二次调用被卡住'
+    assert second['success'] is False or second['data']['status'] in ('running', 'completed')

@@ -955,6 +955,7 @@ class BatchReviewRequest(BaseModel):
     """批量审查请求"""
     ids: list[int]
     reviewed: bool = True
+    owner_confirm: bool = False
 
 
 @router.get("/verify-fund")
@@ -995,6 +996,100 @@ def verify_all_funds(db: Session = Depends(get_db)):
 
     summary = fund_api.verify_funds_batch(items, delay=0.2)
     return {"success": True, "data": summary}
+
+
+# ===== 板块→基金 AI 匹配（agent 闭环） =====
+
+class AiMatchRequest(BaseModel):
+    """单板块 AI 匹配请求；按 sector_name 寻址，内置映射（id=None）同样可用。"""
+    sector_name: str
+    mapping_id: Optional[int] = None
+    apply: bool = False
+
+
+class AiBatchRequest(BaseModel):
+    sectors: Optional[list[str]] = None
+    only_pending: bool = False
+    only_gap: bool = False
+    apply: bool = True
+    limit: Optional[int] = None
+    run_id: Optional[str] = None
+
+
+def _sector_work_order(db: Session, only_pending: bool, only_gap: bool) -> list:
+    """跑批工单：DB 映射行 + 内置字典板块 + 预测里出现过但没有映射行的板块。
+
+    老板抱怨的错配主要来自"从没被审查过的内置表"，只跑 DB 那 118 条等于漏掉问题主体。
+    """
+    from src.models.database import Prediction, SectorFundMapping
+    from src.constants.sector_fund_map import SECTOR_FUND_MAP
+
+    rows = db.query(SectorFundMapping).filter(
+        SectorFundMapping.is_active == True      # noqa: E712
+    ).all()
+    db_sectors = {r.sector_name for r in rows}
+    sectors = []
+    if only_pending:
+        sectors.extend(sorted({r.sector_name for r in rows if not r.reviewed}))
+    if only_gap:
+        builtin_gap = sorted(set(SECTOR_FUND_MAP) - db_sectors)
+        predicted = {row[0] for row in db.query(Prediction.sector).filter(
+            Prediction.sector.isnot(None),
+            Prediction.is_deleted == False,       # noqa: E712
+        ).distinct().all() if row[0]}
+        sectors.extend(sorted((set(builtin_gap) | predicted) - db_sectors))
+    if not sectors:
+        sectors = sorted(db_sectors | set(SECTOR_FUND_MAP))
+    seen, ordered = set(), []
+    for s in sectors:
+        if s and s not in seen:
+            seen.add(s)
+            ordered.append(s)
+    return ordered
+
+
+@router.post("/sector-mappings/ai-match")
+def sector_ai_match(payload: AiMatchRequest, db: Session = Depends(get_db)):
+    """跑一次 agent 闭环，返回候选/验证/判定全过程证据；apply=true 才写库。"""
+    from src.services.sector_fund_agent import resolve_sector_fund, apply_decision
+
+    if not (payload.sector_name or '').strip():
+        raise HTTPException(status_code=400, detail='sector_name 不能为空')
+    decision = resolve_sector_fund(payload.sector_name.strip(), budget_ms=45000, db=db)
+    result = apply_decision(db, decision, mapping_id=payload.mapping_id) if payload.apply \
+        else {'applied': False, 'reason': '未开启 apply'}
+    return {'success': True, 'data': {'decision': decision.to_dict(), 'apply': result}}
+
+
+@router.post("/sector-mappings/ai-batch")
+def sector_ai_batch(payload: AiBatchRequest, db: Session = Depends(get_db)):
+    """异步批量匹配（前端轮询 /ai-batch/status）。"""
+    from src.services.sector_ai_match_task import get_sector_ai_match_manager
+
+    sectors = payload.sectors or _sector_work_order(
+        db, payload.only_pending, payload.only_gap)
+    if payload.limit:
+        sectors = sectors[:max(1, payload.limit)]
+    started = get_sector_ai_match_manager().start(
+        sectors, apply=payload.apply, run_id=payload.run_id)
+    if not started.get('success'):
+        raise HTTPException(status_code=409, detail=started.get('message', '启动失败'))
+    return {'success': True, 'data': started['data']}
+
+
+@router.get("/sector-mappings/ai-batch/status")
+def sector_ai_batch_status():
+    from src.services.sector_ai_match_task import get_sector_ai_match_manager
+    return {'success': True, 'data': get_sector_ai_match_manager().status()}
+
+
+@router.get("/fund-search")
+def fund_search(keyword: str):
+    """按关键词搜天天基金（结果天然只含基金），供前端"人工换一只"和 agent 复核。"""
+    keyword = (keyword or '').strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail='keyword 不能为空')
+    return {'success': True, 'data': fund_api.search_fund(keyword)}
 
 
 @router.get("/sector-mappings")
@@ -1197,7 +1292,8 @@ def batch_review_sector_mappings(req: BatchReviewRequest, db: Session = Depends(
     from src.services.sector_fund_service import get_sector_fund_service
 
     service = get_sector_fund_service(db)
-    count = service.batch_mark_reviewed(req.ids, reviewed=req.reviewed)
+    count = service.batch_mark_reviewed(req.ids, reviewed=req.reviewed,
+                                        owner_confirm=req.owner_confirm)
 
     action = "已审查" if req.reviewed else "未审查"
     return {
