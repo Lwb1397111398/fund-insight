@@ -539,11 +539,12 @@ def test_rejected_codes_never_falls_back_to_the_process_cache(test_db, monkeypat
 
     real = audit.denied_code_map
     monkeypatch.setattr(audit, 'denied_code_map', strict)
-    test_db.add(_mapping('T-测试串库', '000725', '京东方Ａ',
+    # 行按**归一后的键**存，查询用归一前的名字 → 必须走归一化那一支
+    test_db.add(_mapping('半导体', '000725', '京东方Ａ',
                          reviewed=False, is_fetchable=False))
     test_db.add(FundInfo(fund_code='000725', fund_name='京东方Ａ'))
     test_db.commit()
-    assert audit.rejected_codes('T-测试串库', db=test_db) == {'000725'}
+    assert audit.rejected_codes('半导体板块', db=test_db) == {'000725'}
 
 
 def test_update_mapping_does_not_write_itself_into_the_cache(test_db):
@@ -560,3 +561,63 @@ def test_update_mapping_does_not_write_itself_into_the_cache(test_db):
 
     service.update_mapping(row.id, fund_name='医疗ETF华宝', mark_reviewed=False)
     assert 'T-测试缓存毒化' not in SectorFundService._cache
+
+
+def test_repair_resets_flags_that_have_no_verdict(test_db):
+    """旧语义写下的 `is_fetchable=False`（没有身份结论）必须能复位。
+
+    那一列现在的语义是"可服务"；遗留 False 会让行在所有 SQL 读者里黑洞，
+    而页面上没有任何理由可以解释——老板只会以为功能坏了。
+    """
+    from scripts.sweep_sector_mappings import repair_legacy_fetchable_flag
+    legacy = _mapping('T-测试遗留标记', '512170', '华宝中证医疗ETF',
+                      reviewed=True, is_fetchable=False,
+                      evidence=json.dumps([{'stage': 'T3'}]))
+    audited = _mapping('T-测试已体检标记', '000725', '京东方Ａ',
+                       reviewed=False, is_fetchable=False,
+                       evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}))
+    test_db.add_all([legacy, audited])
+    test_db.add(FundInfo(fund_code='512170', fund_name='医疗ETF华宝'))
+    test_db.add(FundInfo(fund_code='000725', fund_name='京东方Ａ'))
+    test_db.commit()
+    assert repair_legacy_fetchable_flag(test_db) == 1
+    test_db.commit()
+    test_db.refresh(legacy)
+    test_db.refresh(audited)
+    assert legacy.is_fetchable is None
+    assert audited.is_fetchable is False
+
+
+def test_retag_writer_refuses_unservable_mapping(test_db):
+    """改标源也要认镜像：agent 换标的会把列清成 NULL，只查列等于没防住。"""
+    from src.services.prediction_maintenance_service import PredictionMaintenanceService
+    row = _mapping('T-测试改标镜像', '000725', '京东方Ａ', reviewed=True,
+                   is_fetchable=None,
+                   evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}))
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='000725', fund_name='京东方Ａ'))
+    test_db.commit()
+    eligible = PredictionMaintenanceService._mapping_eligible(row, 0.0)
+    assert eligible is False
+    row.is_fetchable = False
+    assert PredictionMaintenanceService._mapping_eligible(row, 0.0) is False
+
+
+def test_sweep_never_blacklists_an_owner_locked_row(test_db):
+    """老板锁定的行不能被打上"不可服务"：审查门禁连 owner_confirm 都拒绝，
+    一旦盖下去就是永久关在门外，而那是老板自己选的有意代理。"""
+    from scripts.sweep_sector_mappings import apply_results
+    row = _mapping('债券', '512000', '券商ETF华宝', reviewed=True,
+                   owner_locked=True, reviewed_by='owner')
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='512000', fund_name='券商ETF华宝'))
+    test_db.commit()
+    result = _arbitrate('512000', '券商ETF华宝', '债券', official='券商ETF华宝',
+                        hits=[])
+    result['verdict'] = audit.VERDICT_CODE_IS_OTHER_FUND      # 假设判据想否掉它
+    result.update(id=row.id, sector=row.sector_name, reviewed=True,
+                  owner_locked=True, owner_row=True)
+    apply_results(test_db, [result], [], evidence_only=False)
+    test_db.refresh(row)
+    assert row.is_fetchable is not False
+    assert row.reviewed is True

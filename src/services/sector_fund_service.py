@@ -426,7 +426,7 @@ class SectorFundService:
 
     def refresh_cache(self):
         self._cache.clear()
-        self._cache_loaded = False
+        SectorFundService._cache_loaded = False
         self._load_cache()
 
 

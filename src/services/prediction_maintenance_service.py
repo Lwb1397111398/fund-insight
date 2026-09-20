@@ -261,6 +261,11 @@ class PredictionMaintenanceService:
         `confidence IS NULL` 且 `reviewed=True` 的行是本轮之前人工审查过的历史映射，
         它们本来就是人的结论，不能因为"没有置信度"被排除（排除会让 sync 静默变成空操作）。
         """
+        from src.services.sector_identity_audit import row_unservable
+        if row_unservable(mapping):
+            # 镜像不变量的读侧兜底：agent 换标的时会把 is_fetchable 清成 NULL，
+            # 只查列就会让"从没做过身份体检的新标的"直接驱动几百条预测改标
+            return False
         if getattr(mapping, 'owner_locked', None) or \
                 getattr(mapping, 'reviewed_by', None) == 'owner':
             return True
