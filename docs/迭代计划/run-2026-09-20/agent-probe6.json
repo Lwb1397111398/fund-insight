@@ -1,0 +1,1021 @@
+[
+  {
+    "sector": "半导体",
+    "chosen": {
+      "code": "159995",
+      "name": "芯片ETF",
+      "source": "llm",
+      "official_name": "芯片ETF华夏",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "跟踪国证半导体芯片指数，与半导体板块关联度高，可作为该板块的跟踪标的",
+      "claim_sim": 0.5,
+      "sector_overlap": 0.0,
+      "t3_score": 88.0,
+      "t3_suitable": true,
+      "t3_proxy": false,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "芯片ETF华夏",
+        "code": "159995",
+        "input_name": "芯片ETF",
+        "api_name": "芯片ETF华夏",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：芯片ETF华夏"
+      },
+      "rejected": "",
+      "confidence": 0.575
+    },
+    "alternatives": [],
+    "status": "matched",
+    "confidence": 0.575,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "512480"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "512480",
+          "159995",
+          "512760",
+          "162411"
+        ],
+        "keywords": [
+          "半导体",
+          "芯片",
+          "半导体芯片"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "512480",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国泰 CES 半导体芯片行业 ETF 联接 A」实为「半导体ETF国联安」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159995",
+        "verdict": "pass",
+        "official_name": "芯片ETF华夏",
+        "is_strict_ok": true,
+        "claim_sim": 0.5
+      },
+      {
+        "stage": "T2",
+        "code": "512760",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华夏国证半导体芯片ETF」实为「芯片ETF国泰」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "162411",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华宝中证半导体LOF」实为「华宝标普油气上游股票人民币A」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T3",
+        "code": "159995",
+        "suitable": true,
+        "proxy": false,
+        "score": 88.0
+      }
+    ],
+    "aliases": [
+      "半导体",
+      "芯片",
+      "半导体芯片"
+    ],
+    "keywords": [
+      "半导体",
+      "芯片",
+      "半导体芯片"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 12922,
+    "degraded": true
+  },
+  {
+    "sector": "债券",
+    "chosen": {
+      "code": "511010",
+      "name": "国债ETF",
+      "source": "llm",
+      "official_name": "国债ETF国泰",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "跟踪上证5年期国债指数，属于债券板块对口基金",
+      "claim_sim": 0.5,
+      "sector_overlap": 0.0,
+      "t3_score": 100.0,
+      "t3_suitable": true,
+      "t3_proxy": false,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "国债ETF国泰",
+        "code": "511010",
+        "input_name": "国债ETF",
+        "api_name": "国债ETF国泰",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：国债ETF国泰"
+      },
+      "rejected": "",
+      "confidence": 0.635
+    },
+    "alternatives": [],
+    "status": "matched",
+    "confidence": 0.635,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "512000"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "512000",
+          "511010",
+          "511020",
+          "511260",
+          "159001",
+          "511090"
+        ],
+        "keywords": [
+          "国债",
+          "债券ETF",
+          "利率债"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "512000",
+        "verdict": "pass",
+        "official_name": "券商ETF华宝",
+        "is_strict_ok": true,
+        "claim_sim": 0.5
+      },
+      {
+        "stage": "T2",
+        "code": "511010",
+        "verdict": "pass",
+        "official_name": "国债ETF国泰",
+        "is_strict_ok": true,
+        "claim_sim": 0.5
+      },
+      {
+        "stage": "T2",
+        "code": "511020",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「10年期国债ETF」实为「国债ETF平安」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511260",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「30年期国债ETF」实为「十年国债ETF国泰」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159001",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「中证5-10年国开债ETF」实为「货币ETF易方达」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511090",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「城投债ETF」实为「30年国债ETF鹏扬」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T3",
+        "code": "512000",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "511010",
+        "suitable": true,
+        "proxy": false,
+        "score": 100.0
+      }
+    ],
+    "aliases": [
+      "债券",
+      "国债",
+      "利率债"
+    ],
+    "keywords": [
+      "国债",
+      "债券ETF",
+      "利率债"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 6421,
+    "degraded": false
+  },
+  {
+    "sector": "SpaceX",
+    "chosen": null,
+    "alternatives": [
+      {
+        "code": "515240",
+        "name": "中证科创创业50ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "unknown",
+        "reason": "跟踪中证科创创业50指数，涵盖航天科技相关科创企业",
+        "claim_sim": 1.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": false,
+          "is_strict_ok": false,
+          "kind": "unknown",
+          "fund_type": null,
+          "official_name": null,
+          "code": "515240",
+          "input_name": "中证科创创业50ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": null,
+          "history_count": 0,
+          "message": "验证失败：接口无有效数据，该基金可能已停牌/清盘或代码有误"
+        },
+        "rejected": "抓不到数据（可能已清盘/代码不存在）",
+        "confidence": 0.0
+      },
+      {
+        "code": "159813",
+        "name": "广发中证军工ETF",
+        "source": "llm",
+        "official_name": "半导体ETF鹏华",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证军工指数，包含航天相关军工企业标的",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "半导体ETF鹏华",
+          "code": "159813",
+          "input_name": "广发中证军工ETF",
+          "api_name": "半导体ETF鹏华",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：半导体ETF鹏华"
+        },
+        "rejected": "代码存在但是另一只基金（声称「广发中证军工ETF」实为「半导体ETF鹏华」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "516010",
+        "name": "中证军工龙头ETF",
+        "source": "llm",
+        "official_name": "游戏ETF国泰",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证军工龙头指数，涉及航天领域军工龙头企业",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "游戏ETF国泰",
+          "code": "516010",
+          "input_name": "中证军工龙头ETF",
+          "api_name": "游戏ETF国泰",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：游戏ETF国泰"
+        },
+        "rejected": "代码存在但是另一只基金（声称「中证军工龙头ETF」实为「游戏ETF国泰」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "161024",
+        "name": "富国军工主题LOF",
+        "source": "llm",
+        "official_name": "富国中证军工指数(LOF)A",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证军工指数，布局航天相关军工资产",
+        "claim_sim": 0.3333,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "富国中证军工指数(LOF)A",
+          "code": "161024",
+          "input_name": "富国军工主题LOF",
+          "api_name": "富国中证军工指数(LOF)A",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：富国中证军工指数(LOF)A"
+        },
+        "rejected": "代码存在但是另一只基金（声称「富国军工主题LOF」实为「富国中证军工指数(LOF)A」）",
+        "confidence": 0.0
+      }
+    ],
+    "status": "needs_review",
+    "confidence": 0.0,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": []
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "515240",
+          "159813",
+          "516010",
+          "161024"
+        ],
+        "keywords": [
+          "航天科技",
+          "军工",
+          "科创50"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "515240",
+        "verdict": "reject",
+        "reason": "抓不到数据（可能已清盘/代码不存在）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159813",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「广发中证军工ETF」实为「半导体ETF鹏华」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "516010",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「中证军工龙头ETF」实为「游戏ETF国泰」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "161024",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「富国军工主题LOF」实为「富国中证军工指数(LOF)A」）",
+        "fund_type": ""
+      }
+    ],
+    "aliases": [
+      "SpaceX",
+      "太空探索技术公司",
+      "航天板块"
+    ],
+    "keywords": [
+      "航天科技",
+      "军工",
+      "科创50"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 15563,
+    "degraded": true
+  },
+  {
+    "sector": "存储",
+    "chosen": null,
+    "alternatives": [
+      {
+        "code": "159813",
+        "name": "国泰中证全指半导体ETF",
+        "source": "llm",
+        "official_name": "半导体ETF鹏华",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证全指半导体指数，与存储板块关联度低，仅为关联度较低的替代标的",
+        "claim_sim": 0.4,
+        "sector_overlap": 0.0,
+        "t3_score": 20.0,
+        "t3_suitable": false,
+        "t3_proxy": true,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "半导体ETF鹏华",
+          "code": "159813",
+          "input_name": "国泰中证全指半导体ETF",
+          "api_name": "半导体ETF鹏华",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：半导体ETF鹏华"
+        },
+        "rejected": "语义判定不通过（score=20）",
+        "confidence": 0.0
+      },
+      {
+        "code": "512480",
+        "name": "国联安中证全指半导体产品与设备ETF",
+        "source": "llm",
+        "official_name": "半导体ETF国联安",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证全指半导体产品与设备指数",
+        "claim_sim": 0.2353,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "半导体ETF国联安",
+          "code": "512480",
+          "input_name": "国联安中证全指半导体产品与设备ETF",
+          "api_name": "半导体ETF国联安",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：半导体ETF国联安"
+        },
+        "rejected": "代码存在但是另一只基金（声称「国联安中证全指半导体产品与设备ETF」实为「半导体ETF国联安」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "516500",
+        "name": "华夏中证全指半导体ETF",
+        "source": "llm",
+        "official_name": "生物科技ETF华夏",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证全指半导体指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "生物科技ETF华夏",
+          "code": "516500",
+          "input_name": "华夏中证全指半导体ETF",
+          "api_name": "生物科技ETF华夏",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：生物科技ETF华夏"
+        },
+        "rejected": "代码存在但是另一只基金（声称「华夏中证全指半导体ETF」实为「生物科技ETF华夏」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "159995",
+        "name": "鹏华国证半导体芯片ETF",
+        "source": "llm",
+        "official_name": "芯片ETF华夏",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪国证半导体芯片指数",
+        "claim_sim": 0.2222,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "芯片ETF华夏",
+          "code": "159995",
+          "input_name": "鹏华国证半导体芯片ETF",
+          "api_name": "芯片ETF华夏",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：芯片ETF华夏"
+        },
+        "rejected": "代码存在但是另一只基金（声称「鹏华国证半导体芯片ETF」实为「芯片ETF华夏」）",
+        "confidence": 0.0
+      }
+    ],
+    "status": "needs_review",
+    "confidence": 0.0,
+    "rounds": 2,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": []
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "159813",
+          "512480",
+          "516500",
+          "159995"
+        ],
+        "keywords": [
+          "存储芯片",
+          "半导体存储",
+          "存储ETF"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "159813",
+        "verdict": "pass",
+        "official_name": "半导体ETF鹏华",
+        "is_strict_ok": true,
+        "claim_sim": 0.4
+      },
+      {
+        "stage": "T2",
+        "code": "512480",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国联安中证全指半导体产品与设备ETF」实为「半导体ETF国联安」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "516500",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华夏中证全指半导体ETF」实为「生物科技ETF华夏」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159995",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「鹏华国证半导体芯片ETF」实为「芯片ETF华夏」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T3",
+        "code": "159813",
+        "suitable": false,
+        "proxy": true,
+        "score": 20.0
+      },
+      {
+        "stage": "T4",
+        "keyword": "存储芯片",
+        "hits": [
+          "980138"
+        ]
+      },
+      {
+        "stage": "T4",
+        "keyword": "半导体存储",
+        "hits": [
+          "980138",
+          "159325",
+          "159582",
+          "021532",
+          "012650",
+          "027328",
+          "159516",
+          "159558"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "980138",
+        "verdict": "reject",
+        "reason": "抓不到数据（可能已清盘/代码不存在）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159325",
+        "verdict": "pass",
+        "official_name": "半导体ETF南方",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "159582",
+        "verdict": "pass",
+        "official_name": "半导体ETF博时",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "021532",
+        "verdict": "pass",
+        "official_name": "天弘半导体设备指数A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "012650",
+        "verdict": "pass",
+        "official_name": "博时半导体主题混合A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "027328",
+        "verdict": "pass",
+        "official_name": "浦银半导体产业混合A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "159516",
+        "verdict": "pass",
+        "official_name": "半导体设备ETF国泰",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "159558",
+        "verdict": "pass",
+        "official_name": "半导体设备ETF易方达",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T3",
+        "code": "159325",
+        "suitable": false,
+        "proxy": true,
+        "score": 20.0
+      },
+      {
+        "stage": "T3",
+        "code": "159582",
+        "suitable": false,
+        "proxy": true,
+        "score": 20.0
+      },
+      {
+        "stage": "T3",
+        "code": "021532",
+        "suitable": false,
+        "proxy": true,
+        "score": 25.0
+      },
+      {
+        "stage": "T3",
+        "code": "012650",
+        "suitable": false,
+        "proxy": true,
+        "score": 22.0
+      },
+      {
+        "stage": "T3",
+        "code": "027328",
+        "suitable": false,
+        "proxy": true,
+        "score": 22.0
+      },
+      {
+        "stage": "T3",
+        "code": "159516",
+        "suitable": false,
+        "proxy": true,
+        "score": 25.0
+      },
+      {
+        "stage": "T3",
+        "code": "159558",
+        "suitable": false,
+        "proxy": true,
+        "score": 25.0
+      }
+    ],
+    "aliases": [
+      "存储板块",
+      "存储芯片板块"
+    ],
+    "keywords": [
+      "存储芯片",
+      "半导体存储",
+      "存储ETF"
+    ],
+    "direct_exhausted": true,
+    "elapsed_ms": 20703,
+    "degraded": true
+  },
+  {
+    "sector": "白酒",
+    "chosen": {
+      "code": "161725",
+      "name": "招商中证白酒指数 (LOF)A",
+      "source": "t0_static",
+      "official_name": "招商中证白酒指数(LOF)A",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "基金名称与板块「白酒」字面重合度较高，跟踪中证白酒指数，是白酒板块的对口跟踪标的",
+      "claim_sim": 1.0,
+      "sector_overlap": 0.5,
+      "t3_score": 90.0,
+      "t3_suitable": true,
+      "t3_proxy": false,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "招商中证白酒指数(LOF)A",
+        "code": "161725",
+        "input_name": "招商中证白酒指数 (LOF)A",
+        "api_name": "招商中证白酒指数(LOF)A",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：招商中证白酒指数(LOF)A"
+      },
+      "rejected": "",
+      "confidence": 0.82
+    },
+    "alternatives": [
+      {
+        "code": "160632",
+        "name": "鹏华酒指数(LOF)",
+        "source": "llm",
+        "official_name": "鹏华酒A",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证酒指数，属于白酒板块关联度较高的替代标的，可间接代表白酒板块",
+        "claim_sim": 1.0,
+        "sector_overlap": 0.0,
+        "t3_score": 75.0,
+        "t3_suitable": true,
+        "t3_proxy": true,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "鹏华酒A",
+          "code": "160632",
+          "input_name": "鹏华酒指数(LOF)",
+          "api_name": "鹏华酒A",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：鹏华酒A"
+        },
+        "rejected": "",
+        "confidence": 0.0
+      }
+    ],
+    "status": "matched",
+    "confidence": 0.82,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "161725"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "161725",
+          "512690",
+          "160632",
+          "517000"
+        ],
+        "keywords": [
+          "白酒基金",
+          "中证白酒",
+          "酒指数"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "161725",
+        "verdict": "pass",
+        "official_name": "招商中证白酒指数(LOF)A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "512690",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「酒ETF」实为「酒ETF鹏华」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "160632",
+        "verdict": "pass",
+        "official_name": "鹏华酒A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "517000",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「招商中证白酒指数(LOF)C」实为「沪港深500ETF银华」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T3",
+        "code": "161725",
+        "suitable": true,
+        "proxy": false,
+        "score": 90.0
+      },
+      {
+        "stage": "T3",
+        "code": "160632",
+        "suitable": true,
+        "proxy": true,
+        "score": 75.0
+      }
+    ],
+    "aliases": [
+      "白酒板块",
+      "酒类"
+    ],
+    "keywords": [
+      "白酒基金",
+      "中证白酒",
+      "酒指数"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 3827,
+    "degraded": false
+  },
+  {
+    "sector": "日股",
+    "chosen": {
+      "code": "513880",
+      "name": "大成日经225ETF",
+      "source": "llm",
+      "official_name": "日经225ETF华安",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "该基金为跟踪日经225指数的公募ETF基金，与日股板块的投资方向高度匹配",
+      "claim_sim": 0.8,
+      "sector_overlap": 0.0,
+      "t3_score": 95.0,
+      "t3_suitable": true,
+      "t3_proxy": false,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "日经225ETF华安",
+        "code": "513880",
+        "input_name": "大成日经225ETF",
+        "api_name": "日经225ETF华安",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：日经225ETF华安"
+      },
+      "rejected": "",
+      "confidence": 0.61
+    },
+    "alternatives": [],
+    "status": "matched",
+    "confidence": 0.61,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "513520"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "513520",
+          "513090",
+          "513880",
+          "160223",
+          "005741"
+        ],
+        "keywords": [
+          "日股",
+          "日经225"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "513520",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华夏野村日经225ETF」实为「日经ETF华夏」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "513090",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「易方达日兴日经225ETF」实为「香港证券ETF易方达」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "513880",
+        "verdict": "pass",
+        "official_name": "日经225ETF华安",
+        "is_strict_ok": true,
+        "claim_sim": 0.8
+      },
+      {
+        "stage": "T2",
+        "code": "160223",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国泰日经225LOF」实为「国泰创业板指数(LOF)A」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "005741",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「易方达日经225指数发起式A」实为「南方君信混合A」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T3",
+        "code": "513880",
+        "suitable": true,
+        "proxy": false,
+        "score": 95.0
+      }
+    ],
+    "aliases": [
+      "日本股市",
+      "日经指数"
+    ],
+    "keywords": [
+      "日股",
+      "日经225"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 6125,
+    "degraded": false
+  }
+]

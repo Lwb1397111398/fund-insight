@@ -1106,15 +1106,24 @@ class LLMAnalyzer:
         }
     
     def get_fund_for_sector(self, sector: str) -> Optional[Dict]:
-        """根据板块名称获取对应基金"""
-        sector = sector.strip()
+        """按板块取基金：**只做精确匹配**。
 
+        旧实现是 `key in sector or sector in key` 的子串匹配，任何含同一个字的板块都会
+        命中同一只基金（"光"→光伏、"车"→新能源车）。模糊需求现在由 sector_alias 显式
+        登记，或由 sector_fund_agent 走 LLM + 验证。
+        """
+        sector = (sector or '').strip()
+        if not sector:
+            return None
         sector_fund_map = self._get_sector_fund_map()
-        for key, fund_info in sector_fund_map.items():
-            if key in sector or sector in key:
-                return fund_info
-
-        return None
+        if sector in sector_fund_map:
+            return sector_fund_map[sector]
+        try:
+            from src.constants.sector_fund_map import normalize_sector_name
+            normalized = normalize_sector_name(sector)
+            return sector_fund_map.get(normalized)
+        except Exception:
+            return None
 
     def _fill_fund_from_sector(self, result: Dict):
         """根据 sector 自动匹配基金代码和名称（多层匹配 + 自动学习）
@@ -1158,25 +1167,44 @@ class LLMAnalyzer:
                 logger.info(f"[基金匹配] 未审查DB命中: {standard_sector} → {fund.get('name', '')}")
                 continue
 
-            # 第4层：FundInfo 表（命中后自动保存到待审查队列）
-            fund = self._find_fund_in_fundinfo(standard_sector)
+            # 第4-5层：交给板块 agent（唯一入口）。历史上这两层是"FundInfo 模糊匹配 +
+            # search_fund 取第一个"，正是"识别出来的基金离板块差十万八千里"的源头，
+            # 且命中后还会自动写进 sector_fund_mapping 自我确认。现在必须由 LLM 提案 +
+            # 抓站验证 + 语义复判才认账；帖子分析热路径默认不跑 LLM（由板块匹配页/批量任务跑）。
+            fund = self._resolve_via_agent(standard_sector)
             if fund:
                 pred['fund_code'] = fund.get('code', '')
                 pred['fund_name'] = fund.get('name', '')
-                logger.info(f"[基金匹配] FundInfo命中: {standard_sector} → {fund.get('name', '')}")
+                pred['_fund_match_level'] = fund.get('match_level', 3)
+                logger.info(f"[基金匹配] agent: {standard_sector} → {fund.get('name', '')}"
+                            f"（{fund.get('status', '')}/置信 {fund.get('confidence', 0):.2f}）")
                 continue
 
-            # 第5层：天天基金 API 搜索（命中后自动保存到待审查队列）
-            fund = self._search_fund_via_api(standard_sector)
-            if fund:
-                pred['fund_code'] = fund.get('code', '')
-                pred['fund_name'] = fund.get('name', '')
-                self._save_fund_mapping(standard_sector, fund.get('code', ''), fund.get('name', ''), reviewed=False)
-                logger.info(f"[基金匹配] API搜索命中: {standard_sector} → {fund.get('name', '')}，已自动保存到待审查")
-                continue
-
-            # 第6层：都没找到，留空
+            # 都没找到，留空（不再"随便挑一只"填空）
             logger.warning(f"[基金匹配] 板块 '{standard_sector}' 无对应基金，留空")
+
+    def _resolve_via_agent(self, sector: str) -> Optional[Dict]:
+        """把板块交给 sector_fund_agent 决策，返回 {code,name,status,confidence,match_level}。
+
+        match_level 枚举写进 `analysis_logs.fund_match_level`（INTEGER 列，不能塞字符串）：
+        1=确定性命中 2=agent 判定通过 3=降级（LLM 不可用/超预算）。
+        """
+        import os
+        from src.services.sector_fund_agent import resolve_sector_fund
+
+        allow_llm = os.getenv('SECTOR_AGENT_LLM_IN_POST', 'false').lower() == 'true'
+        try:
+            decision = resolve_sector_fund(sector, allow_llm=allow_llm, budget_ms=4000)
+        except Exception as exc:
+            logger.warning(f"[基金匹配] agent 异常，跳过（不回填错基金）: {exc}")
+            return None
+        cand = decision.chosen
+        if not cand:
+            return None
+        match_level = 2 if decision.status in ('matched', 'proxy') else 3
+        return {'code': cand.code, 'name': cand.display_name,
+                'status': decision.status, 'confidence': decision.confidence,
+                'match_level': match_level}
 
     def _find_fund_in_db_mapping(self, sector: str, reviewed_only: bool = False) -> Optional[Dict]:
         """查数据库 SectorFundMapping（reviewed_only=True 只返回已审查的映射）"""
@@ -1191,43 +1219,27 @@ class LLMAnalyzer:
             return None
 
     def _find_fund_in_fundinfo(self, sector: str) -> Optional[Dict]:
-        """第4层：查 FundInfo 表，按 sector_type 模糊匹配（命中后自动保存到待审查队列）"""
+        """第4层（保留兼容签名）：只按 `FundInfo.sector_type` **精确**取候选。
+
+        以前这里还有 `.contains()` 与"反向包含"两级模糊匹配，并且命中后立刻
+        `_save_fund_mapping(reviewed=False)` 把结果写进映射表——下一轮又被当成
+        "库里已有映射"读出来，等于自己给自己盖章，这是错配被固化的主路径。
+        现在：只认精确匹配、不再自动写库；要不要采信交给 sector_fund_agent 的验证与语义判定。
+        """
         try:
             from src.models.database import SessionLocal, FundInfo
             db = SessionLocal()
             try:
-                # 精确匹配
                 fund = db.query(FundInfo).filter(
                     FundInfo.sector_type == sector
                 ).first()
                 if fund:
-                    result = {'code': fund.fund_code, 'name': fund.fund_name}
-                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False, db=db)
-                    return result
-
-                # 模糊匹配
-                fund = db.query(FundInfo).filter(
-                    FundInfo.sector_type.contains(sector)
-                ).first()
-                if fund:
-                    result = {'code': fund.fund_code, 'name': fund.fund_name}
-                    self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False, db=db)
-                    return result
-
-                # 反向匹配（sector 包含 sector_type）
-                funds = db.query(FundInfo).filter(
-                    FundInfo.sector_type != None
-                ).all()
-                for f in funds:
-                    if f.sector_type and (f.sector_type in sector or sector in f.sector_type):
-                        result = {'code': f.fund_code, 'name': f.fund_name}
-                        self._save_fund_mapping(sector, result['code'], result['name'], reviewed=False, db=db)
-                        return result
+                    return {'code': fund.fund_code, 'name': fund.fund_name}
+                return None
             finally:
                 db.close()
         except Exception:
-            pass
-        return None
+            return None
 
     def _search_fund_via_api(self, sector: str) -> Optional[Dict]:
         """第4层：调天天基金 API 搜索"""

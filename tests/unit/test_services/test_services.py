@@ -178,7 +178,8 @@ class TestPredictionService:
 
         assert stats["verified"] == 2
         assert stats["correct"] == 1
-        assert stats["accuracy"] == 0.5
+        # accuracy 口径是 0–100 百分数（见 prediction_service.get_stats 注释），前端按 % 渲染
+        assert stats["accuracy"] == 50.0
 
 
 class TestFundService:

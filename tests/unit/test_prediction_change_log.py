@@ -94,7 +94,8 @@ def test_manual_verification_creates_change_log(test_db):
     assert log.source == "manual"
     assert "status" in log.changed_fields
     assert log.before_state["status"] == "pending"
-    assert log.after_state["status"] == "verified"
+    # 人工确认与自动验证同口径：结论写 success/failed，不再写 status='verified'
+    assert log.after_state["status"] == "success"
 
 
 def test_automatic_verification_creates_change_log(test_db, monkeypatch):

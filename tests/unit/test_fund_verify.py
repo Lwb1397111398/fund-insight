@@ -10,7 +10,11 @@ from src.fund.fund_api import FundAPI
 
 
 def _make_api() -> FundAPI:
-    return FundAPI()
+    api = FundAPI()
+    # 单测必须零网络：官方名回填会调搜索接口，这里默认给空结果，
+    # 需要验证回填行为的用例再用 patch.object 覆盖。
+    api.search_fund = lambda keyword: []
+    return api
 
 
 class TestVerifyFundFetchable:
@@ -38,11 +42,73 @@ class TestVerifyFundFetchable:
             'fund_name': None,
             'nav': 1.8104,
             'nav_date': '2026-07-31',
-        }), patch.object(api, 'get_fund_history', return_value=[{'date': '2026-07-31', 'nav': 1.8104}]):
+        }), patch.object(api, 'get_fund_history', return_value=[{'date': '2026-07-31', 'nav': 1.8104}]), \
+             patch.object(api, 'search_fund', return_value=[]):
             result = api.verify_fund_fetchable('001594', '错的名称')
         assert result['ok'] is True
         assert result['api_name'] is None
         assert result['history_count'] == 1
+        # 有实时净值即算严格合格；只有历史且不足 5 条才算不合格（见下一个用例）
+        assert result['is_strict_ok'] is True
+        # 不主动探股票域（单测不允许打外站），基金域有数据即 fund
+        assert result['kind'] == 'fund'
+
+    def test_only_few_history_is_not_strict_ok(self):
+        """旧 ok 只要 1 条历史就放行；严格判据要求 nav>0 或 ≥5 条净值。"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value={
+            'fund_code': '001594', 'fund_name': None, 'nav': None, 'nav_date': None,
+        }), patch.object(api, 'get_fund_history',
+                         return_value=[{'date': '2026-07-31', 'nav': 1.81}] * 3):
+            result = api.verify_fund_fetchable('001594')
+        assert result['ok'] is True
+        assert result['is_strict_ok'] is False
+        assert result['history_count'] == 3
+
+    def test_official_name_backfilled_from_search(self):
+        """场内 ETF 常拿不到实时名称，改用搜索接口按代码反查官方名回填。"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value=None), \
+             patch.object(api, 'get_fund_history', return_value=[{'date': 'x', 'nav': 1.0}] * 6), \
+             patch.object(api, 'search_fund', return_value=[
+                 {'fund_code': '588000', 'fund_name': '科创50ETF华夏', 'fund_type': ''}]):
+            result = api.verify_fund_fetchable('588000')
+        assert result['api_name'] == '科创50ETF华夏'
+        assert result['is_strict_ok'] is True
+
+    def test_probe_stock_labels_kind(self):
+        """基金域无数据 + 股票域有数据 → kind='stock'（老板要求"是基金不能是股票"）。"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value=None), \
+             patch.object(api, 'get_fund_history', return_value=[]), \
+             patch.object(api, 'search_fund', return_value=[]), \
+             patch.object(api.session, 'get') as mock_get:
+            mock_get.return_value.json.return_value = {
+                'data': {'f57': '600519', 'f58': '贵州茅台', 'f43': 1}}
+            result = api.verify_fund_fetchable('600519', probe_stock=True)
+        assert result['ok'] is False
+        assert result['kind'] == 'stock'
+        assert mock_get.called
+
+    def test_kind_unknown_without_stock_probe(self):
+        """默认不探股票域：省一次外站请求，也让单测保持零网络。"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value=None), \
+             patch.object(api, 'get_fund_history', return_value=[]), \
+             patch.object(api, 'search_fund', return_value=[]), \
+             patch.object(api.session, 'get') as mock_get:
+            result = api.verify_fund_fetchable('999999')
+        assert result['kind'] == 'unknown'
+        assert not mock_get.called
+
+    def test_history_window_is_30_days_for_stability(self):
+        """7 天窗口遇节假日只有 4-5 条，严格判据会随周末翻转 → 必须按 30 天取数。"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value=None), \
+             patch.object(api, 'get_fund_history', return_value=[]) as mock_hist, \
+             patch.object(api, 'search_fund', return_value=[]):
+            api.verify_fund_fetchable('512480')
+        assert mock_hist.call_args.kwargs.get('days') >= 30
 
     def test_fail_when_no_data(self):
         """信息接口 None 且历史为空 → 抓取不到"""

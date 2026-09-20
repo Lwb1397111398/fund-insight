@@ -67,6 +67,25 @@ class TestFundMappingSessionReuse:
 
         assert result == {"code": "159732", "name": "消费电子ETF"}
         assert session_calls == 1
+        # 行为变更（板块基金迭代）：FundInfo 命中**不再**自动写进 sector_fund_mapping。
+        # 旧逻辑会把模糊匹配结果自我固化为"库里已有映射"，是错配被放大的主路径；
+        # 现在只有 sector_fund_agent 走完抓站验证 + 语义复判后才允许落库。
         assert test_db.query(SectorFundMapping).filter(
             SectorFundMapping.sector_name == "消费电子"
-        ).first() is not None
+        ).first() is None
+
+    def test_fundinfo_fuzzy_match_no_longer_poisons_mappings(self, test_db, monkeypatch):
+        """反向/子串模糊匹配已删除：含同一个字的板块不能被吸到别的基金上。"""
+        from src.analyzer.llm_analyzer import LLMAnalyzer
+        from src.models import database
+        from src.models.database import FundInfo, SectorFundMapping
+
+        test_db.add(FundInfo(fund_code="159732", fund_name="消费电子ETF",
+                             fund_type="ETF", sector_type="消费", can_delete=True))
+        test_db.commit()
+        monkeypatch.setattr(database, "SessionLocal", lambda: test_db)
+
+        analyzer = LLMAnalyzer.__new__(LLMAnalyzer)
+        # "消费电子" 与 sector_type "消费" 是旧的子串关系，现在必须不命中
+        assert analyzer._find_fund_in_fundinfo("消费电子") is None
+        assert test_db.query(SectorFundMapping).count() == 0

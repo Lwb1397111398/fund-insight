@@ -89,6 +89,8 @@ def test_migration_runner_upgrades_explicit_sqlite_database(tmp_path):
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
 
@@ -108,6 +110,8 @@ def test_migration_runner_fails_closed_in_production_without_database_url(tmp_pa
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
 

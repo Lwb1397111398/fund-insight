@@ -1,0 +1,41 @@
+{
+  "source_file": "fund_insight_export_2026-09-20.json",
+  "source_sha256": "34b300e211f9c4df59b1189adecdede5c5ce8565ca10c2579cd953d3693b3d64",
+  "shadow_db": "E:\\AI Agent\\work area\\fund-insight\\data\\fund_insight_baseline.db",
+  "counts": {
+    "bloggers": 27,
+    "fund_info": 162,
+    "posts": 657,
+    "predictions": 2178,
+    "prediction_change_logs": 2129,
+    "batch_analysis_tasks": 199,
+    "analysis_logs": 240,
+    "verification_tasks": 0,
+    "prediction_groups": 0,
+    "viewpoints": 489,
+    "crawler_article_records": 634,
+    "fund_history": 9541,
+    "sector_alias": 0,
+    "sector_fund_mapping": 118,
+    "investment_advice": 43
+  },
+  "expected": {
+    "bloggers": 27,
+    "fund_info": 162,
+    "posts": 657,
+    "predictions": 2178,
+    "prediction_change_logs": 2129,
+    "batch_analysis_tasks": 199,
+    "analysis_logs": 240,
+    "verification_tasks": 0,
+    "prediction_groups": 0,
+    "viewpoints": 489,
+    "crawler_article_records": 634,
+    "fund_history": 9541,
+    "sector_alias": 0,
+    "sector_fund_mapping": 118,
+    "investment_advice": 43
+  },
+  "created_dependencies": {},
+  "checked_at": "2026-09-20T23:44:28.699515"
+}

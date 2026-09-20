@@ -1,0 +1,1073 @@
+[
+  {
+    "sector": "半导体",
+    "chosen": null,
+    "alternatives": [
+      {
+        "code": "512480",
+        "name": "国泰 CES 半导体芯片行业 ETF 联接 A",
+        "source": "t0_static",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.4444,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "512480",
+          "input_name": "国泰 CES 半导体芯片行业 ETF 联接 A",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「国泰 CES 半导体芯片行业 ETF 联接 A」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "159995",
+        "name": "芯片ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪国证半导体芯片指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "159995",
+          "input_name": "芯片ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「芯片ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "512760",
+        "name": "国联安中证半导体ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证半导体指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.5714,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "512760",
+          "input_name": "国联安中证半导体ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「国联安中证半导体ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "513300",
+        "name": "华夏国证半导体芯片ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪国证半导体芯片指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.5,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "513300",
+          "input_name": "华夏国证半导体芯片ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-17",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「华夏国证半导体芯片ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "160416",
+        "name": "华安半导体指数(LOF)",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证半导体指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 1.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "160416",
+          "input_name": "华安半导体指数(LOF)",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-17",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「华安半导体指数(LOF)」实为「」）",
+        "confidence": 0.0
+      }
+    ],
+    "status": "needs_review",
+    "confidence": 0.0,
+    "rounds": 2,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "512480"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "512480",
+          "159995",
+          "512760",
+          "513300",
+          "160416"
+        ],
+        "keywords": [
+          "半导体",
+          "芯片"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "512480",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国泰 CES 半导体芯片行业 ETF 联接 A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159995",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「芯片ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "512760",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国联安中证半导体ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "513300",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华夏国证半导体芯片ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "160416",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华安半导体指数(LOF)」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T4",
+        "keyword": "半导体",
+        "hits": [
+          "159325",
+          "159582",
+          "159813",
+          "560780",
+          "561980",
+          "562590",
+          "588170"
+        ]
+      },
+      {
+        "stage": "T4",
+        "keyword": "芯片",
+        "hits": [
+          "561980",
+          "562590",
+          "588170",
+          "021344",
+          "013445",
+          "013446",
+          "159310",
+          "159560",
+          "159599",
+          "159801"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "159325",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「半导体ETF南方」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159582",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「半导体ETF博时」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159813",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「半导体ETF鹏华」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "560780",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「半导体设备ETF广发」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "561980",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「半导体设备ETF招商」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "562590",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「半导体设备ETF华夏」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "588170",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「科创半导体ETF华夏」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "021344",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「东财芯片E」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T4",
+        "keyword": "半导体",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "芯片",
+        "hits": []
+      }
+    ],
+    "aliases": [
+      "半导体芯片"
+    ],
+    "keywords": [
+      "半导体",
+      "芯片"
+    ],
+    "direct_exhausted": true,
+    "elapsed_ms": 9031,
+    "degraded": false
+  },
+  {
+    "sector": "债券",
+    "chosen": null,
+    "alternatives": [
+      {
+        "code": "512000",
+        "name": "券商ETF",
+        "source": "t0_static",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "512000",
+          "input_name": "券商ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「券商ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "511010",
+        "name": "国泰上证5年期国债ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪上证5年期国债指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "511010",
+          "input_name": "国泰上证5年期国债ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「国泰上证5年期国债ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "159965",
+        "name": "平安中证5-10年期国债ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证5-10年期国债指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "159965",
+          "input_name": "平安中证5-10年期国债ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「平安中证5-10年期国债ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "511090",
+        "name": "华泰柏瑞上证10年期国债ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪上证10年期国债指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "511090",
+          "input_name": "华泰柏瑞上证10年期国债ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「华泰柏瑞上证10年期国债ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "159025",
+        "name": "博时中证10年期国债ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证10年期国债指数",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "159025",
+          "input_name": "博时中证10年期国债ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 9,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「博时中证10年期国债ETF」实为「」）",
+        "confidence": 0.0
+      }
+    ],
+    "status": "needs_review",
+    "confidence": 0.0,
+    "rounds": 3,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "512000"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "512000",
+          "511010",
+          "159965",
+          "511090",
+          "159025"
+        ],
+        "keywords": [
+          "国债ETF",
+          "债券ETF",
+          "利率债"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "512000",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「券商ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511010",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国泰上证5年期国债ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159965",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「平安中证5-10年期国债ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511090",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华泰柏瑞上证10年期国债ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159025",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「博时中证10年期国债ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T4",
+        "keyword": "国债ETF",
+        "hits": [
+          "511020",
+          "511100",
+          "511160",
+          "511260",
+          "511130"
+        ]
+      },
+      {
+        "stage": "T4",
+        "keyword": "债券ETF",
+        "hits": [
+          "511020",
+          "511100",
+          "511160",
+          "511260",
+          "511130",
+          "021156",
+          "009656",
+          "009657",
+          "012692",
+          "012693"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "511020",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国债ETF平安」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511100",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国债ETF华夏」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511160",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国债ETF东财」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511260",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「十年国债ETF国泰」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "511130",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「30年国债ETF博时」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "021156",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华安中债1-5年国开行债券ETF联接E」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "009656",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华安中债1-5年国开行债券ETF联接A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "009657",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华安中债1-5年国开行债券ETF联接C」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T4",
+        "keyword": "国债ETF",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "债券ETF",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "利率债",
+        "hits": [
+          "021335",
+          "021336",
+          "022977",
+          "472007",
+          "018253",
+          "018254",
+          "019543",
+          "019724"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "021335",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国联利率债A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "021336",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国联利率债C」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "022977",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「平安利率债E」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "472007",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「汇添富利率债」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "018253",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「平安利率债A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "018254",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「平安利率债C」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "019543",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「浦银普恒利率债」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "019724",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「鑫元稳丰利率债」实为「」）",
+        "fund_type": ""
+      }
+    ],
+    "aliases": [
+      "债券",
+      "国债",
+      "利率债"
+    ],
+    "keywords": [
+      "国债ETF",
+      "债券ETF",
+      "利率债"
+    ],
+    "direct_exhausted": true,
+    "elapsed_ms": 7702,
+    "degraded": false
+  },
+  {
+    "sector": "SpaceX",
+    "chosen": null,
+    "alternatives": [
+      {
+        "code": "515248",
+        "name": "中证科创创业50ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "unknown",
+        "reason": "跟踪中证科创创业50指数，涵盖航天科技等相关科创领域标的",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": false,
+          "is_strict_ok": false,
+          "kind": "unknown",
+          "fund_type": null,
+          "official_name": null,
+          "code": "515248",
+          "input_name": "中证科创创业50ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": null,
+          "history_count": 0,
+          "message": "验证失败：接口无有效数据，该基金可能已停牌/清盘或代码有误"
+        },
+        "rejected": "抓不到数据（可能已清盘/代码不存在）",
+        "confidence": 0.0
+      },
+      {
+        "code": "159813",
+        "name": "国证军民融合ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪国证军民融合主题指数，包含航天相关产业标的",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "159813",
+          "input_name": "国证军民融合ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「国证军民融合ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "512660",
+        "name": "军工ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证军工指数，涉及航天装备等相关板块标的",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "512660",
+          "input_name": "军工ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「军工ETF」实为「」）",
+        "confidence": 0.0
+      },
+      {
+        "code": "161024",
+        "name": "富国军工主题混合(LOF)",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证军工指数，布局航天相关产业标的",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": null,
+          "code": "161024",
+          "input_name": "富国军工主题混合(LOF)",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：可抓取净值数据（接口未返回名称）"
+        },
+        "rejected": "代码存在但是另一只基金（声称「富国军工主题混合(LOF)」实为「」）",
+        "confidence": 0.0
+      }
+    ],
+    "status": "needs_review",
+    "confidence": 0.0,
+    "rounds": 3,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": []
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "515248",
+          "159813",
+          "512660",
+          "161024"
+        ],
+        "keywords": [
+          "航天科技",
+          "军工",
+          "科创50"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "515248",
+        "verdict": "reject",
+        "reason": "抓不到数据（可能已清盘/代码不存在）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159813",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「国证军民融合ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "512660",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「军工ETF」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "161024",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「富国军工主题混合(LOF)」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T4",
+        "keyword": "航天科技",
+        "hits": [
+          "018027",
+          "018028",
+          "000901"
+        ]
+      },
+      {
+        "stage": "T4",
+        "keyword": "军工",
+        "hits": [
+          "018027",
+          "018028",
+          "000901",
+          "512680",
+          "512810",
+          "512560",
+          "002251",
+          "011113",
+          "011592",
+          "013566"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "018027",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「嘉实中证智选航空航天科技ETF发起联接A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "018028",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「嘉实中证智选航空航天科技ETF发起联接C」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "000901",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「航天科技」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "512680",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「军工ETF广发」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "512810",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「军工ETF华宝」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "512560",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「军工ETF易方达」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "002251",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「华夏军工安全混合A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "011113",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「富国军工主题混合C」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T4",
+        "keyword": "航天科技",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "军工",
+        "hits": [
+          "512710",
+          "004698",
+          "005609"
+        ]
+      },
+      {
+        "stage": "T4",
+        "keyword": "科创50",
+        "hits": [
+          "004698",
+          "005609",
+          "019385",
+          "019386",
+          "588000",
+          "588040",
+          "588050",
+          "588060",
+          "588150",
+          "588280"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "512710",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「军工龙头ETF富国」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "004698",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「博时军工主题股票A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "005609",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「富国军工主题混合A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "019385",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「东财科创50A」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "019386",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「东财科创50C」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "588000",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「科创50ETF华夏」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "588040",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「科创50ETF鹏华」实为「」）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "588050",
+        "verdict": "reject",
+        "reason": "代码存在但是另一只基金（声称「科创50ETF工银」实为「」）",
+        "fund_type": ""
+      }
+    ],
+    "aliases": [
+      "SpaceX",
+      "太空探索技术公司",
+      "航天板块"
+    ],
+    "keywords": [
+      "航天科技",
+      "军工",
+      "科创50"
+    ],
+    "direct_exhausted": true,
+    "elapsed_ms": 7765,
+    "degraded": false
+  }
+]

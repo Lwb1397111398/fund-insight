@@ -1,0 +1,916 @@
+[
+  {
+    "sector": "SpaceX",
+    "chosen": null,
+    "alternatives": [
+      {
+        "code": "161024",
+        "name": "富国军工主题混合(LOF)",
+        "source": "llm",
+        "official_name": "富国中证军工指数(LOF)A",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪军工主题，包含航天相关投资方向，但与SpaceX板块关联度较低，仅为关联替代",
+        "claim_sim": 0.25,
+        "sector_overlap": 0.0,
+        "t3_score": 25.0,
+        "t3_suitable": false,
+        "t3_proxy": true,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "富国中证军工指数(LOF)A",
+          "code": "161024",
+          "input_name": "富国军工主题混合(LOF)",
+          "api_name": "富国中证军工指数(LOF)A",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：富国中证军工指数(LOF)A"
+        },
+        "rejected": "语义判定不通过（score=25）",
+        "claim_mismatch": "LLM 称「富国军工主题混合(LOF)」，官方名实为「富国中证军工指数(LOF)A」",
+        "confidence": 0.0
+      },
+      {
+        "code": "159776",
+        "name": "国证军民融合ETF",
+        "source": "llm",
+        "official_name": "港股医药ETF银华",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪国证军民融合主题指数，虽包含航天领域相关标的，但与SpaceX板块关联度较低，仅为关联替代",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 20.0,
+        "t3_suitable": false,
+        "t3_proxy": true,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "港股医药ETF银华",
+          "code": "159776",
+          "input_name": "国证军民融合ETF",
+          "api_name": "港股医药ETF银华",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：港股医药ETF银华"
+        },
+        "rejected": "语义判定不通过（score=20）",
+        "claim_mismatch": "LLM 称「国证军民融合ETF」，官方名实为「港股医药ETF银华」",
+        "confidence": 0.0
+      },
+      {
+        "code": "515240",
+        "name": "中证科创创业50ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "unknown",
+        "reason": "跟踪中证科创创业50指数，涵盖航天科技相关科创企业",
+        "claim_sim": 1.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": false,
+          "is_strict_ok": false,
+          "kind": "unknown",
+          "fund_type": null,
+          "official_name": null,
+          "code": "515240",
+          "input_name": "中证科创创业50ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": null,
+          "history_count": 0,
+          "message": "验证失败：接口无有效数据，该基金可能已停牌/清盘或代码有误"
+        },
+        "rejected": "抓不到数据（可能已清盘/代码不存在）",
+        "claim_mismatch": "",
+        "confidence": 0.0
+      },
+      {
+        "code": "516030",
+        "name": "中证军工ETF",
+        "source": "llm",
+        "official_name": "",
+        "fund_type": "",
+        "kind": "unknown",
+        "reason": "跟踪中证军工指数，涉及航天军工相关业务标的",
+        "claim_sim": 1.0,
+        "sector_overlap": 0.0,
+        "t3_score": 0.0,
+        "t3_suitable": null,
+        "t3_proxy": null,
+        "verify": {
+          "ok": false,
+          "is_strict_ok": false,
+          "kind": "unknown",
+          "fund_type": null,
+          "official_name": null,
+          "code": "516030",
+          "input_name": "中证军工ETF",
+          "api_name": null,
+          "api_nav": null,
+          "nav_date": null,
+          "history_count": 0,
+          "message": "验证失败：接口无有效数据，该基金可能已停牌/清盘或代码有误"
+        },
+        "rejected": "抓不到数据（可能已清盘/代码不存在）",
+        "claim_mismatch": "",
+        "confidence": 0.0
+      }
+    ],
+    "status": "needs_review",
+    "confidence": 0.0,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": []
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "515240",
+          "159776",
+          "516030",
+          "161024"
+        ],
+        "keywords": [
+          "航天科技",
+          "军工",
+          "科创50"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "515240",
+        "verdict": "reject",
+        "reason": "抓不到数据（可能已清盘/代码不存在）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "159776",
+        "verdict": "pass",
+        "official_name": "港股医药ETF银华",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T2",
+        "code": "516030",
+        "verdict": "reject",
+        "reason": "抓不到数据（可能已清盘/代码不存在）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T2",
+        "code": "161024",
+        "verdict": "pass",
+        "official_name": "富国中证军工指数(LOF)A",
+        "is_strict_ok": true,
+        "claim_sim": 0.25
+      },
+      {
+        "stage": "T3",
+        "code": "159776",
+        "suitable": false,
+        "proxy": true,
+        "score": 20.0
+      },
+      {
+        "stage": "T3",
+        "code": "161024",
+        "suitable": false,
+        "proxy": true,
+        "score": 25.0
+      }
+    ],
+    "aliases": [
+      "SpaceX",
+      "航天板块",
+      "太空探索"
+    ],
+    "keywords": [
+      "航天科技",
+      "军工",
+      "科创50"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 35781,
+    "degraded": false,
+    "timed_out": true
+  },
+  {
+    "sector": "存储",
+    "chosen": {
+      "code": "159813",
+      "name": "中证动漫游戏ETF",
+      "source": "llm",
+      "official_name": "半导体ETF鹏华",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "存储属于半导体细分领域",
+      "claim_sim": 0.0,
+      "sector_overlap": 0.0,
+      "t3_score": 80.0,
+      "t3_suitable": true,
+      "t3_proxy": true,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "半导体ETF鹏华",
+        "code": "159813",
+        "input_name": "中证动漫游戏ETF",
+        "api_name": "半导体ETF鹏华",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：半导体ETF鹏华"
+      },
+      "rejected": "",
+      "claim_mismatch": "LLM 称「中证动漫游戏ETF」，官方名实为「半导体ETF鹏华」",
+      "confidence": 0.5344
+    },
+    "alternatives": [],
+    "status": "proxy",
+    "confidence": 0.5344,
+    "rounds": 3,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": []
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "159813",
+          "516010",
+          "160632",
+          "012789"
+        ],
+        "keywords": [
+          "动漫游戏",
+          "游戏",
+          "动漫"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "159813",
+        "verdict": "pass",
+        "official_name": "半导体ETF鹏华",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T2",
+        "code": "516010",
+        "verdict": "pass",
+        "official_name": "游戏ETF国泰",
+        "is_strict_ok": true,
+        "claim_sim": 0.25
+      },
+      {
+        "stage": "T2",
+        "code": "160632",
+        "verdict": "pass",
+        "official_name": "鹏华酒A",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T2",
+        "code": "012789",
+        "verdict": "pass",
+        "official_name": "汇添富双享回报债券A",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "159813",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "516010",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "160632",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "012789",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T4",
+        "keyword": "动漫游戏",
+        "hits": [
+          "022481",
+          "012728",
+          "012729",
+          "023715",
+          "012768",
+          "012769"
+        ]
+      },
+      {
+        "stage": "T4",
+        "keyword": "游戏",
+        "hits": [
+          "022481",
+          "012728",
+          "012729",
+          "023715",
+          "012768",
+          "012769",
+          "159869",
+          "516770",
+          "517770"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "022481",
+        "verdict": "pass",
+        "official_name": "国泰中证动漫游戏ETF联接E",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "012728",
+        "verdict": "pass",
+        "official_name": "国泰中证动漫游戏ETF联接A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "012729",
+        "verdict": "pass",
+        "official_name": "国泰中证动漫游戏ETF联接C",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "023715",
+        "verdict": "pass",
+        "official_name": "华夏中证动漫游戏ETF发起式联接D",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "012768",
+        "verdict": "pass",
+        "official_name": "华夏中证动漫游戏ETF发起式联接A",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "012769",
+        "verdict": "pass",
+        "official_name": "华夏中证动漫游戏ETF发起式联接C",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "159869",
+        "verdict": "pass",
+        "official_name": "游戏ETF华夏",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T2",
+        "code": "516770",
+        "verdict": "pass",
+        "official_name": "游戏ETF华泰柏瑞",
+        "is_strict_ok": true,
+        "claim_sim": 1.0
+      },
+      {
+        "stage": "T3",
+        "code": "022481",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "012728",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "012729",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "023715",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "012768",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "012769",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "159869",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "516770",
+        "suitable": false,
+        "proxy": false,
+        "score": 0.0
+      },
+      {
+        "stage": "T4",
+        "keyword": "动漫游戏",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "游戏",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "动漫",
+        "hits": []
+      },
+      {
+        "stage": "T4",
+        "keyword": "存储",
+        "hits": [
+          "980138"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "980138",
+        "verdict": "reject",
+        "reason": "抓不到数据（可能已清盘/代码不存在）",
+        "fund_type": ""
+      },
+      {
+        "stage": "T5",
+        "code": "159813",
+        "proxy": true,
+        "score": 80.0,
+        "reason": "存储属于半导体细分领域"
+      }
+    ],
+    "aliases": [
+      "游戏动漫",
+      "动漫游戏"
+    ],
+    "keywords": [
+      "动漫游戏",
+      "游戏",
+      "动漫"
+    ],
+    "direct_exhausted": true,
+    "elapsed_ms": 24938,
+    "degraded": false,
+    "timed_out": false
+  },
+  {
+    "sector": "军工",
+    "chosen": {
+      "code": "512680",
+      "name": "军工ETF",
+      "source": "llm",
+      "official_name": "军工ETF广发",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "名称含军工字样，跟踪中证军工指数，与板块贴合度高",
+      "claim_sim": 0.5,
+      "sector_overlap": 0.5,
+      "t3_score": 80.0,
+      "t3_suitable": true,
+      "t3_proxy": false,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "军工ETF广发",
+        "code": "512680",
+        "input_name": "军工ETF",
+        "api_name": "军工ETF广发",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：军工ETF广发"
+      },
+      "rejected": "",
+      "claim_mismatch": "",
+      "confidence": 0.775
+    },
+    "alternatives": [
+      {
+        "code": "161024",
+        "name": "富国军工主题混合(LOF)",
+        "source": "llm",
+        "official_name": "富国中证军工指数(LOF)A",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "名称含军工字样，跟踪中证军工指数，与板块贴合度高",
+        "claim_sim": 0.25,
+        "sector_overlap": 0.5,
+        "t3_score": 80.0,
+        "t3_suitable": true,
+        "t3_proxy": false,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "富国中证军工指数(LOF)A",
+          "code": "161024",
+          "input_name": "富国军工主题混合(LOF)",
+          "api_name": "富国中证军工指数(LOF)A",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：富国中证军工指数(LOF)A"
+        },
+        "rejected": "",
+        "claim_mismatch": "LLM 称「富国军工主题混合(LOF)」，官方名实为「富国中证军工指数(LOF)A」",
+        "confidence": 0.0
+      },
+      {
+        "code": "160630",
+        "name": "鹏华军工指数(LOF)",
+        "source": "llm",
+        "official_name": "鹏华中证国防指数(LOF)A",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "名称含国防字样，跟踪中证军工指数，为军工板块合理替代",
+        "claim_sim": 0.0,
+        "sector_overlap": 0.0,
+        "t3_score": 80.0,
+        "t3_suitable": true,
+        "t3_proxy": false,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "鹏华中证国防指数(LOF)A",
+          "code": "160630",
+          "input_name": "鹏华军工指数(LOF)",
+          "api_name": "鹏华中证国防指数(LOF)A",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：鹏华中证国防指数(LOF)A"
+        },
+        "rejected": "",
+        "claim_mismatch": "LLM 称「鹏华军工指数(LOF)」，官方名实为「鹏华中证国防指数(LOF)A」",
+        "confidence": 0.0
+      }
+    ],
+    "status": "matched",
+    "confidence": 0.775,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "512660"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "512660",
+          "512680",
+          "161024",
+          "160630",
+          "512710"
+        ],
+        "keywords": [
+          "军工",
+          "军工指数"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "512660",
+        "verdict": "pass",
+        "official_name": "军工ETF国泰",
+        "is_strict_ok": true,
+        "claim_sim": 0.5
+      },
+      {
+        "stage": "T2",
+        "code": "512680",
+        "verdict": "pass",
+        "official_name": "军工ETF广发",
+        "is_strict_ok": true,
+        "claim_sim": 0.5
+      },
+      {
+        "stage": "T2",
+        "code": "161024",
+        "verdict": "pass",
+        "official_name": "富国中证军工指数(LOF)A",
+        "is_strict_ok": true,
+        "claim_sim": 0.25
+      },
+      {
+        "stage": "T2",
+        "code": "160630",
+        "verdict": "pass",
+        "official_name": "鹏华中证国防指数(LOF)A",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T2",
+        "code": "512710",
+        "verdict": "pass",
+        "official_name": "军工龙头ETF富国",
+        "is_strict_ok": true,
+        "claim_sim": 0.3333
+      },
+      {
+        "stage": "T3",
+        "code": "512660",
+        "suitable": true,
+        "proxy": false,
+        "score": 50.0
+      },
+      {
+        "stage": "T3",
+        "code": "512680",
+        "suitable": true,
+        "proxy": false,
+        "score": 80.0
+      },
+      {
+        "stage": "T3",
+        "code": "161024",
+        "suitable": true,
+        "proxy": false,
+        "score": 80.0
+      },
+      {
+        "stage": "T3",
+        "code": "160630",
+        "suitable": true,
+        "proxy": false,
+        "score": 80.0
+      },
+      {
+        "stage": "T3",
+        "code": "512710",
+        "suitable": true,
+        "proxy": false,
+        "score": 60.0
+      }
+    ],
+    "aliases": [
+      "军工板块",
+      "军工行业"
+    ],
+    "keywords": [
+      "军工",
+      "军工指数"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 5656,
+    "degraded": false,
+    "timed_out": false
+  },
+  {
+    "sector": "创新药",
+    "chosen": {
+      "code": "159992",
+      "name": "创新药ETF",
+      "source": "llm",
+      "official_name": "创新药ETF银华",
+      "fund_type": "",
+      "kind": "fund",
+      "reason": "跟踪中证创新药指数，与创新药板块贴合度高",
+      "claim_sim": 0.6667,
+      "sector_overlap": 0.6667,
+      "t3_score": 88.0,
+      "t3_suitable": true,
+      "t3_proxy": false,
+      "verify": {
+        "ok": true,
+        "is_strict_ok": true,
+        "kind": "fund",
+        "fund_type": null,
+        "official_name": "创新药ETF银华",
+        "code": "159992",
+        "input_name": "创新药ETF",
+        "api_name": "创新药ETF银华",
+        "api_nav": null,
+        "nav_date": "2026-09-18",
+        "history_count": 20,
+        "message": "验证通过：创新药ETF银华"
+      },
+      "rejected": "",
+      "claim_mismatch": "",
+      "confidence": 0.819
+    },
+    "alternatives": [
+      {
+        "code": "515120",
+        "name": "中证创新药产业ETF",
+        "source": "llm",
+        "official_name": "创新药ETF广发",
+        "fund_type": "",
+        "kind": "fund",
+        "reason": "跟踪中证创新药产业指数，与创新药板块贴合度高",
+        "claim_sim": 0.4,
+        "sector_overlap": 0.6667,
+        "t3_score": 88.0,
+        "t3_suitable": true,
+        "t3_proxy": false,
+        "verify": {
+          "ok": true,
+          "is_strict_ok": true,
+          "kind": "fund",
+          "fund_type": null,
+          "official_name": "创新药ETF广发",
+          "code": "515120",
+          "input_name": "中证创新药产业ETF",
+          "api_name": "创新药ETF广发",
+          "api_nav": null,
+          "nav_date": "2026-09-18",
+          "history_count": 20,
+          "message": "验证通过：创新药ETF广发"
+        },
+        "rejected": "",
+        "claim_mismatch": "",
+        "confidence": 0.0
+      }
+    ],
+    "status": "matched",
+    "confidence": 0.819,
+    "rounds": 1,
+    "evidence": [
+      {
+        "stage": "T0",
+        "candidates": [
+          "159858"
+        ]
+      },
+      {
+        "stage": "T1",
+        "candidates": [
+          "159858",
+          "515120",
+          "159992",
+          "501009",
+          "161027"
+        ],
+        "keywords": [
+          "创新药",
+          "生物医药"
+        ]
+      },
+      {
+        "stage": "T2",
+        "code": "159858",
+        "verdict": "pass",
+        "official_name": "创新药ETF南方",
+        "is_strict_ok": true,
+        "claim_sim": 0.6667
+      },
+      {
+        "stage": "T2",
+        "code": "515120",
+        "verdict": "pass",
+        "official_name": "创新药ETF广发",
+        "is_strict_ok": true,
+        "claim_sim": 0.4
+      },
+      {
+        "stage": "T2",
+        "code": "159992",
+        "verdict": "pass",
+        "official_name": "创新药ETF银华",
+        "is_strict_ok": true,
+        "claim_sim": 0.6667
+      },
+      {
+        "stage": "T2",
+        "code": "501009",
+        "verdict": "pass",
+        "official_name": "汇添富中证生物科技指数(LOF)A",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T2",
+        "code": "161027",
+        "verdict": "pass",
+        "official_name": "富国中证全指证券公司指数(LOF)A",
+        "is_strict_ok": true,
+        "claim_sim": 0.0
+      },
+      {
+        "stage": "T3",
+        "code": "159858",
+        "suitable": true,
+        "proxy": false,
+        "score": 67.0
+      },
+      {
+        "stage": "T3",
+        "code": "515120",
+        "suitable": true,
+        "proxy": false,
+        "score": 88.0
+      },
+      {
+        "stage": "T3",
+        "code": "159992",
+        "suitable": true,
+        "proxy": false,
+        "score": 88.0
+      },
+      {
+        "stage": "T3",
+        "code": "501009",
+        "suitable": false,
+        "proxy": true,
+        "score": 30.0
+      },
+      {
+        "stage": "T3",
+        "code": "161027",
+        "suitable": false,
+        "proxy": true,
+        "score": 10.0
+      }
+    ],
+    "aliases": [
+      "创新药板块",
+      "创新药赛道"
+    ],
+    "keywords": [
+      "创新药",
+      "生物医药"
+    ],
+    "direct_exhausted": false,
+    "elapsed_ms": 6343,
+    "degraded": false,
+    "timed_out": false
+  }
+]

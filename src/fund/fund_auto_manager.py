@@ -102,22 +102,27 @@ class FundAutoManager:
         1. 从映射表中查找
         2. 如果找不到，使用LLM推荐
         3. 验证基金代码有效性
+
+        先走 sector_fund_agent（LLM 提案 + 抓站验证 + 语义复判 + 关键词回环）；
+        agent 没有可靠结论时**不再**退回"静态表/一次 LLM 猜"，避免把错基金喂给同步链路。
         """
-        fund_info = get_fund_for_sector(sector)
-        if fund_info:
-            if self._verify_fund_exists(fund_info['code']):
-                return fund_info
-        
-        recommended_fund = self._recommend_fund_with_llm(sector)
-        if recommended_fund and self._verify_fund_exists(recommended_fund['code']):
-            return recommended_fund
-        
+        from src.services.sector_fund_agent import resolve_sector_fund
+
+        decision = resolve_sector_fund(sector, allow_llm=True, budget_ms=25000)
+        cand = decision.chosen
+        if cand and decision.status in ('matched', 'proxy'):
+            return {'code': cand.code, 'name': cand.display_name}
+        logger.info(f"[自动匹配] {sector} → agent 无可靠结论（{decision.status}），不回填")
         return None
-    
+
     def _verify_fund_exists(self, fund_code: str) -> bool:
-        """验证基金代码是否有效，并排除不适合的基金类型"""
+        """验证基金代码是否有效，并排除不适合的基金类型。
+
+        `allow_fallback=False`：允许历史兜底时，任意六位数字都能"验证通过"（`get_fund_info`
+        会退到历史净值接口），这是"八竿子打不着的代码也被采信"的通道之一。
+        """
         try:
-            fund_info = fund_api.get_fund_info(fund_code)
+            fund_info = fund_api.get_fund_info(fund_code, allow_fallback=False)
             if not fund_info or not fund_info.get('fund_name'):
                 return False
             

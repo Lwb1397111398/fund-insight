@@ -16,6 +16,9 @@ def test_explicit_sqlite_database_url_is_honored(tmp_path):
     """临时恢复和测试不能回退到默认本地数据库。"""
     target = tmp_path / "isolated.db"
     env = os.environ.copy()
+    # 子进程 stdout 必须显式 UTF-8：中文用户名机器上默认按 GBK 编码，父进程按 UTF-8
+    # 解码就会拿到替换字符（详见 S0 修复记录）。
+    env["PYTHONIOENCODING"] = "utf-8"
     env["DATABASE_URL"] = f"sqlite:///{target.as_posix()}"
 
     result = subprocess.run(
@@ -28,6 +31,8 @@ def test_explicit_sqlite_database_url_is_honored(tmp_path):
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
 
@@ -38,6 +43,9 @@ def test_explicit_sqlite_database_url_is_honored(tmp_path):
 def test_explicit_postgresql_url_fails_closed_when_driver_missing():
     """A production PostgreSQL URL must not silently fall back to local SQLite."""
     env = os.environ.copy()
+    # 子进程 stdout 必须显式 UTF-8：中文用户名机器上默认按 GBK 编码，父进程按 UTF-8
+    # 解码就会拿到替换字符（详见 S0 修复记录）。
+    env["PYTHONIOENCODING"] = "utf-8"
     env["DATABASE_URL"] = "postgresql://user:pass@example.invalid/fund_insight"
 
     result = subprocess.run(
@@ -69,6 +77,8 @@ raise SystemExit(1)
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     assert result.returncode == 0
@@ -78,6 +88,9 @@ raise SystemExit(1)
 def test_unknown_database_url_scheme_is_rejected():
     """Unexpected DATABASE_URL schemes should fail closed instead of using SQLite."""
     env = os.environ.copy()
+    # 子进程 stdout 必须显式 UTF-8：中文用户名机器上默认按 GBK 编码，父进程按 UTF-8
+    # 解码就会拿到替换字符（详见 S0 修复记录）。
+    env["PYTHONIOENCODING"] = "utf-8"
     env["DATABASE_URL"] = "mysql://user:pass@example.invalid/fund_insight"
 
     result = subprocess.run(
@@ -98,6 +111,8 @@ raise SystemExit(1)
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     assert result.returncode == 0

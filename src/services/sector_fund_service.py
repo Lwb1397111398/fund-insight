@@ -260,8 +260,13 @@ class SectorFundService:
                 db.close()
 
     def update_mapping(self, mapping_id: int, fund_code: str = None,
-                       fund_name: str = None) -> Optional[Dict]:
-        """更新映射（基金代码/名称），自动标记为已审查"""
+                       fund_name: str = None,
+                       mark_reviewed: Optional[bool] = None) -> Optional[Dict]:
+        """更新映射（基金代码/名称）。
+
+        `mark_reviewed=None` 沿用旧行为（手工编辑即视为已审查）；agent 写库时必须
+        显式传 False/True，否则低置信结果会被自动标成"已审查"（审查门禁就废了）。
+        """
         db = self._get_db()
         try:
             mapping = db.query(SectorFundMapping).filter(
@@ -274,7 +279,7 @@ class SectorFundService:
                 mapping.fund_code = fund_code
             if fund_name is not None:
                 mapping.fund_name = fund_name
-            mapping.reviewed = True  # 编辑自动标记为已审查
+            mapping.reviewed = True if mark_reviewed is None else mark_reviewed
             # 编辑即激活：若该行曾被级联清理置为 inactive，保存后必须恢复可见，
             # 否则更新会"成功"但列表按 is_active 过滤后凭空丢失该板块
             mapping.is_active = True
@@ -284,7 +289,7 @@ class SectorFundService:
             self._cache[mapping.sector_name] = {
                 'code': mapping.fund_code,
                 'name': mapping.fund_name,
-                'reviewed': True
+                'reviewed': mapping.reviewed or False
             }
 
             return {

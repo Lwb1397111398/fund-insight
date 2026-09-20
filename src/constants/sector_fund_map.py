@@ -447,19 +447,22 @@ def get_fund_for_sector(sector: str) -> Optional[Dict]:
             return SECTOR_FUND_MAP[standard_sector]
 
     # 4. 模糊匹配（包含关系）
+    #    长度门槛：短键（"光"、"车"、"药"）做子串匹配会把不相干的板块吸到同一只基金上，
+    #    这正是"识别出来的基金离板块差十万八千里"的成因之一。短别名只能通过
+    #    SECTOR_ALIASES / sector_alias 表显式登记，不走子串。
     for key, fund_info in SECTOR_FUND_MAP.items():
-        if key in sector or sector in key:
+        if len(key) >= 3 and (key in sector or sector in key):
             return fund_info
 
     # 5. 硬编码别名模糊匹配
     for alias, standard_sector in SECTOR_ALIASES.items():
-        if alias in sector or sector in alias:
+        if len(alias) >= 3 and (alias in sector or sector in alias):
             if standard_sector in SECTOR_FUND_MAP:
                 return SECTOR_FUND_MAP[standard_sector]
 
     # 6. 数据库别名模糊匹配
     for alias, standard_sector in db_aliases.items():
-        if alias in sector or sector in alias:
+        if len(alias) >= 3 and (alias in sector or sector in alias):
             if standard_sector in SECTOR_FUND_MAP:
                 return SECTOR_FUND_MAP[standard_sector]
 

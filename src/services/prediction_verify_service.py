@@ -670,8 +670,10 @@ class PredictionVerifyService:
             from src.constants.sector_fund_map import normalize_sector_name
             standard_sector = normalize_sector_name(sector)
             mapping = self.db.query(SectorFundMapping).filter(
-                SectorFundMapping.sector_name == standard_sector
-            ).first()
+                SectorFundMapping.sector_name == standard_sector,
+                SectorFundMapping.is_active == True,          # noqa: E712
+            ).order_by(SectorFundMapping.reviewed.desc(),      # 已审查优先
+                       SectorFundMapping.id.asc()).first()
             if mapping and mapping.fund_code:
                 fund_name = mapping.fund_name or ''
                 if not any(kw in fund_name for kw in excluded_keywords):
@@ -692,13 +694,9 @@ class PredictionVerifyService:
                 if not any(kw in fund_name for kw in excluded_keywords):
                     return f.fund_code, f.fund_name
 
-            # 第6步：FundInfo 模糊匹配
-            all_funds = self.db.query(FundInfo).all()
-            for f in all_funds:
-                if f.sector_type and (sector in f.sector_type or f.sector_type in sector):
-                    fund_name = f.fund_name or ''
-                    if not any(kw in fund_name for kw in excluded_keywords):
-                        return f.fund_code, fund_name
+            # 6) removed: fuzzy FundInfo match. sector_type is free text, so a
+            #    fuzzy hit silently verifies a prediction against an unrelated fund.
+            #    Re-matching now goes through sector_fund_agent (LLM + fetch verify).
 
         return None, None
     

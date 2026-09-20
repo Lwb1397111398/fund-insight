@@ -277,7 +277,8 @@ class FundAPI:
 
         return results
 
-    def verify_fund_fetchable(self, fund_code: str, input_name: Optional[str] = None) -> Dict:
+    def verify_fund_fetchable(self, fund_code: str, input_name: Optional[str] = None,
+                             probe_stock: bool = False, fill_name: bool = True) -> Dict:
         """验证基金代码是否能从数据源正常抓取。
 
         依次调用实时信息接口与历史净值接口，返回结构化验证结果。
@@ -297,6 +298,10 @@ class FundAPI:
         if not re.fullmatch(r'\d{6}', code):
             return {
                 'ok': False,
+                'is_strict_ok': False,
+                'kind': 'unknown',
+                'fund_type': None,
+                'official_name': None,
                 'code': code,
                 'input_name': input_name,
                 'api_name': None,
@@ -315,14 +320,23 @@ class FundAPI:
 
         history: List[Dict] = []
         try:
-            # 历史净值是判断"能否抓取"的权威依据，只调一次
-            history = self.get_fund_history(code, days=7)
+            # 历史净值是判断"能否抓取"的权威依据，只调一次。
+            # 窗口用 30 天而不是 7 天：7 天遇上节假日只有 4-5 条，会让严格判据
+            # 在周末随机翻转（同一只正常基金一会儿合格一会儿不合格）。
+            history = self.get_fund_history(code, days=30)
         except Exception as e:
             logger.warning(f"验证基金{code}时历史接口异常: {e}")
 
         nav = (info or {}).get('nav')
         api_name = (info or {}).get('fund_name')
         nav_date = (info or {}).get('nav_date')
+        # 场内 ETF 常常拿不到实时名称（jsonpgz 为空），但官方名是"验证抓取"面板和
+        # 后续相关性判断的关键输入，所以再用搜索接口按代码反查一次名字。
+        if not api_name and fill_name:
+            for item in self.search_fund(code):
+                if str(item.get('fund_code')) == code and item.get('fund_name'):
+                    api_name = item['fund_name']
+                    break
         # 实时接口没给净值日期时，用历史最新一条兜底展示
         if not nav_date and history:
             latest_date = history[0].get('date')
@@ -345,6 +359,15 @@ class FundAPI:
 
         return {
             'ok': ok,
+            # is_strict_ok 是 agent 用的严格判据：只"接口有返回"不够，要能拿到可用净值。
+            # 旧 ok 语义保持不变（tests/unit/test_fund_verify.py 断言"1 条历史也算 ok"，
+            # 且前端"验证抓取"面板依赖它），新增字段而不是改老字段。
+            'is_strict_ok': bool((nav and nav > 0) or len(history) >= 5),
+            # kind：天天基金这两个接口都只服务基金域，有数据即基金；
+            # 无数据时再去股票域探测，避免把 6 位股票代码当成"基金抓不到"。
+            'kind': self._classify_code_kind(code, ok, probe_stock=probe_stock),
+            'fund_type': (info or {}).get('fund_type') or None,
+            'official_name': api_name,
             'code': code,
             'input_name': input_name,
             'api_name': api_name,
@@ -353,6 +376,34 @@ class FundAPI:
             'history_count': len(history),
             'message': message
         }
+
+    def _classify_code_kind(self, code: str, ok: bool, probe_stock: bool = False) -> str:
+        """判定 6 位代码属于基金还是股票。
+
+        000001 既是深市股票（平安银行）也是场外基金（华夏成长）的代号，**不能靠码段猜**，
+        只能看"基金域有没有数据"。股票域探测要多打一次外站请求，因此默认不探
+        （`probe_stock=False`）——只有 agent 匹配链路需要区分"基金抓不到"与"这是股票"。
+        """
+        if ok:
+            return 'fund'
+        if not probe_stock:
+            return 'unknown'
+        try:
+            response = self.session.get(
+                'https://push2.eastmoney.com/api/qt/stock/get',
+                params={
+                    'secid': ('1.' if code.startswith(('5', '6', '9')) else '0.') + code,
+                    'fields': 'f57,f58,f43',
+                    'invt': '2',
+                },
+                timeout=self.timeout,
+            )
+            data = (response.json() or {}).get('data')
+            if data and (data.get('f57') or data.get('f58')):
+                return 'stock'
+        except Exception as e:
+            logger.debug(f"股票域探测 {code} 失败（按未知处理）: {e}")
+        return 'unknown'
 
     def verify_funds_batch(self, items: List[Dict], delay: float = 0.3) -> Dict:
         """批量验证多只基金能否从数据源抓取，用于一键排查问题基金。
@@ -379,7 +430,7 @@ class FundAPI:
                 # 仅在真正发起新的一次网络验证前做节流间隔
                 if cache and delay > 0:
                     time.sleep(delay)
-                verify = self.verify_fund_fetchable(code, name)
+                verify = self.verify_fund_fetchable(code, name, fill_name=False)
                 cache[code] = verify
             row = {
                 'sector_name': sector,
