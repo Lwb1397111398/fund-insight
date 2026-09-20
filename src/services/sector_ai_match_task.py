@@ -161,6 +161,16 @@ class SectorAiMatchManager:
                                            'note': str(exc)[:200], 'attempts': attempt}
                         retry_next.append(sector)
                     task.done = sum(1 for v in results.values() if not v.get('llm_unavailable'))
+                    # 进度必须边跑边可见：之前整轮跑完才写 results/counts，
+                    # 前端一直显示 0/87，看起来像卡死。
+                    task.results = [results[s] for s in task.sectors if s in results]
+                    counts = {'matched': 0, 'proxy': 0, 'needs_review': 0,
+                              'conflict': 0, 'no_fund': 0}
+                    for row in task.results:
+                        key = row['status'] if row['status'] in counts else 'needs_review'
+                        counts[key] += 1
+                    task.counts = counts
+                    task.pending_retry = retry_next
                     task.touch()
                     time.sleep(PACE_SECONDS)
                 pending = retry_next

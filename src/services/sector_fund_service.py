@@ -36,11 +36,20 @@ class SectorFundService:
 
         db = self._get_db()
         try:
+            # sector_name 不是唯一列：没有 ORDER BY 时"同名多行"取哪一条取决于
+            # 数据库返回顺序，SQLite 与 Postgres 可能给出不同基金（同一板块两种结论）。
+            # 固定为"已审查优先、id 最小优先"，且已审查条目不被未审查条目覆盖。
             mappings = db.query(SectorFundMapping).filter(
                 SectorFundMapping.is_active == True
+            ).order_by(
+                SectorFundMapping.reviewed.desc(),
+                SectorFundMapping.id.asc(),
             ).all()
 
             for m in mappings:
+                existing = self._cache.get(m.sector_name)
+                if existing and existing.get('reviewed') and not (m.reviewed or False):
+                    continue
                 self._cache[m.sector_name] = {
                     'code': m.fund_code,
                     'name': m.fund_name,
@@ -226,8 +235,14 @@ class SectorFundService:
             if self._should_close(db):
                 db.close()
 
-    def mark_reviewed_by_id(self, mapping_id: int, reviewed: bool = True) -> bool:
-        """按 ID 标记映射为已审查/未审查"""
+    def mark_reviewed_by_id(self, mapping_id: int, reviewed: bool = True,
+                            owner_confirm: bool = False) -> bool:
+        """按 ID 标记审查。
+
+        与 `batch_mark_reviewed` 同一套证据守卫：没有 `match_source + verified_at`
+        的行不能凭空变成"已审查"，否则审查门禁等于不存在。
+        取消审查（reviewed=False）时同时解除 owner_locked，避免"锁定但未审查"的僵尸行。
+        """
         db = self._get_db()
         try:
             mapping = db.query(SectorFundMapping).filter(
@@ -235,8 +250,18 @@ class SectorFundService:
             ).first()
             if not mapping:
                 return False
+            if reviewed and not (mapping.match_source and mapping.verified_at) \
+                    and not owner_confirm:
+                return False
 
             mapping.reviewed = reviewed
+            if reviewed:
+                mapping.reviewed_by = 'owner' if owner_confirm else (mapping.reviewed_by or 'agent')
+                mapping.owner_locked = True
+                mapping.match_source = mapping.match_source or 'manual'
+            else:
+                mapping.owner_locked = False
+                mapping.reviewed_by = None
             db.commit()
             if mapping.sector_name in self._cache:
                 self._cache[mapping.sector_name]['reviewed'] = reviewed
@@ -410,12 +435,16 @@ _sector_fund_service: Optional[SectorFundService] = None
 
 
 def get_sector_fund_service(db: Session = None) -> SectorFundService:
-    """获取板块-基金服务单例（不再持有会话）"""
+    """获取板块-基金服务。
+
+    不传 db → 全局单例（只读缓存，跨请求复用）；
+    传 db → 返回**临时实例**。以前这里会把请求级 Session 钉到单例上，
+    于是批量线程与其他请求线程会共用同一个 Session
+    （SQLAlchemy Session 不是线程安全的）。
+    """
     global _sector_fund_service
+    if db is not None:
+        return SectorFundService(db)
     if _sector_fund_service is None:
-        _sector_fund_service = SectorFundService(db)
-    elif db is not None:
-        # 更新 db 引用，确保使用当前请求的 session
-        _sector_fund_service.db = db
-        _sector_fund_service._external_db = True
+        _sector_fund_service = SectorFundService()
     return _sector_fund_service

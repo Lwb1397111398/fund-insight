@@ -50,7 +50,8 @@ def upgrade() -> None:
             continue
         for name, type_ in columns:
             if name not in existing:
-                op.add_column(table, sa.Column(name, type_, nullable=True))
+                with op.batch_alter_table(table) as batch_op:
+                    batch_op.add_column(sa.Column(name, type_, nullable=True))
     existing = _columns("prediction_change_logs")
     if existing is not None and "run_id" not in existing:
         op.create_index(
@@ -58,15 +59,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 先删索引再删列：带着索引 DROP COLUMN 在部分数据库上会直接报错
+    try:
+        op.drop_index("ix_prediction_change_logs_run_id",
+                      table_name="prediction_change_logs")
+    except Exception:
+        pass
     for table, columns in ADDITIONS.items():
         existing = _columns(table)
         if existing is None:
             continue
         for name, _ in reversed(columns):
             if name in existing:
-                op.drop_column(table, name)
-    try:
-        op.drop_index("ix_prediction_change_logs_run_id",
-                      table_name="prediction_change_logs")
-    except Exception:
-        pass
+                # SQLite 旧版本不支持 DROP COLUMN，必须走 batch_alter_table 重建表
+                with op.batch_alter_table(table) as batch_op:
+                    batch_op.drop_column(name)

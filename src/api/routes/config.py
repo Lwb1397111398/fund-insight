@@ -1005,6 +1005,9 @@ class AiMatchRequest(BaseModel):
     sector_name: str
     mapping_id: Optional[int] = None
     apply: bool = False
+    # 采纳时必须回传预览拿到的 token：agent 是不确定的，重跑一次可能给出别的基金，
+    # 那样老板点的"采纳"就不是他看过的那份证据了。
+    decision_token: Optional[str] = None
 
 
 class AiBatchRequest(BaseModel):
@@ -1039,10 +1042,20 @@ def _sector_work_order(db: Session, only_pending: bool, only_gap: bool) -> list:
         ).distinct().all() if row[0]}
         sectors.extend(sorted((set(builtin_gap) | predicted) - db_sectors))
     if not sectors:
-        sectors = sorted(db_sectors | set(SECTOR_FUND_MAP))
+        # only_pending/only_gap 选中的集合为空时**不能**退化成"整个库都跑一遍"：
+        # 前端"AI 匹配待审查"按钮在零待审查时会变成全库写操作。
+        return []
     seen, ordered = set(), []
-    for s in sectors:
-        if s and s not in seen:
+    for raw in sectors:
+        s = (raw or '').strip()
+        try:
+            from src.constants.sector_fund_map import normalize_sector_name
+            s = normalize_sector_name(s) or s
+        except Exception:
+            pass
+        if not s or len(s) > 50:
+            continue
+        if s not in seen:
             seen.add(s)
             ordered.append(s)
     return ordered
@@ -1055,10 +1068,21 @@ def sector_ai_match(payload: AiMatchRequest, db: Session = Depends(get_db)):
 
     if not (payload.sector_name or '').strip():
         raise HTTPException(status_code=400, detail='sector_name 不能为空')
-    decision = resolve_sector_fund(payload.sector_name.strip(), budget_ms=45000, db=db)
+    from src.services.sector_fund_agent import remember_decision, recall_decision
+
+    if payload.apply and payload.decision_token:
+        decision = recall_decision(payload.decision_token)
+        if decision is None or decision.sector != payload.sector_name.strip():
+            raise HTTPException(status_code=410,
+                                detail='预览结果已过期或与板块不符，请重新点「AI 匹配」再看一遍')
+    else:
+        decision = resolve_sector_fund(payload.sector_name.strip(), budget_ms=45000, db=db)
+    token = remember_decision(decision)
     result = apply_decision(db, decision, mapping_id=payload.mapping_id) if payload.apply \
         else {'applied': False, 'reason': '未开启 apply'}
-    return {'success': True, 'data': {'decision': decision.to_dict(), 'apply': result}}
+    return {'success': True,
+            'data': {'decision': decision.to_dict(), 'decision_token': token,
+                     'apply': result}}
 
 
 @router.post("/sector-mappings/ai-batch")

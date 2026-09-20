@@ -185,7 +185,10 @@ def _fake_decision(sector, code='159995', name='芯片ETF', status='matched', co
                          t3_suitable=True, t3_proxy=False, t3_score=95,
                          confidence=conf, verify={'is_strict_ok': True}, kind='etf')
     return SectorDecision(sector=sector, chosen=cand, status=status, confidence=conf,
-                          rounds=1, evidence=[{'stage': 'T1', 'candidates': [code]}])
+                          rounds=1, evidence=[
+                              {'stage': 'T1', 'candidates': [code]},
+                              {'stage': 'T2', 'code': code, 'verdict': 'pass'},
+                              {'stage': 'T3', 'code': code, 'suitable': True, 'score': 95}])
 
 
 def test_ai_match_preview_does_not_write(monkeypatch, tmp_path):
@@ -335,3 +338,78 @@ def test_ai_endpoints_require_password(tmp_path):
                 os.environ['ACCESS_PASSWORD'] = old
     finally:
         real_app.dependency_overrides.clear()
+
+
+def test_access_password_fail_closed_when_unset(monkeypatch, tmp_path):
+    """ACCESS_PASSWORD 不再有硬编码默认值：未配置时 /api/ 必须拒绝服务而不是放行。"""
+    import os
+    from fastapi.testclient import TestClient
+    from src.api.main import app
+
+    session_factory = _database(tmp_path)
+
+    def override_db():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_db
+    monkeypatch.delenv("ACCESS_PASSWORD", raising=False)
+    try:
+        client = TestClient(app)
+        res = client.get("/api/config/sector-mappings")
+        assert res.status_code == 503
+        assert "ACCESS_PASSWORD" in res.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_source_has_no_hardcoded_password():
+    """推送 GitHub 前的硬门禁：真实口令不得出现在**被 git 跟踪**的文件里。
+
+    用 `git grep` 而不是遍历文件系统：仓库里可能有别的 worktree/临时目录，
+    那些不属于要推送的内容，扫到只会产生假警报。
+    """
+    import io
+    import os
+    import subprocess
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    secret = ''
+    env_path = os.path.join(root, '.env')
+    if os.path.exists(env_path):
+        for line in io.open(env_path, encoding='utf-8', errors='replace'):
+            if line.strip().startswith('ACCESS_PASSWORD='):
+                secret = line.split('=', 1)[1].strip()
+                break
+    assert secret, '本地 .env 缺少 ACCESS_PASSWORD，无法执行口令泄漏检查'
+
+    out = subprocess.run(['git', 'grep', '-l', '-F', secret], cwd=root,
+                         capture_output=True, text=True, encoding='utf-8',
+                         errors='replace')
+    assert out.stdout.strip() == '', '被跟踪文件里仍残留真实口令：%s' % out.stdout.strip()
+
+
+def test_source_secret_not_in_planned_docs():
+    """计划文档里也不许写出真实口令（本轮就发生过一次）。"""
+    import io
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    secret = ''
+    env_path = os.path.join(root, '.env')
+    if os.path.exists(env_path):
+        for line in io.open(env_path, encoding='utf-8', errors='replace'):
+            if line.strip().startswith('ACCESS_PASSWORD='):
+                secret = line.split('=', 1)[1].strip()
+                break
+    hits = []
+    for base, dirs, files in os.walk(os.path.join(root, 'docs')):
+        for name in files:
+            if not name.endswith('.md'):
+                continue
+            path = os.path.join(base, name)
+            text = io.open(path, encoding='utf-8', errors='replace').read()
+            if secret and secret in text:
+                hits.append(os.path.relpath(path, root))
+    assert hits == [], '文档里泄漏了真实口令：%s' % hits

@@ -2543,6 +2543,7 @@ const fetchWeChatBatch = async () => {
                         const res = await axios.post('/api/config/sector-mappings/ai-match',
                             { sector_name: m.sector_name, apply: false }, { timeout: 120000 });
                         aiResult.value = Object.assign({ sector: m.sector_name }, res.data?.data || {});
+                        // 采纳时回传该 token，保证写进去的就是看过的那份证据
                     } catch (e) {
                         aiResult.value = { sector: m.sector_name, decision: null,
                             error: e.response?.data?.detail || e.message };
@@ -2556,7 +2557,9 @@ const fetchWeChatBatch = async () => {
                     const sector = aiResult.value.decision.sector;
                     try {
                         const res = await axios.post('/api/config/sector-mappings/ai-match',
-                            { sector_name: sector, apply: true }, { timeout: 120000 });
+                            { sector_name: sector, apply: true,
+                              decision_token: aiResult.value.decision_token },
+                            { timeout: 120000 });
                         const applied = res.data?.data?.apply || {};
                         if (!applied.applied) {
                             alert('未写入：' + (applied.reason || res.data?.data?.decision?.status || '未知原因'));

@@ -2,12 +2,13 @@
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.models.database import Blogger, FundInfo, Prediction, SectorFundMapping
+from src.models.database import (Blogger, FundInfo, Prediction, SectorAlias,
+                             SectorFundMapping)
 from src.services.prediction_change_log_service import (
     add_prediction_change_log,
     snapshot_prediction,
@@ -137,8 +138,16 @@ class PredictionMaintenanceService:
             "removed": removed,
         }
 
-    def sync_sector_mappings(self, *, dry_run: bool = True) -> Dict:
-        """使用已审核映射预览或同步预测基金关联。"""
+    def sync_sector_mappings(self, *, dry_run: bool = True,
+                             min_confidence: float = 0.85,
+                             run_id: Optional[str] = None) -> Dict:
+        """使用已审核映射预览或同步预测基金关联。
+
+        - `min_confidence`：只有 agent 置信度达标的映射才允许改预测结论；老板手工确认过的行
+          （`reviewed_by='owner'` 或 `owner_locked`）无条件有效——那是他说的"有意代理"。
+        - `run_id`：写进 change log，`scripts/restore_prediction_batch.py` 才能整批回滚。
+        - 板块匹配走别名归一（`sector_alias`），否则"绿电/绿色电力"这类同义板块会漏改。
+        """
         mappings = self.db.query(SectorFundMapping).filter(
             SectorFundMapping.is_active == True,
             SectorFundMapping.reviewed == True,
@@ -147,7 +156,11 @@ class PredictionMaintenanceService:
             SectorFundMapping.id.desc(),
         ).all()
         sector_map = {}
+        low_confidence = 0
         for mapping in mappings:
+            if not self._mapping_eligible(mapping, min_confidence):
+                low_confidence += 1
+                continue
             sector_map.setdefault(mapping.sector_name, mapping)
 
         predictions = self.db.query(Prediction).filter(
@@ -158,7 +171,7 @@ class PredictionMaintenanceService:
         no_mapping = 0
         for prediction in predictions:
             sector = prediction.sector or prediction.sector_type
-            mapping = sector_map.get(sector)
+            mapping = self._lookup_mapping(sector_map, sector)
             if not mapping:
                 no_mapping += 1
                 continue
@@ -188,6 +201,9 @@ class PredictionMaintenanceService:
         result = {
             "dry_run": dry_run,
             "total_mappings": len(sector_map),
+            "mappings_skipped_low_confidence": low_confidence,
+            "min_confidence": min_confidence,
+            "run_id": run_id,
             "would_update": len(candidates),
             "predictions_updated": 0,
             "predictions_unchanged": unchanged,
@@ -222,6 +238,7 @@ class PredictionMaintenanceService:
                     action="maintenance_sync",
                     source="sector_mapping",
                     before_state=before_state,
+                    run_id=run_id,
                 )
                 result["predictions_updated"] += 1
 
@@ -234,6 +251,45 @@ class PredictionMaintenanceService:
         except Exception:
             self.db.rollback()
             raise
+
+    @staticmethod
+    def _mapping_eligible(mapping: SectorFundMapping, min_confidence: float) -> bool:
+        """老板手工确认/锁定的行永远有效；agent 写的行必须达到置信度门槛。
+
+        `confidence IS NULL` 且 `reviewed=True` 的行是本轮之前人工审查过的历史映射，
+        它们本来就是人的结论，不能因为"没有置信度"被排除（排除会让 sync 静默变成空操作）。
+        """
+        if getattr(mapping, 'owner_locked', None) or \
+                getattr(mapping, 'reviewed_by', None) == 'owner':
+            return True
+        confidence = getattr(mapping, 'confidence', None)
+        if confidence is None:
+            return bool(getattr(mapping, 'reviewed', False))
+        return confidence >= min_confidence
+
+    def _lookup_mapping(self, sector_map: Dict, sector: Optional[str]) -> Optional[SectorFundMapping]:
+        """先精确命中，再走板块别名/归一化，避免同义板块漏改。
+
+        别名直接查库，不用 `sector_fund_map._load_db_aliases()` 的进程内缓存——
+        那个缓存可能在本次跑批之前就是空的，会让刚写入的别名"看不见"。
+        """
+        if not sector:
+            return None
+        mapping = sector_map.get(sector)
+        if mapping:
+            return mapping
+        try:
+            from src.constants.sector_fund_map import normalize_sector_name
+            normalized = normalize_sector_name(sector)
+            if normalized in sector_map:
+                return sector_map[normalized]
+            alias = self.db.query(SectorAlias).filter(
+                SectorAlias.alias_name == sector).first()
+            if alias and alias.sector_name in sector_map:
+                return sector_map[alias.sector_name]
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _reset_verification(prediction: Prediction) -> None:

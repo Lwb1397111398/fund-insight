@@ -264,6 +264,8 @@ class PredictionChangeLog(Base):
     )
     action = Column(String(32), nullable=False)
     source = Column(String(50), nullable=False, default='application')
+    # 批量改动的批次标识：没有它就无法把一次跑批的改动整批回滚（表上原本没有任何 batch 列）
+    run_id = Column(String(40))
     changed_fields = Column(JSON, nullable=False, default=list)
     before_state = Column(JSON, nullable=False)
     after_state = Column(JSON, nullable=False)
@@ -273,6 +275,7 @@ class PredictionChangeLog(Base):
         Index('ix_prediction_change_logs_prediction_id', 'prediction_id'),
         Index('ix_prediction_change_logs_created_at', 'created_at'),
         Index('ix_prediction_change_logs_action', 'action'),
+        Index('ix_prediction_change_logs_run_id', 'run_id'),
     )
 
 

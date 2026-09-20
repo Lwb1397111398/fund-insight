@@ -12,6 +12,7 @@ from src.models.database import SessionLocal
 from src.services.sector_fund_agent import (
     SectorFundAgent, SectorDecision, FundCandidate, apply_decision,
     compute_confidence, similarity, is_etf, normalize_fund_name,
+    is_broad_index_fund, sector_allows_broad_index, as_bool,
     AUTO_REVIEW_CONFIDENCE, CLAIM_SIM_REJECT,
 )
 
@@ -300,12 +301,14 @@ def test_full_evidence_write_marks_reviewed(db_session):
                              official_name='芯片ETF', t3_suitable=True, t3_proxy=False,
                              t3_score=95, confidence=0.92,
                              verify={'is_strict_ok': True}))
+    decision.evidence = [{'stage': 'T2', 'code': '159995', 'verdict': 'pass'},
+                         {'stage': 'T3', 'code': '159995', 'suitable': True, 'score': 95}]
     apply_decision(db_session, decision)
     db_session.refresh(row)
     assert row.reviewed is True
     assert row.reviewed_by == 'agent'
     assert row.confidence == pytest.approx(0.92)
-    assert json.loads(row.evidence) == []
+    assert [e['stage'] for e in json.loads(row.evidence)] == ['T2', 'T3']
 
 
 def test_owner_locked_row_is_never_overwritten(db_session):
@@ -348,3 +351,84 @@ def test_ai_batch_manager_start_does_not_deadlock(monkeypatch):
     second = manager.start(['T-测试批量B'], apply=False)
     assert time.monotonic() - started < 4.0, '第二次调用被卡住'
     assert second['success'] is False or second['data']['status'] in ('running', 'completed')
+
+
+# ---------- 宽基凑数：跑批实测发现过的真实缺陷 ----------
+
+def test_broad_index_rejected_for_industry_sector():
+    """豆粕→中证500ETF、中药→沪深300ETF联接 这类"拿大盘凑数"必须硬拒。"""
+    assert is_broad_index_fund('中证500ETF博时') is True
+    assert is_broad_index_fund('沪深300ETF联接A') is True
+    assert is_broad_index_fund('国泰中证豆粕ETF') is False
+    assert sector_allows_broad_index('豆粕') is False
+    assert sector_allows_broad_index('沪深300') is True
+    assert sector_allows_broad_index('日股') is True
+    assert sector_allows_broad_index('科技成长') is False
+
+    agent = make_agent([
+        {'candidates': [{'code': '159968', 'name': '中证500ETF', 'reason': ''}],
+         'keywords': ['豆粕'], 'aliases': []},
+        {'judgements': [{'code': '159968', 'suitable': True, 'proxy': False, 'score': 95}]},
+        None,
+    ], verify_map={'159968': {'ok': True, 'is_strict_ok': True, 'kind': 'fund',
+                              'official_name': '中证500ETF博时', 'fund_type': '指数型'}},
+        search_map={'豆粕': []})
+    decision = agent.resolve('豆粕')
+    assert decision.chosen is None
+    assert any('宽基' in (e.get('reason') or '') for e in decision.evidence
+               if e.get('stage') == 'T2')
+
+
+def test_broad_index_allowed_for_market_sector():
+    """日股→日经225ETF、亚太→亚太精选 是正当选择，不能被宽基规则误杀。"""
+    agent = make_agent([
+        {'candidates': [{'code': '513880', 'name': '日经225ETF', 'reason': ''}],
+         'keywords': ['日经'], 'aliases': []},
+        {'judgements': [{'code': '513880', 'suitable': True, 'proxy': False, 'score': 95}]},
+    ], verify_map={'513880': {'ok': True, 'is_strict_ok': True, 'kind': 'fund',
+                              'official_name': '日经225ETF华安', 'fund_type': '指数型'}})
+    decision = agent.resolve('日股')
+    assert decision.chosen is not None and decision.chosen.code == '513880'
+
+
+def test_llm_string_false_is_not_true():
+    """LLM 回 "suitable":"false" 时不能当 True（bool("false") 是 True，会误自动审查）。"""
+    assert as_bool('false') is False
+    assert as_bool('False') is False
+    assert as_bool('是') is True
+    assert as_bool(True) is True
+    assert as_bool(1) is True
+    assert as_bool(None) is False
+
+
+def test_industry_etf_with_quanzhi_token_not_rejected():
+    """`中证全指证券/医药卫生/半导体` 是行业 ETF，不能被宽基规则误杀。"""
+    assert is_broad_index_fund('华宝中证全指证券公司ETF') is False
+    assert is_broad_index_fund('广发中证全指医药卫生ETF') is False
+    assert is_broad_index_fund('国泰中证全指半导体设备ETF') is False
+    assert is_broad_index_fund('中证500ETF博时') is True
+    assert is_broad_index_fund('沪深300ETF联接A') is True
+    assert is_broad_index_fund('易方达创业板ETF') is True
+
+
+def test_auto_review_requires_t2_and_t3_evidence():
+    """没有抓站与语义证据的结论不得自动置已审查。"""
+    decision = SectorDecision(
+        sector='T-测试无证据', status='matched', confidence=0.99, evidence=[],
+        chosen=FundCandidate(code='159995', official_name='芯片ETF', source='llm',
+                             t3_suitable=True, t3_score=99, confidence=0.99,
+                             verify={'is_strict_ok': True}))
+    assert decision.auto_reviewable is False
+    decision.evidence = [{'stage': 'T2', 'code': '159995', 'verdict': 'pass'},
+                         {'stage': 'T3', 'code': '159995', 'suitable': True, 'score': 99}]
+    assert decision.auto_reviewable is True
+
+
+def test_resolve_creates_fresh_agent_state():
+    """并发安全：单次调用状态不能挂在模块级单例上。"""
+    from src.services import sector_fund_agent as mod
+    a1 = mod.SectorFundAgent(llm_call=lambda p: None)
+    a2 = mod.SectorFundAgent(llm_call=lambda p: None)
+    a1._deadline_at = 1.0
+    a1._llm_calls = 9
+    assert a2._deadline_at is None and a2._llm_calls == 0

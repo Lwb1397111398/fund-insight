@@ -42,7 +42,8 @@ def upgrade() -> None:
             continue
         for name, type_ in columns:
             if name not in existing:
-                op.add_column(table, sa.Column(name, type_, nullable=True))
+                with op.batch_alter_table(table) as batch_op:
+                    batch_op.add_column(sa.Column(name, type_, nullable=True))
         if "owner_locked" not in existing:
             op.create_index("ix_sector_fund_mapping_owner_locked", table, ["owner_locked"])
 
@@ -59,4 +60,6 @@ def downgrade() -> None:
                 pass
         for name, _ in reversed(columns):
             if name in existing:
-                op.drop_column(table, name)
+                # SQLite 不支持 DROP COLUMN（旧版本），必须走 batch_alter_table 重建表
+                with op.batch_alter_table(table) as batch_op:
+                    batch_op.drop_column(name)

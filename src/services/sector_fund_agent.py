@@ -32,36 +32,63 @@ T3_PASS_SCORE = 70          # 语义相关性及格线
 AUTO_REVIEW_CONFIDENCE = 0.80   # direct 自动置 reviewed 的置信度（金标集标定，勿拍脑袋改）
 AUTO_REVIEW_PROXY_CONFIDENCE = 0.68  # proxy 只到 0.68（覆盖率口径按此计）
 CLAIM_SIM_REJECT = 0.35     # LLM 声称名 vs 官方名：低于此判"代码存在但是另一只基金"
-MAX_CANDIDATES_PER_SECTOR = 8
+MAX_CANDIDATES_PER_SECTOR = 5   # 每只候选要打 2-3 个网络请求，8 只时单板块实测能跑到 9 分钟
 MAX_LLM_CALLS_PER_SECTOR = 6   # T1 提案 1 次 + 每轮 T3 复判 1 次（最多 3 轮）+ 兜底 1 次
 BONDED_TYPES = ('债券', '债', '货币', '理财', '短债', '纯债')
 BOND_SECTOR_HINTS = ('债', '货币', '理财', '同业存单')
 
 # 宽基指数不能充当行业板块的标的。实测跑批里出现过 豆粕→中证500ETF、
-# 中药→沪深300ETF联接、低空经济→中证A50ETF 这类"买不到就给你一只大盘"的假命中，
-# 语义模型会把它判成相关，所以这条要写成硬规则，不能交给 LLM 自由裁量。
-BROAD_INDEX_TOKENS = (
-    '沪深300', '中证500', '中证1000', '中证2000', '中证A50', '中证A500', '上证50',
-    '深证50', '创业板', '科创50', '科创100', '科创创业', '中证全指', '全指',
-    '国证2000', '万得微盘', '微盘', 'A50', 'A500', 'MSCI', '上证指数', '沪深交易所',
-)
+# 中药→沪深300ETF联接、低空经济→中证A50ETF 这类"买不到就给你一只大盘"的假命中。
+# 判定只认"核心名恰好等于宽基本身"：`华宝中证全指证券ETF`(券商)、`中证全指医药卫生`
+# 这类行业 ETF 名字里带"全指"却不是宽基，早期用裸 token 子串会把它们全部误杀。
+BROAD_INDEX_CORES = {
+    '沪深300', '中证500', '中证1000', '中证2000', '中证800', '中证a50', '中证a500',
+    '上证50', '深证50', '上证180', '上证380', '创业板', '创业板指', '科创50', '科创100',
+    '双创', '国证2000', '万得微盘', '微盘', 'a50', 'a500', 'mscia50', '上证指数',
+    '深证成指', '中证全指', '中证100', '国证2000指数',
+}
 # 板块本身就是宽基/市场（日股→日经225ETF、沪深300→300ETF、亚太→亚太精选）时允许
 BROAD_ALLOWED_FOR_SECTORS = (
     '沪深300', '中证500', '中证1000', '中证2000', '中证A50', 'A50', 'A500', '上证50',
-    '深证50', '创业', '科创', '全指', '微盘', '宽基', '中小盘',
-    '日', '美', '港', '德国', '法国', '英国', '印度', '越南', '沙特', '全球', '海外',
-    '纳指', '纳斯达克', '标普', '日经', '东证', '恒指', '恒生', '中概', '亚太', '亚洲',
-    '欧洲', 'QDII', '科创创业', '北证', '新三板', '红利', '自由现金流',
+    '深证50', '创业', '科创', '全指', '微盘', '宽基', '中小盘', '中证800', '上证180',
+    '日本', '日股', '日经', '美股', '纳指', '纳斯达克', '标普', '东证', '港股', '恒指',
+    '恒生', '中概', '亚太', '亚洲', '欧洲', '德国', '法国', '英国', '印度', '越南',
+    '沙特', '全球', '海外', 'QDII', '北证', '新三板', '红利', '自由现金流', '现金流',
 )
+# 老板点名"没有对口基金、只能取关联度最大替代"的板块（产品规则 2）。
+# 这些由 scripts/seed_owner_proxies.py 落成 owner_locked 行，agent 不得覆盖。
+DELIBERATE_PROXIES = {
+    '债券': ('512000', '无债市标的时取证券/券商 ETF 作关联度最大的替代'),
+    'SpaceX': ('159206', '无 SpaceX 对口基金，取商业航天关联最大的标的（实测官方名：卫星 ETF）'),
+}
+
 
 def is_broad_index_fund(name: str) -> bool:
-    n = (name or '').upper().replace(' ', '')
-    return any(tok.upper() in n for tok in BROAD_INDEX_TOKENS)
+    """核心名（剥掉公司前缀与 ETF/联接/指数 等后缀）恰好等于某个宽基才算宽基。"""
+    core = normalize_fund_name(name).lower().replace(' ', '')
+    if not core:
+        return False
+    for tok in BROAD_INDEX_CORES:
+        token = tok.lower()
+        if core == token or (core.startswith(token) and len(core) - len(token) <= 2):
+            return True
+    return False
 
 
 def sector_allows_broad_index(sector: str) -> bool:
     s = (sector or '').upper().replace(' ', '')
     return any(tok.upper() in s for tok in BROAD_ALLOWED_FOR_SECTORS)
+
+
+def as_bool(value) -> bool:
+    """LLM 常把布尔写成字符串，而 `bool("false")` 是 True。只认明确真值。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in ('true', 'yes', 'y', '1', '是', '对', '合适')
+    return False
 
 COMPANY_PREFIXES = (
     '华夏', '易方达', '南方', '国泰', '华宝', '招商', '广发', '嘉实', '富国', '天弘',
@@ -178,6 +205,10 @@ class SectorDecision:
             return False
         if self.chosen.t3_suitable is not True:
             return False
+        # 没有 T2/T3 证据就不许自动置已审查：否则"零证据自动通过"会被测试锁死成合法行为
+        stages = {e.get('stage') for e in (self.evidence or [])}
+        if not {'T2', 'T3'} <= stages:
+            return False
         need = AUTO_REVIEW_PROXY_CONFIDENCE if self.chosen.t3_proxy else AUTO_REVIEW_CONFIDENCE
         if self.chosen.t3_proxy and not self.direct_exhausted:
             return False
@@ -208,6 +239,10 @@ class SectorFundAgent:
         self._verify_call = verify_call
         self._search_call = search_call
         self._llm_calls = 0
+        self._deadline_at: Optional[float] = None
+
+    def _out_of_time(self) -> bool:
+        return self._deadline_at is not None and time.monotonic() >= self._deadline_at
 
     # ---------- 外部依赖 ----------
     def llm(self, prompt: str, max_tokens: int = 900) -> Optional[dict]:
@@ -241,22 +276,32 @@ class SectorFundAgent:
     # ---------- T0 确定性候选 ----------
     def tier0(self, sector: str, db=None) -> List[FundCandidate]:
         """只取精确匹配的候选；已审查行优先，但同样要过 T2/T3（不再无条件采信）。"""
-        from src.services.sector_fund_service import get_sector_fund_service
+        from src.models.database import SectorFundMapping
         out: List[FundCandidate] = []
         norm = self.normalize_sector(sector)
+        # 用调用方传进来的 session：批量线程借 service 单例会拿到别的请求钉住的
+        # Session（SQLAlchemy Session 非线程安全），而且失败只落在 debug 日志里，
+        # 表现就是"已审查映射悄悄读不到"，agent 于是又去提另一只基金。
+        own_session = db is None
+        if own_session:
+            from src.models.database import SessionLocal
+            db = SessionLocal()
         try:
-            cached = get_sector_fund_service().get_all_mappings() or {}
-            for key in (norm, sector):
-                row = cached.get(key)
-                if not row:
-                    continue
-                code = row.get('code')
-                if code and all(c.code != code for c in out):
+            for key in [k for k in dict.fromkeys((norm, sector)) if k]:
+                row = db.query(SectorFundMapping).filter(
+                    SectorFundMapping.sector_name == key,
+                    SectorFundMapping.is_active == True,          # noqa: E712
+                ).order_by(SectorFundMapping.reviewed.desc(),
+                           SectorFundMapping.id.asc()).first()
+                if row and all(c.code != row.fund_code for c in out):
                     out.append(FundCandidate(
-                        code=code, name=row.get('name') or '',
-                        source='t0_reviewed_db' if row.get('reviewed') else 't0_static'))
+                        code=row.fund_code, name=row.fund_name or '',
+                        source='t0_reviewed_db' if row.reviewed else 't0_static'))
         except Exception as exc:
-            logger.debug('[agent] T0 读库失败：%s', exc)
+            logger.warning('[agent] T0 读库失败：%s', exc)
+        finally:
+            if own_session:
+                db.close()
         try:
             from src.constants import SECTOR_FUND_MAP
             hit = SECTOR_FUND_MAP.get(norm) or SECTOR_FUND_MAP.get(sector)
@@ -311,9 +356,18 @@ class SectorFundAgent:
                      decision: SectorDecision) -> List[FundCandidate]:
         kept: List[FundCandidate] = []
         for cand in cands:
+            if self._out_of_time():
+                # 预算用完就停：宁可少验几只，也不要把一个板块拖成几分钟
+                cand.rejected = '超预算未验证'
+                decision.timed_out = True
+                continue
             res = self.verify(cand.code, cand.name) or {}
             cand.verify = res
-            cand.official_name = res.get('official_name') or res.get('api_name') or ''
+            if cand.source == 'search' and cand.name:
+                # 搜索结果本身就是官方名，省一次按代码反查的请求
+                cand.official_name = cand.name
+            else:
+                cand.official_name = res.get('official_name') or res.get('api_name') or ''
             cand.fund_type = res.get('fund_type') or ''
             # 注意两个 "kind" 不是一回事：verify 结果里的 kind 是"基金/股票"域判定，
             # cand.kind 是"ETF/LOF/场外"品种优先级。混用会让 ETF 优先规则失效。
@@ -383,8 +437,8 @@ class SectorFundAgent:
         for cand in cands:
             j = table.get(cand.code) or {}
             cand.t3_score = float(j.get('score') or 0)
-            cand.t3_suitable = bool(j.get('suitable')) if j else None
-            cand.t3_proxy = bool(j.get('proxy')) if j else None
+            cand.t3_suitable = as_bool(j.get('suitable')) if j else None
+            cand.t3_proxy = as_bool(j.get('proxy')) if j else None
             if j.get('reason'):
                 cand.reason = str(j['reason'])[:200]
             decision.evidence.append({'stage': 'T3', 'code': cand.code,
@@ -400,6 +454,10 @@ class SectorFundAgent:
                      decision: SectorDecision) -> List[FundCandidate]:
         found: List[FundCandidate] = []
         for kw in keywords:
+            if self._out_of_time():
+                decision.evidence.append({'stage': 'T4', 'keyword': kw,
+                                          'verdict': 'skipped_over_budget'})
+                break
             for item in self.search(kw)[:MAX_CANDIDATES_PER_SECTOR]:
                 code = str(item.get('fund_code') or '').strip()
                 if not re.fullmatch(r'\d{6}', code) or code in seen:
@@ -459,6 +517,7 @@ class SectorFundAgent:
             return decision
         started = time.monotonic()
         self._llm_calls = 0
+        self._deadline_at = started + budget_ms / 1000.0
         seen = set()
         pool: List[FundCandidate] = []
 
@@ -608,16 +667,42 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
             'confidence': cand.confidence}
 
 
-_AGENT: Optional[SectorFundAgent] = None
-
-
-def get_sector_fund_agent() -> SectorFundAgent:
-    global _AGENT
-    if _AGENT is None:
-        _AGENT = SectorFundAgent()
-    return _AGENT
-
-
 def resolve_sector_fund(sector: str, hint: Optional[str] = None, **kwargs) -> SectorDecision:
-    """全项目唯一入口：给板块名，拿回带证据的基金决策。"""
-    return get_sector_fund_agent().resolve(sector, hint=hint, **kwargs)
+    """全项目唯一入口：给板块名，拿回带证据的基金决策。
+
+    每次新建一个 agent 实例：LLM 调用计数与截止时间是**单次调用的状态**，
+    放在模块级单例上会让批量线程与 /ai-match 请求互相偷走预算、误报 llm_unavailable。
+    """
+    return SectorFundAgent().resolve(sector, hint=hint, **kwargs)
+
+
+# 预览结果暂存，供"采纳并写入"精确落地：重跑一次 agent 是不确定的，
+# 老板看到的证据链必须就是最终写进去的那一份。
+_PREVIEW_TTL_SECONDS = 1800
+_previews: Dict[str, tuple] = {}
+
+
+def remember_decision(decision: SectorDecision) -> str:
+    import hashlib
+    import time as _t
+
+    payload = json.dumps(decision.to_dict(), ensure_ascii=False, sort_keys=True)
+    token = hashlib.sha1(payload.encode('utf-8')).hexdigest()[:16]
+    _previews[token] = (decision, _t.monotonic() + _PREVIEW_TTL_SECONDS)
+    if len(_previews) > 200:
+        now = _t.monotonic()
+        for key in [k for k, (_, exp) in _previews.items() if exp < now][:100]:
+            _previews.pop(key, None)
+    return token
+
+
+def recall_decision(token: str) -> Optional[SectorDecision]:
+    entry = _previews.get(token)
+    if not entry:
+        return None
+    decision, expires = entry
+    import time as _t
+    if _t.monotonic() > expires:
+        _previews.pop(token, None)
+        return None
+    return decision

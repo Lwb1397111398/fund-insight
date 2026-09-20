@@ -64,7 +64,13 @@ def add_prediction_change_log(
     action: str,
     source: str,
     before_state: Dict[str, Any],
+    run_id: Optional[str] = None,
 ) -> Optional[PredictionChangeLog]:
+    """记录一条预测变更。字段无变化时返回 None（不写空日志）。
+
+    `run_id` 用于批量改动的整批回滚：表上没有 batch 列，只能靠它把一次跑批的
+    所有行串起来（见 scripts/restore_prediction_batch.py）。
+    """
     after_state = snapshot_prediction(prediction)
     changed_fields = [
         field for field in SNAPSHOT_FIELDS
@@ -80,6 +86,7 @@ def add_prediction_change_log(
         changed_fields=changed_fields,
         before_state=before_state,
         after_state=after_state,
+        run_id=run_id,
     )
     db.add(log)
     return log

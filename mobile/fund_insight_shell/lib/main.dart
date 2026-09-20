@@ -51,12 +51,7 @@ class _ShellPageState extends State<ShellPage> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFFF5F7FA))
-      // 口令存在 localStorage，必须开 DOM storage，否则每次进来都要重输
-      ..setPlatformConfiguration(
-        const AndroidPlatformConfigurationSettings(
-          domesticDownloads: true,
-        ),
-      )
+      // DOM storage 默认开启，口令存在 localStorage 里，装一次输一次就够
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (p) => setState(() => _progress = p),
