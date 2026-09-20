@@ -292,18 +292,42 @@ def test_fund_search_endpoint(monkeypatch, tmp_path):
 
     session_factory = _database(tmp_path)
     app, client = _client(monkeypatch, session_factory)
-    monkeypatch.setattr(api_instance, 'search_fund',
-                        lambda kw: [{'fund_code': '159995', 'fund_name': '芯片ETF',
-                                     'fund_type': ''}])
+    # 底层是混合证券搜索：结果里会混进股票（实测 000938→紫光股份）。
+    # "人工换一只"的下拉框绝不能把股票端给老板，所以接口必须按 CATEGORYDESC 过滤。
+    monkeypatch.setattr(api_instance, 'search_fund', lambda kw: [
+        {'fund_code': '159995', 'fund_name': '芯片ETF', 'fund_type': '',
+         'category_desc': '基金', 'is_fund': True},
+        {'fund_code': '000938', 'fund_name': '紫光股份', 'fund_type': '',
+         'category_desc': '深市', 'is_fund': False},
+    ])
     try:
         res = client.get('/api/config/fund-search', params={'keyword': '芯片'},
                          headers=AUTH_HEADERS)
         assert res.status_code == 200
-        assert res.json()['data'][0]['fund_code'] == '159995'
+        body = res.json()
+        assert [d['fund_code'] for d in body['data']] == ['159995']
+        assert body['dropped_non_fund'] == 1
         assert client.get('/api/config/fund-search', params={'keyword': '  '},
                           headers=AUTH_HEADERS).status_code == 400
     finally:
         app.dependency_overrides.clear()
+
+
+def test_fund_search_endpoint_reports_upstream_failure(monkeypatch, tmp_path):
+    """接口失败（None）不能伪装成"查无基金"（[]），否则老板以为真没有这只基金。"""
+    from src.fund.fund_api import fund_api as api_instance
+    from fastapi import HTTPException
+
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    monkeypatch.setattr(api_instance, 'search_fund', lambda kw: None)
+    try:
+        res = client.get('/api/config/fund-search', params={'keyword': '芯片'},
+                         headers=AUTH_HEADERS)
+        assert res.status_code == 502
+    finally:
+        app.dependency_overrides.clear()
+
 
 
 def test_ai_endpoints_require_password(tmp_path):

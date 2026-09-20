@@ -129,17 +129,37 @@ def similarity(a: str, b: str) -> float:
     return round(2 * len(ga & gb) / (len(ga) + len(gb)), 4)
 
 
+EXCHANGE_LISTED_CODE = re.compile(r'^(?:15\d{4}|5\d{5})$')
+
+
+def is_exchange_listed(code: str) -> bool:
+    """是否场内（交易所）上市的基金码段。
+
+    旧正则写成 `15[0-9]{3}`（只有 5 位）却配 fullmatch，深市 15xxxx 一条都匹配不上：
+    实测 `is_etf('159995','')=False`、`fund_kind_label('159206','富国中证卫星产业')='otc'`，
+    等于所有"名字没带 ETF 字样"的深市 ETF 都被当成场外基金降权。
+    """
+    return bool(EXCHANGE_LISTED_CODE.match((code or '').strip()))
+
+
 def is_etf(code: str, name: str = "") -> bool:
-    """场内 ETF 判定：名字里有 ETF 最可靠，其次看场内代码段。"""
-    if 'ETF' in (name or '').upper():
-        return True
-    code = (code or '').strip()
-    return bool(re.fullmatch(r'(15[0-9]{3}|5[0-9]{5})', code))
+    """场内 ETF：码段在场内 **且** 名字含 ETF，两个条件缺一不可。
+
+    只看名字会把 162412「华宝医疗ETF联接A」判成场内 ETF——它是场外联接基金，
+    而老板的规则是"选基金最好是 ETF，因为最纯粹"；只看码段会把 511xxx 货基判成 ETF。
+    """
+    return is_exchange_listed(code) and 'ETF' in (name or '').upper()
 
 
 def fund_kind_label(code: str, name: str = "") -> str:
-    if is_etf(code, name):
+    n = name or ''
+    if '联接' in n:
+        # 必须先于 etf/lof 判：162412 既含"ETF"字样又落在 16xxxx（LOF 码段）
+        return 'feeder'
+    if is_etf(code, n):
         return 'etf'
+    if is_exchange_listed(code):
+        return 'exchange_other'
     if re.fullmatch(r'(16[0-9]{4}|50[0-9]{4}|51[0-9]{4}|52[0-9]{4})', (code or '').strip()):
         return 'lof'
     if re.fullmatch(r'(0[0-9]{5}|1[0-9]{5})', (code or '').strip()):
@@ -147,7 +167,8 @@ def fund_kind_label(code: str, name: str = "") -> str:
     return 'other'
 
 
-KIND_PRIOR = {'etf': 1.0, 'lof': 0.75, 'otc': 0.6, 'other': 0.4}
+KIND_PRIOR = {'etf': 1.0, 'exchange_other': 0.8, 'lof': 0.75,
+              'feeder': 0.45, 'otc': 0.6, 'other': 0.4}
 SOURCE_PRIOR = {'t0_reviewed_db': 1.0, 'search': 0.85, 'llm': 0.75, 't0_static': 0.6}
 
 
@@ -271,7 +292,11 @@ class SectorFundAgent:
         if self._search_call is not None:
             return self._search_call(keyword)
         from src.fund.fund_api import fund_api
-        return fund_api.search_fund(keyword) or []
+        results = fund_api.search_fund(keyword) or []
+        # 天天基金这个检索接口是**混合证券搜索**（实测 "000938"→紫光股份、
+        # "液冷"→冰山冷热/五 粮 液）。agent 的关键词检索如果不过滤，就会把股票
+        # 当成候选喂给后续判定——而"必须是基金不能是股票"是老板的硬要求。
+        return [r for r in results if r.get('is_fund')]
 
     # ---------- T0 确定性候选 ----------
     def tier0(self, sector: str, db=None) -> List[FundCandidate]:
@@ -286,30 +311,38 @@ class SectorFundAgent:
         if own_session:
             from src.models.database import SessionLocal
             db = SessionLocal()
+        from src.services.sector_identity_audit import (
+            row_unservable, static_fund_for_sector)
         try:
             for key in [k for k in dict.fromkeys((norm, sector)) if k]:
-                row = db.query(SectorFundMapping).filter(
+                rows = db.query(SectorFundMapping).filter(
                     SectorFundMapping.sector_name == key,
                     SectorFundMapping.is_active == True,          # noqa: E712
-                ).order_by(SectorFundMapping.reviewed.desc(),
-                           SectorFundMapping.id.asc()).first()
-                if row and all(c.code != row.fund_code for c in out):
-                    out.append(FundCandidate(
-                        code=row.fund_code, name=row.fund_name or '',
-                        source='t0_reviewed_db' if row.reviewed else 't0_static'))
+                ).order_by(SectorFundMapping.reviewed.desc().nulls_last(),
+                           SectorFundMapping.id.asc()).all()
+                for row in rows:
+                    if row_unservable(row):
+                        continue      # 列或 verdict 任一说不可服务，就不当候选
+                    if all(c.code != row.fund_code for c in out):
+                        out.append(FundCandidate(
+                            code=row.fund_code, name=row.fund_name or '',
+                            source='t0_reviewed_db' if row.reviewed else 't0_static'))
+                        break
         except Exception as exc:
             logger.warning('[agent] T0 读库失败：%s', exc)
-        finally:
-            if own_session:
-                db.close()
         try:
-            from src.constants import SECTOR_FUND_MAP
-            hit = SECTOR_FUND_MAP.get(norm) or SECTOR_FUND_MAP.get(sector)
+            # 静态表回落必须在关闭 session 之前查（own_session 时用完就还连接）
+            # 静态表没有 is_fetchable 列，是体检盖不到的暗道；与其余读者共用
+            # static_fund_for_sector（拒绝集按 (板块, 代码) 记，不按代码全局拉黑）
+            hit = static_fund_for_sector(sector, db=db)
             if hit and all(c.code != hit.get('code') for c in out):
                 out.append(FundCandidate(code=hit.get('code'), name=hit.get('name', ''),
                                          source='t0_static'))
         except Exception:
             pass
+        finally:
+            if own_session:
+                db.close()
         return out[:MAX_CANDIDATES_PER_SECTOR]
 
     def normalize_sector(self, sector: str) -> str:
@@ -612,7 +645,8 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
     row = q.filter(SectorFundMapping.id == mapping_id).first() if mapping_id else \
         q.filter(SectorFundMapping.sector_name == decision.sector,
                  SectorFundMapping.is_active == True).order_by(  # noqa: E712
-            SectorFundMapping.reviewed.desc(), SectorFundMapping.id.asc()).first()
+            SectorFundMapping.reviewed.desc().nulls_last(),   # Postgres 上 NULL 排最前
+            SectorFundMapping.id.asc()).first()
 
     if row is not None and row.owner_locked:
         return {'applied': False, 'reason': '该映射已被老板锁定（有意代理），agent 不覆盖',
@@ -620,7 +654,16 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
 
     verify = cand.verify or {}
     now = datetime.now()
-    evidence_json = json.dumps(decision.evidence, ensure_ascii=False)[:60000]
+    from src.services.sector_identity_audit import row_unservable
+    while len(json.dumps(decision.evidence, ensure_ascii=False)) > 60000 and len(decision.evidence) > 1:
+        decision.evidence.pop(0)   # 截字符串会产出非法 JSON，下游 json.loads 直接抛
+    tiers = list(decision.evidence) + [{
+        'stage': 'FETCH',
+        'is_strict_ok': bool(verify.get('is_strict_ok')),
+        'nav_date': verify.get('nav_date'),
+        'history_count': verify.get('history_count'),
+    }]
+    evidence_json = json.dumps(tiers, ensure_ascii=False)
     message = ('直接对应' if not cand.t3_proxy else '无对口基金，取关联度最大的替代') \
         + (f'：{cand.reason}' if cand.reason else '')
     if cand.claim_mismatch:
@@ -639,6 +682,17 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
                                 fund_name=cand.display_name)
         db.add(row)
     changed_fund = row.fund_code != cand.code
+    if not changed_fund and row_unservable(row):
+        # 同码重判：体检说过"不可服务"，agent 的抓取通过不能把它洗白
+        # （agent 只有净值判据，没有身份判据）。明说理由，别回报 applied=True，
+        # 否则前端显示"直接对应"而所有读路径继续拒绝这一行。
+        return {'applied': False, 'mapping_id': row.id, 'status': 'audit_rejected',
+                'reason': '该行身份体检不通过（%s）：请换标的或重新体检'
+                          % (row.verify_message or '见证据')}
+    if changed_fund:
+        # 旧体检结论是关于**被换掉那只**的：不清掉就会带着 is_fetchable=False 继续
+        # 对所有读路径隐身，而 agent 刚刚重新验证过新标的。
+        row.is_fetchable = None
     row.fund_code = cand.code
     row.fund_name = cand.display_name
     row.is_active = True
@@ -648,12 +702,15 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
     row.verified_at = now
     row.verify_message = message[:500]
     row.llm_reason = (cand.reason or '')[:500]
-    row.is_fetchable = bool(verify.get('is_strict_ok'))
+    # `is_fetchable` 只由身份体检写（语义 = 可服务）。agent 的抓取判据是瞬时事实，
+    # 塞进同一列会让一次净值抖动就把正确映射从所有读路径里踢出去。
     row.evidence = evidence_json
     if should_review:
         row.reviewed = True
         row.reviewed_by = 'agent'
     db.commit()
+    from src.services.sector_identity_audit import invalidate_denied_cache
+    invalidate_denied_cache()      # 拒绝集缓存在别的进程里也要认账
 
     try:
         get_sector_fund_service().refresh_cache()

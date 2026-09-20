@@ -11,9 +11,12 @@ from src.fund.fund_api import FundAPI
 
 def _make_api() -> FundAPI:
     api = FundAPI()
-    # 单测必须零网络：官方名回填会调搜索接口，这里默认给空结果，
+    # 单测必须零网络：官方名回填现在走"基金域名册 + 单码 pingzhongdata"，
+    # 默认给"接口不可用"（等价于查不到、且不许据此下结论），
     # 需要验证回填行为的用例再用 patch.object 覆盖。
     api.search_fund = lambda keyword: []
+    api.get_fund_domain_name = lambda code: {
+        'status': 'error', 'name': None, 'fund_type': None, 'source': 'stub'}
     return api
 
 
@@ -65,16 +68,34 @@ class TestVerifyFundFetchable:
         assert result['is_strict_ok'] is False
         assert result['history_count'] == 3
 
-    def test_official_name_backfilled_from_search(self):
-        """场内 ETF 常拿不到实时名称，改用搜索接口按代码反查官方名回填。"""
+    def test_official_name_backfilled_from_fund_domain(self):
+        """场内 ETF 常拿不到实时名称，改用**纯基金域**来源按代码反查官方名回填。
+
+        不能用搜索接口回填：它是混合证券搜索，按代码反查会把股票名当成基金官方名
+        （实测 000938 只回"紫光股份"），"验证抓取"面板于是显示一个股票名。
+        """
         api = _make_api()
         with patch.object(api, 'get_fund_info', return_value=None), \
              patch.object(api, 'get_fund_history', return_value=[{'date': 'x', 'nav': 1.0}] * 6), \
-             patch.object(api, 'search_fund', return_value=[
-                 {'fund_code': '588000', 'fund_name': '科创50ETF华夏', 'fund_type': ''}]):
+             patch.object(api, 'get_fund_domain_name', return_value={
+                 'status': 'ok', 'name': '科创50ETF华夏', 'fund_type': '指数型',
+                 'source': 'roster'}):
             result = api.verify_fund_fetchable('588000')
         assert result['api_name'] == '科创50ETF华夏'
         assert result['is_strict_ok'] is True
+
+    def test_no_name_backfill_when_fund_domain_absent(self):
+        """基金域查不到这个码时不能瞎猜名字，更不能退回混合检索。"""
+        api = _make_api()
+        with patch.object(api, 'get_fund_info', return_value=None), \
+             patch.object(api, 'get_fund_history', return_value=[]), \
+             patch.object(api, 'get_fund_domain_name', return_value={
+                 'status': 'absent', 'name': None, 'fund_type': None,
+                 'source': 'pingzhong'}), \
+             patch.object(api, 'search_fund', return_value=[
+                 {'fund_code': '000938', 'fund_name': '紫光股份', 'is_fund': False}]):
+            result = api.verify_fund_fetchable('000938')
+        assert result['api_name'] is None
 
     def test_probe_stock_labels_kind(self):
         """基金域无数据 + 股票域有数据 → kind='stock'（老板要求"是基金不能是股票"）。"""

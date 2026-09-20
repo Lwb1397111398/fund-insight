@@ -668,20 +668,22 @@ class PredictionVerifyService:
             # 第3步：查 SectorFundMapping 表（与 LLM 分析器共享同一映射源）
             from src.models.database import SectorFundMapping
             from src.constants.sector_fund_map import normalize_sector_name
+            from src.services.sector_identity_audit import servable_predicate as _servable_predicate
             standard_sector = normalize_sector_name(sector)
             mapping = self.db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == standard_sector,
                 SectorFundMapping.is_active == True,          # noqa: E712
-            ).order_by(SectorFundMapping.reviewed.desc(),      # 已审查优先
+                _servable_predicate(),                        # 身份体检不通过的行不再当标的
+            ).order_by(SectorFundMapping.reviewed.desc().nulls_last(),   # 已审查优先
                        SectorFundMapping.id.asc()).first()
             if mapping and mapping.fund_code:
                 fund_name = mapping.fund_name or ''
                 if not any(kw in fund_name for kw in excluded_keywords):
                     return mapping.fund_code, fund_name
 
-            # 第4步：硬编码表
-            from src.constants.sector_fund_map import get_fund_for_sector
-            hardcoded = get_fund_for_sector(standard_sector)
+            # 第4步：硬编码表——同样要过体检拒绝集，否则在这里降级等于没降
+            from src.services.sector_identity_audit import static_fund_for_sector
+            hardcoded = static_fund_for_sector(standard_sector, db=self.db)
             if hardcoded:
                 return hardcoded['code'], hardcoded['name']
 

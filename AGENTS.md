@@ -178,10 +178,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次文档重写前的只读收集结果：
+最近一次核对（2026-09-21，S4a 之后）：
 
-- `pytest --collect-only -q` 可收集 123 个测试。
-- CodeGraph 状态显示 179 个索引文件、2910 个节点、3589 条边；当时有 3 个新增和 3 个修改待同步。
+- `pytest tests/unit -q` → **506 passed / 16 skipped / 0 failed**（约 90 秒）。
+- 单测必须零网络：`tests/unit/test_sector_identity_audit.py` 用 autouse fixture 挡掉基金域名册下载；新增会打站的代码要照样注入桩。
+- CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：
 

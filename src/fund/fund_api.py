@@ -6,7 +6,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import json
 import re
+import threading
 import time
+import unicodedata
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -23,6 +25,40 @@ from src.core.config import config
 from src.models.database import FundInfo, FundHistory, SessionLocal
 
 logger = logging.getLogger(__name__)
+
+# pingzhongdata 的"页面未找到"页是 HTTP 200 + 固定正文，只能按字节匹配：
+# 正文 title 是 GBK 乱码，`'页面未找到' in response.text` 永远不成立。
+PINGZHONG_NOT_FOUND_SIGNATURE = b'\xe9\xa1\xb5\xe9\x9d\xa2\xe6\x9c\xaa'  # 页面未
+
+_FUND_ROSTER = None
+_ROSTER_LOCK = threading.Lock()
+
+_IDENTITY_STRIP = re.compile(r"[\s\-—·、,，。'\"!！()\[\]（）【】]")
+
+
+def normalize_for_identity(name) -> str:
+    """把名称折成可比较形式：全角转半角（京东方Ａ→京东方A）、去空白与分隔符（报 喜 鸟→报喜鸟）。
+
+    归一细节直接决定阈值是否安全：id 25 j=0.467、id 79 j=0.40 都贴着 0.35/0.45 边界，
+    任何一处归一改动都可能把正确行翻成硬拒，所以由
+    tests/fixtures/name_identity_golden.json 逐项钉死。
+    """
+    if not name:
+        return ''
+    return _IDENTITY_STRIP.sub('', unicodedata.normalize('NFKC', str(name)).lower())
+
+
+def jaccard_name(a, b) -> float:
+    """字符集 Jaccard：语序无关，用来判"这两个名字指的是不是同一只产品"。
+
+    不用二字 Dice——`华宝中证医疗ETF` vs `医疗ETF华宝` 是同一只基金，Dice 只有
+    0.33 会把正确映射判成错行；Jaccard 给 0.78，而"京东方Ａ vs 大成添利宝货币B"
+    （股票名撞上同码货基）仍是 0.0，分离度足够。
+    """
+    ca, cb = set(normalize_for_identity(a)), set(normalize_for_identity(b))
+    if not ca or not cb:
+        return 0.0
+    return round(len(ca & cb) / len(ca | cb), 4)
 
 
 class FundAPI:
@@ -331,12 +367,12 @@ class FundAPI:
         api_name = (info or {}).get('fund_name')
         nav_date = (info or {}).get('nav_date')
         # 场内 ETF 常常拿不到实时名称（jsonpgz 为空），但官方名是"验证抓取"面板和
-        # 后续相关性判断的关键输入，所以再用搜索接口按代码反查一次名字。
+        # 后续相关性判断的关键输入。这里必须用**纯基金域**来源：搜索接口是混合证券
+        # 搜索，按代码反查会把股票名（000938→紫光股份）当成基金官方名返回。
         if not api_name and fill_name:
-            for item in self.search_fund(code):
-                if str(item.get('fund_code')) == code and item.get('fund_name'):
-                    api_name = item['fund_name']
-                    break
+            domain = self.get_fund_domain_name(code)
+            if domain.get('status') == 'ok':
+                api_name = domain.get('name')
         # 实时接口没给净值日期时，用历史最新一条兜底展示
         if not nav_date and history:
             latest_date = history[0].get('date')
@@ -455,8 +491,18 @@ class FundAPI:
             'problems': problems,
         }
 
-    def search_fund(self, keyword: str) -> List[Dict]:
-        """搜索基金"""
+    def search_fund(self, keyword: str) -> Optional[List[Dict]]:
+        """搜索基金。
+
+        注意：这个接口是**混合证券搜索**，返回值里既有基金也有股票
+        （实测 `000938` 只回"紫光股份"、`液冷` 回"冰山冷热/五 粮 液"），
+        所以调用方必须用 `is_fund` / `category_desc` 过滤，不能拿到结果就当基金。
+        查询键要用**原始名称**：'京东方Ａ' 原始名查得到，NFKC 归一后反而 0 条命中。
+
+        Returns:
+            None 表示请求/解析失败（与"查无结果"的 [] 区分开——身份判定要靠这个区别
+            决定能不能下"这不是基金"的结论，混为一谈会让站点故障静默变成批量降级）。
+        """
         try:
             params = {
                 'm': '1',
@@ -469,19 +515,90 @@ class FundAPI:
             )
             response.encoding = 'utf-8'
             data = response.json()
-            
+
             results = []
-            if 'Datas' in data:
-                for item in data['Datas'][:10]:
-                    results.append({
-                        'fund_code': item.get('CODE'),
-                        'fund_name': item.get('NAME'),
-                        'fund_type': item.get('FUNDTYPE', '')
-                    })
+            for item in (data.get('Datas') or [])[:10]:
+                category = item.get('CATEGORYDESC') or ''
+                results.append({
+                    'fund_code': item.get('CODE'),
+                    'fund_name': item.get('NAME'),
+                    'fund_type': item.get('FUNDTYPE', ''),
+                    'category_desc': category,
+                    'is_fund': category == '基金' or bool(item.get('FundBaseInfo')),
+                })
             return results
         except Exception as e:
             logger.error(f"搜索基金失败: {e}")
-            return []
+            return None
+
+    def load_fund_roster(self, refresh: bool = False) -> Dict:
+        """一次性拉取基金域名册（约 3.1MB / 2.7 万条），用于"码→官方名"和"名→码"。
+
+        为什么用名册而不是逐个代码 pingzhongdata：整表 1 个请求，且**离线**就能把
+        "德明利/哈三联/京东方Ａ 这些名字根本不是基金"判掉。
+        名册不是全集（实测缺 000938/002154/002261/004529，这些都能由单码接口解析），
+        所以**名册查不到永远不作为负证据**，只回落单码。
+        """
+        global _FUND_ROSTER
+        with _ROSTER_LOCK:
+            if _FUND_ROSTER and not refresh:
+                return _FUND_ROSTER
+            response = self.session.get(
+                'http://fund.eastmoney.com/js/fundcode_search.js', timeout=30)
+            text = response.content.decode('utf-8', errors='replace')
+            start, end = text.find('['), text.rfind(']')
+            if start < 0 or end <= start:
+                raise ValueError('fundcode_search.js 解析失败')
+            rows = json.loads(text[start:end + 1])
+            by_code, codes_by_name = {}, {}
+            for row in rows:
+                # 行结构：[代码, 拼音缩写, 中文名称, 基金类型, 全拼]——拼音列不是名字，别取错
+                if len(row) < 4 or not row[0]:
+                    continue
+                code, name, ftype = str(row[0]), (row[2] or ''), (row[3] or '')
+                by_code[code] = {'name': name, 'fund_type': ftype}
+                codes_by_name.setdefault(name, []).append(code)
+                codes_by_name.setdefault(normalize_for_identity(name), []).append(code)
+            _FUND_ROSTER = {'by_code': by_code, 'codes_by_name': codes_by_name,
+                            'loaded_at': time.time(), 'size': len(by_code)}
+            return _FUND_ROSTER
+
+    def get_fund_domain_name(self, code: str) -> Dict:
+        """取"这个 6 位码在基金域到底是什么品种"，返回 {status, name, fund_type, source}。
+
+        status: ok（基金域有这只）/ absent（站点明确回答没有此码，确定负证据）/
+                error（请求失败，**不能**据此下结论）。
+        """
+        code = (code or '').strip()
+        if not re.fullmatch(r'\d{6}', code):
+            return {'status': 'absent', 'name': None, 'fund_type': None, 'source': 'bad_code'}
+        try:
+            roster = self.load_fund_roster()
+        except Exception as e:
+            logger.warning(f"名册加载失败，回落到单码接口: {e}")
+            roster = {'by_code': {}, 'codes_by_name': {}}
+        hit = roster['by_code'].get(code)
+        if hit and hit.get('name'):
+            return {'status': 'ok', 'name': hit['name'],
+                    'fund_type': hit.get('fund_type'), 'source': 'roster'}
+        try:
+            response = self.session.get(
+                f'http://fund.eastmoney.com/pingzhongdata/{code}.js',
+                timeout=self.timeout, allow_redirects=True)
+        except Exception as e:
+            logger.debug(f"单码基金名查询 {code} 失败: {e}")
+            return {'status': 'error', 'name': None, 'fund_type': None, 'source': 'pingzhong'}
+        content = response.content or b''
+        match = re.search(rb'fS_name\s*=\s*"([^"]+)"', content)
+        if match:
+            return {'status': 'ok',
+                    'name': match.group(1).decode('utf-8', errors='replace'),
+                    'fund_type': None, 'source': 'pingzhong'}
+        # 404 页是 HTTP 200 + 固定文案，只能按字节判：正文明明是 GBK 乱码 title，
+        # 用 `'页面未找到' in response.text` 永远匹配不上，会静默退回"取不到就当没结论"。
+        if PINGZHONG_NOT_FOUND_SIGNATURE in content:
+            return {'status': 'absent', 'name': None, 'fund_type': None, 'source': 'pingzhong'}
+        return {'status': 'error', 'name': None, 'fund_type': None, 'source': 'pingzhong'}
 
 
 class FundDataManager:

@@ -1109,11 +1109,20 @@ def sector_ai_batch_status():
 
 @router.get("/fund-search")
 def fund_search(keyword: str):
-    """按关键词搜天天基金（结果天然只含基金），供前端"人工换一只"和 agent 复核。"""
+    """按关键词搜基金，供前端"人工换一只"和 agent 复核。
+
+    底层是**混合证券搜索**（实测 000938→紫光股份、液冷→冰山冷热），所以这里必须按
+    CATEGORYDESC 过滤掉股票，否则"人工换一只"的下拉框会把股票喂给老板选。
+    """
     keyword = (keyword or '').strip()
     if not keyword:
         raise HTTPException(status_code=400, detail='keyword 不能为空')
-    return {'success': True, 'data': fund_api.search_fund(keyword)}
+    results = fund_api.search_fund(keyword)
+    if results is None:
+        raise HTTPException(status_code=502, detail='基金搜索接口不可用，请稍后重试')
+    funds = [r for r in results if r.get('is_fund')]
+    return {'success': True, 'data': funds,
+            'dropped_non_fund': len(results) - len(funds)}
 
 
 @router.get("/sector-mappings")
@@ -1153,7 +1162,15 @@ def get_sector_mappings(
                 'fund_code': fund_info.get('code', ''),
                 'fund_name': fund_info.get('name', ''),
                 'reviewed': True,
-                'source': 'builtin'
+                'source': 'builtin',
+                # 内置表没有体检结论：显式标 unaudited，前端才不会把它算成"已确认可服务"
+                'servable': True,
+                'identity_verdict': None,
+                'identity_reason': None,
+                'identity_official_name': None,
+                'identity_suggestion': None,
+                'relevance_low': False,
+                'audited': False,
             })
 
     mappings = merged
@@ -1196,7 +1213,8 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = 
         )
 
         if not result:
-            return {"success": False, "message": "映射不存在"}
+            return {"success": False,
+                    "message": "映射不存在，或身份体检不通过（不可服务的行不能只改名字就回到已审查）"}
 
         # 级联清理冲突
         if result.get('sector_name') and result.get('fund_code'):
@@ -1242,7 +1260,15 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
                 fund_code=mapping.fund_code,
                 fund_name=mapping.fund_name
             )
-            if result and result.get('sector_name') and result.get('fund_code'):
+            if result is None:
+                # 门禁拒绝不能报成"更新成功"（前端会显示"已更新映射"）
+                return {
+                    "success": False,
+                    "message": "更新被拒绝：该行身份体检不通过（股票名/同码别的基金）。"
+                               "请改基金代码，或先重新验证抓取。",
+                    "data": None
+                }
+            if result.get('sector_name') and result.get('fund_code'):
                 try:
                     service.cascade_cleanup_conflicts(
                         result['sector_name'], result['fund_code'], result.get('fund_name', '')
@@ -1318,12 +1344,18 @@ def batch_review_sector_mappings(req: BatchReviewRequest, db: Session = Depends(
     service = get_sector_fund_service(db)
     count = service.batch_mark_reviewed(req.ids, reviewed=req.reviewed,
                                         owner_confirm=req.owner_confirm)
+    rejected = getattr(service, '_last_batch_review_rejected', []) or []
 
     action = "已审查" if req.reviewed else "未审查"
+    message = f"已将 {count} 个映射标记为{action}"
+    if rejected:
+        # 身份体检不通过的行不能靠"一键全部标记已审查"复活，必须让老板看见被拒了
+        message += f"；{len(rejected)} 个因身份体检不通过被拒绝（{('、'.join(rejected[:3]))}…）"
     return {
         "success": True,
-        "message": f"已将 {count} 个映射标记为{action}",
-        "data": {"count": count}
+        "message": message,
+        "data": {"count": count, "rejected": len(rejected),
+                 "rejected_sectors": rejected}
     }
 
 

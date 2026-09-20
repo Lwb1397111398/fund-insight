@@ -5,7 +5,6 @@
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
-from src.constants.sector_fund_map import get_fund_for_sector as get_mapped_fund
 from src.models.database import FundInfo
 
 # 与 fund_auto_manager._verify_fund_exists 同源的本地过滤词：
@@ -46,7 +45,8 @@ def match_fund_with_fallback(
     # 映射表未命中或基金未入库时原样落到第一级，新基金自动入库语义完全保留。
     if sector:
         try:
-            mapped = get_mapped_fund(sector)
+            from src.services.sector_identity_audit import static_fund_for_sector
+            mapped = static_fund_for_sector(sector, db=db)
             if mapped and mapped.get("code"):
                 existing = db.query(FundInfo).filter(
                     FundInfo.fund_code == str(mapped["code"])

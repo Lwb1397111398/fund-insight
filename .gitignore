@@ -74,3 +74,6 @@ mobile/**/android/.gradle/
 mobile/**/android/app/.cxx/
 mobile/**/android/local.properties
 mobile/**/.flutter-plugins*
+
+# 体检断点续跑缓存（机器相关，且会屏蔽站点的最新状态）
+docs/迭代计划/run-2026-09-20/sweep-cache.json

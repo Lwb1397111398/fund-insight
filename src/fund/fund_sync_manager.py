@@ -450,8 +450,10 @@ class FundSyncManager:
         service.refresh_cache()
 
         # 2. 加载板块-基金映射（reviewed=True 优先）
+        from src.services.sector_identity_audit import servable_predicate
         mappings = db.query(SectorFundMapping).filter(
-            SectorFundMapping.is_active == True
+            SectorFundMapping.is_active == True,
+            servable_predicate(),
         ).all()
 
         # 构建映射表：sector_name -> {code, name, reviewed}

@@ -11,12 +11,16 @@ from src.models.database import SectorFundMapping, FundInfo, SessionLocal
 
 logger = logging.getLogger(__name__)
 
+# 板块映射缓存有效期：跨进程（Cron 体检 → Web 读取）传播上限
+_CACHE_TTL = 60.0
+
 
 class SectorFundService:
     """板块-基金映射服务 - 使用缓存，按需创建会话"""
 
     _cache: Dict[str, Dict] = {}       # {sector_name: {'code': ..., 'name': ..., 'reviewed': bool}}
     _cache_loaded: bool = False
+    _cache_at: float = 0.0
 
     def __init__(self, db: Session = None):
         self._external_db = db is not None
@@ -31,7 +35,11 @@ class SectorFundService:
         return not self._external_db or db is not self.db
 
     def _load_cache(self):
-        if self._cache_loaded:
+        # TTL：体检跑在 Render Cron 进程里，Web 进程的类级缓存若永不过期，
+        # 降级就要等到下次重启才生效——那等于"这轮白做"，而且没有任何报错。
+        import time as _time
+        if SectorFundService._cache_loaded and \
+                (_time.time() - SectorFundService._cache_at) < _CACHE_TTL:
             return
 
         db = self._get_db()
@@ -42,27 +50,35 @@ class SectorFundService:
             mappings = db.query(SectorFundMapping).filter(
                 SectorFundMapping.is_active == True
             ).order_by(
-                SectorFundMapping.reviewed.desc(),
+                SectorFundMapping.reviewed.desc().nulls_last(),
                 SectorFundMapping.id.asc(),
             ).all()
 
             for m in mappings:
+                if self._unservable(m):
+                    # 体检判定"不可服务"的行（股票名/同码别的基金/代码填错/基金域没有此码）
+                    # 不进缓存：它既不该服务帖子分析，也不该挡住同板块另一条可服务的行。
+                    # 管理界面走 get_all_mappings_with_status，仍然看得见。
+                    continue
                 existing = self._cache.get(m.sector_name)
                 if existing and existing.get('reviewed') and not (m.reviewed or False):
                     continue
                 self._cache[m.sector_name] = {
                     'code': m.fund_code,
                     'name': m.fund_name,
-                    'reviewed': m.reviewed or False
+                    'reviewed': m.reviewed or False,
                 }
 
-            self._cache_loaded = True
+            SectorFundService._cache_loaded = True
+            import time as _time
+            SectorFundService._cache_at = _time.time()
         finally:
             if self._should_close(db):
                 db.close()
 
     def get_fund_by_sector(self, sector_name: str) -> Optional[Dict]:
         """获取板块对应的基金（优先返回 reviewed=True 的映射）"""
+        from src.services.sector_identity_audit import servable_predicate
         if sector_name in self._cache:
             cached = self._cache[sector_name]
             if cached.get('reviewed'):
@@ -74,14 +90,18 @@ class SectorFundService:
             mapping = db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == sector_name,
                 SectorFundMapping.is_active == True,
-                SectorFundMapping.reviewed == True
+                SectorFundMapping.reviewed == True,
+                servable_predicate(),
             ).first()
 
             if not mapping:
-                # 降级查 reviewed=False
+                # 降级查 reviewed=False。降级分支同样要过滤：体检判"不可服务"的行
+                # 如果在这里被捞回来，"取消 reviewed"就等于什么都没做（000725 京东方Ａ
+                # 实测正是这样继续服务帖子分析的）。
                 mapping = db.query(SectorFundMapping).filter(
                     SectorFundMapping.sector_name == sector_name,
-                    SectorFundMapping.is_active == True
+                    SectorFundMapping.is_active == True,
+                    servable_predicate(),
                 ).first()
 
             if mapping:
@@ -98,6 +118,12 @@ class SectorFundService:
             if self._should_close(db):
                 db.close()
 
+    @staticmethod
+    def _unservable(row) -> bool:
+        """体检结论有两个来源：`is_fetchable` 列与 evidence 里的 verdict，都要认。"""
+        from src.services.sector_identity_audit import row_unservable
+        return row_unservable(row)
+
     def get_all_mappings(self) -> Dict[str, Dict]:
         self._load_cache()
         return self._cache.copy()
@@ -112,8 +138,10 @@ class SectorFundService:
 
             # 待审查排在前面，同状态内按板块名排序
             mappings = query.order_by(SectorFundMapping.reviewed.asc(), SectorFundMapping.sector_name).all()
-            return [
-                {
+            from src.services.sector_identity_audit import identity_view
+            out = []
+            for m in mappings:
+                item = {
                     'id': m.id,
                     'sector_name': m.sector_name,
                     'fund_code': m.fund_code,
@@ -125,8 +153,9 @@ class SectorFundService:
                     'created_at': m.created_at.isoformat() if m.created_at else None,
                     'updated_at': m.updated_at.isoformat() if m.updated_at else None
                 }
-                for m in mappings
-            ]
+                item.update(identity_view(m))
+                out.append(item)
+            return out
         finally:
             if self._should_close(db):
                 db.close()
@@ -173,68 +202,6 @@ class SectorFundService:
             if self._should_close(db):
                 db.close()
 
-    def add_mapping(self, sector_name: str, fund_code: str, fund_name: str,
-                    keywords: List[str] = None, reviewed: bool = False) -> SectorFundMapping:
-        """添加或更新映射（upsert），并级联清理低优先级层的冲突数据"""
-        db = self._get_db()
-        try:
-            self.ensure_fund_info_exists(fund_code, fund_name, sector_type=sector_name)
-            existing = db.query(SectorFundMapping).filter(
-                SectorFundMapping.sector_name == sector_name
-            ).first()
-
-            if existing:
-                existing.fund_code = fund_code
-                existing.fund_name = fund_name
-                if keywords is not None:
-                    existing.keywords = keywords
-                existing.is_active = True
-                if reviewed:
-                    existing.reviewed = True
-                db.commit()
-                db.refresh(existing)
-                self._cache[sector_name] = {
-                    'code': fund_code, 'name': fund_name, 'reviewed': existing.reviewed or False
-                }
-                return existing
-            else:
-                mapping = SectorFundMapping(
-                    sector_name=sector_name,
-                    fund_code=fund_code,
-                    fund_name=fund_name,
-                    keywords=keywords,
-                    reviewed=reviewed
-                )
-                db.add(mapping)
-                db.commit()
-                db.refresh(mapping)
-                self._cache[sector_name] = {
-                    'code': fund_code, 'name': fund_name, 'reviewed': reviewed
-                }
-                return mapping
-        finally:
-            if self._should_close(db):
-                db.close()
-
-    def mark_reviewed(self, sector_name: str, reviewed: bool = True) -> bool:
-        """标记映射为已审查/未审查"""
-        db = self._get_db()
-        try:
-            mapping = db.query(SectorFundMapping).filter(
-                SectorFundMapping.sector_name == sector_name
-            ).first()
-            if not mapping:
-                return False
-
-            mapping.reviewed = reviewed
-            db.commit()
-            if sector_name in self._cache:
-                self._cache[sector_name]['reviewed'] = reviewed
-            return True
-        finally:
-            if self._should_close(db):
-                db.close()
-
     def mark_reviewed_by_id(self, mapping_id: int, reviewed: bool = True,
                             owner_confirm: bool = False) -> bool:
         """按 ID 标记审查。
@@ -250,6 +217,14 @@ class SectorFundService:
             ).first()
             if not mapping:
                 return False
+            if reviewed and self._unservable(mapping):
+                # 体检判定"不可服务"（股票名/同码别的基金/代码填错）的行，即使
+                # match_source+verified_at 齐备、即使老板勾了"确认"，也不能再回到
+                # 已审查：证据齐备恰恰是体检自己写上去的，否则一次误点就复活股票。
+                logger.info('[板块映射] 拒绝标记 %s(%s)：%s',
+                            mapping.sector_name, mapping.fund_code,
+                            mapping.verify_message or '身份判定未通过')
+                return False
             if reviewed and not (mapping.match_source and mapping.verified_at) \
                     and not owner_confirm:
                 return False
@@ -263,8 +238,7 @@ class SectorFundService:
                 mapping.owner_locked = False
                 mapping.reviewed_by = None
             db.commit()
-            if mapping.sector_name in self._cache:
-                self._cache[mapping.sector_name]['reviewed'] = reviewed
+            self.refresh_cache()
             return True
         finally:
             if self._should_close(db):
@@ -285,8 +259,13 @@ class SectorFundService:
             rows = db.query(SectorFundMapping).filter(
                 SectorFundMapping.id.in_(mapping_ids)).all()
             flipped, skipped = 0, []
+            rejected = []
             for row in rows:
                 has_evidence = bool(row.match_source and row.verified_at)
+                if reviewed and self._unservable(row):
+                    # 身份体检判"不可服务"的行不能被批量审查复活，owner_confirm 也不行
+                    rejected.append(row.sector_name)
+                    continue
                 if reviewed and not has_evidence and not owner_confirm:
                     skipped.append(row.sector_name)
                     continue
@@ -300,8 +279,12 @@ class SectorFundService:
             db.commit()
             if skipped:
                 logger.info('[批量审查] %d 条因无证据被跳过：%s', len(skipped), skipped[:10])
+            if rejected:
+                logger.info('[批量审查] %d 条因身份体检不通过被拒绝（不可复活）：%s',
+                            len(rejected), rejected[:10])
             self.refresh_cache()
             self._last_batch_review_skipped = skipped
+            self._last_batch_review_rejected = rejected
             return flipped
         finally:
             if self._should_close(db):
@@ -323,11 +306,29 @@ class SectorFundService:
             if not mapping:
                 return None
 
+            # 体检结论的输入是 (代码, 名字, 板块)：换代码**或**换名字都让旧结论失效，
+            # 退回"从未体检"（NULL 仍可服务），等下一轮体检重新证。
+            # 只按**代码**判"结论作废"：降级理由的钥匙是代码（同码撞车的另一只基金），
+            # 改名字不足以让一只股票变成基金——老板只改名就能复活降级行是不安全的。
+            changed = fund_code is not None and fund_code != mapping.fund_code
+            if changed:
+                mapping.is_fetchable = None
+                mapping.evidence = _drop_identity_evidence(mapping.evidence)
             if fund_code is not None:
                 mapping.fund_code = fund_code
             if fund_name is not None:
                 mapping.fund_name = fund_name
             mapping.reviewed = True if mark_reviewed is None else mark_reviewed
+            if mapping.reviewed and self._unservable(mapping):
+                # 既没换标的也没换名字、只是把状态翻回"已审查" → 拒绝（防一键复活）
+                logger.info('[板块映射] 拒绝标记 %s(%s)：身份体检不通过',
+                            mapping.sector_name, mapping.fund_code)
+                db.rollback()
+                return None
+            # 写库出口重新物化镜像不变量：verdict 属不可服务 ⇒ 列必须 False。
+            # 否则"只有 verdict 是否定"的行会让 SQL 读者继续服务、Python 读者隐藏它。
+            if self._unservable(mapping):
+                mapping.is_fetchable = False
             if mapping.reviewed:
                 # 手工编辑/确认 = 老板的决定：记来源并锁定，agent 之后不得覆盖
                 mapping.reviewed_by = 'owner'
@@ -339,11 +340,9 @@ class SectorFundService:
             db.commit()
             db.refresh(mapping)
 
-            self._cache[mapping.sector_name] = {
-                'code': mapping.fund_code,
-                'name': mapping.fund_name,
-                'reviewed': mapping.reviewed or False
-            }
+            # 不手写缓存条目：`_load_cache` 会过滤不可服务的行，
+            # 直接塞 dict 会让"刚保存的行立刻可见、但所有读路径都不该看到它"这种情况发生
+            self.refresh_cache()
 
             return {
                 'id': mapping.id,
@@ -448,3 +447,18 @@ def get_sector_fund_service(db: Session = None) -> SectorFundService:
     if _sector_fund_service is None:
         _sector_fund_service = SectorFundService()
     return _sector_fund_service
+
+
+def _drop_identity_evidence(raw):
+    """人工改码后，把已过期的身份结论从 evidence 里摘掉。"""
+    import json as _json
+    if not raw:
+        return raw
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return raw
+    if isinstance(data, dict) and 'identity' in data:
+        data.pop('identity', None)
+        return _json.dumps(data, ensure_ascii=False)
+    return raw

@@ -535,7 +535,7 @@ class SectorFundMapping(Base):
     verified_at = Column(DateTime)      # 最后一次抓站验证时间
     verify_message = Column(Text)       # 验证结论/替代理由（面向用户）
     llm_reason = Column(Text)           # LLM 推荐理由原文
-    is_fetchable = Column(Boolean)      # 严格抓取判据（净值>0 或 ≥5 条净值），与旧 ok 分开
+    is_fetchable = Column(Boolean)      # 可服务（身份体检写）：NULL=从未体检，False=身份/抓取不通过
     evidence = Column(Text)             # agent 每轮候选/验证/判定的 JSON，前端可展开复核
     reviewed_by = Column(String(30))    # owner|agent|seed
     owner_locked = Column(Boolean)      # 老板手工挑定（含"有意代理"），agent 不得覆盖

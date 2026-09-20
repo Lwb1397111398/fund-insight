@@ -212,12 +212,38 @@ class LLMAnalyzer:
             from src.services.sector_fund_service import get_sector_fund_service
             service = get_sector_fund_service()
             db_mappings = service.get_all_mappings()
+            static = self._audited_static_map()
             if db_mappings:
-                return {**SECTOR_FUND_MAP, **db_mappings}
+                return {**static, **db_mappings}
+            return static
         except Exception as e:
             logger.debug(f"[LLM] 获取数据库板块映射失败: {e}")
-        
-        return SECTOR_FUND_MAP
+
+        # 兜底也不能返回未过滤的静态表：体检降级过的板块正是靠这里偷偷复活的
+        return self._audited_static_map()
+
+    @staticmethod
+    def _audited_static_map() -> Dict:
+        """内置静态表减去体检判不可服务的 (板块, 代码)。
+
+        某板块的 DB 行被降级后，合并结果不能继续从 SECTOR_FUND_MAP 里把同一只
+        股票/错基金发给 LLM；拒绝集本身拉不到时按空表处理（宁可不给提示，
+        也不能给一只已确认不可服务的标的）。
+        """
+        from src.constants import SECTOR_FUND_MAP
+        from src.services.sector_identity_audit import (
+            denied_map_available, rejected_codes)
+        try:
+            if not denied_map_available():
+                # 拒绝集一次都没取到过 = "哪些标的被否"本身不可知。
+                # 此时放行 122 条内置映射等于体检白做，而且是静默的：按空表处理。
+                logger.warning('[LLM] 身份拒绝集不可用，本轮不提供静态板块映射提示')
+                return {}
+            return {k: v for k, v in SECTOR_FUND_MAP.items()
+                    if v.get('code') not in rejected_codes(k)}
+        except Exception as e:
+            logger.debug(f"[LLM] 拒绝集不可用，静态表按空处理: {e}")
+            return {}
     
     def __init__(self):
         self.provider = config.LLM_PROVIDER
@@ -1241,20 +1267,6 @@ class LLMAnalyzer:
         except Exception:
             return None
 
-    def _search_fund_via_api(self, sector: str) -> Optional[Dict]:
-        """第4层：调天天基金 API 搜索"""
-        try:
-            from src.fund.fund_api import FundAPI
-            api = FundAPI()
-            results = api.search_fund(sector)
-            if results:
-                # 取第一个结果
-                r = results[0]
-                return {'code': r.get('fund_code', ''), 'name': r.get('fund_name', '')}
-        except Exception as e:
-            logger.warning(f"[基金匹配] API搜索失败: {e}")
-        return None
-
     def _save_fund_mapping(self, sector: str, fund_code: str, fund_name: str, reviewed: bool = False, db=None):
         """自动保存映射到数据库（reviewed=False 表示待审查）"""
         try:
@@ -1263,11 +1275,13 @@ class LLMAnalyzer:
             if db is None:
                 db = SessionLocal()
             try:
+                from src.services.sector_identity_audit import servable_predicate
                 existing = db.query(SectorFundMapping).filter(
                     SectorFundMapping.sector_name == sector,
                     SectorFundMapping.is_active == True,
+                    servable_predicate(),
                 ).order_by(
-                    SectorFundMapping.reviewed.desc(),
+                    SectorFundMapping.reviewed.desc().nulls_last(),
                     SectorFundMapping.id.asc(),
                 ).first()
                 if existing:

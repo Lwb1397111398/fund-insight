@@ -148,9 +148,11 @@ class PredictionMaintenanceService:
         - `run_id`：写进 change log，`scripts/restore_prediction_batch.py` 才能整批回滚。
         - 板块匹配走别名归一（`sector_alias`），否则"绿电/绿色电力"这类同义板块会漏改。
         """
+        from src.services.sector_identity_audit import servable_predicate
         mappings = self.db.query(SectorFundMapping).filter(
             SectorFundMapping.is_active == True,
             SectorFundMapping.reviewed == True,
+            servable_predicate(),
         ).order_by(
             SectorFundMapping.updated_at.desc(),
             SectorFundMapping.id.desc(),

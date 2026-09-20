@@ -308,7 +308,12 @@ def test_full_evidence_write_marks_reviewed(db_session):
     assert row.reviewed is True
     assert row.reviewed_by == 'agent'
     assert row.confidence == pytest.approx(0.92)
-    assert [e['stage'] for e in json.loads(row.evidence)] == ['T2', 'T3']
+    tiers = json.loads(row.evidence)
+    assert [e['stage'] for e in tiers] == ['T2', 'T3', 'FETCH']
+    assert tiers[-1]['is_strict_ok'] is True
+    # agent 不再写 is_fetchable：那一列的语义是"身份体检判可服务"，
+    # 一次净值抖动若写进去，正确映射会从所有读路径里无声消失
+    assert row.is_fetchable is None
 
 
 def test_owner_locked_row_is_never_overwritten(db_session):
