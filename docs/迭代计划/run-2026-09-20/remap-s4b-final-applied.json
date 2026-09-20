@@ -1,0 +1,4778 @@
+{
+ "run_id": "rematch-20260921b",
+ "min_confidence": 0.85,
+ "updated": 530,
+ "verified_reset": 351,
+ "details": [
+  {
+   "prediction_id": 5,
+   "sector": "军工",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 7,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 9,
+   "sector": "印度股",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "006105",
+   "new_fund_name": "宏利印度股票(QDII)A",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 72,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 88,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 178,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 234,
+   "sector": "沪深300",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 378,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 419,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 488,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 522,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 540,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 556,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 598,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 603,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 671,
+   "sector": "SpaceX",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159206",
+   "new_fund_name": "永赢国证商用卫星通信产业 ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 761,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 809,
+   "sector": "中报高增长",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159259",
+   "new_fund_name": "- 成长ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 842,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 849,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 852,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 870,
+   "sector": "业绩板块",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510880",
+   "new_fund_name": "华泰柏瑞上证红利ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 895,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 903,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 909,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 919,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 930,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 946,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 962,
+   "sector": "培育钻石",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "516360",
+   "new_fund_name": "华宝中证新材料主题ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 963,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 964,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 975,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 991,
+   "sector": "质量成长",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "008528",
+   "new_fund_name": "华泰柏瑞质量成长A",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 997,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 999,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1005,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1012,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1031,
+   "sector": "中老登",
+   "old_fund_code": "563020",
+   "old_fund_name": "红利低波 ETF 易方达",
+   "new_fund_code": "512690",
+   "new_fund_name": "酒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1032,
+   "sector": "创业板",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1051,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1053,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1055,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1061,
+   "sector": "市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510050",
+   "new_fund_name": "华泰柏瑞上证50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1069,
+   "sector": "传统老登",
+   "old_fund_code": "519670",
+   "old_fund_name": "银河行业混合A",
+   "new_fund_code": "512690",
+   "new_fund_name": "酒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1094,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1110,
+   "sector": "业绩和涨价线",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1114,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1129,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1138,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1141,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1142,
+   "sector": "老登",
+   "old_fund_code": "002273",
+   "old_fund_name": null,
+   "new_fund_code": "512690",
+   "new_fund_name": "酒ETF鹏华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1144,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1160,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1163,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1174,
+   "sector": "中证500",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510500",
+   "new_fund_name": "中证500ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1179,
+   "sector": "创业板",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1222,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1224,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1229,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1247,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1249,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1251,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1275,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1279,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1280,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1287,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1289,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1323,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1331,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1335,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1362,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1366,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1371,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1373,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1393,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1402,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1434,
+   "sector": "中报预增",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510880",
+   "new_fund_name": "华泰柏瑞上证红利ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1448,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1469,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1470,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1476,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1480,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1507,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1515,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1520,
+   "sector": "市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510050",
+   "new_fund_name": "华泰柏瑞上证50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1521,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1525,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1544,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1545,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1553,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1562,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1566,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1569,
+   "sector": "全市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159338",
+   "new_fund_name": "国泰中证A500ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1570,
+   "sector": "全市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159338",
+   "new_fund_name": "国泰中证A500ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1582,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1588,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1590,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1601,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1619,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1624,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1644,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1666,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1667,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1671,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1674,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1678,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1680,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1681,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1682,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1687,
+   "sector": "韩国股市",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "513310",
+   "new_fund_name": "中韩半导体ETF（QDII）",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1692,
+   "sector": "印度",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "006105",
+   "new_fund_name": "宏利印度股票(QDII)A",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1702,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1703,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1709,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1734,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1754,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1759,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1769,
+   "sector": "韩国股市",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "513310",
+   "new_fund_name": "中韩半导体ETF（QDII）",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1771,
+   "sector": "创业板",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1773,
+   "sector": "大盘",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1789,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1803,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1805,
+   "sector": "中字头",
+   "old_fund_code": "519670",
+   "old_fund_name": "银河行业混合A",
+   "new_fund_code": "512950",
+   "new_fund_name": "华夏中证央企结构调整 ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1806,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1811,
+   "sector": "中证500",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510500",
+   "new_fund_name": "中证500ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1814,
+   "sector": "市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510050",
+   "new_fund_name": "华泰柏瑞上证50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1817,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1825,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1834,
+   "sector": "沪深300",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1836,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1837,
+   "sector": "市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510050",
+   "new_fund_name": "华泰柏瑞上证50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1846,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1851,
+   "sector": "互联网",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "517200",
+   "new_fund_name": "互联网ETF嘉实",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1868,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1871,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1876,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1881,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1882,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1883,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1905,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1909,
+   "sector": "零售",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "159936",
+   "new_fund_name": "广发中证全指可选消费 ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1913,
+   "sector": "创业板",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1919,
+   "sector": "沪深300",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1921,
+   "sector": "上证指数",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1925,
+   "sector": "市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510050",
+   "new_fund_name": "华泰柏瑞上证50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1936,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1937,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1942,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1947,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1949,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1951,
+   "sector": "国产替代",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159667",
+   "new_fund_name": "国泰中证机床 ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1953,
+   "sector": "LED",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159732",
+   "new_fund_name": "华夏国证消费电子主题 ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1961,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1970,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1976,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1978,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1979,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1987,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1989,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1991,
+   "sector": "红利",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2008,
+   "sector": "韩国综指",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "513310",
+   "new_fund_name": "中韩半导体ETF（QDII）",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2012,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2016,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2022,
+   "sector": "Ai应用",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515230",
+   "new_fund_name": "国泰中证全指软件ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2024,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2033,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2035,
+   "sector": "韩股",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "513310",
+   "new_fund_name": "中韩半导体ETF（QDII）",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2036,
+   "sector": "纳指",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "159501",
+   "new_fund_name": "纳指ETF嘉实",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2043,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2047,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2048,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2049,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2051,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2054,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2063,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2067,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2068,
+   "sector": "韩股",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "513310",
+   "new_fund_name": "中韩半导体ETF（QDII）",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2069,
+   "sector": "纳指",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "159501",
+   "new_fund_name": "纳指ETF嘉实",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2070,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2083,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2087,
+   "sector": "A股市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "华泰柏瑞沪深 300ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2088,
+   "sector": "A股市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "华泰柏瑞沪深 300ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2090,
+   "sector": "市场",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510050",
+   "new_fund_name": "华泰柏瑞上证50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2094,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2098,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2099,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2101,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2106,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2108,
+   "sector": "沪深300",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2115,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2116,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2122,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2131,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2142,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2147,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2148,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2152,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2159,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2165,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2173,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2174,
+   "sector": "沪深300",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2185,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2193,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2194,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2195,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2201,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2206,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2222,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2224,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2228,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2232,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2240,
+   "sector": "创业板",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2248,
+   "sector": "国产替代",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159667",
+   "new_fund_name": "国泰中证机床 ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2250,
+   "sector": "超节点",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515880",
+   "new_fund_name": "通信ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2257,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2265,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2268,
+   "sector": "印度",
+   "old_fund_code": "513520",
+   "old_fund_name": null,
+   "new_fund_code": "006105",
+   "new_fund_name": "宏利印度股票(QDII)A",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2269,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2270,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2286,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2305,
+   "sector": "长鑫存储",
+   "old_fund_code": "512480",
+   "old_fund_name": "半导体ETF国联安",
+   "new_fund_code": "588200",
+   "new_fund_name": "科创芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2307,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2309,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2311,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2312,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2319,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2326,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2335,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2339,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2343,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2360,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2364,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2368,
+   "sector": "煤炭",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2370,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2373,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2377,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2390,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2391,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2392,
+   "sector": "设备",
+   "old_fund_code": "515700",
+   "old_fund_name": "新能源车ETF平安",
+   "new_fund_code": "159516",
+   "new_fund_name": "半导体设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2393,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2398,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2403,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2407,
+   "sector": "创业板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2414,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2426,
+   "sector": "创业板",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2429,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2435,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2441,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2446,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2447,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2448,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2458,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2462,
+   "sector": "大盘",
+   "old_fund_code": "508031",
+   "old_fund_name": "国泰海通城投宽庭保租房REIT",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2468,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2476,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF华夏",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2496,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2499,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2504,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2505,
+   "sector": "高位品种",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2522,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2524,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2525,
+   "sector": "上证指数",
+   "old_fund_code": "159943",
+   "old_fund_name": null,
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2527,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2530,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2533,
+   "sector": "纳指",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "159501",
+   "new_fund_name": "纳指ETF嘉实",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2535,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2536,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2541,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2546,
+   "sector": "高端制造",
+   "old_fund_code": "515700",
+   "old_fund_name": "新能源车ETF平安",
+   "new_fund_code": "516320",
+   "new_fund_name": "华夏中证装备产业ETF（高端装备ETF）",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2547,
+   "sector": "新质生产力",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "588000",
+   "new_fund_name": "华夏上证科创板50成份ETF（科创50ETF）",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2550,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2557,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2559,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2573,
+   "sector": "钢铁",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515210",
+   "new_fund_name": "钢铁 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2574,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2578,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2581,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2588,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2594,
+   "sector": "情绪连板",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510210",
+   "new_fund_name": "上证指数ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2597,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2600,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2601,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2608,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2614,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2615,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF华夏",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2619,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2632,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2633,
+   "sector": "钢铁",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515210",
+   "new_fund_name": "钢铁 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2637,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2644,
+   "sector": "券商",
+   "old_fund_code": "512000",
+   "old_fund_name": "券商ETF华宝",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2645,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2652,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2661,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2665,
+   "sector": "传统行业",
+   "old_fund_code": "563020",
+   "old_fund_name": "红利低波 ETF 易方达",
+   "new_fund_code": "510050",
+   "new_fund_name": "上证 50ETF 华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2666,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2668,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2670,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2674,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2677,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2679,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2682,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2684,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF华夏",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2687,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2693,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2694,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2696,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2704,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2706,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2713,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2721,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2722,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2725,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2729,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2730,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2731,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2734,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2738,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2748,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2751,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2753,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2757,
+   "sector": "资源",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "510410",
+   "new_fund_name": "资源ETF博时",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2758,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2762,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2763,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2770,
+   "sector": "农牧饲渔",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "159275",
+   "new_fund_name": "农牧渔ETF华宝",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2773,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2774,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2775,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2776,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2777,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2778,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2779,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2784,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2785,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2787,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2790,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2791,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2792,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2794,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2795,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2801,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2802,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2804,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2813,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2814,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2815,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2820,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2821,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2822,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2826,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2830,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2835,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2836,
+   "sector": "宽基",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深 300ETF 华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2837,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2848,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2851,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2853,
+   "sector": "有色金属",
+   "old_fund_code": "160221",
+   "old_fund_name": "国泰国证有色金属行业指数(LOF)A",
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2856,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2859,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2861,
+   "sector": "资源",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "510410",
+   "new_fund_name": "资源ETF博时",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2870,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2874,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2878,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2879,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2880,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2884,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2886,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF华夏",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2887,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF华夏",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2888,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2890,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2892,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2895,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2897,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2901,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2902,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2903,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2907,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2910,
+   "sector": "国内云租赁",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159099",
+   "new_fund_name": "云计算 ETF 华宝",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2913,
+   "sector": "纳指",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "159501",
+   "new_fund_name": "纳指ETF嘉实",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2914,
+   "sector": "美十年期国债",
+   "old_fund_code": "000801",
+   "old_fund_name": null,
+   "new_fund_code": "511260",
+   "new_fund_name": "十年国债ETF国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2916,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2919,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2920,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2922,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2923,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2926,
+   "sector": "资源股",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色金属ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2929,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2931,
+   "sector": "创业板",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2932,
+   "sector": "创业板",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2934,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2936,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2937,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2938,
+   "sector": "生物疫苗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "017185",
+   "new_fund_name": "国泰疫苗与生物科技ETF联接A",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2942,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2948,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2950,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2958,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2960,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2962,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2963,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2964,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2971,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2974,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2976,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2978,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2983,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2985,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2986,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2993,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2996,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2998,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3005,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3012,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3019,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3020,
+   "sector": "军工",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3021,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3022,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3027,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3031,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3033,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3035,
+   "sector": "有色金属",
+   "old_fund_code": "160221",
+   "old_fund_name": "国泰国证有色金属行业指数(LOF)A",
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3038,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3039,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3043,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3047,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3049,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3050,
+   "sector": "煤炭",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3053,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3056,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3062,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3067,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3069,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3073,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3076,
+   "sector": "粮食",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "158038",
+   "new_fund_name": "粮食ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3079,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3081,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3083,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3084,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3086,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3088,
+   "sector": "红利",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3090,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3093,
+   "sector": "有色金属",
+   "old_fund_code": "160221",
+   "old_fund_name": "国泰国证有色金属行业指数(LOF)A",
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3094,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3096,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3097,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3099,
+   "sector": "粮食",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "158038",
+   "new_fund_name": "粮食ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3101,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3102,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3108,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3112,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3113,
+   "sector": "煤炭",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3114,
+   "sector": "钢铁",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515210",
+   "new_fund_name": "钢铁 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3117,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3122,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3125,
+   "sector": "创业板",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159915",
+   "new_fund_name": "创业板ETF易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3126,
+   "sector": "粮食",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "158038",
+   "new_fund_name": "粮食ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3127,
+   "sector": "大盘",
+   "old_fund_code": "510050",
+   "old_fund_name": "上证50ETF华夏",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3132,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3133,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3135,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3136,
+   "sector": "有色金属",
+   "old_fund_code": "160221",
+   "old_fund_name": "国泰国证有色金属行业指数(LOF)A",
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3145,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3149,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3158,
+   "sector": "大盘",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3160,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3163,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3165,
+   "sector": "钢铁",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515210",
+   "new_fund_name": "钢铁 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3167,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3173,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3175,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3178,
+   "sector": "粮食",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "158038",
+   "new_fund_name": "粮食ETF富国",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3183,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3186,
+   "sector": "钢铁",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515210",
+   "new_fund_name": "钢铁 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3187,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3190,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3197,
+   "sector": "纳指",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159501",
+   "new_fund_name": "纳指ETF嘉实",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3198,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3199,
+   "sector": "PCB",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515260",
+   "new_fund_name": "华宝中证电子50ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3201,
+   "sector": "煤炭",
+   "old_fund_code": "161724",
+   "old_fund_name": "招商中证煤炭等权指数(LOF)A",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3203,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3204,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3213,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3214,
+   "sector": "传媒",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3216,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3218,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3221,
+   "sector": "传媒",
+   "old_fund_code": "512980",
+   "old_fund_name": "传媒ETF广发",
+   "new_fund_code": "159805",
+   "new_fund_name": "传媒ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3228,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3234,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3237,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3247,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3256,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3258,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3260,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3262,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3263,
+   "sector": "CPO",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159583",
+   "new_fund_name": "富国通信设备ETF",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3266,
+   "sector": "韩股",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "513310",
+   "new_fund_name": "中韩半导体ETF（QDII）",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3267,
+   "sector": "纳指",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "159501",
+   "new_fund_name": "纳指ETF嘉实",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3275,
+   "sector": "存储",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159995",
+   "new_fund_name": "华夏国证半导体芯片ETF",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3278,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3283,
+   "sector": "红利",
+   "old_fund_code": "002413",
+   "old_fund_name": "雷科防务",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3286,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3288,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3291,
+   "sector": "有色金属",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "512400",
+   "new_fund_name": "有色 ETF 南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3292,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3293,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3296,
+   "sector": "煤炭",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3302,
+   "sector": "煤炭",
+   "old_fund_code": "512400",
+   "old_fund_name": "有色金属ETF南方",
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3305,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3308,
+   "sector": "化工",
+   "old_fund_code": "158006",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3312,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3316,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3317,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3318,
+   "sector": "红利",
+   "old_fund_code": "510880",
+   "old_fund_name": "红利ETF华泰柏瑞",
+   "new_fund_code": "515180",
+   "new_fund_name": "红利 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3321,
+   "sector": "粮食",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "158038",
+   "new_fund_name": "粮食ETF富国",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3324,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3326,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3331,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3336,
+   "sector": "创新药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159992",
+   "new_fund_name": "创新药ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3339,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3343,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3344,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3347,
+   "sector": "化工",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "516570",
+   "new_fund_name": "化工行业 ETF 易方达",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3348,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3353,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3354,
+   "sector": "券商",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "159842",
+   "new_fund_name": "券商ETF银华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3356,
+   "sector": "综合",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "018536",
+   "new_fund_name": "汇添富上证综合指数C",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3357,
+   "sector": "大盘",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3358,
+   "sector": "煤炭",
+   "old_fund_code": "003033",
+   "old_fund_name": null,
+   "new_fund_code": "515220",
+   "new_fund_name": "煤炭 ETF 国泰",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3361,
+   "sector": "医疗",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159877",
+   "new_fund_name": "医疗ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3362,
+   "sector": "军工",
+   "old_fund_code": "512660",
+   "old_fund_name": "军工ETF国泰",
+   "new_fund_code": "512680",
+   "new_fund_name": "军工ETF广发",
+   "reset_verified": false
+  }
+ ]
+}

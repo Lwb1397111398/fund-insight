@@ -621,3 +621,50 @@ def test_sweep_never_blacklists_an_owner_locked_row(test_db):
     test_db.refresh(row)
     assert row.is_fetchable is not False
     assert row.reviewed is True
+
+
+def test_etf_upgrade_prefers_established_etf(test_db, monkeypatch):
+    """老板规则"ETF 最纯粹"落地时不能挑到一只新发的迷你 ETF。
+
+    排名信号用"本系统已存了多少条净值"：名字长度分不出 512170 和 158010，
+    但历史深度能；同时新标的必须能建档（fund_code 有外键，实测踩到 IntegrityError）。
+    """
+    from datetime import date
+    from scripts.sweep_sector_mappings import pick_etf_upgrade
+    from src.models.database import FundHistory
+
+    monkeypatch.setattr(
+        audit.fund_api, 'verify_fund_fetchable',
+        lambda code, **kw: {'is_strict_ok': True, 'history_count': 20, 'ok': True})
+    row = _mapping('T-测试ETF升级', '162412', '华宝医疗ETF联接A', reviewed=True)
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='162412', fund_name='华宝医疗ETF联接A'))
+    test_db.add(FundInfo(fund_code='512170', fund_name='医疗ETF华宝'))
+    for i in range(12):                      # 512170 有历史，158010 没有
+        test_db.add(FundHistory(fund_code='512170', nav_date=date(2026, 1, i + 1),
+                                nav=1.0 + i))
+    test_db.commit()
+
+    verdict = {'official_name': '华宝医疗ETF联接A', 'suggestions': [
+        {'code': '158010', 'name': '医疗ETF嘉实'},
+        {'code': '512170', 'name': '医疗ETF华宝'}]}
+    upgrade = pick_etf_upgrade(test_db, row, verdict)
+    assert upgrade['code'] == '512170', upgrade
+    assert upgrade['local_history_rows'] == 12
+    assert 'ETF' in upgrade['reason'] or '纯粹' in upgrade['reason']
+
+
+def test_etf_upgrade_skips_owner_and_bad_rows(test_db, monkeypatch):
+    """老板手定的代理与已被身份体检否掉的行都不许自动换标的。"""
+    from scripts.sweep_sector_mappings import pick_etf_upgrade
+    monkeypatch.setattr(audit.fund_api, 'verify_fund_fetchable',
+                        lambda code, **kw: {'is_strict_ok': True})
+    owner = _mapping('债券', '512000', '券商ETF华宝', reviewed=True,
+                     owner_locked=True, reviewed_by='owner')
+    bad = _mapping('T-测试ETF升级跳过', '000725', '京东方Ａ', reviewed=False,
+                   is_fetchable=False,
+                   evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}))
+    test_db.add_all([owner, bad])
+    test_db.commit()
+    assert pick_etf_upgrade(test_db, owner, {'official_name': '券商ETF华宝'}) is None
+    assert pick_etf_upgrade(test_db, bad, {'official_name': '大成添利宝货币B'}) is None

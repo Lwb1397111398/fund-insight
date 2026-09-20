@@ -66,9 +66,11 @@ def main():
     _db_guard.pin_local_sqlite()
     from datetime import datetime
 
-    from src.models.database import (Prediction, PredictionChangeLog, SessionLocal,
-                                     snapshot_prediction)
-    from src.services.prediction_change_log_service import add_prediction_change_log
+    from src.models.database import Prediction, PredictionChangeLog, SessionLocal
+    # snapshot_prediction 住在审计服务里，不在 models：写错模块会让整个回滚工具
+    # 在 main() 里 ImportError 崩掉，而单测只 import 常量，照样全绿
+    from src.services.prediction_change_log_service import (
+        add_prediction_change_log, snapshot_prediction)
     from src.utils.blogger_stats import recalculate_blogger_stats
 
     db = SessionLocal()

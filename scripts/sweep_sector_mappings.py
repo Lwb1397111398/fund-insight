@@ -154,7 +154,7 @@ def check_canaries():
     return dead
 
 
-def suggest_exchange_etf(sector):
+def suggest_exchange_etf(sector, limit=5):
     """从基金域名册里找"官方名逐字含板块核心词"的场内 ETF，只作建议不自动采信。"""
     import re
     from src.fund.fund_api import fund_api
@@ -177,7 +177,7 @@ def suggest_exchange_etf(sector):
             continue
         out.append({'code': code, 'name': name})
     out.sort(key=lambda x: (len(x['name']), x['code']))
-    return out[:5]
+    return out[:limit]
 
 
 def pick_demotions(results):
@@ -202,6 +202,8 @@ def main():
     ap.add_argument('--tag', default=datetime.now().strftime('%Y%m%d-%H%M%S'))
     ap.add_argument('--restore-from', default=None, help='按 manifest 逐字段还原')
     ap.add_argument('--refresh-roster', action='store_true')
+    ap.add_argument('--upgrade-etf', action='store_true',
+                    help='把"有场内 ETF 可用却挂着联接/LOF/场外基金"的映射换成那只 ETF"')
     args = ap.parse_args()
 
     db_url = _db_guard.pin_local_sqlite()
@@ -247,6 +249,7 @@ def main():
                 r['no_conclusion'] = True
             if r['verdict'] in UNSERVABLE_VERDICTS:
                 r['suggestions'] = suggest_exchange_etf(m.sector_name)
+            r['etf_upgrade'] = pick_etf_upgrade(db, m, r)
             r['relevance_low'] = bool(
                 r['verdict'] == VERDICT_OK
                 and not sector_relevance(m.sector_name, r.get('official_name') or ''))
@@ -271,6 +274,12 @@ def main():
 
         # 分桶互斥：verdict 本身就是单值的，这里只是防止将来加规则时重复计数
         demote = pick_demotions(results)
+        planned = [r for r in results if r.get('etf_upgrade')]
+        print('[场内ETF升级] 可替换 %d 条（--apply --upgrade-etf 生效）' % len(planned))
+        for r in planned[:25]:
+            up = r['etf_upgrade']
+            print('   %-12s %s → %s %s' % (r['sector'], up['replaced'],
+                                           up['code'], up['name']))
         buckets = {}
         for r in demote:
             buckets[r['verdict']] = buckets.get(r['verdict'], 0) + 1
@@ -305,20 +314,74 @@ def main():
         print('[清单] %s（--restore-from 用它还原）' % manifest)
 
         from src.services.sector_fund_service import get_sector_fund_service
-        applied = apply_results(db, results, demote, args.evidence_only)
+        applied = apply_results(db, results, demote, args.evidence_only,
+                                upgrade_etf=args.upgrade_etf)
         get_sector_fund_service(db).refresh_cache()
         from src.services.sector_identity_audit import invalidate_denied_cache
         invalidate_denied_cache()      # 静态表回落的拒绝集也要立刻认账
-        print('[写入] 证据列 %d 行；降级 reviewed %d 行；旧语义标记复位 %d 行%s'
+        print('[写入] 证据列 %d 行；降级 reviewed %d 行；旧语义标记复位 %d 行；'
+              '场内 ETF 升级 %d 行%s'
               % (applied['evidence'], applied['demoted'], applied['legacy_repaired'],
+                 applied['upgraded'],
                  '（--evidence-only，未降级）' if args.evidence_only else ''))
-        print('[提示] 缓存是进程内的：Web 服务如果在跑，需重启才会读到新结论')
+        print('[提示] 映射缓存是进程内的（60s TTL）：Web 服务最迟 60 秒后读到新结论，'
+              '要立刻生效就重启它')
         return 0
     finally:
         db.close()
 
 
-def apply_results(db, results, demote, evidence_only):
+def pick_etf_upgrade(db, row, verdict_row):
+    """老板规则：能配场内 ETF 就必须用 ETF（最纯粹），联接/LOF/场外只在没有 ETF 时用。
+
+    只在**同时满足**以下条件时替换：原标的不是场内 ETF、名册里存在官方名含板块核心词
+    的场内 ETF、该 ETF 抓取严格通过。换标的属于改数据，所以要留证据。
+    """
+    from src.services.sector_fund_agent import fund_kind_label
+    from src.services.sector_identity_audit import identity_verdict_of, UNSERVABLE_VERDICTS
+
+    if getattr(row, 'owner_locked', None) or getattr(row, 'reviewed_by', None) == 'owner':
+        return None                       # 老板手定的代理不动
+    if identity_verdict_of(row) in UNSERVABLE_VERDICTS:
+        return None                       # 先等身份体检降级，别在坏行上换标的
+    official = verdict_row.get('official_name') or row.fund_name or ''
+    if fund_kind_label(row.fund_code, official) == 'etf':
+        return None
+    from src.fund.fund_api import fund_api
+    # 同一指数往往有多家公司的场内 ETF（医疗：512170 / 159828 / 158010 …）。
+    # 名字长度分不出好坏，用**净值历史条数**当"年龄与规模"的代理：老基金历史更长，
+    # 通常也更活跃。候选本来就限死在 5 只以内，所以每只都抓一次是可接受的。
+    from sqlalchemy import func
+    from src.models.database import FundHistory
+
+    def local_depth(code):
+        # 本站已经存了多少条净值 = 这只基金在本系统里"现在就能验证"到什么程度。
+        # 零网络、比 30 天窗口的 history_count 有区分度（那个最多 30 条，大家都一样）。
+        return db.query(func.count(FundHistory.id)).filter(
+            FundHistory.fund_code == code).scalar() or 0
+
+    best, best_score = None, -1
+    cands = verdict_row.get('suggestions') or suggest_exchange_etf(row.sector_name, limit=20)
+    for cand in cands:
+        if cand['code'] == row.fund_code:
+            return None                   # 第一名就是自己：已经是最优
+        verify = fund_api.verify_fund_fetchable(cand['code'], fill_name=False)
+        time.sleep(PACE_SECONDS)
+        if not verify.get('is_strict_ok'):
+            continue
+        score = local_depth(cand['code'])
+        if score > best_score:
+            best, best_score = cand, score
+    if best is None:
+        return None
+    return {'code': best['code'], 'name': best['name'],
+            'replaced': '%s %s' % (row.fund_code, official),
+            'local_history_rows': best_score,
+            'reason': '板块「%s」有场内 ETF 可用，按"ETF 最纯粹"替换 %s'
+                      % (row.sector_name, official)}
+
+
+def apply_results(db, results, demote, evidence_only, upgrade_etf=False):
     """写证据列（`is_fetchable` 语义 = 可服务）与降级；绝不写 match_source/match_kind。"""
     from src.models.database import SectorFundMapping
     from src.services.sector_identity_audit import (
@@ -327,7 +390,7 @@ def apply_results(db, results, demote, evidence_only):
     repaired = repair_legacy_fetchable_flag(db)
     by_id = {r['id']: r for r in results}
     now = datetime.now()
-    evidence_n = demoted_n = 0
+    evidence_n = demoted_n = upgraded = 0
     for row in db.query(SectorFundMapping).filter(
             SectorFundMapping.id.in_(list(by_id))).all():
         r = by_id[row.id]
@@ -346,11 +409,24 @@ def apply_results(db, results, demote, evidence_only):
             'evidence': r.get('evidence'),
             'checked_at': now.isoformat(timespec='seconds'),
         }
+        if upgrade_etf and r.get('etf_upgrade'):
+            up = r['etf_upgrade']
+            evidence['etf_upgrade'] = dict(up, applied_at=now.isoformat(timespec='seconds'))
+            # sector_fund_mapping.fund_code 有外键指向 fund_info：新标的没档案就写
+            # 会 IntegrityError（实测踩到），先补一条最小档案，净值由基金同步任务补。
+            from src.services.sector_fund_service import SectorFundService
+            SectorFundService(db).ensure_fund_info_exists(
+                up['code'], up['name'], sector_type=row.sector_name)
+            row.fund_code, row.fund_name = up['code'], up['name']
+            row.is_fetchable = None       # 新标的还没体检，退回"从未体检"
+            upgraded += 1
         row.evidence = json.dumps(evidence, ensure_ascii=False)
         row.verify_message = r.get('reason') or ''
         row.verified_at = now
-        if r['verdict'] not in (VERDICT_UNKNOWN, VERDICT_PROBE_UNAVAILABLE):
-            # "没查到"不等于"查到了且不对"：无结论时保持原值，不把好端端的历史行踢出服务
+        if r['verdict'] not in (VERDICT_UNKNOWN, VERDICT_PROBE_UNAVAILABLE)                 and not r.get('owner_row'):
+            # "没查到"不等于"查到了且不对"：无结论时保持原值，不把好端端的历史行踢出服务。
+            # 老板锁定的行更不打不可服务章——那列会让所有读者拉黑它，而审查门禁
+            # 连 owner_confirm 都拒绝，等于把老板自己选的标的永久关在门外。
             row.is_fetchable = r['verdict'] not in UNSERVABLE_VERDICTS
         evidence_n += 1
         if not evidence_only and row.id in demote_ids:
@@ -359,7 +435,8 @@ def apply_results(db, results, demote, evidence_only):
             row.reviewed_by = None
             demoted_n += 1
     db.commit()
-    return {'evidence': evidence_n, 'demoted': demoted_n, 'legacy_repaired': repaired}
+    return {'evidence': evidence_n, 'demoted': demoted_n, 'legacy_repaired': repaired,
+            'upgraded': upgraded}
 
 
 def repair_legacy_fetchable_flag(db) -> int:
