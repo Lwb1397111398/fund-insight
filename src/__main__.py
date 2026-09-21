@@ -47,6 +47,16 @@ def main():
         os.makedirs(data_dir)
     
     if args.init_db:
+        # `.env` 的 DATABASE_URL 指向**生产 Supabase**，而 `python -m src --init-db`
+        # 是文档里推荐的本机验证命令 —— 误跑一次就是在远端库上建表/补列。
+        # 非 SQLite 必须显式授权才执行初始化（AGENTS.md 的"启动级检查"因此只能在本地跑）。
+        url = os.getenv("DATABASE_URL", "")
+        if url and not url.lower().startswith("sqlite") \
+                and os.getenv("ALLOW_REMOTE_INIT_DB") != "1":
+            print("[abort] DATABASE_URL 指向非 SQLite（%s）：--init-db 只允许本地镜像库。"
+                  "确实要在远端库上初始化，设 ALLOW_REMOTE_INIT_DB=1 再跑一次。"
+                  % url.split("@")[-1])
+            sys.exit(2)
         init_database()
     else:
         start_server(host=args.host, port=args.port)

@@ -143,8 +143,11 @@ class PredictionMaintenanceService:
                              run_id: Optional[str] = None) -> Dict:
         """使用已审核映射预览或同步预测基金关联。
 
-        - `min_confidence`：只有 agent 置信度达标的映射才允许改预测结论；老板手工确认过的行
-          （`reviewed_by='owner'` 或 `owner_locked`）无条件有效——那是他说的"有意代理"。
+        - `min_confidence`：只作为**兜底**门槛——没有 agent 审查章的行（人工勾的、
+          历史遗留的）要改预测仍得到达这个置信度；带 `reviewed_by='agent'` 章的行
+          按 agent 自己的标定门槛放行（见 `_mapping_eligible`，M2 修的就是这两套
+          门槛打架留下的死区）。老板手工确认过的行（`reviewed_by='owner'` 或
+          `owner_locked`）无条件有效——那是他说的"有意代理"。
         - `run_id`：写进 change log，`scripts/restore_prediction_batch.py` 才能整批回滚。
         - 板块匹配走别名归一（`sector_alias`），否则"绿电/绿色电力"这类同义板块会漏改。
         """
@@ -256,10 +259,23 @@ class PredictionMaintenanceService:
 
     @staticmethod
     def _mapping_eligible(mapping: SectorFundMapping, min_confidence: float) -> bool:
-        """老板手工确认/锁定的行永远有效；agent 写的行必须达到置信度门槛。
+        """老板手工确认/锁定的行永远有效；agent 自己盖过章的行按 agent 的门槛算。
 
         `confidence IS NULL` 且 `reviewed=True` 的行是本轮之前人工审查过的历史映射，
         它们本来就是人的结论，不能因为"没有置信度"被排除（排除会让 sync 静默变成空操作）。
+
+        为什么这里不能再立第二个数字（S4a 第 6 轮 M2）：门槛曾同时存在两套——
+        agent 用 `AUTO_REVIEW_CONFIDENCE`（direct 0.80 / proxy 0.68，由
+        `scripts/calibrate_sector_agent.py` 在金标集上标定）决定"能不能自动置已审查"，
+        本方法却写死 `min_confidence=0.85` 决定"能不能改预测"。于是 0.68~0.8499 区间
+        成了死区：**同一行"审查通过"却"不够好到去修正结论"**。实测本地镜像库里
+        12 条 agent 自批映射全部落在死区（人工智能 515070 0.8225、光伏 159857 0.8101、
+        京A 012765 0.684、矿泉水 515170 0.7315……），其中 京A 那条的 pending 预测
+        id 1238 至今挂着 `fund_code=000725`（`sector_identity_audit` 文件头那只
+        "京东方Ａ"股票，也就是本轮迭代要修的"预测被别的品种验证"）。
+        现在只有一套真值：达没达标由 agent 自己按 `match_kind` 判，本方法只认它盖的章。
+        改完实测（本地镜像库，dry-run）：可改标映射 110 -> 122（+12 条全部来自死区），
+        待改预测 0 -> 115 条，其中 pending 31 条、需重置旧结论 84 条。
         """
         from src.services.sector_identity_audit import row_unservable
         if row_unservable(mapping):
@@ -270,6 +286,18 @@ class PredictionMaintenanceService:
                 getattr(mapping, 'reviewed_by', None) == 'owner':
             return True
         confidence = getattr(mapping, 'confidence', None)
+        if getattr(mapping, 'reviewed', False) and \
+                getattr(mapping, 'reviewed_by', None) == 'agent' and confidence is not None:
+            # agent 的章就是它自己按标定阈值盖的（`SectorDecision.auto_reviewable`），
+            # 复核一遍同一个阈值即可；低于 agent 门槛还带着章 = 章是别处盖的（老板勾的、
+            # 或阈值后来被调高过），退回调用方传入的 `min_confidence` 再判一次。
+            from src.services.sector_fund_agent import (
+                AUTO_REVIEW_CONFIDENCE, AUTO_REVIEW_PROXY_CONFIDENCE)
+            gate = (AUTO_REVIEW_PROXY_CONFIDENCE
+                    if getattr(mapping, 'match_kind', None) == 'proxy'
+                    else AUTO_REVIEW_CONFIDENCE)
+            if confidence >= gate:
+                return True
         if confidence is None:
             return bool(getattr(mapping, 'reviewed', False))
         return confidence >= min_confidence

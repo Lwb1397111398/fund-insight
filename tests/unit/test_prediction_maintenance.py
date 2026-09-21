@@ -236,6 +236,69 @@ def test_rollback_invalid_execution_records_prediction_change(monkeypatch, test_
     assert log.after_state["status"] == "pending"
 
 
+def test_sync_retags_with_an_agent_approved_proxy_mapping(test_db):
+    """M2：agent 自己按 proxy 门槛（0.68）盖过章的映射必须能修正预测。
+
+    旧写法在这里写死 0.85，于是 0.68~0.8499 区间"审查通过却不够格改结论"。
+    实测本地镜像库 12 条 agent 自批映射全被卡在死区，其中 京A 那条的 pending
+    预测（线上 id 1238）至今挂着 000725——本模块要修的那只"京东方Ａ"股票。
+    """
+    test_db.add_all([
+        FundInfo(fund_code="OLD01", fund_name="旧基金"),
+        FundInfo(fund_code="NEW01", fund_name="代理ETF"),
+    ])
+    blogger, post = _blogger_post(test_db, "死区博主")
+    prediction = _prediction(test_db, blogger, post, fund_code="OLD01", sector="白酒")
+    test_db.add(SectorFundMapping(
+        sector_name="白酒", fund_code="NEW01", fund_name="代理ETF",
+        reviewed=True, reviewed_by="agent", match_kind="proxy",
+        confidence=0.72, is_active=True,
+    ))
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=False)
+
+    assert result["mappings_skipped_low_confidence"] == 0
+    assert result["predictions_updated"] == 1
+    test_db.refresh(prediction)
+    assert prediction.fund_code == "NEW01"
+
+
+def test_mapping_eligible_uses_the_agent_gate_not_a_second_number():
+    """M2 的门禁本身：一套真值 = agent 的标定阈值，不再是第二个写死的 0.85。"""
+    eligible = PredictionMaintenanceService._mapping_eligible
+
+    def _row(**kw):
+        kwargs = dict(sector_name="白酒", fund_code="NEW01", fund_name="某ETF",
+                      is_active=True)
+        kwargs.update(kw)
+        return SectorFundMapping(**kwargs)
+
+    # agent 盖过章 = 它已按 match_kind 的门槛（direct 0.80 / proxy 0.68）判过
+    assert eligible(_row(reviewed=True, reviewed_by="agent",
+                         match_kind="proxy", confidence=0.75), 0.85) is True
+    assert eligible(_row(reviewed=True, reviewed_by="agent",
+                         match_kind="direct", confidence=0.82), 0.85) is True
+    # 没盖章的同样两行：仍然只认调用方传的 min_confidence
+    assert eligible(_row(reviewed=False, reviewed_by=None,
+                         match_kind="proxy", confidence=0.75), 0.85) is False
+    assert eligible(_row(reviewed=False, reviewed_by=None,
+                         match_kind="direct", confidence=0.82), 0.85) is False
+    # 带着章但置信度低于 agent 门槛（阈值后来被调高过、或人工勾的"已审查"）
+    # → 章不作数，回到 min_confidence 兜底
+    assert eligible(_row(reviewed=True, reviewed_by="agent",
+                         match_kind="direct", confidence=0.72), 0.85) is False
+    assert eligible(_row(reviewed=True, reviewed_by="agent",
+                         match_kind="direct", confidence=0.90), 0.85) is True
+    # 老板的行永远作数；体检判不可服务的行永远不作数
+    assert eligible(_row(reviewed=True, reviewed_by="owner", owner_locked=True,
+                         confidence=0.10), 0.85) is True
+    assert eligible(_row(reviewed=True, reviewed_by="agent", match_kind="direct",
+                         confidence=0.95, is_fetchable=False), 0.85) is False
+    # 历史人工行：没有置信度但有审查 = 人的结论
+    assert eligible(_row(reviewed=True, reviewed_by=None, confidence=None), 0.85) is True
+
+
 def _request(headers=None):
     raw_headers = [
         (key.lower().encode("latin-1"), value.encode("latin-1"))

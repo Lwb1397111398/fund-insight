@@ -77,3 +77,9 @@ mobile/**/.flutter-plugins*
 
 # 体检断点续跑缓存（机器相关，且会屏蔽站点的最新状态）
 docs/迭代计划/run-2026-09-20/sweep-cache.json
+
+# 一次性手工脚本：只连本机、按当天数据写，不该进版本库（历史上误提交过一次）
+scripts/_tmp_*.py
+
+# 临时实验产物
+/lab4.json

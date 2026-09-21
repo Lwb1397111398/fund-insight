@@ -1,0 +1,206 @@
+{
+ "run_id": "s4b-llm-remap",
+ "min_confidence": 0.85,
+ "updated": 22,
+ "verified_reset": 17,
+ "details": [
+  {
+   "prediction_id": 33,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1655,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1755,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1840,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2167,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2186,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2230,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2275,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2336,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2352,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2389,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2431,
+   "sector": "中药",
+   "old_fund_code": "512170",
+   "old_fund_name": "华宝中证医疗ETF",
+   "new_fund_code": "159647",
+   "new_fund_name": "中药ETF鹏华",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2812,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3074,
+   "sector": "农牧",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "159275",
+   "new_fund_name": "农牧渔ETF华宝",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3162,
+   "sector": "亚太精选",
+   "old_fund_code": "050015",
+   "old_fund_name": "博时大中华亚太精选",
+   "new_fund_code": "159687",
+   "new_fund_name": "亚太精选ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3192,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3195,
+   "sector": "亚太",
+   "old_fund_code": "006105",
+   "old_fund_name": null,
+   "new_fund_code": "159687",
+   "new_fund_name": "亚太精选ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3208,
+   "sector": "养殖",
+   "old_fund_code": "159825",
+   "old_fund_name": "农业ETF富国",
+   "new_fund_code": "159865",
+   "new_fund_name": "养殖ETF国泰",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3287,
+   "sector": "农牧",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "159275",
+   "new_fund_name": "农牧渔ETF华宝",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3297,
+   "sector": "储能",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159305",
+   "new_fund_name": "储能电池ETF广发",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3311,
+   "sector": "农牧",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "159275",
+   "new_fund_name": "农牧渔ETF华宝",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3337,
+   "sector": "农牧",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "159275",
+   "new_fund_name": "农牧渔ETF华宝",
+   "reset_verified": false
+  }
+ ]
+}

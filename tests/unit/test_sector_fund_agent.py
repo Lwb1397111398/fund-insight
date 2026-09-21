@@ -293,6 +293,34 @@ def test_low_confidence_write_keeps_reviewed_false(db_session):
     assert row.match_source == 'agent'
 
 
+def test_switching_target_creates_missing_fund_archive(db_session):
+    """换标的时新代码没档案必须自动补 `fund_info`（外键约束，LLM 批次实测踩过）。
+
+    原来只有"新建映射"分支补档案，**换标的**分支不补：
+    中科三环 → 562800 稀有金属ETF嘉实 直接 IntegrityError，整批后台任务连坐失败。
+    """
+    from src.models.database import FundInfo, SectorFundMapping
+    row = _seed(db_session, 'T-测试换标的建档')      # 在册 159995，档案已有
+    decision = SectorDecision(
+        sector='T-测试换标的建档', status='matched', confidence=0.90,
+        chosen=FundCandidate(code='562800', name='稀有金属ETF嘉实', source='llm',
+                             official_name='稀有金属ETF嘉实', t3_suitable=True,
+                             t3_score=92, confidence=0.90,
+                             verify={'is_strict_ok': True}))
+    assert db_session.query(FundInfo).filter_by(fund_code='562800').first() is None
+    result = apply_decision(db_session, decision)
+    assert result['applied'] is True
+    db_session.refresh(row)
+    assert row.fund_code == '562800'
+    archive = db_session.query(FundInfo).filter_by(fund_code='562800').first()
+    assert archive is not None, '换了标的却没建档案：外键会让整批写库崩掉'
+    assert archive.fund_name == '稀有金属ETF嘉实'
+    db_session.query(SectorFundMapping).filter(
+        SectorFundMapping.sector_name == 'T-测试换标的建档').delete(synchronize_session=False)
+    db_session.query(FundInfo).filter_by(fund_code='562800').delete()
+    db_session.commit()
+
+
 def test_full_evidence_write_marks_reviewed(db_session):
     row = _seed(db_session, 'T-测试全证据')
     decision = SectorDecision(
@@ -308,7 +336,8 @@ def test_full_evidence_write_marks_reviewed(db_session):
     assert row.reviewed is True
     assert row.reviewed_by == 'agent'
     assert row.confidence == pytest.approx(0.92)
-    tiers = json.loads(row.evidence)
+    payload = json.loads(row.evidence)
+    tiers = payload['tiers'] if isinstance(payload, dict) else payload
     assert [e['stage'] for e in tiers] == ['T2', 'T3', 'FETCH']
     assert tiers[-1]['is_strict_ok'] is True
     # agent 不再写 is_fetchable：那一列的语义是"身份体检判可服务"，
@@ -437,3 +466,174 @@ def test_resolve_creates_fresh_agent_state():
     a1._deadline_at = 1.0
     a1._llm_calls = 9
     assert a2._deadline_at is None and a2._llm_calls == 0
+
+
+def test_agent_archive_rolls_back_with_the_mapping(db_session):
+    """换标的失败时不能留下孤儿 `fund_info`：agent 路径没有 manifest，靠同一事务回滚。"""
+    from src.models.database import FundInfo, SectorFundMapping
+    from src.services.sector_fund_agent import (
+        SectorDecision, FundCandidate, apply_decision)
+    row = _seed(db_session, u'T-测试建档回滚')
+    decision = SectorDecision(
+        sector=u'T-测试建档回滚', status=u'matched', confidence=0.9,
+        chosen=FundCandidate(code=u'562801', name=u'稀有金属ETF测试', source=u'llm',
+                             official_name=u'稀有金属ETF测试', t3_suitable=True,
+                             t3_score=92, confidence=0.9,
+                             verify={u'is_strict_ok': True}))
+    real_commit = db_session.commit
+
+    def boom():
+        raise RuntimeError(u'模拟提交失败')
+    db_session.commit = boom
+    try:
+        try:
+            apply_decision(db_session, decision)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(u'提交异常被吞掉了，回滚语义没测到')
+    finally:
+        db_session.commit = real_commit
+    db_session.rollback()
+    assert db_session.query(FundInfo).filter_by(fund_code=u'562801').first() is None, \
+        u'映射没写成，档案却留下了 = 孤儿基金'
+    db_session.query(__import__('src.models.database', fromlist=['SectorFundMapping']).SectorFundMapping).filter(
+        SectorFundMapping.sector_name == u'T-测试建档回滚').delete(synchronize_session=False)
+    db_session.commit()
+
+
+def test_agent_write_keeps_identity_audit_evidence(db_session):
+    """agent 写库不许把身份体检的证据整列抹掉（实测 AI 批次洗掉了 realign 溯源）。"""
+    from src.models.database import FundInfo, SectorFundMapping
+    from src.services.sector_fund_agent import (
+        SectorDecision, FundCandidate, apply_decision)
+    row = _seed(db_session, 'T-测试证据共存', code='159995')
+    row.evidence = json.dumps({'identity': {'verdict': 'ok', 'official_name': '旧'},
+                              'identity_realign': {'from_code': '000000',
+                                                   'core': '芯片'}})
+    db_session.commit()
+    decision = SectorDecision(
+        sector='T-测试证据共存', status='matched', confidence=0.9,
+        chosen=FundCandidate(code='159995', name='芯片ETF', source='llm',
+                            official_name='芯片ETF', t3_suitable=True, t3_score=95,
+                            confidence=0.9, verify={'is_strict_ok': True}))
+    apply_decision(db_session, decision)
+    db_session.refresh(row)
+    payload = json.loads(row.evidence)
+    assert payload['identity']['verdict'] == 'ok', '同码重判不该洗掉身份结论'
+    assert payload['identity_realign']['core'] == '芯片'
+    assert [t['stage'] for t in payload['tiers']][-1] == 'FETCH'
+    # 换标的：旧结论讲的是被换掉那只，必须挪到 before 键而不是继续挂在当前码上
+    row.evidence = json.dumps({'identity': {'verdict': 'ok', 'official_name': '芯片ETF'},
+                              'identity_realign': {'from_code': '000000'}})
+    db_session.commit()
+    if not db_session.query(FundInfo).filter_by(fund_code='512170').first():
+        db_session.add(FundInfo(fund_code='512170', fund_name='医疗ETF华宝'))
+    decision.chosen = FundCandidate(code='512170', name='医疗ETF华宝', source='search',
+                                   official_name='医疗ETF华宝', t3_suitable=True,
+                                   t3_score=95, confidence=0.9,
+                                   verify={'is_strict_ok': True})
+    apply_decision(db_session, decision)
+    db_session.refresh(row)
+    payload = json.loads(row.evidence)
+    assert 'identity' not in payload
+    assert payload['identity_before_agent_switch']['official_name'] == '芯片ETF'
+    assert payload['identity_realign'] == {'from_code': '000000'}
+    assert audit_verdict_is_none(row)
+
+
+def audit_verdict_is_none(row):
+    from src.services.sector_identity_audit import identity_verdict_of
+    return identity_verdict_of(row) is None
+
+
+def test_agent_cannot_self_approve_a_machine_corrected_row(db_session):
+    """D4：带着体检/升级章的行，agent 同码重判不许自己盖"已审查"，也不重刷 match_source。"""
+    from src.models.database import SectorFundMapping
+    from src.services.sector_fund_agent import (
+        SectorDecision, FundCandidate, apply_decision)
+    row = _seed(db_session, 'T-不许自批', code='159995')
+    # 章的**唯一**存身处是 evidence（体检/升级两条机器路径都是这么写的）：
+    # match_source 只是一个会被后续写入盖掉的说明文字，判据不能建在它上面。
+    row.match_source = 'identity_realign'
+    row.evidence = json.dumps({'identity_realign': {'code': '159995',
+                                                    'from_code': '000938',
+                                                    'core': '芯片'}})
+    row.reviewed = False
+    db_session.commit()
+    decision = SectorDecision(
+        sector='T-不许自批', status='matched', confidence=0.95,
+        chosen=FundCandidate(code='159995', name='芯片ETF', source='llm',
+                             official_name='芯片ETF', t3_suitable=True, t3_score=98,
+                             confidence=0.95, verify={'is_strict_ok': True}))
+    decision.evidence = [{'stage': 'T3', 'code': '159995', 'suitable': True, 'score': 98}]
+    apply_decision(db_session, decision)
+    db_session.refresh(row)
+    assert row.reviewed is False, 'agent 替老板批了体检换过的标的'
+    assert row.match_source == 'identity_realign'
+    db_session.query(SectorFundMapping).filter(
+        SectorFundMapping.sector_name == 'T-不许自批').delete(synchronize_session=False)
+    db_session.commit()
+
+
+def test_later_agent_write_cannot_launder_the_machine_swap_flag(db_session):
+    """M3：`match_source='agent'` 已经把这行盖过一遍了，章也不许因此消失。
+
+    实测形态就是 id 131(传媒 159805) / id 145(医疗 159877)：ETF 升级写入
+    `evidence.etf_upgrade` 之后，又跑了一轮 agent，把 `match_source` 改成 'agent'
+    并自己盖上"已审查"——于是"机器改了标的、等老板确认"这件事在页面上彻底隐身，
+    而 v7.2 §5 那块挡板（同码重判不许自批）被追溯性作废。
+    这里刻意让 `match_source` 与审查态都是"被洗过"的样子，只有 evidence 还留着真相。
+    """
+    from src.models.database import SectorFundMapping
+    from src.services.sector_fund_agent import (
+        SectorDecision, FundCandidate, apply_decision)
+    row = _seed(db_session, 'T-溯源洗不掉', code='159877')
+    row.match_source = 'agent'                 # 之后任何一次写入都会盖掉它
+    row.reviewed = True                        # 被上一轮 agent 误批过
+    row.reviewed_by = 'agent'
+    row.evidence = json.dumps({'etf_upgrade': {'code': '159877', 'from_code': '162412',
+                                               'applied_at': '2026-09-21T06:47:47'}})
+    db_session.commit()
+    decision = SectorDecision(
+        sector='T-溯源洗不掉', status='matched', confidence=0.97,
+        chosen=FundCandidate(code='159877', name='医疗ETF南方', source='llm',
+                             official_name='医疗ETF南方', t3_suitable=True, t3_score=98,
+                             confidence=0.97, verify={'is_strict_ok': True}))
+    decision.evidence = [{'stage': 'T2', 'code': '159877', 'verdict': 'pass'},
+                         {'stage': 'T3', 'code': '159877', 'suitable': True, 'score': 98}]
+    assert decision.auto_reviewable is True, '前提：这一轮 agent 本身是完全够格自批的'
+    apply_decision(db_session, decision)
+    db_session.refresh(row)
+    assert row.reviewed is False, '带着未确认换标章的行被自批了 = 替老板批审查'
+    assert row.reviewed_by is None
+    assert row.match_source == 'agent'          # 同码重判不再改 provenance
+    payload = json.loads(row.evidence)
+    assert payload['etf_upgrade']['from_code'] == '162412', '溯源记录不许被写入洗掉'
+    db_session.query(SectorFundMapping).filter(
+        SectorFundMapping.sector_name == 'T-溯源洗不掉').delete(synchronize_session=False)
+    db_session.commit()
+
+
+
+def test_agent_write_keeps_legacy_prev_trace(db_session):
+    """D7：`prev` 是某些行仅存的旧候选轨迹，agent 重写证据时不能把它删掉。"""
+    from src.models.database import SectorFundMapping
+    from src.services.sector_fund_agent import (
+        SectorDecision, FundCandidate, apply_decision)
+    row = _seed(db_session, 'T-保留prev', code='159995')
+    row.evidence = json.dumps({'prev': [{'stage': 'T1', 'candidates': ['159995']}]})
+    db_session.commit()
+    decision = SectorDecision(
+        sector='T-保留prev', status='matched', confidence=0.9,
+        chosen=FundCandidate(code='159995', name='芯片ETF', source='llm',
+                             official_name='芯片ETF', t3_suitable=True, t3_score=95,
+                             confidence=0.9, verify={'is_strict_ok': True}))
+    apply_decision(db_session, decision)
+    db_session.refresh(row)
+    payload = json.loads(row.evidence)
+    assert payload['prev'][0]['stage'] == 'T1'
+    assert payload['tiers'][-1]['stage'] == 'FETCH'
+    db_session.query(SectorFundMapping).filter(
+        SectorFundMapping.sector_name == 'T-保留prev').delete(synchronize_session=False)
+    db_session.commit()

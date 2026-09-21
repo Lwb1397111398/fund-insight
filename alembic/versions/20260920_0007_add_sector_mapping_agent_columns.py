@@ -43,6 +43,15 @@ def _columns(table):
     return {column["name"] for column in inspector.get_columns(table)}
 
 
+def _indexes(table):
+    if context.is_offline_mode():
+        return set()
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return set()
+    return {ix["name"] for ix in inspector.get_indexes(table)}
+
+
 def upgrade() -> None:
     for table, columns in ADDITIONS.items():
         existing = _columns(table)
@@ -52,8 +61,12 @@ def upgrade() -> None:
             if name not in existing:
                 with op.batch_alter_table(table) as batch_op:
                     batch_op.add_column(sa.Column(name, type_, nullable=True))
-    existing = _columns("prediction_change_logs")
-    if existing is not None and "run_id" not in existing:
+    # 判"要不要建索引"必须看索引名：run_id 这一列正是本迁移上面刚加的，
+    # 重新 inspect 列名会以为"早就存在"，于是索引永远漏建（第 4 轮评审 MINOR）
+    need_index = (_columns("prediction_change_logs") is not None
+                  and "ix_prediction_change_logs_run_id"
+                  not in _indexes("prediction_change_logs"))
+    if need_index:
         op.create_index(
             "ix_prediction_change_logs_run_id", "prediction_change_logs", ["run_id"])
 

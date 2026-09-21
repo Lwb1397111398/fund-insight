@@ -297,6 +297,10 @@ class SectorFundService:
 
         `mark_reviewed=None` 沿用旧行为（手工编辑即视为已审查）；agent 写库时必须
         显式传 False/True，否则低置信结果会被自动标成"已审查"（审查门禁就废了）。
+
+        **换了标的就先证身份**（`_manual_identity_verdict`）：判"这码根本不是基金"时
+        不置审查、不锁老板，写 `is_fetchable=False` 并说明理由；判"没查到"（接口抖动、
+        新基金未入库）一律按"没意见"处理，沿用旧行为——审查门不能建在网络抖动上。
         """
         db = self._get_db()
         try:
@@ -311,14 +315,44 @@ class SectorFundService:
             # 只按**代码**判"结论作废"：降级理由的钥匙是代码（同码撞车的另一只基金），
             # 改名字不足以让一只股票变成基金——老板只改名就能复活降级行是不安全的。
             changed = fund_code is not None and fund_code != mapping.fund_code
+            # 探测是网络活（名册首次 timeout=30s，单码 10s×3 重试）：**不能**把库事务
+            # 压在它身上 —— 生产走 Supabase 连接池，一次页面保存会变成几分钟
+            # `idle in transaction`。此刻还没有任何写入，先结束只读事务，探完再取行。
+            accusation = identity = None
+            if changed:
+                sector_name = mapping.sector_name        # rollback 后实例过期，先存标量
+                probe_code, probe_name = fund_code, fund_name or mapping.fund_name
+                db.rollback()
+                accusation, identity = _manual_identity_verdict(
+                    probe_code, probe_name, sector_name)
             if changed:
                 mapping.is_fetchable = None
                 mapping.evidence = _drop_identity_evidence(mapping.evidence)
+                # 理由列讲的是被换掉那只，留着会让这行"可服务"却挂着旧降级说明
+                mapping.verify_message = None
             if fund_code is not None:
                 mapping.fund_code = fund_code
             if fund_name is not None:
                 mapping.fund_name = fund_name
             mapping.reviewed = True if mark_reviewed is None else mark_reviewed
+            if changed:
+                # M4：人工换标的本来是**唯一一条没有"这是基金不是股票"证明的写入路径**
+                # （机器两条都有：`etf_candidates` 只收场内 ETF 官方名、
+                #  `sweep.reaudit_new_code` 用非名册域名重证一次），而它在页面上
+                # 直接产出 `is_fetchable=None + reviewed + owner_locked` =
+                # 体检与 agent 永久免疫的行。老板在 UI 里输 600519「贵州茅台」
+                # 就是这么变成"可信的错误标的"的。判定已在**事务外**探好（见上）。
+                if accusation:
+                    # 只在这一次判定**确定**否掉时才动手：owner_locked 会挡住
+                    # `row_unservable()` 的整条判据（老板例外），所以必须同时撤掉
+                    # 审查与锁定，否则"is_fetchable=False"是个永不生效的假动作。
+                    mapping.is_fetchable = False
+                    mapping.verify_message = accusation
+                    mapping.reviewed, mapping.reviewed_by, mapping.owner_locked = \
+                        False, None, False
+                    if identity is not None:
+                        # 老板看得见"到底是哪只基金顶上了这个码"，也才有下一轮体检
+                        mapping.evidence = _stamp_identity(mapping.evidence, identity)
             if mapping.reviewed and self._unservable(mapping):
                 # 既没换标的也没换名字、只是把状态翻回"已审查" → 拒绝（防一键复活）
                 logger.info('[板块映射] 拒绝标记 %s(%s)：身份体检不通过',
@@ -349,7 +383,10 @@ class SectorFundService:
                 'sector_name': mapping.sector_name,
                 'fund_code': mapping.fund_code,
                 'fund_name': mapping.fund_name,
-                'reviewed': True
+                # 换标的被身份证明否掉时这里是 False：调用方（PUT/POST 路由）不许再
+                # 无条件写"已标记为已审查"，否则老板看到的是一个根本没审过的行
+                'reviewed': bool(mapping.reviewed),
+                'verify_message': mapping.verify_message,
             }
         finally:
             if self._should_close(db):
@@ -449,8 +486,21 @@ def get_sector_fund_service(db: Session = None) -> SectorFundService:
     return _sector_fund_service
 
 
+# 人工改码后要摘掉的过期键。`identity` 是"这一行当前标的"的身份结论，
+# `identity_realign`/`etf_upgrade`/`identity_before_upgrade` 是"机器把这行从谁换成了谁"
+# 的溯源章（`machine_swap_of()` 的判据 = 章里的代码仍是当前代码）。
+_STALE_IDENTITY_KEYS = ('identity', 'identity_realign', 'etf_upgrade',
+                        'identity_before_upgrade')
+
+
 def _drop_identity_evidence(raw):
-    """人工改码后，把已过期的身份结论从 evidence 里摘掉。"""
+    """人工改码后，把已过期的身份结论与换标溯源从 evidence 里摘掉。
+
+    这些键讲的都是**被换掉那只**：留着前端会继续指向一次更早的机器纠正。
+    而且 M3 把 agent 的自批挡板改成读 evidence 之后，不摘章就等于"这一行永远
+    不许自动审查"——老板手改标的**就是那两个章在等的确认**（v7.4 第 6 轮 M4）。
+    `prev` 与候选轨迹（`tiers`）保留：那是决策过程，不是身份结论。
+    """
     import json as _json
     if not raw:
         return raw
@@ -458,7 +508,73 @@ def _drop_identity_evidence(raw):
         data = _json.loads(raw)
     except Exception:
         return raw
-    if isinstance(data, dict) and 'identity' in data:
-        data.pop('identity', None)
+    if isinstance(data, dict) and any(k in data for k in _STALE_IDENTITY_KEYS):
+        for key in _STALE_IDENTITY_KEYS:
+            data.pop(key, None)
         return _json.dumps(data, ensure_ascii=False)
     return raw
+
+
+# 判定"确定不是这只基金"的三类结论 + "基金域查无此码"，见 audit.UNSERVABLE_VERDICTS。
+MANUAL_UNSERVABLE_MESSAGE = '基金域查无此码：这是股票/已清盘，不能作为板块标的'
+
+
+def _manual_identity_verdict(code, stored_name, sector):
+    """人工换标的后的身份证明：返回 `(给老板看的理由, 身份结论 dict)`，放行时 `(None, None)`。
+
+    判据只有"查到了且不对"这一类才动手（`UNSERVABLE_VERDICTS`：股票名/同码别的基金/
+    代码填错/基金域明确回答没有这个码）。`unknown`、`probe_unavailable` 与任何异常
+    都**失败开放**：体检模块自己的原则是"没查到不是反向证据"，一次网络抖动绝不能
+    把老板刚挑的标的判成不可服务——那会让所有读路径立刻失去这个板块。
+
+    探针不另写一份：直接复用 `sector_identity_audit.arbitrate_mapping`（函数内 import
+    是本仓库避环的既有写法，agent 与体检互相引用也走这条路）。这里用它的默认探针
+    （名册优先、单码兜底）：sweep 换标的时要把名册关掉，是因为那行的**名字本来就是
+    名册写进去的**（拿名册自证 = Jaccard 恒 1.0）；这一支的名字是老板手打的，
+    两条证据互相独立，名册反而是"德明利/京东方Ａ 这类根本不是基金的名字"的
+    第二证据（搜索接口实测会抖，单靠它不能判死）。代价是进程内第一次名册加载
+    （3.1MB / 实测 2s），之后整进程复用。
+    """
+    from src.services import sector_identity_audit as audit
+    from datetime import datetime
+    try:
+        res = audit.arbitrate_mapping((code or '').strip(), (stored_name or '').strip(),
+                                      sector or '')
+    except Exception as exc:
+        # 站点/解析任何意外都按"没结论"处理，绝不能让保存按钮因为体检坏了而报错
+        logger.warning('[板块映射] 人工换标的的身份判定失败（按不干预处理）：%s', exc)
+        return None, None
+    verdict = (res or {}).get('verdict')
+    if verdict not in audit.UNSERVABLE_VERDICTS:
+        return None, None
+    official = (res or {}).get('official_name')
+    reason = MANUAL_UNSERVABLE_MESSAGE
+    if official:
+        reason = '%s（该代码实为「%s」）' % (MANUAL_UNSERVABLE_MESSAGE, official)
+    identity = {
+        'verdict': verdict,
+        'jaccard': res.get('jaccard'),
+        'official_name': official,
+        'reason': '%s：%s' % (reason, res.get('reason') or ''),
+        'suggested_code': res.get('suggested_code'),
+        'suggested_name': res.get('suggested_name'),
+        'suggestions': [],
+        'relevance_low': False,
+        'evidence': res.get('evidence'),
+        'checked_at': datetime.now().isoformat(timespec='seconds'),
+        'source': 'manual_edit',
+    }
+    return reason, identity
+
+
+def _stamp_identity(raw, identity):
+    """把这次的身份结论写进 evidence（前端与下一轮体检都要看得见它）。"""
+    import json as _json
+    try:
+        data = _json.loads(raw) if raw else {}
+        if not isinstance(data, dict):
+            data = {'prev': data}
+    except Exception:
+        data = {}
+    data['identity'] = identity
+    return _json.dumps(data, ensure_ascii=False)

@@ -563,24 +563,29 @@ class FundAPI:
                             'loaded_at': time.time(), 'size': len(by_code)}
             return _FUND_ROSTER
 
-    def get_fund_domain_name(self, code: str) -> Dict:
+    def get_fund_domain_name(self, code: str, use_roster: bool = True) -> Dict:
         """取"这个 6 位码在基金域到底是什么品种"，返回 {status, name, fund_type, source}。
 
         status: ok（基金域有这只）/ absent（站点明确回答没有此码，确定负证据）/
                 error（请求失败，**不能**据此下结论）。
+
+        `use_roster=False` 走单码接口（pingzhongdata），用于"名字本来就是从名册写进去"
+        的场景（realign 换标的）：拿名册写名、再拿名册自证身份，Jaccard 恒 1.0，
+        是条自我背书的假证据。
         """
         code = (code or '').strip()
         if not re.fullmatch(r'\d{6}', code):
             return {'status': 'absent', 'name': None, 'fund_type': None, 'source': 'bad_code'}
-        try:
-            roster = self.load_fund_roster()
-        except Exception as e:
-            logger.warning(f"名册加载失败，回落到单码接口: {e}")
-            roster = {'by_code': {}, 'codes_by_name': {}}
-        hit = roster['by_code'].get(code)
-        if hit and hit.get('name'):
-            return {'status': 'ok', 'name': hit['name'],
-                    'fund_type': hit.get('fund_type'), 'source': 'roster'}
+        if use_roster:
+            try:
+                roster = self.load_fund_roster()
+            except Exception as e:
+                logger.warning(f"名册加载失败，回落到单码接口: {e}")
+                roster = {'by_code': {}, 'codes_by_name': {}}
+            hit = roster['by_code'].get(code)
+            if hit and hit.get('name'):
+                return {'status': 'ok', 'name': hit['name'],
+                        'fund_type': hit.get('fund_type'), 'source': 'roster'}
         try:
             response = self.session.get(
                 f'http://fund.eastmoney.com/pingzhongdata/{code}.js',

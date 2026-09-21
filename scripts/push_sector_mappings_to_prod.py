@@ -1,0 +1,185 @@
+# -*- coding: utf-8 -*-
+"""把 `export_repaired_mappings.py` 生成的清单**定向**回写到生产（整批一次调用）。
+
+为什么走专用接口而不是逐行 PUT：`PUT /api/config/sector-mappings/{id}` 的请求模型
+`MappingUpdate` 只有 fund_code/fund_name 两列，Pydantic 会**静默丢掉**其余 11 个审计字段
+（reviewed / owner_locked / reviewed_by / is_fetchable / match_source / match_kind /
+confidence / verify_message / llm_reason / evidence / keywords），而
+`service.update_mapping()` 还会把碰到的每行标成 `reviewed=True + owner_locked=True +
+reviewed_by='owner'`。实测过一遍：13 个字段只有 2 个落地，降级旗标一个都没送到，
+行却被永久锁定（从此免于体检与 agent），脚本却照样打印"成功 N"。
+现在整批发给 `POST /api/config/sector-mappings/-/audit-import`，由服务端按 sector_name
+寻址、逐列照搬审计结论，并逐行回执 updated/created/unchanged/refused(原因)。
+
+三道硬闸，缺一不动：
+1. 默认 dry-run，只让服务端出计划；真写必须 `--confirm WRITE-TO-PROD`
+   （它会原样进请求的 confirm 字段，服务端没有这个字面量就自动退回计划）；
+2. 只按 `sector_name` 匹配，清单里的本地 id 一律不发 —— 两边 id 不同，按 id 写会写错行；
+3. 每一行都读服务端回执：**老板锁定/署名的行会被服务端拒绝覆盖**（那是有意代理，
+   如 债券→512000、SpaceX→159206），这类拒绝是预期的、只汇报；其余拒绝或写失败
+   一律非 0 退出，不做静默跳过。绝不删除任何行。
+
+口令只从环境变量 `ACCESS_PASSWORD` 读，绝不出现在命令行、代码或日志里。
+
+    ACCESS_PASSWORD=... python scripts/push_sector_mappings_to_prod.py            # 看计划
+    ACCESS_PASSWORD=... python scripts/push_sector_mappings_to_prod.py --limit 5  # 小批试算
+    ACCESS_PASSWORD=... python scripts/push_sector_mappings_to_prod.py --confirm WRITE-TO-PROD
+"""
+import argparse
+import io
+import json
+import os
+import urllib.error
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MANIFEST = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20',
+                        'prod-writeback-sector-mappings.json')
+DEFAULT_BASE = 'https://fund-insight.onrender.com'
+ENDPOINT = '/api/config/sector-mappings/-/audit-import'
+CONFIRM = 'WRITE-TO-PROD'
+
+# 与 src/api/routes/config.py 的 AuditMappingRow 对齐；sector_name 用于寻址。
+ROW_FIELDS = ('sector_name', 'fund_code', 'fund_name', 'keywords', 'is_active', 'reviewed',
+              'match_source', 'match_kind', 'confidence', 'verified_at', 'verify_message',
+              'llm_reason', 'is_fetchable', 'evidence', 'reviewed_by', 'owner_locked')
+
+# 服务端这些拒因是**设计如此**（老板的行机器不覆盖），只汇报不当失败。
+EXPECTED_REFUSALS = ('owner_locked', 'reviewed_by_owner')
+REASON_LABEL = {
+    'owner_locked': '老板已锁定',
+    'reviewed_by_owner': '老板署名已审查',
+    'empty_sector_name': '板块名为空',
+    'empty_fund_code': '基金代码为空',
+    'bad_evidence_json': '证据不是合法 JSON',
+    'bad_verified_at': 'verified_at 不是合法时间',
+    'evidence_too_large': '证据过大',
+}
+
+
+def request(base, path, password, payload=None, method='GET', timeout=180):
+    data = json.dumps(payload, ensure_ascii=False).encode('utf-8') if payload is not None else None
+    req = urllib.request.Request(base.rstrip('/') + path, data=data, method=method,
+                                 headers={'X-Access-Password': password,
+                                          'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode('utf-8', 'replace') or '{}')
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode('utf-8', 'replace')[:400]
+        try:
+            return exc.code, json.loads(body)
+        except Exception:
+            return exc.code, {'raw': body}
+    except Exception as exc:
+        return 0, {'error': str(exc)[:200]}
+
+
+def build_rows(data, limit):
+    """清单行 → 请求体：只带审计字段，**丢掉本地 id**（两边 id 不同，按 id 写会写错行）。
+
+    显式 null 必须保留：`reviewed_by=None` 就是"退回未审查"的语义，
+    服务端靠"字段在不在"区分照搬 null 与不动现值。
+    """
+    rows = []
+    for m in (data.get('mappings') or [])[:limit]:
+        rows.append({f: m.get(f) for f in ROW_FIELDS})
+    return rows
+
+
+def show_items(items, limit=15):
+    interesting = [i for i in items if i.get('outcome') in ('updated', 'created', 'refused')]
+    for item in interesting[:limit]:
+        extra = ''
+        if item['outcome'] == 'refused':
+            reason = item.get('reason') or ''
+            label = REASON_LABEL.get(reason, reason)
+            extra = '（现 %s）' % item.get('current_fund_code') if reason in EXPECTED_REFUSALS else ''
+            print('   [拒·%s] %-12s %s%s' % (label, item['sector_name'],
+                                              item.get('fund_code') or '', extra))
+        else:
+            print('   [%s] %-12s → %s 改 %d 列：%s'
+                  % ('新建' if item['outcome'] == 'created' else '更新',
+                     item['sector_name'], item.get('fund_code'),
+                     len(item.get('changed_fields') or ()),
+                     '、'.join((item.get('changed_fields') or [])[:6])))
+    if len(interesting) > limit:
+        print('   ...其余 %d 行省略' % (len(interesting) - limit))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--base', default=os.getenv('APP_BASE_URL', DEFAULT_BASE))
+    ap.add_argument('--confirm', default='', help='必须等于 %s 才真写' % CONFIRM)
+    ap.add_argument('--limit', type=int, default=None, help='只处理前 N 行（先小批验证）')
+    args = ap.parse_args()
+
+    password = os.getenv('ACCESS_PASSWORD', '')
+    if not password:
+        print('[abort] 环境变量 ACCESS_PASSWORD 未设置：口令只走环境变量，不进命令行/代码')
+        return 2
+    if not os.path.exists(MANIFEST):
+        print('[abort] 没有清单，先跑 python scripts/export_repaired_mappings.py')
+        return 2
+    data = json.load(io.open(MANIFEST, encoding='utf-8'))
+    rows = build_rows(data, args.limit)
+    apply_write = args.confirm == CONFIRM
+    print('[计划] 目标=%s 清单 %d 行（指纹 %s，生成于 %s）→ %s'
+          % (args.base, len(rows), data.get('sha256'), data.get('generated_at'),
+             '真写' if apply_write else 'dry-run'))
+
+    status, body = request(args.base, ENDPOINT, password,
+                           {'mappings': rows, 'dry_run': not apply_write,
+                            'confirm': CONFIRM if apply_write else None},
+                           method='POST')
+    if status in (404, 405):
+        print('[abort] 生产尚无审计回写接口（HTTP %s）：先把本轮代码部署上去再回写' % status)
+        return 3
+    if status == 422:
+        print('[abort] 生产不接受该请求体（HTTP 422），多半是接口版本不匹配：%s'
+              % str(body)[:220])
+        return 3
+    if not isinstance(body, dict) or status != 200 or 'data' not in body:
+        print('[abort] 回写接口未正常响应（HTTP %s）：%s' % (status, str(body)[:220]))
+        return 3
+
+    counts = (body.get('data') or {}).get('counts') or {}
+    items = (body.get('data') or {}).get('items') or []
+    reasons = (body.get('data') or {}).get('refused_reasons') or {}
+    print('[回执] 服务端：%s' % body.get('message', ''))
+    print('       updated=%s created=%s unchanged=%s refused=%s（written=%s，dry_run=%s）'
+          % (counts.get('updated'), counts.get('created'), counts.get('unchanged'),
+             counts.get('refused'), body.get('written'), body.get('dry_run')))
+    if reasons:
+        print('       拒因：%s' % '、'.join(
+            '%s×%d' % (REASON_LABEL.get(k, k), v) for k, v in reasons.items()))
+    show_items(items)
+    if body.get('dry_run'):
+        print('\n[dry-run] 未写生产。确认无误后加 --confirm %s（建议先 --limit 5 小批验证）'
+              % CONFIRM)
+        if not apply_write:
+            return 0
+        # 带了 confirm 却被服务端退回 dry-run：口令/字段没对上，必须当失败处理
+        print('[abort] 已带 --confirm 但服务端仍判为 dry-run（confirm_ok=%s）'
+              % body.get('confirm_ok'))
+        return 3
+
+    unexpected = [i for i in items if i.get('outcome') == 'refused'
+                  and (i.get('reason') not in EXPECTED_REFUSALS)]
+    owner_rows = [i for i in items if i.get('outcome') == 'refused'
+                  and i.get('reason') in EXPECTED_REFUSALS]
+    if owner_rows:
+        print('[保留] %d 行是老板锁定/署名的有意代理，服务端已按规则不覆盖' % len(owner_rows))
+    if unexpected:
+        print('[异常] %d 行被服务端拒绝或写失败，请逐条核对后重跑：' % len(unexpected))
+        for i in unexpected[:20]:
+            print('   %-12s %s → %s：%s' % (i['sector_name'], i.get('mapping_id'),
+                                             i.get('fund_code'), i.get('reason')))
+        return 4
+    print('[完成] 生产已落在被审计的状态：更新 %d、新建 %d、本就一致 %d'
+          % (counts.get('updated', 0), counts.get('created', 0), counts.get('unchanged', 0)))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

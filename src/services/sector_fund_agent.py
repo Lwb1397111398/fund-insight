@@ -129,17 +129,12 @@ def similarity(a: str, b: str) -> float:
     return round(2 * len(ga & gb) / (len(ga) + len(gb)), 4)
 
 
-EXCHANGE_LISTED_CODE = re.compile(r'^(?:15\d{4}|5\d{5})$')
-
-
-def is_exchange_listed(code: str) -> bool:
-    """是否场内（交易所）上市的基金码段。
-
-    旧正则写成 `15[0-9]{3}`（只有 5 位）却配 fullmatch，深市 15xxxx 一条都匹配不上：
-    实测 `is_etf('159995','')=False`、`fund_kind_label('159206','富国中证卫星产业')='otc'`，
-    等于所有"名字没带 ETF 字样"的深市 ETF 都被当成场外基金降权。
-    """
-    return bool(EXCHANGE_LISTED_CODE.match((code or '').strip()))
+# 场内码段只有**一处定义**（在 sector_identity_audit，体检脚本与 agent 共用）。
+# 旧正则写成 `15[0-9]{3}`（只有 5 位）却配 fullmatch，深市 15xxxx 一条都匹配不上：
+# 实测 `is_etf('159995','')=False`、`fund_kind_label('159206','富国中证卫星产业')='otc'`，
+# 等于所有"名字没带 ETF 字样"的深市 ETF 都被当成场外基金降权。
+from src.services.sector_identity_audit import (  # noqa: E402
+    EXCHANGE_LISTED_CODE, is_exchange_listed)
 
 
 def is_etf(code: str, name: str = "") -> bool:
@@ -624,6 +619,23 @@ class SectorFundAgent:
         return decision
 
 
+def ensure_fund_archive(db, code: str, name: str = '', sector_type: str = '') -> bool:
+    """映射写库前保证 `fund_info` 里有这只基金的档案（外键要求）。
+
+    原来只在"新建映射"分支补档案，**换标的**分支没补：实测 LLM 批次里
+    中科三环 → 562800 稀有金属ETF嘉实（本地没档案）直接抛
+    `IntegrityError FOREIGN KEY`，整批后台任务连坐失败。
+    用传进来的 session：单测里别的用例可能已把模块级 engine 换成临时库，
+    另开 session 会 \"no such table\"。
+    """
+    from src.models.database import FundInfo
+    if not code or db.query(FundInfo).filter_by(fund_code=code).first():
+        return False
+    db.add(FundInfo(fund_code=code, fund_name=(name or '').strip() or None,
+                    sector_type=sector_type or None))
+    return True
+
+
 def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = None,
                    allow_review_toggle: bool = True) -> Dict:
     """把 agent 结论落到 sector_fund_mapping，带完整证据。
@@ -654,7 +666,7 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
 
     verify = cand.verify or {}
     now = datetime.now()
-    from src.services.sector_identity_audit import row_unservable
+    from src.services.sector_identity_audit import machine_swap_of, row_unservable
     while len(json.dumps(decision.evidence, ensure_ascii=False)) > 60000 and len(decision.evidence) > 1:
         decision.evidence.pop(0)   # 截字符串会产出非法 JSON，下游 json.loads 直接抛
     tiers = list(decision.evidence) + [{
@@ -663,20 +675,41 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
         'nav_date': verify.get('nav_date'),
         'history_count': verify.get('history_count'),
     }]
-    evidence_json = json.dumps(tiers, ensure_ascii=False)
+    # `evidence` 列被两边用：agent 写"候选/验证轨迹"，身份体检写 `identity` 等结论。
+    # 以前这里整列覆盖，等于 AI 一批就把体检证据全抹了（实测：确定性纠正过的 5 行
+    # realigned 溯源在批次跑完后消失，前端分桶归 0）。现在只换 tiers，保留结论键。
+    preserved = {}
+    try:
+        prev = json.loads(row.evidence) if getattr(row, 'evidence', None) else {}
+        if isinstance(prev, dict):
+            preserved = {k: prev[k] for k in
+                         ('identity', 'identity_realign', 'identity_before_upgrade',
+                          'identity_before_agent_switch', 'etf_upgrade', 'prev')
+                         if k in prev}
+    except Exception:
+        preserved = {}
+    if row is not None and row.fund_code != cand.code:
+        # 换标的：旧身份证据讲的是被换掉那只，留着就是"verdict=ok 指向不存在的代码"
+        if 'identity' in preserved:
+            preserved['identity_before_agent_switch'] = preserved.pop('identity')
+        preserved.pop('etf_upgrade', None)
+    evidence_json = json.dumps(dict(preserved, tiers=tiers), ensure_ascii=False)
     message = ('直接对应' if not cand.t3_proxy else '无对口基金，取关联度最大的替代') \
         + (f'：{cand.reason}' if cand.reason else '')
     if cand.claim_mismatch:
         message += f'（{cand.claim_mismatch}）'
 
-    should_review = allow_review_toggle and decision.auto_reviewable
+    # 体检/升级换过标的的行带着 `identity_realign`/`etf_upgrade` 章，等老板确认；
+    # agent 同码重判不许把这一章洗成"已审查"（v7.2 §5：那是替老板批审查）。
+    # 判据只能取自 evidence，不能取 `match_source`：后者是普通可写字段，之后任何一次
+    # agent/人工写入都会把它盖掉。实测 id 131(传媒 159805)/id 145(医疗 159877) 两条
+    # ETF 升级行带着 `etf_upgrade.applied_at=2026-09-21T06:47:47`，却因为
+    # `match_source='agent' + reviewed=1` 让这一章彻底失效（v7.4 §十四 M3）。
+    # `machine_swap_of()` 还多要求"换到的代码仍是当前代码"，老板改过标的就自动失效。
+    machine_swapped = machine_swap_of(row) is not None
+    should_review = allow_review_toggle and decision.auto_reviewable and \
+        not (machine_swapped and row is not None and row.fund_code == cand.code)
     if row is None:
-        from src.models.database import FundInfo
-        if not db.query(FundInfo).filter_by(fund_code=cand.code).first():
-            # 用传进来的 session 补档案，避免另开一个 session：单测里别的用例可能已把
-            # 模块级 engine 换成临时库，新开 session 会 "no such table"。
-            db.add(FundInfo(fund_code=cand.code, fund_name=cand.display_name,
-                           sector_type=decision.sector))
         row = SectorFundMapping(sector_name=decision.sector,
                                 fund_code=cand.code,
                                 fund_name=cand.display_name)
@@ -693,10 +726,12 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
         # 旧体检结论是关于**被换掉那只**的：不清掉就会带着 is_fetchable=False 继续
         # 对所有读路径隐身，而 agent 刚刚重新验证过新标的。
         row.is_fetchable = None
+    ensure_fund_archive(db, cand.code, cand.display_name, decision.sector)
     row.fund_code = cand.code
     row.fund_name = cand.display_name
     row.is_active = True
-    row.match_source = 'agent'
+    if not machine_swapped:
+        row.match_source = 'agent'
     row.match_kind = 'proxy' if cand.t3_proxy else 'direct'
     row.confidence = cand.confidence
     row.verified_at = now
@@ -708,6 +743,9 @@ def apply_decision(db, decision: SectorDecision, mapping_id: Optional[int] = Non
     if should_review:
         row.reviewed = True
         row.reviewed_by = 'agent'
+    elif machine_swapped and row.reviewed:
+        # 章还在（`identity_realign`/`etf_upgrade`）却已被批过：退回待审，别让状态自相矛盾
+        row.reviewed, row.reviewed_by = False, None
     db.commit()
     from src.services.sector_identity_audit import invalidate_denied_cache
     invalidate_denied_cache()      # 拒绝集缓存在别的进程里也要认账

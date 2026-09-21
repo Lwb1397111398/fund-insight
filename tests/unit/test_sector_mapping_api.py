@@ -237,7 +237,15 @@ def test_ai_match_apply_writes_evidence(monkeypatch, tmp_path):
         seed.close()
 
         res = client.post('/api/config/sector-mappings/ai-match',
-                          json={'sector_name': 'AI写入板块', 'apply': True},
+                          json={'sector_name': 'AI写入板块', 'apply': False},
+                          headers=AUTH_HEADERS)
+        assert res.status_code == 200, res.text
+        token = res.json()['data']['decision_token']
+        # 采纳必须回传预览的 token：apply=True 不带 token 会被拒（400），
+        # 因为重跑一次 agent 可能给出别的基金，写进去的就不是老板看过的那份证据。
+        res = client.post('/api/config/sector-mappings/ai-match',
+                          json={'sector_name': 'AI写入板块', 'apply': True,
+                                'decision_token': token},
                           headers=AUTH_HEADERS)
         assert res.status_code == 200, res.text
         assert res.json()['data']['apply']['applied'] is True

@@ -370,7 +370,7 @@ def test_restore_from_manifest_roundtrip(test_db):
                    match_source='agent', confidence=0.91)
     test_db.add(row)
     test_db.commit()
-    path = write_manifest('pytest', test_db, [row])
+    path = write_manifest('pytest', test_db)
     data = json.load(io.open(path, encoding='utf-8'))
     assert set(data['fields']) == set(MANIFEST_FIELDS)
     row.reviewed = False
@@ -633,9 +633,11 @@ def test_etf_upgrade_prefers_established_etf(test_db, monkeypatch):
     from scripts.sweep_sector_mappings import pick_etf_upgrade
     from src.models.database import FundHistory
 
+    from datetime import date as _date
     monkeypatch.setattr(
         audit.fund_api, 'verify_fund_fetchable',
-        lambda code, **kw: {'is_strict_ok': True, 'history_count': 20, 'ok': True})
+        lambda code, **kw: {'is_strict_ok': True, 'history_count': 20, 'ok': True,
+                            'nav_date': _date.today().isoformat()})
     row = _mapping('T-测试ETF升级', '162412', '华宝医疗ETF联接A', reviewed=True)
     test_db.add(row)
     test_db.add(FundInfo(fund_code='162412', fund_name='华宝医疗ETF联接A'))
@@ -657,8 +659,10 @@ def test_etf_upgrade_prefers_established_etf(test_db, monkeypatch):
 def test_etf_upgrade_skips_owner_and_bad_rows(test_db, monkeypatch):
     """老板手定的代理与已被身份体检否掉的行都不许自动换标的。"""
     from scripts.sweep_sector_mappings import pick_etf_upgrade
+    from datetime import date as _date
     monkeypatch.setattr(audit.fund_api, 'verify_fund_fetchable',
-                        lambda code, **kw: {'is_strict_ok': True})
+                        lambda code, **kw: {'is_strict_ok': True,
+                                            'nav_date': _date.today().isoformat()})
     owner = _mapping('债券', '512000', '券商ETF华宝', reviewed=True,
                      owner_locked=True, reviewed_by='owner')
     bad = _mapping('T-测试ETF升级跳过', '000725', '京东方Ａ', reviewed=False,
@@ -668,3 +672,708 @@ def test_etf_upgrade_skips_owner_and_bad_rows(test_db, monkeypatch):
     test_db.commit()
     assert pick_etf_upgrade(test_db, owner, {'official_name': '券商ETF华宝'}) is None
     assert pick_etf_upgrade(test_db, bad, {'official_name': '大成添利宝货币B'}) is None
+    # 存量没有体检证据、但**本轮**判成股票的行也不能换标的（生产第一次跑就是这种库）
+    fresh = _mapping('T-升级看新鲜结论', '000938', '紫光股份', reviewed=True)
+    test_db.add(fresh)
+    test_db.add(FundInfo(fund_code='000938', fund_name='紫光股份'))
+    test_db.commit()
+    assert pick_etf_upgrade(test_db, fresh, {'official_name': '紫光股份',
+                                             'verdict': 'not_a_fund'}) is None
+    assert pick_etf_upgrade(test_db, bad, {'official_name': 'x', 'verdict': 'ok',
+                                          'suggestions': [{'code': '512000',
+                                                           'name': '券商ETF华宝'}]},
+                           proxy_codes={'512000'}) is None
+
+
+# ---------- S4a-v7.3：核心词、候选 ETF 与不相关标的确定性纠正 ----------
+
+ROSTER_FIXTURE = {
+    'by_code': {
+        '512170': {'name': u'医疗ETF华宝', 'fund_type': u'指数型-股票'},
+        '512070': {'name': u'证券保险ETF易方达', 'fund_type': u'指数型-股票'},
+        '159537': {'name': u'信创ETF国泰', 'fund_type': u'指数型-股票'},
+        '159632': {'name': u'纳斯达克ETF华安', 'fund_type': u'QDII'},
+        '516810': {'name': u'农业ETF华夏', 'fund_type': u'指数型-股票'},
+        '159811': {'name': u'5GETF博时', 'fund_type': u'指数型-股票'},
+        '162412': {'name': u'华宝医疗ETF联接A', 'fund_type': u'指数型-股票'},
+        '004529': {'name': u'长盛盛通纯债C', 'fund_type': u'债券型'},
+    },
+    'codes_by_name': {},
+}
+CORES_FIXTURE = [u'信创', u'医疗', u'保险', u'证券', u'5G', u'中药', u'市场', u'养殖']
+
+
+def _fake_roster(monkeypatch):
+    monkeypatch.setattr(audit.fund_api, 'load_fund_roster',
+                        lambda refresh=False: ROSTER_FIXTURE)
+
+
+@pytest.mark.parametrize(u'sector,expected', [
+    (u'信创', u'信创'), (u'养殖', u'养殖'), (u'中证500', u'中证500'), (u'5G', u'5G'),
+    (u'SpaceX概念', u'SpaceX'), (u'全A指数', u'全A'),
+    (u'业绩板块', u''), (u'市场', u''), (u'资源股', u''), (u'A股', u''),
+    (u'Ai应用', u''), (u'应用', u''),
+])
+def test_sector_core_extraction_rules(sector, expected):
+    u"""核心词是 realign 的准入闸门：泛指词必须出局，拉丁缩写不能被抽坏。"""
+    assert audit.sector_core(sector) == expected, sector
+
+
+def test_core_matcher_golden_matches_implementation():
+    u"""145 个板块名的核心词表是**实测基线**，改规则一定会被撞。"""
+    path = os.path.join(os.path.dirname(__file__), '..', 'fixtures',
+                        'core_matcher_golden.json')
+    # 金标随仓库走（scripts/probe_sector_cores.py 生成并同步）：文件不在就是真出事，
+    # 静默 skip 会让 CI 上一整条规则跑 0 个用例还全绿
+    with io.open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    for item in data['sectors']:
+        assert audit.sector_core(item['sector']) == item['core'], item['sector']
+    # 逐行核对规则；条数另有 test_golden_counts_are_pinned 钉死（只跟文件自己比是恒真）
+
+
+def test_sh_etf_segment_not_dropped(monkeypatch):
+    u"""`code[:2] in ('15','5')` 曾把 986 只沪市 ETF 全丢掉（'512170'[:2]=='51'）。"""
+    _fake_roster(monkeypatch)
+    assert '512170' in {c['code'] for c in audit.etf_candidates(
+        u'医疗', all_cores=CORES_FIXTURE, roster=ROSTER_FIXTURE)}
+    assert '512070' in {c['code'] for c in audit.etf_candidates(
+        u'保险', all_cores=CORES_FIXTURE, roster=ROSTER_FIXTURE)}
+
+
+def test_feeder_etf_lookalike_excluded(monkeypatch):
+    u"""162412 名字带 ETF 却是场外联接基金，不能当"最纯粹"的标的被选中。"""
+    _fake_roster(monkeypatch)
+    assert '162412' not in {c['code'] for c in audit.etf_candidates(
+        u'医疗', all_cores=CORES_FIXTURE, roster=ROSTER_FIXTURE)}
+
+
+def test_composite_index_can_serve_two_sectors(monkeypatch):
+    u"""「证券保险ETF」同时服务 证券 与 保险：等长认领不作废（撞车另有消解）。"""
+    _fake_roster(monkeypatch)
+    for sector in (u'保险', u'证券'):
+        assert '512070' in {c['code'] for c in audit.etf_candidates(
+            sector, all_cores=CORES_FIXTURE, roster=ROSTER_FIXTURE)}, sector
+
+
+def test_no_fabricated_suggestion(monkeypatch):
+    u"""名册里没有对口号就不许硬凑：候选必须为空，而不是挑一只沾边的。"""
+    _fake_roster(monkeypatch)
+    assert audit.etf_candidates(u'中药', all_cores=CORES_FIXTURE,
+                                roster=ROSTER_FIXTURE) == []
+    assert audit.etf_candidates(u'市场', all_cores=CORES_FIXTURE,
+                                roster=ROSTER_FIXTURE) == []
+
+
+@pytest.mark.parametrize(u'sector,official,expected', [
+    (u'5G', u'通信ETF华夏', True),
+    (u'AI', u'人工智能ETF易方达', True),
+    (u'保险', u'纳斯达克ETF华安', False),
+    (u'信创', u'农业ETF华夏', False),
+])
+def test_relevance_synonyms(sector, official, expected):
+    u"""同义写法（5G↔通信）不能判成"字面无关"，真错配（保险↔纳斯达克）必须判出来。"""
+    assert audit.sector_relevance(sector, official,
+                                  has_alternative=lambda core: True) is expected
+
+
+def _realign_row(db, sector, code, name, **kw):
+    row = _mapping(sector, code, name, reviewed=True, **kw)
+    db.add(row)
+    db.add(FundInfo(fund_code=code, fund_name=name))
+    db.commit()
+    return row
+
+
+def _realign_setup(monkeypatch, test_db, sector=u'信创', code=u'516810',
+                   name=u'农业ETF华夏', **kw):
+    from datetime import date
+    from scripts.sweep_sector_mappings import pick_irrelevant_replacement
+    _fake_roster(monkeypatch)
+    monkeypatch.setattr(
+        audit.fund_api, u'verify_fund_fetchable',
+        lambda c, **k: {u'is_strict_ok': True, u'ok': True,
+                        u'nav_date': date.today().isoformat(), u'history_count': 30})
+    monkeypatch.setattr(
+        audit.fund_api, u'get_fund_domain_name',
+        lambda c, use_roster=True: {
+            u'status': u'ok',
+            u'name': ROSTER_FIXTURE[u'by_code'].get(c, {}).get(u'name'),
+            u'fund_type': None,
+            u'source': u'roster' if use_roster else u'pingzhong'})
+    return pick_irrelevant_replacement, _realign_row(test_db, sector, code, name, **kw)
+
+
+def test_realign_picks_matching_etf_and_resets_conclusion(test_db, monkeypatch):
+    u"""换标的必须连带把旧结论全部复位，且不能留"名字还是旧标的"的假证据。"""
+    pick, row = _realign_setup(monkeypatch, test_db)
+    used = set()
+    plan = pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True},
+                used=used, cores=CORES_FIXTURE)
+    assert plan[u'code'] == '159537', plan
+    assert '159537' in used
+
+    from scripts.sweep_sector_mappings import apply_realign
+    created = []
+    written = apply_realign(test_db, [plan], created)
+    assert written and created == ['159537']
+    test_db.refresh(row)
+    assert (row.fund_code, row.fund_name) == ('159537', u'信创ETF国泰')
+    assert row.reviewed is False and row.owner_locked is False
+    assert row.confidence is None
+    # 审查门要 match_source+verified_at：置 None 会让行"可服务但不可审查"，死在待审查里
+    assert row.match_source == u'identity_realign'
+    assert row.is_fetchable is True
+    evidence = json.loads(row.evidence)
+    assert evidence[u'identity'][u'official_name'] == u'信创ETF国泰'
+    assert evidence[u'identity'][u'verdict'] == u'ok'
+    assert evidence[u'identity_realign'][u'from_code'] == '516810'
+    assert evidence[u'identity_realign'][u'core'] == u'信创'
+
+
+def test_realign_no_double_booking(test_db, monkeypatch):
+    u"""两个板块抢同一只 ETF 时，第二个必须换下一只或放弃（占用消解）。"""
+    pick, row = _realign_setup(monkeypatch, test_db)
+    assert pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True},
+                used={'159537'}, cores=CORES_FIXTURE) is None
+
+
+def test_upgrade_etf_writes_nothing_under_evidence_only(test_db, monkeypatch):
+    """--evidence-only 的承诺是"只写证据列"，升级标的也必须停。"""
+    from scripts.sweep_sector_mappings import apply_results
+    from src.models.database import FundInfo
+    row = _mapping('低波', '027137', '广发红利低波指数A', reviewed=True)
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='027137', fund_name='广发红利低波指数A'))
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'ok', 'reviewed': True, 'owner_row': False,
+                'official_name': '广发红利低波指数A', 'reason': 'x', 'jaccard': 1.0,
+                'suggested_code': None, 'suggested_name': None, 'suggestions': [],
+                'relevance_low': False,
+                'etf_upgrade': {'code': '512890', 'name': '红利低波ETF',
+                                'replaced': '027137 x', 'local_history_rows': 3,
+                                'reason': '有场内 ETF 可用'}}]
+    apply_results(test_db, results, [], evidence_only=True, upgrade_etf=True)
+    test_db.refresh(row)
+    assert row.fund_code == '027137', 'evidence-only 竟然换了标的'
+    assert json.loads(row.evidence).get('etf_upgrade') is None
+
+
+def test_upgrade_refuses_proxy_and_taken_codes(test_db, monkeypatch):
+    """非空断言：行本身是 ok + 场外基金，只有代理码/占用两条能挡住升级。"""
+    from scripts.sweep_sector_mappings import pick_etf_upgrade
+    from src.models.database import FundInfo
+    monkeypatch.setattr(audit.fund_api, 'verify_fund_fetchable',
+                        lambda c, **k: {'is_strict_ok': True, 'ok': True,
+                                        'nav_date': __import__('datetime').date.today().isoformat()})
+    row = _mapping('医疗', '027137', '华宝医疗ETF联接A', reviewed=True)
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='027137', fund_name='华宝医疗ETF联接A'))
+    test_db.commit()
+    verdict_row = {'official_name': '华宝医疗ETF联接A', 'verdict': 'ok', 'suggestions': [
+        {'code': '512000', 'name': '券商ETF华宝'}]}
+    assert pick_etf_upgrade(test_db, row, verdict_row, proxy_codes={'512000'}) is None
+    verdict_row['suggestions'] = [{'code': '512170', 'name': '医疗ETF华宝'}]
+    assert pick_etf_upgrade(test_db, row, verdict_row, proxy_codes=set(),
+                            taken={'512170'}) is None
+    got = pick_etf_upgrade(test_db, row, verdict_row, proxy_codes=set(), taken=set())
+    assert got and got['code'] == '512170', got
+
+
+def test_proxy_deny_codes_fail_closed(monkeypatch):
+    """读不到刻意代理拒绝集必须报 None（调用方 exit 8），不能"当没有代理"继续写。"""
+    from scripts import sweep_sector_mappings as sweep
+    import builtins
+    real_import = builtins.__import__
+
+    def boom(name, *a, **k):
+        if name == 'src.services.sector_fund_agent':
+            raise ImportError('模拟导入失败')
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(builtins, '__import__', boom)
+    assert sweep.proxy_deny_codes() is None
+
+
+def test_upgrade_leaves_no_stale_identity_evidence(test_db):
+    """升级写完不许留下"verdict=ok 讲的是旧代码"的假自证（镜像不变量的另一半）。"""
+    from scripts.sweep_sector_mappings import apply_results
+    from src.models.database import FundInfo
+    row = _mapping('传媒', '162412', '华宝医疗ETF联接A', reviewed=True,
+                   is_fetchable=True,
+                   evidence=json.dumps({'identity': {'verdict': 'ok',
+                                                     'official_name': '华宝医疗ETF联接A'}}))
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='162412', fund_name='华宝医疗ETF联接A'))
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'ok', 'reviewed': True, 'owner_row': False,
+                'official_name': '华宝医疗ETF联接A', 'reason': '旧的', 'jaccard': 1.0,
+                'suggested_code': None, 'suggested_name': None, 'suggestions': [],
+                'relevance_low': False,
+                'etf_upgrade': {'code': '159877', 'name': '医疗ETF南方',
+                                'replaced': '162412 x', 'local_history_rows': 9,
+                                'reason': '有场内 ETF 可用'}}]
+    apply_results(test_db, results, [], evidence_only=False, upgrade_etf=True)
+    test_db.refresh(row)
+    ev = json.loads(row.evidence)
+    assert row.fund_code == '159877' and row.is_fetchable is None
+    assert 'identity' not in ev and ev.get('identity_before_upgrade'), '旧身份证据没挪走'
+
+
+@pytest.mark.parametrize(u'kw,verdict_row', [
+    ({u'sector': u'市场', u'code': '510300', u'name': u'沪深300ETF'},
+     {u'verdict': u'ok', u'relevance_low': True}),
+    ({u'sector': u'保险', u'code': '159632', u'name': u'纳斯达克ETF华安',
+      u'owner_locked': True, u'reviewed_by': u'owner'},
+     {u'verdict': u'ok', u'relevance_low': True}),
+    ({u'sector': u'信创', u'code': '000725', u'name': u'京东方Ａ'},
+     {u'verdict': u'not_a_fund', u'relevance_low': False}),
+])
+def test_realign_refuses_generic_owner_and_stock(test_db, monkeypatch, kw, verdict_row):
+    u"""泛指核心词、老板手定行、名字本身是股票的行一律不换标的。"""
+    pick, row = _realign_setup(monkeypatch, test_db, **kw)
+    assert pick(test_db, row, verdict_row, used=set(), cores=CORES_FIXTURE) is None
+
+
+def test_realign_restore_removes_created_fund(test_db, monkeypatch):
+    u"""回滚要把"本轮为映射新建的基金档案"一并删掉，否则它永久挂在基金列表里。"""
+    from scripts.sweep_sector_mappings import (apply_realign, finalize_manifest,
+                                               restore, write_manifest)
+    pick, row = _realign_setup(monkeypatch, test_db)
+    path = write_manifest(u'pytest-realign', test_db)
+    plan = pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True},
+                used=set(), cores=CORES_FIXTURE)
+    created = []
+    apply_realign(test_db, [plan], created)
+    assert finalize_manifest(path, created) == ['159537']
+    assert test_db.query(FundInfo).filter(FundInfo.fund_code == '159537').first()
+
+    restore(test_db, path)
+    test_db.refresh(row)
+    assert row.fund_code == '516810' and row.reviewed is True
+    assert test_db.query(FundInfo).filter(FundInfo.fund_code == '159537').first() is None
+    os.remove(path)
+
+
+def test_realign_fixes_a_demoted_row(test_db, monkeypatch):
+    u"""code_is_other_fund 的坏行（存名不是那个码）也要能换标的，换完必须重新仲裁。
+
+    v7.1 准入表第 3 行。只测 ok+relevance_low 等于把"把坏行修好"这条主路径漏掉。
+    """
+    from scripts.sweep_sector_mappings import apply_realign
+    roster = {'by_code': dict(ROSTER_FIXTURE['by_code']), 'codes_by_name': {}}
+    roster['by_code'][u'560080'] = {u'name': u'中药ETF汇添富', u'fund_type': u'指数型-股票'}
+    pick, row = _realign_setup(monkeypatch, test_db, sector=u'中药', code=u'004529',
+                               name=u'工银瑞信中证中药指数A')
+    # _realign_setup 里那两份补丁要覆盖掉：名册得含 560080，域名解析得走 pingzhong 分支
+    monkeypatch.setattr(audit.fund_api, u'load_fund_roster', lambda refresh=False: roster)
+    monkeypatch.setattr(
+        audit.fund_api, u'get_fund_domain_name',
+        lambda c, use_roster=True: {
+            u'status': u'ok', u'name': roster[u'by_code'].get(c, {}).get(u'name'),
+            u'fund_type': None,
+            u'source': u'roster' if use_roster else u'pingzhong'})
+    plan = pick(test_db, row, {u'verdict': u'code_is_other_fund', u'relevance_low': False},
+                used=set(), cores=CORES_FIXTURE + [u'中药'])
+    assert plan[u'code'] == u'560080', plan
+    created = []
+    assert apply_realign(test_db, [plan], created)
+    test_db.refresh(row)
+    assert row.fund_code == u'560080' and row.is_fetchable is True
+    identity = json.loads(row.evidence)[u'identity']
+    assert identity[u'official_name'] == u'中药ETF汇添富'
+    # 非名册来源（pingzhong）才算自证：拿名册写名再用名册仲裁是恒 1.0 的自我背书
+    assert identity[u'evidence'][u'domain_source'] == u'pingzhong'
+
+
+def test_realign_returns_none_without_candidates(test_db, monkeypatch):
+    u"""粗筛后无候选必须直接返回 None，不能退化成"挑一只沾边的"。"""
+    from scripts import sweep_sector_mappings as sweep
+    pick, row = _realign_setup(monkeypatch, test_db)
+    monkeypatch.setattr(sweep, u'etf_candidates_for', lambda *a, **k: [])
+    assert pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True},
+                used=set(), cores=CORES_FIXTURE) is None
+
+
+def test_stale_nav_candidate_rejected(test_db, monkeypatch):
+    u"""净值停更 >30 天的候选必须拒掉：储能/信创的候选本地净值全是 0 条，只看本地深度会随机选。"""
+    from datetime import date, timedelta
+    from scripts.sweep_sector_mappings import rank_verified_candidates
+    cands = [{u'code': u'512170', u'name': u'医疗ETF华宝'}]
+    stale = (date.today() - timedelta(days=90)).isoformat()
+    monkeypatch.setattr(audit.fund_api, u'verify_fund_fetchable',
+                        lambda c, **k: {u'is_strict_ok': True, u'ok': True,
+                                        u'nav_date': stale})
+    assert rank_verified_candidates(test_db, cands, set()) == []
+    monkeypatch.setattr(audit.fund_api, u'verify_fund_fetchable',
+                        lambda c, **k: {u'is_strict_ok': True, u'ok': True,
+                                        u'nav_date': date.today().isoformat()})
+    ranked = rank_verified_candidates(test_db, cands, set())
+    assert [r[u'cand'][u'code'] for r in ranked] == [u'512170']
+
+
+def test_core_variants_case_insensitive():
+    u"""`5g`/`5G`、`Ai应用`/`AI应用` 必须等价（比较前统一大小写）。"""
+    assert audit.core_variants(u'5g') == (u'5g', u'通信')
+    assert audit.core_variants(u'5G') == (u'5G', u'通信')
+    assert audit.contains_core(u'5getf博时', u'5G')
+
+
+def test_upgrade_reason_names_the_held_fund(test_db, monkeypatch):
+    u"""升级理由要写老板在册的那只基金名，不能写站点解析出的另一个名字。"""
+    from datetime import date as _date
+    from scripts.sweep_sector_mappings import pick_etf_upgrade
+    monkeypatch.setattr(audit.fund_api, u'verify_fund_fetchable',
+                        lambda c, **k: {u'is_strict_ok': True, u'ok': True,
+                                        u'nav_date': _date.today().isoformat()})
+    row = _mapping(u'低波', u'027137', u'广发红利低波指数A', reviewed=True)
+    test_db.add(row)
+    test_db.commit()
+    # official_name 故意与在册名不同：两者相同的话这条用例改回旧写法也照样绿（空断言）
+    upgrade = pick_etf_upgrade(test_db, row, {u'official_name': u'红利低波ETF华泰柏瑞',
+                                             u'suggestions': [{u'code': u'512890',
+                                                              u'name': u'红利低波ETF'}]})
+    assert upgrade and u'广发红利低波指数A' in upgrade[u'reason']
+    assert u'红利低波ETF华泰柏瑞' not in upgrade[u'reason']
+
+
+# ---------- 代码质检第 2 轮补的用例 ----------
+
+def test_etf_candidates_include_their_own_core(monkeypatch):
+    """认领宇宙漏了自己 = `--upgrade-etf` 对 109/145 个在册板块静默变 no-op。
+
+    调用方（`pick_etf_upgrade`）传的 all_cores 可能只来自静态表，
+    本板块核心词必须在里面，否则 `mine` 恒 0、候选恒空。
+    """
+    _fake_roster(monkeypatch)
+    assert audit.etf_candidates(u'医疗', all_cores=[u'保险', u'证券'],
+                                roster=ROSTER_FIXTURE), u'自己的核心词不在宇宙里就不该颗粒无收'
+
+
+def test_feeder_named_etf_on_in_exchange_code_excluded(monkeypatch):
+    """把"排联接"这条规则真的跑到：16xxxx 的联接基金靠码段就被挡了，测它等于没测。"""
+    roster = {'by_code': dict(ROSTER_FIXTURE['by_code']), 'codes_by_name': {}}
+    roster['by_code'][u'159998'] = {u'name': u'医疗ETF联接A', u'fund_type': u'指数型-股票'}
+    monkeypatch.setattr(audit.fund_api, u'load_fund_roster', lambda refresh=False: roster)
+    codes = {c['code'] for c in audit.etf_candidates(
+        u'医疗', all_cores=CORES_FIXTURE, roster=roster)}
+    assert u'512170' in codes and u'159998' not in codes, codes
+
+
+def test_synonyms_are_symmetric():
+    """单向同义表会让"通信板块配 5GETF"判成不相关，接着把对的标的换掉。"""
+    assert audit.sector_relevance(u'5G', u'通信ETF华夏',
+                                  has_alternative=lambda c: True) is True
+    assert audit.sector_relevance(u'通信', u'5GETF博时',
+                                  has_alternative=lambda c: True) is True
+
+
+@pytest.mark.parametrize(u'sector', [u'债券'])
+def test_realign_refuses_alias_renamed_sector(test_db, monkeypatch, sector):
+    """别名会把板块改写成另一个主题（实测 债券→券商），核心词与候选都不是老板看到的那个板块。"""
+    pick, row = _realign_setup(monkeypatch, test_db, sector=sector, code=u'512000',
+                               name=u'券商ETF华宝')
+    verdict_row = {u'verdict': u'ok', u'relevance_low': True}
+    assert pick(test_db, row, verdict_row, used=set(),
+                cores=CORES_FIXTURE, realign_codes=set()) is None
+
+
+def test_realign_refuses_proxy_codes_on_both_sides(test_db, monkeypatch):
+    """刻意代理拒绝集要同时挡"行内现有代码"和"候选代码"，否则会把 512000 推给别的板块。"""
+    pick, row = _realign_setup(monkeypatch, test_db)
+    assert pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True}, used=set(),
+                cores=CORES_FIXTURE, realign_codes={u'516810'}) is None
+    assert pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True}, used=set(),
+                cores=CORES_FIXTURE, realign_codes={u'159537'}) is None
+
+
+def test_realign_respects_targets_held_by_other_rows(test_db, monkeypatch):
+    """跨轮撞车：上一轮已经把 159537 给了别的板块，这一轮就不许再给它。"""
+    pick, row = _realign_setup(monkeypatch, test_db)
+    assert pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True}, used=set(),
+                cores=CORES_FIXTURE, occupied={u'159537'}) is None
+    plan = pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True}, used=set(),
+                cores=CORES_FIXTURE, occupied={u'999999'})
+    assert plan and plan[u'code'] == u'159537'
+
+
+def test_realign_writes_nothing_when_only_roster_knows_the_code(test_db, monkeypatch):
+    """非名册来源拿不到名字 = 唯一的循环自证被切断，此时必须不写。"""
+    from scripts.sweep_sector_mappings import apply_realign
+    pick, row = _realign_setup(monkeypatch, test_db)
+    plan = pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True}, used=set(),
+                cores=CORES_FIXTURE)
+    monkeypatch.setattr(
+        audit.fund_api, u'get_fund_domain_name',
+        lambda c, use_roster=True: {
+            u'status': u'absent' if not use_roster else u'ok',
+            u'name': u'信创ETF国泰' if use_roster else None,
+            u'fund_type': None, u'source': u'roster' if use_roster else u'pingzhong'})
+    created = []
+    assert apply_realign(test_db, [plan], created) == []
+    test_db.refresh(row)
+    assert row.fund_code == u'516810', u'重新仲裁没过却照样换了标的'
+    assert created == []
+
+
+def test_demote_unwritten_falls_back_to_demotion(test_db):
+    """realign 计划被否之后，坏行必须回到"该降就降"，不能顶着 reviewed=True 挂着降级结论活着。"""
+    from scripts.sweep_sector_mappings import demote_unwritten
+    row = _mapping(u'T-回退降级', u'000725', u'京东方Ａ', reviewed=True,
+                   evidence=json.dumps({u'identity': {u'verdict': u'code_is_other_fund'}}))
+    test_db.add(row)
+    test_db.commit()
+    plan = {u'id': row.id, u'code': u'512170'}
+    results = [{u'id': row.id, u'verdict': u'code_is_other_fund', u'owner_row': False}]
+    assert demote_unwritten(test_db, results, [plan], []) == 1
+    test_db.refresh(row)
+    assert row.reviewed is False and row.is_fetchable is False
+    assert demote_unwritten(test_db, results, [plan], [plan]) == 0
+
+
+@pytest.mark.parametrize(u'apply,realign,ev,expected', [
+    (True, True, False, True), (False, True, False, False),
+    (True, False, False, False), (True, True, True, False),
+])
+def test_should_realign_gate(apply, realign, ev, expected):
+    from argparse import Namespace
+    from scripts.sweep_sector_mappings import should_realign
+    assert should_realign(Namespace(apply=apply, realign_irrelevant=realign,
+                                    evidence_only=ev)) is expected
+
+
+def test_identity_view_exposes_the_realign_provenance(test_db):
+    """前端逐行提示与分桶直接读这几个键，键名一改就静默变空。
+
+    `identity_realign` 记录带 `code`（写库时是 `dict(plan, ...)`，plan 必有 code）：
+    溯源只在"换到的标的仍是当前标的"时算未确认，老板一旦再改标的旗标就该消失。
+    """
+    row = _mapping(u'T-视图', u'512170', u'医疗ETF华宝', evidence=json.dumps({
+        u'identity': {u'verdict': u'ok'},
+        u'identity_realign': {u'code': u'512170', u'from_code': u'516810',
+                             u'from_name': u'农业ETF华夏',
+                             u'core': u'信创', u'reason': u'x'}}))
+    view = audit.identity_view(row)
+    assert view[u'realigned'] == {u'from_code': u'516810', u'from_name': u'农业ETF华夏',
+                                 u'core': u'信创', u'reason': u'x',
+                                 u'kind': u'identity_realign'}
+    row.fund_code = u'600000'          # 老板自己又换了标的 = 已确认
+    assert audit.identity_view(row)[u'realigned'] is None
+
+
+def test_upgrade_registers_occupancy_within_the_round(test_db, monkeypatch):
+    """两个板块同轮抢一只 ETF：第一个成交后必须把码登记进调用方的占用集。
+
+    占用登记以前写在 main 的 print 循环里，谁都测不到；现在内聚进本函数。
+    """
+    from datetime import date
+    from scripts.sweep_sector_mappings import pick_etf_upgrade
+    from src.models.database import FundInfo
+    monkeypatch.setattr(audit.fund_api, u'verify_fund_fetchable',
+                        lambda c, **k: {u'is_strict_ok': True, u'ok': True,
+                                        u'nav_date': date.today().isoformat()})
+    a = _mapping(u'T-占用A', u'027137', u'华宝医疗ETF联接A', reviewed=True)
+    b = _mapping(u'T-占用B', u'027138', u'华宝医疗ETF联接C', reviewed=True)
+    test_db.add_all([a, b])
+    test_db.add(FundInfo(fund_code=u'027137', fund_name=u'华宝医疗ETF联接A'))
+    test_db.add(FundInfo(fund_code=u'027138', fund_name=u'华宝医疗ETF联接C'))
+    test_db.commit()
+    taken = set()
+    cands = [{u'code': u'512170', u'name': u'医疗ETF华宝'}]
+    first = pick_etf_upgrade(test_db, a, {u'official_name': u'华宝医疗ETF联接A',
+                                         u'verdict': u'ok', u'suggestions': cands},
+                             taken=taken, proxy_codes=set())
+    assert first and u'512170' in taken, first
+    second = pick_etf_upgrade(test_db, b, {u'official_name': u'华宝医疗ETF联接C',
+                                          u'verdict': u'ok', u'suggestions': cands},
+                              taken=taken, proxy_codes=set())
+    assert second is None, u'同一轮里两只板块挂上了同一只 ETF'
+
+
+@pytest.mark.parametrize(u'sector,expected', [
+    (u'5G指数', u'5G'), (u'AI主题', u'AI'), (u'SpaceX概念', u'SpaceX'),
+    (u'5G板块', u'5G'), (u'5G', u'5G'),
+])
+def test_sector_core_strips_generic_tail_on_latin_cores(sector, expected):
+    """拉丁缩写核心词一样要先剥泛指尾，否则 `5G指数` 会当成新核心词去配标的。"""
+    assert audit.sector_core(sector) == expected
+
+
+def test_golden_counts_are_pinned():
+    """核心词表的条数必须钉死：只跟文件自己比是恒真断言，规则改坏也发现不了。"""
+    path = os.path.join(os.path.dirname(__file__), u'..', u'fixtures',
+                        u'core_matcher_golden.json')
+    data = json.load(io.open(path, encoding=u'utf-8'))
+    c = data[u'counts']
+    assert (c[u'rows'], c[u'with_core'], c[u'rejected']) == (145, 129, 16), c
+
+
+def test_coerce_handles_every_datetime_field():
+    """manifest 里的日期是 ISO 串，回写 DateTime 列前必须还原（含 updated_at）。"""
+    from datetime import datetime
+    from scripts.sweep_sector_mappings import _coerce
+    stamp = datetime(2026, 9, 20, 8, 9, 10).isoformat(sep=u' ')
+    for field in (u'verified_at', u'updated_at'):
+        assert _coerce(field, stamp) == datetime(2026, 9, 20, 8, 9, 10), field
+    assert _coerce(u'fund_name', stamp) == stamp
+    assert _coerce(u'updated_at', None) is None
+
+
+def test_upgrade_resets_the_review_and_states_the_new_reason(test_db):
+    """升级换标的=机器替老板决定，必须回到未审查，且理由写新标的（评审 BLOCKER 1/2）。"""
+    from scripts.sweep_sector_mappings import apply_results
+    from src.models.database import FundInfo
+    row = _mapping('医疗', '162412', '华宝医疗ETF联接A', reviewed=True,
+                   reviewed_by='agent', match_source='agent', match_kind='proxy',
+                   confidence=0.68, llm_reason='旧标的的理由', keywords=['旧'],
+                   is_fetchable=True, owner_locked=False)
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='162412', fund_name='华宝医疗ETF联接A'))
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'ok', 'reviewed': True, 'owner_row': False,
+                'official_name': '华宝医疗ETF联接A', 'reason': '代码在基金域的品种名与映射名一致',
+                'jaccard': 1.0, 'suggested_code': None, 'suggested_name': None,
+                'suggestions': [], 'relevance_low': False,
+                'etf_upgrade': {'code': '512170', 'name': '医疗ETF华宝',
+                                'replaced': '162412 x', 'local_history_rows': 12,
+                                'reason': '板块「医疗」有场内 ETF 可用，按"ETF 最纯粹"替换'}}]
+    apply_results(test_db, results, [], evidence_only=False, upgrade_etf=True)
+    test_db.refresh(row)
+    assert row.fund_code == '512170'
+    assert (row.reviewed, row.reviewed_by, row.confidence, row.match_kind) == \
+        (False, None, None, None)
+    assert row.match_source == 'etf_upgrade' and row.keywords is None
+    assert '最纯粹' in row.verify_message and '一致' not in row.verify_message, \
+        'verify_message 还是旧标的的体检结论 = 前端显示假自证'
+    from src.services.sector_identity_audit import identity_view
+    assert 'ETF 最纯粹' in identity_view(row)['identity_reason']
+
+
+def test_upgrade_registers_created_fund_info_for_rollback(test_db):
+    """升级新建的档案必须登记进清单，否则 --restore-from 之后留孤儿基金。"""
+    from scripts.sweep_sector_mappings import apply_results
+    from src.models.database import FundInfo
+    row = _mapping('传媒', '162413', '传媒联接A', reviewed=True)
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='162413', fund_name='传媒联接A'))
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'ok', 'reviewed': True, 'owner_row': False,
+                'official_name': '传媒联接A', 'reason': 'r', 'jaccard': 1.0,
+                'suggested_code': None, 'suggested_name': None, 'suggestions': [],
+                'relevance_low': False,
+                'etf_upgrade': {'code': '512980', 'name': '传媒ETF',
+                                'replaced': '162413 x', 'local_history_rows': 5,
+                                'reason': '有场内 ETF 可用'}}]
+    created = []
+    apply_results(test_db, results, [], evidence_only=False, upgrade_etf=True,
+                  created_codes=created)
+    assert created == ['512980'], created
+
+
+def test_identity_view_survives_legacy_array_evidence(test_db):
+    """evidence 列历史上是 agent 写的**数组**：解析必须容错，不然一行旧数据 500 整页。"""
+    row = _mapping('T-旧数组证据', '510300', '沪深300ETF',
+                   evidence=json.dumps([{'stage': 'T1', 'candidates': ['510300']}]))
+    view = audit.identity_view(row)
+    assert view['servable'] is True and view['identity_verdict'] is None
+    assert view['relevance_low'] is False
+
+
+def test_agent_evidence_coexists_with_audit_identity(test_db):
+    """体检写 dict、agent 写数组的那一页已经统一成 {tiers:…, identity:…}：
+    换标的要保住 realign 溯源，同码重判要保住 identity。"""
+    from src.services.sector_fund_agent import (
+        SectorDecision, FundCandidate, apply_decision)
+    from src.models.database import FundInfo
+    row = _mapping('T-证据共存2', '159995', '芯片ETF', reviewed=False,
+                   evidence=json.dumps({'identity': {'verdict': 'ok'},
+                                         'identity_realign': {'core': '芯片'}}))
+    test_db.add(row)
+    test_db.commit()
+    decision = SectorDecision(
+        sector='T-证据共存2', status='matched', confidence=0.9,
+        chosen=FundCandidate(code='512170', name='医疗ETF华宝', source='search',
+                             official_name='医疗ETF华宝', t3_suitable=True, t3_score=95,
+                             confidence=0.9, verify={'is_strict_ok': True}))
+    apply_decision(test_db, decision)
+    test_db.refresh(row)
+    payload = json.loads(row.evidence)
+    assert payload['identity_realign'] == {'core': '芯片'}
+    assert 'identity' not in payload and payload['identity_before_agent_switch']
+    assert payload['tiers'][-1]['stage'] == 'FETCH'
+
+
+def test_upgrade_never_touches_owner_rows(test_db):
+    """老板手定的行（`reviewed_by='owner'`/`owner_locked`）不参与场内 ETF 升级。"""
+    from scripts.sweep_sector_mappings import apply_results
+    from src.models.database import FundInfo
+    row = _mapping('债券', '512000', '券商ETF华宝', reviewed=True, reviewed_by='owner',
+                   owner_locked=True, match_source='manual', confidence=0.5,
+                   is_fetchable=True, verify_message='老板确认的有意代理：无债市标的')
+    test_db.add(row)
+    test_db.add(FundInfo(fund_code='512000', fund_name='券商ETF华宝'))
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'ok', 'reviewed': True, 'owner_row': True,
+                'official_name': '券商ETF华宝', 'reason': '代码在基金域的品种名与映射名一致',
+                'jaccard': 1.0, 'suggested_code': None, 'suggested_name': None,
+                'suggestions': [], 'relevance_low': False,
+                'etf_upgrade': {'code': '511010', 'name': '国债ETF', 'from_code': '512000',
+                                'replaced': 'x', 'local_history_rows': 3,
+                                'reason': '不该发生'}}]
+    apply_results(test_db, results, [], evidence_only=False, upgrade_etf=True)
+    test_db.refresh(row)
+    assert row.fund_code == '512000'
+    assert row.verify_message == '老板确认的有意代理：无债市标的', '体检结论刷掉了老板的理由'
+    assert row.owner_locked is True and row.reviewed is True
+
+
+def test_audit_run_keeps_user_facing_reason(test_db):
+    """D1 回归：一次普通体检（ok 结论）不许把面向用户的理由列刷成 Jaccard 语句。"""
+    from scripts.sweep_sector_mappings import apply_results
+    row = _mapping('中药', '560080', '中药ETF汇添富', reviewed=True, match_source='agent',
+                   verify_message='直接对应：跟踪中证中药指数')
+    test_db.add(row)
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'ok', 'reviewed': True, 'owner_row': False,
+                'official_name': '中药ETF汇添富', 'jaccard': 1.0,
+                'reason': '代码在基金域的品种名与映射名一致（Jaccard 1.000）',
+                'suggested_code': None, 'suggested_name': None, 'suggestions': [],
+                'relevance_low': False}]
+    apply_results(test_db, results, [], evidence_only=False)
+    test_db.refresh(row)
+    assert row.verify_message == '直接对应：跟踪中证中药指数'
+    # 但降级结论必须写进去：那才是这一列要告诉老板的"为什么不能用"
+    row2 = _mapping('测试刷写', '000725', '京东方Ａ', reviewed=True, verify_message='')
+    test_db.add(row2)
+    test_db.commit()
+    r2 = [{'id': row2.id, 'verdict': 'not_a_fund', 'reviewed': True, 'owner_row': False,
+           'official_name': '大成添利宝货币B', 'jaccard': 0.0,
+           'reason': '「京东方Ａ」在基金域查不到同名产品', 'suggested_code': None,
+           'suggested_name': None, 'suggestions': [], 'relevance_low': False}]
+    apply_results(test_db, r2, [r2[0]], evidence_only=False)
+    test_db.refresh(row2)
+    assert row2.verify_message == '「京东方Ａ」在基金域查不到同名产品'
+
+
+def test_demote_unwritten_respects_midrun_owner_edits(test_db):
+    """D2：计划未成交时也不许拿计划期的旧事实替老板解锁 / 判死他刚换的标的。"""
+    from scripts.sweep_sector_mappings import demote_unwritten
+    row = _mapping('T-回退看现状', '000938', '紫光股份', reviewed=True,
+                   evidence=json.dumps({'identity': {'verdict': 'code_is_other_fund'}}))
+    test_db.add(row)
+    test_db.commit()
+    results = [{'id': row.id, 'verdict': 'code_is_other_fund', 'owner_row': False}]
+    plan = {'id': row.id, 'from_code': '000938', 'code': '512170'}
+    # 老板在计划期内把标的换了并锁定 → 不能被回退降级
+    row.fund_code = '510300'
+    row.owner_locked = True
+    test_db.commit()
+    assert demote_unwritten(test_db, results, [plan], []) == 0
+    test_db.refresh(row)
+    assert row.owner_locked is True and row.reviewed is True
+    # 解锁后，标的仍是计划里那个坏码 → 该降就降
+    row.owner_locked = False
+    row.fund_code = '000938'
+    test_db.commit()
+    assert demote_unwritten(test_db, results, [plan], []) == 1
+    test_db.refresh(row)
+    assert row.reviewed is False and row.is_fetchable is False

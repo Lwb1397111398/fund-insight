@@ -15,6 +15,14 @@ if project_root not in sys.path:
 
 # 必须在导入应用配置前覆盖 DATABASE_URL，避免集成测试写入 Supabase。
 _test_db_path = Path(tempfile.gettempdir()) / f"fund-insight-pytest-{os.getpid()}.db"
+# 同名文件复用会把上一轮的**旧表结构**带进来（0007/0008/0009 之前建的文件尤其如此），
+# 表现为随机 "no column named match_source" 之类的假故障；开跑前先删干净。
+for _stale in (str(_test_db_path), str(_test_db_path) + '-wal', str(_test_db_path) + '-shm'):
+    try:
+        if os.path.exists(_stale):
+            os.remove(_stale)
+    except OSError:
+        pass
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db_path.as_posix()}"
 os.environ.pop("ALEMBIC_DATABASE_URL", None)
 os.environ.setdefault("LLM_API_KEY", "test-key")
@@ -53,6 +61,30 @@ def db_session():
         # 回滚所有未提交的操作，避免测试数据污染
         db.rollback()
         db.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sector_service_caches():
+    """板块映射有两处**进程内**缓存：`SectorFundService` 的类属性映射表 + 绑着某个
+    session 的服务单例 `_sector_fund_service`，外加身份体检的静态表拒绝集。
+
+    它们都是跨用例脏读的来源：单例还绑着上一个用例已经关闭的 session，按全量顺序跑时
+    会把 A 文件的映射当成 B 文件的"现状"（实测 `test_machine_swap_flag_survives_nothing_after_a_manual_edit`
+    单跑 11 passed、全量跑就挂）。逐个测试文件自己清太容易漏——新增一个文件就得记得抄一次，
+    所以统一放在根 conftest 里，进出各清一遍。
+    """
+    from src.services import sector_fund_service as sfs
+    from src.services import sector_identity_audit as audit
+
+    def _reset():
+        sfs.SectorFundService._cache = {}
+        sfs.SectorFundService._cache_loaded = False
+        sfs._sector_fund_service = None
+        audit.invalidate_denied_cache()
+
+    _reset()
+    yield
+    _reset()
 
 
 @pytest.fixture

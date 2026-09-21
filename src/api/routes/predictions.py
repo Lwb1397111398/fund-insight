@@ -163,7 +163,15 @@ def sync_sector_mapping(
             detail="执行同步需要确认头 X-Danger-Confirm: sync-prediction-mapping",
         )
     try:
-        result = PredictionMaintenanceService(db).sync_sector_mappings(dry_run=dry_run)
+        run_id = None
+        if not dry_run:
+            # 没 run_id 的写入等于**不可回滚**：`scripts/restore_prediction_batch.py`
+            # 按 run_id 过滤，UI 这一路以前不传，整批改标只能靠备份文件救
+            from datetime import datetime as _dt
+            run_id = 'ui-sync-%s' % _dt.now().strftime('%Y%m%d-%H%M%S')
+        result = PredictionMaintenanceService(db).sync_sector_mappings(
+            dry_run=dry_run, run_id=run_id)
+        result['run_id'] = run_id
 
         # 构建详细消息
         parts = []

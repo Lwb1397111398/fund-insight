@@ -30,10 +30,23 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL"):
                   "本脚本只操作本地镜像库：设 LOCAL_DB_URL=sqlite:///<路径> 或清掉 DATABASE_URL。"
                   % configured.split("@")[-1])
             raise SystemExit(4)
+        # 逃生口本身也要校验：报错信息就是让操作者设 LOCAL_DB_URL，
+        # 从 `.env` 手滑粘一个 postgres:// 进来，整批 sweep/seed 就变成线上写入。
+        if "://" in override and not override.lower().startswith("sqlite"):
+            print("[abort] %s 也必须指向 SQLite（%s）：本脚本只操作本地镜像库"
+                  % (allow_env_override, override.split("@")[-1]))
+            raise SystemExit(4)
+        if "://" not in override:
+            # 允许只给一个文件路径，统一转成 sqlite URL
+            override = "sqlite:///" + os.path.abspath(override).replace("\\", "/")
         os.environ["DATABASE_URL"] = override
     elif not configured:
         os.environ["DATABASE_URL"] = "sqlite:///" + DEFAULT_DB.replace("\\", "/")
     url = os.environ["DATABASE_URL"]
+    # 兜底断言（不是 assert：`python -O` 会把 assert 整条剥掉）
+    if not url.lower().startswith("sqlite"):
+        print("[abort] 最终 DATABASE_URL 仍非 SQLite（%s）" % url.split("@")[-1])
+        raise SystemExit(4)
     print("[env] DATABASE_URL = %s" % url)
     sys.stdout.flush()
     return url

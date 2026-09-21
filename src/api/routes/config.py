@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional
 from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -951,6 +951,59 @@ class MappingCreate(BaseModel):
     fund_name: Optional[str] = None
 
 
+# ===== 审计结论定向回写（生产写回的服务端出口） =====
+
+# 真写必须显式带这个字面量（与 scripts/push_sector_mappings_to_prod.py 的 --confirm 同一个词，
+# 少一个口令就少一次"老板记错哪个串"的机会）
+AUDIT_IMPORT_CONFIRM = 'WRITE-TO-PROD'
+AUDIT_IMPORT_CONFIRM_HEADER = 'X-Audit-Confirm'
+
+# 逐列照搬的审计字段：sector_name 只用来寻址，本地 id 一律不采信
+AUDIT_FIELDS = ('fund_code', 'fund_name', 'keywords', 'is_active', 'reviewed',
+                'match_source', 'match_kind', 'confidence', 'verified_at',
+                'verify_message', 'llm_reason', 'is_fetchable', 'evidence',
+                'reviewed_by', 'owner_locked')
+
+# 列宽（PostgreSQL 真的会截断/报错，SQLite 不会：本地过、线上炸是最坏的组合）
+AUDIT_MAX_LEN = {'fund_code': 20, 'fund_name': 100, 'match_source': 20,
+                 'match_kind': 12, 'reviewed_by': 30}
+
+
+class AuditMappingRow(BaseModel):
+    """一行审计结论，形状 = `export_repaired_mappings.py` 导出的清单条目。
+
+    用 `model_fields_set` 区分"清单显式给了 null"（必须照搬，例：`reviewed_by=None`
+    就是把结论退回未审查）与"根本没给这一列"（不碰目标库现值），
+    所以缺列不会把生产值悄悄抹成 NULL。
+
+    寻址/代码两列也做成可选：整列缺失不该让 145 行的批次一起吃 422，
+    逐行校验、逐行回执才有意义（空/缺 fund_code 会被拒成 `empty_fund_code`）。
+    """
+    sector_name: Optional[str] = None
+    fund_code: Optional[str] = None
+    fund_name: Optional[str] = None
+    keywords: Optional[Any] = None
+    is_active: Optional[bool] = None
+    reviewed: Optional[bool] = None
+    match_source: Optional[str] = None
+    match_kind: Optional[str] = None
+    confidence: Optional[float] = None
+    verified_at: Optional[str] = None
+    verify_message: Optional[str] = None
+    llm_reason: Optional[str] = None
+    is_fetchable: Optional[bool] = None
+    evidence: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    owner_locked: Optional[bool] = None
+
+
+class AuditImportRequest(BaseModel):
+    """批量回写请求：默认只出计划，真写要 `confirm`（字段或 `X-Audit-Confirm` 头）。"""
+    mappings: list[AuditMappingRow] = []
+    dry_run: bool = True
+    confirm: Optional[str] = None
+
+
 class BatchReviewRequest(BaseModel):
     """批量审查请求"""
     ids: list[int]
@@ -1070,7 +1123,15 @@ def sector_ai_match(payload: AiMatchRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail='sector_name 不能为空')
     from src.services.sector_fund_agent import remember_decision, recall_decision
 
-    if payload.apply and payload.decision_token:
+    if payload.apply:
+        # 采纳必须回传预览拿到的 token：agent 是不确定的，apply=True 却不带 token 时
+        # 悄悄重跑一次再写库，等于把"老板点的采纳就是他看过的那份证据"这句保证废掉，
+        # 而且白烧一次 LLM。宁可让前端重来一遍。
+        if not payload.decision_token:
+            raise HTTPException(
+                status_code=400,
+                detail='采纳并写入必须带预览返回的 decision_token：'
+                       '请先点「AI 匹配」看证据，再点「采纳并写入」')
         decision = recall_decision(payload.decision_token)
         if decision is None or decision.sector != payload.sector_name.strip():
             raise HTTPException(status_code=410,
@@ -1170,6 +1231,7 @@ def get_sector_mappings(
                 'identity_official_name': None,
                 'identity_suggestion': None,
                 'relevance_low': False,
+                'realigned': None,
                 'audited': False,
             })
 
@@ -1184,6 +1246,277 @@ def get_sector_mappings(
             "total": len(mappings),
             "reviewed_count": reviewed_count,
             "unreviewed_count": unreviewed_count
+        }
+    }
+
+
+# ===== 审计结论定向回写（生产写回的服务端出口） =====
+
+
+def _audit_row_values(item: AuditMappingRow):
+    """清单行 → {列名: 值}，只包含请求里**显式给出**的列。
+
+    返回 (values, error)：error 非空表示这行不合法，整行拒掉并说明原因，
+    绝不"尽力而为"写一半 —— 超长在本地 SQLite 不报、到生产 PostgreSQL 才炸
+    是这轮最怕的错位。
+    """
+    given = item.model_fields_set
+    values: dict = {}
+    for field in AUDIT_FIELDS:
+        if field not in given:
+            continue
+        value = getattr(item, field)
+        if isinstance(value, str):
+            value = value.strip() or None
+        if field == 'verified_at':
+            if value is not None:
+                try:
+                    value = datetime.fromisoformat(str(value))
+                except ValueError:
+                    return values, 'bad_verified_at'
+        if field == 'evidence' and value is not None:
+            if len(value) > 100000:
+                return values, 'evidence_too_large'
+            try:
+                json.loads(value)
+            except Exception:
+                return values, 'bad_evidence_json'   # 下游一律 json.loads，写坏等于自毁证据
+        limit = AUDIT_MAX_LEN.get(field)
+        if value is not None and limit and len(str(value)) > limit:
+            return values, 'too_long:%s' % field
+        values[field] = value
+    if not values.get('fund_code'):
+        return values, 'empty_fund_code'
+    return values, None
+
+
+def _find_mapping_by_sector(db: Session, sector: str):
+    """按**板块名**在目标库定位行（绝不按本地 id：两边 id 不同，按 id 写会写错行）。
+
+    同名多行时沿用 create/update 的同一套选择规则（active 优先、id 最小优先）。
+    精确名找不到才退到归一名（别名/黑话），并把命中方式回给调用方，
+    让老板看得见这一行是按哪个名字落地的。
+    """
+    def _pick(name):
+        if not name:
+            return None
+        return db.query(SectorFundMapping).filter(
+            SectorFundMapping.sector_name == name
+        ).order_by(SectorFundMapping.is_active.desc(), SectorFundMapping.id.asc()).first()
+
+    row = _pick(sector)
+    if row is not None:
+        return row, 'exact'
+    try:
+        from src.constants.sector_fund_map import normalize_sector_name
+        normalized = normalize_sector_name(sector)
+    except Exception:
+        normalized = None
+    if normalized and normalized != sector:
+        row = _pick(normalized)
+        if row is not None:
+            return row, 'normalized:%s' % normalized
+    return None, None
+
+
+def _audit_owner_guard(row) -> Optional[str]:
+    """老板的行机器不许覆盖：与 `scripts/sweep_sector_mappings.py` 同一条判据。"""
+    if row is None:
+        return None
+    if getattr(row, 'owner_locked', None):
+        return 'owner_locked'
+    if getattr(row, 'reviewed_by', None) == 'owner':
+        return 'reviewed_by_owner'
+    return None
+
+
+def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Optional[str]:
+    """把审计字段逐列照搬落库。成功返回 None，失败返回拒绝原因。
+
+    第 7 轮评审 BLOCKER-1：这个端点"逐字段照搬"，不设线等于把 M4 刚堵上的
+    "人工写入不带身份证明"重新开成一个更大的口子 —— 一份清单就能把
+    `600519 贵州茅台` 写进生产，还顺手给自己盖 owner 免疫章（体检与 agent 从此
+    碰不到它）。四条线全部在这里，不在调用方：
+    1. 总开关：默认关闭，与 `ENABLE_DATABASE_IMPORT` 同一套仓库惯例；
+    2. `owner_locked`/`reviewed_by` 一律从载荷剔掉 —— 免疫只能由老板在页面上盖；
+    3. 标的代码先过基金域自证，判"根本不是基金/是同码的另一只"整行拒；
+    4. 落库前物化镜像不变量：不可服务或"机器换标的没人确认"的行不得带着
+       `reviewed=True` 进门（否则第 5 轮修的"一键复活降级行"又通了）。
+    """
+    from src.services.sector_fund_service import _manual_identity_verdict
+    from src.services.sector_identity_audit import (
+        UNSERVABLE_VERDICTS, identity_verdict_of, machine_swap_of)
+
+    if os.getenv('ENABLE_SECTOR_AUDIT_IMPORT', '').lower() != 'true':
+        return 'import_disabled（服务端需设 ENABLE_SECTOR_AUDIT_IMPORT=true 才开这个口）'
+    # 免疫只能由老板在页面上盖：清单不许把自己锁上，也不许冒充老板的"已审查"。
+    # 但 `reviewed_by='agent'` 这类**真实来源**要照搬，`owner_locked=False` /
+    # `reviewed_by=None`（=取消免疫、退回未审查）也要照搬 —— 一律剔掉这两列会让
+    # 回写永久不幂等（清单写 False、库里是 NULL，一比就永远"有差异"）。
+    if values.get('owner_locked'):
+        values.pop('owner_locked', None)
+    if str(values.get('reviewed_by') or '').strip().lower() == 'owner':
+        values.pop('reviewed_by', None)
+    # 探测是网络活：一次一码，行数由脚本的 --limit 控制；只在真要写时打
+    accusation, _identity = _manual_identity_verdict(
+        values.get('fund_code'), values.get('fund_name'), sector)
+    if accusation:
+        return 'identity_unproven:%s' % accusation[:120]
+    try:
+        # 外键保障：sector_fund_mapping.fund_code 指向 fund_info，先补最小档案再改映射
+        # （复用 PUT/POST 同一个 helper，别再抄一份）
+        service.ensure_fund_info_exists(values.get('fund_code'),
+                                        values.get('fund_name'), sector)
+        if row is None:
+            row = SectorFundMapping(sector_name=sector,
+                                    fund_code=values.get('fund_code'))
+            db.add(row)
+        for field, value in values.items():
+            setattr(row, field, value)
+        if identity_verdict_of(row) in UNSERVABLE_VERDICTS:
+            row.is_fetchable = False      # 镜像不变量：verdict 否 ⇒ 列必须 False
+            if getattr(row, 'reviewed', None):
+                db.rollback()
+                return 'unservable_but_reviewed'
+        if getattr(row, 'reviewed', None) and machine_swap_of(row) is not None:
+            db.rollback()
+            return 'unacknowledged_machine_swap'
+        db.commit()
+        return None
+    except Exception as exc:
+        db.rollback()
+        return 'write_failed:%s' % str(exc)[:160]
+
+
+@router.post("/sector-mappings/-/audit-import")
+def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
+                                db: Session = Depends(get_db)):
+    """把本地体检/审计结论**逐字段**导入本库（按 sector_name 寻址，不整库覆盖）。
+
+    为什么不能走现成的 `PUT /sector-mappings/{id}`：它的请求模型 `MappingUpdate`
+    只有 fund_code/fund_name 两列，Pydantic 会静默丢掉其余 11 个审计字段，而
+    `service.update_mapping()` 还把碰到的每行标成 `reviewed=True` +
+    `owner_locked=True` + `reviewed_by='owner'`。本轮实测（临时库跑真实路由）
+    13 个字段只有 2 个落地：降级旗标 `is_fetchable=False` 变回 NULL、行被永久锁定，
+    回写等于什么都没做，还顺手拆掉了唯一的审查护栏 —— 而脚本照样打印「成功 N」。
+    这里按板块名寻址、逐列照搬，让接收端**恰好**停在被审计的状态。
+
+    四条规矩：
+    1. 默认 `dry_run=true` 只回计划；真写必须 `confirm == 'WRITE-TO-PROD'`
+       （字段或 `X-Audit-Confirm` 头），否则原样返回计划、一行不写；
+    2. 只按 `sector_name` 匹配，本地 id 一律不采信；
+    3. 只创建/更新，**绝不删除**；
+    4. 老板的行（`owner_locked` 或 `reviewed_by='owner'`，例：有意代理
+       债券→512000、SpaceX→159206）机器不覆盖，拒了并说明原因。
+    """
+    rows = payload.mappings or []
+    if len(rows) > 2000:
+        raise HTTPException(status_code=400, detail='单次最多 2000 行，请分批回写')
+
+    from src.services.sector_fund_service import get_sector_fund_service
+
+    confirm_given = (payload.confirm or '') == AUDIT_IMPORT_CONFIRM or \
+        request.headers.get(AUDIT_IMPORT_CONFIRM_HEADER, '') == AUDIT_IMPORT_CONFIRM
+    # 没有口令就退化成 dry-run：宁可让调用方多点一次按钮，也不允许"忘了传"变成写生产
+    blocked_without_confirm = bool(not payload.dry_run and not confirm_given)
+    dry_run = bool(payload.dry_run) or not confirm_given
+
+    service = get_sector_fund_service(db)
+    counts = {'updated': 0, 'created': 0, 'unchanged': 0, 'refused': 0}
+    items = []
+    written = 0
+
+    for item in rows:
+        sector = (item.sector_name or '').strip()
+        entry = {'sector_name': sector, 'outcome': 'refused', 'reason': None,
+                 'mapping_id': None, 'matched_by': None,
+                 'fund_code': (item.fund_code or '').strip(), 'changed_fields': []}
+        if not sector:
+            counts['refused'] += 1
+            entry['reason'] = 'empty_sector_name'
+            items.append(entry)
+            continue
+        if len(sector) > 50:
+            counts['refused'] += 1
+            entry['reason'] = 'too_long:sector_name'
+            items.append(entry)
+            continue
+        values, err = _audit_row_values(item)
+        entry['fund_code'] = values.get('fund_code') or entry['fund_code']
+        if err:
+            counts['refused'] += 1
+            entry['reason'] = err
+            items.append(entry)
+            continue
+
+        row, matched_by = _find_mapping_by_sector(db, sector)
+        entry['mapping_id'] = row.id if row is not None else None
+        entry['matched_by'] = matched_by
+        guard = _audit_owner_guard(row)
+        if guard:
+            counts['refused'] += 1
+            entry['reason'] = guard
+            entry['current_fund_code'] = row.fund_code
+            entry['current_reviewed'] = bool(row.reviewed)
+            items.append(entry)
+            continue
+
+        changed = sorted(f for f, v in values.items()
+                         if row is None or getattr(row, f, None) != v)
+        outcome = 'created' if row is None else ('unchanged' if not changed else 'updated')
+        if not dry_run and outcome != 'unchanged':
+            apply_err = _audit_apply_row(db, service, row, sector, values)
+            if apply_err:
+                outcome = 'refused'
+                entry['reason'] = apply_err
+            else:
+                written += 1
+        entry['outcome'] = outcome
+        entry['changed_fields'] = changed
+        counts[outcome] += 1
+        items.append(entry)
+
+    if written:
+        # 结论改了 reviewed / is_fetchable / evidence：三处进程内缓存必须一起认账，
+        # 否则"生产刚写完、自己却读不到"（体检降级要等到下次重启才生效）。
+        try:
+            service.refresh_cache()
+        except Exception as exc:
+            print(f"[审计回写] 映射缓存刷新失败（不影响已写入的数据）: {exc}")
+        try:
+            from src.services.sector_identity_audit import invalidate_denied_cache
+            invalidate_denied_cache()
+        except Exception as exc:
+            print(f"[审计回写] 拒绝集缓存失效失败: {exc}")
+        try:
+            from src.constants.sector_fund_map import refresh_db_aliases_cache
+            refresh_db_aliases_cache()
+        except Exception as exc:
+            print(f"[审计回写] 别名缓存刷新失败: {exc}")
+
+    reasons = {}
+    for i in items:
+        if i['outcome'] == 'refused':
+            reasons[i['reason']] = reasons.get(i['reason'], 0) + 1
+    message = '%s更新 %d、新建 %d、已一致 %d、拒绝 %d（共 %d 行）' % (
+        '[dry-run] 计划：' if dry_run else '[审计回写] ',
+        counts['updated'], counts['created'], counts['unchanged'],
+        counts['refused'], len(rows))
+    if blocked_without_confirm:
+        message += '；本次未写入：真写必须带 confirm=%s（或 %s 头）' % (
+            AUDIT_IMPORT_CONFIRM, AUDIT_IMPORT_CONFIRM_HEADER)
+    return {
+        'success': True,
+        'dry_run': dry_run,
+        'confirm_ok': confirm_given,
+        'written': written,
+        'message': message,
+        'data': {
+            'total': len(rows),
+            'counts': counts,
+            'refused_reasons': reasons,
+            'items': items,
+            'audit_fields': list(AUDIT_FIELDS),
         }
     }
 
@@ -1282,14 +1615,23 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
             }
 
         # 不存在，创建新记录
-        # 注意：SectorFundMapping 使用模块顶部导入（第 21 行），
+        # 第 7 轮 MAJOR-2：创建路径也是"人工写入、没有身份证明"，PUT 那条修了、
+        # 这条没修等于没修 —— UI 里新建 白酒→600519 贵州茅台 会直接得到一行
+        # reviewed=True 且可服务的股票映射。判"根本不是基金"就不给已审查，
+        # 并把理由写清楚（与 update_mapping 同一条规则：探测失败一律不冤枉）。
+        # SectorFundMapping 使用模块顶部导入（第 21 行），
         # 不要在此函数内局部 import，否则会把整个函数内的同名变量变成局部变量，
         # 上面 db.query(SectorFundMapping) 会抛 UnboundLocalError
+        from src.services.sector_fund_service import _manual_identity_verdict
+        accusation, _identity = _manual_identity_verdict(
+            mapping.fund_code, mapping.fund_name, mapping.sector_name)
         new_mapping = SectorFundMapping(
             sector_name=mapping.sector_name,
             fund_code=mapping.fund_code,
             fund_name=mapping.fund_name or '',
-            reviewed=True
+            reviewed=not accusation,
+            verify_message=accusation or None,
+            is_fetchable=False if accusation else None,
         )
         db.add(new_mapping)
         db.commit()

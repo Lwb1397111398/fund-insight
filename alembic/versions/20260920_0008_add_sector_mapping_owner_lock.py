@@ -35,6 +35,15 @@ def _columns(table):
     return {column["name"] for column in inspector.get_columns(table)}
 
 
+def _indexes(table):
+    if context.is_offline_mode():
+        return set()
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return set()
+    return {ix["name"] for ix in inspector.get_indexes(table)}
+
+
 def upgrade() -> None:
     for table, columns in ADDITIONS.items():
         existing = _columns(table)
@@ -44,8 +53,11 @@ def upgrade() -> None:
             if name not in existing:
                 with op.batch_alter_table(table) as batch_op:
                     batch_op.add_column(sa.Column(name, type_, nullable=True))
-        if "owner_locked" not in existing:
-            op.create_index("ix_sector_fund_mapping_owner_locked", table, ["owner_locked"])
+        # 索引名按当前表算：硬编码 sector_fund_mapping 在只有一张表时看不出来，
+        # ADDITIONS 加第二张表的那天起就会拿错名字、既漏建又误判"已存在"
+        index_name = "ix_%s_owner_locked" % table
+        if index_name not in _indexes(table):
+            op.create_index(index_name, table, ["owner_locked"])
 
 
 def downgrade() -> None:

@@ -62,6 +62,114 @@ GENERIC_MARKET_CORES = frozenset({
     '市场', '大盘', '资源', '宽基', '指数', '权重', '龙头', '板块', '主线',
 })
 
+# ---------- 板块核心词（相关性判据与候选 ETF 匹配共用） ----------
+
+# 场内码段的**唯一定义**：深市 15xxxx，沪市 5xxxxx（50/51/52/53/54/55/56/57/58/59 全收）。
+# 原来 agent 与体检脚本各写一套，脚本写的 `code[:2] in ('15','5')` 让 986 只沪市 ETF
+# 全部进不了候选池（'512170'[:2]=='51'），现在 sector_fund_agent 从这里转发。
+EXCHANGE_LISTED_CODE = re.compile(r'^(?:15\d{4}|5\d{5})$')
+
+# 泛指尾缀。必须剥在"含数字/拉丁字母→取整串"**之前**，否则
+# `SpaceX概念` 会整串成为核心词（正确是 `SpaceX`）、`全A指数` 同理；
+# 「股」也要剥，否则 韩股/台股/A股 会被当成有效主题词去配基金。
+_SECTOR_TAIL = re.compile(r'(?:板块行情|主题|概念|指数|方向|行情|板块|股)+$')
+
+# 剥完还是泛指词 → 没有"对口标的"这回事，不许 realign
+GENERIC_SECTOR_STOP = frozenset(GENERIC_MARKET_CORES) | {
+    '全球', '精选', '应用', '综合', '设备', '中报', '业绩', '老登',
+}
+
+# 基金公司名（前缀或后缀挂在 ETF 名上）。指数段里混进公司名会让"核心词命中"变成假命中
+# （板块「华夏」会命中"华夏沪深300ETF"的每一只），所以算指数段时先剔掉。
+FUND_COMPANY_TOKENS = frozenset({
+    '华夏', '易方达', '南方', '广发', '富国', '嘉实', '华安', '国泰', '博时', '招商',
+    '天弘', '鹏华', '汇添富', '华泰柏瑞', '平安', '大成', '中欧', '景顺长城', '工银',
+    '建信', '交银', '兴业', '银华', '泰康', '东财', '东吴', '中银', '永赢', '万家',
+    '海富通', '华宝', '华商', '金鹰', '浦银安盛', '国寿', '国联', '长江', '摩根',
+})
+
+
+def is_exchange_listed(code: str) -> bool:
+    """是否场内（交易所）上市基金码段。"""
+    return bool(EXCHANGE_LISTED_CODE.match((code or '').strip()))
+
+
+# 拉丁缩写板块名与其**中文等价说法**：不展开的话 `5G`↔「通信ETF华夏」、
+# `AI`↔「人工智能ETF易方达」会被判成"字面无关"，于是把本来就是正确答案的行
+# 换成一只更窄的 ETF（实测 id 121/122 就是这种假阳性）。
+SECTOR_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+    '5G': ('通信',),
+    'AI': ('人工智能',),
+    'CPO': ('光模块', '光通信'),
+    'EDA': ('电子设计',),
+    '芯片': ('半导体',),
+}
+
+
+# 双向边：只写 `5G→通信` 的单向表会得出"5G 板块配通信ETF=相关、
+# 通信板块配 5GETF=不相关"，后者于是被 realign 换掉一只**本来就对**的标的（实测）。
+_SYNONYM_EDGES = {}
+for _abbr, _zh in SECTOR_SYNONYMS.items():
+    _SYNONYM_EDGES.setdefault(_abbr.upper(), set()).update(_zh)
+    for _z in _zh:
+        _SYNONYM_EDGES.setdefault(_z, set()).add(_abbr.upper())
+
+
+def core_variants(core: str) -> Tuple[str, ...]:
+    """核心词及其**双向**等价写法，只用于相关性旗标（不用于候选匹配）。
+
+    候选必须"官方名字面含核心词"（v7.1 §一.4 的字面保证）：同义词是语义等价，
+    拿它选标的就不再是"确定性"操作。
+    """
+    if not core:
+        return ()
+    out = [core] + sorted(_SYNONYM_EDGES.get(core.upper(), ()))
+    return tuple(dict.fromkeys(out))
+
+
+def normalize_sector_text(sector: str) -> str:
+    """板块名标准化（别名→标准名）。名册/离线测试拿不到别名表时退回原串。"""
+    try:
+        from src.constants.sector_fund_map import normalize_sector_name
+        return (normalize_sector_name((sector or '').strip()) or '').strip()
+    except Exception:
+        return (sector or '').strip()
+
+
+def sector_core(sector: str) -> str:
+    """板块的**主题核心词**，用于相关性旗标与候选 ETF 匹配。
+
+    规则（顺序即语义，S4a-v7.3 定稿）：
+    1. 标准化板块名（别名→标准名）；
+    2. 剥泛指尾缀（板块/概念/主题/指数/方向/行情/股）；
+    3. 剥完**整串**就是主题词：`5G`/`全A`/`SpaceX`/`中证500` 一律不做汉字抽取
+       （`cjk_core('全A指数')` 会得到"全指数"，是错的）——所以代码里没有第三条分支，
+       "不抽取"就是默认行为；
+    4. 结果在泛指 stop-list 里、或**汉字部分**正好是这些泛指词（`Ai应用`→'应用'）、
+       或长度 < 2 → 返回 ''（无核心词，不许 realign）。
+    """
+    norm = normalize_sector_text(sector)
+    if not norm:
+        return ''
+    core = _SECTOR_TAIL.sub('', norm).strip()
+    generic = core in GENERIC_SECTOR_STOP or cjk_core(core) in GENERIC_SECTOR_STOP
+    return '' if (generic or len(core) < 2) else core
+
+
+def etf_index_segment(name: str) -> str:
+    """ETF 官方名里的"指数段"：`ETF` 之前的部分，剔掉基金公司名。
+
+    储能电池ETF广发 → 储能电池；华泰柏瑞沪深300ETF → 沪深300。
+    只取 ETF 之前而不看之后，是因为结尾那段几乎都是公司名。
+    公司名要**按长度降序**剔：`华泰` 排在 `华泰柏瑞` 前面会先把长名剔成 `柏瑞`。
+    """
+    upper = (name or '').upper()
+    idx = upper.find('ETF')
+    seg = (name or '')[:idx] if idx >= 0 else (name or '')
+    for token in sorted(FUND_COMPANY_TOKENS, key=len, reverse=True):
+        seg = seg.replace(token, '')
+    return seg.strip()
+
 
 def servable_predicate():
     """SQL 谓词：NULL 必须视为可服务。
@@ -72,6 +180,11 @@ def servable_predicate():
     """
     from src.models.database import SectorFundMapping
     return or_(
+        # 老板锁定的行按"老板说了算"放行，与 `row_unservable()` 的 owner 例外同一条规则。
+        # 少这一句就会两侧打架：体检结论否定 + is_fetchable 被 owner 守卫跳过 =
+        # SQL 在服务、Python 在藏（实测 债券/512000）。
+        SectorFundMapping.owner_locked == True,          # noqa: E712
+        SectorFundMapping.reviewed_by == 'owner',
         SectorFundMapping.is_fetchable.is_(None),
         SectorFundMapping.is_fetchable == True,   # noqa: E712
     )
@@ -99,9 +212,44 @@ def row_unservable(row) -> bool:
     """
     if row is None:
         return False
+    if getattr(row, 'owner_locked', None) or \
+            getattr(row, 'reviewed_by', None) == 'owner':
+        # 老板锁定的行是**显式例外**，不是"体检没做"：他手定的有意代理（债券→512100 类）
+        # 永远按老板的结论服务。体检结论照样写进 evidence 当前端提示，但不当门。
+        # 两边（列 + verdict）都跳过，才不会和 `servable_predicate()` 判出两个答案。
+        return False
     if getattr(row, 'is_fetchable', None) is False:
         return True
     return identity_verdict_of(row) in UNSERVABLE_VERDICTS
+
+
+MACHINE_SWAP_KEYS = ('identity_realign', 'etf_upgrade')
+
+
+def machine_swap_of(row) -> Optional[Dict]:
+    """机器换过标的、且老板**还没确认**的溯源记录（None = 没换过或已确认）。
+
+    判据只能取自 `evidence`，不能取 `match_source`：后者是普通可写字段，之后任何一次
+    agent/人工写入都会把它盖掉。实测有 2 行带着 `etf_upgrade` 记录，却已经是
+    `match_source='agent' + reviewed=True`，于是前端"机器已纠正"分桶归 0、
+    agent 也以为自己可以自由盖审查章。
+    换到的代码仍等于当前代码才算"未确认"——老板一旦改成别的标的就是已经表态。
+    """
+    import json
+    try:
+        payload = json.loads(getattr(row, 'evidence', None) or '{}')
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if getattr(row, 'reviewed_by', None) == 'owner' or getattr(row, 'owner_locked', None):
+        return None
+    code = getattr(row, 'fund_code', None)
+    for key in MACHINE_SWAP_KEYS:
+        rec = payload.get(key)
+        if isinstance(rec, dict) and rec.get('code') == code and code:
+            return dict(rec, kind=key)
+    return None
 
 
 def cjk_core(text) -> str:
@@ -239,9 +387,11 @@ def arbitrate_mapping(code: str, stored_name: str, sector: str = '',
         return result
 
     # ---- 5. 码是只基金，但与板块毫无关系 ----
-    sector_core = cjk_core(sector)
-    if (sector_core and sector_core not in GENERIC_MARKET_CORES
-            and official and not (set(sector_core) & set(cjk_core(official)))):
+    # 这里要的是**汉字交集**判据（板块含汉字却与基金官方名零交集），
+    # 与相关性/候选用的 `sector_core()` 不是同一个量，变量名必须区分开
+    sector_cjk = cjk_core(sector)
+    if (sector_cjk and sector_cjk not in GENERIC_MARKET_CORES
+            and official and not (set(sector_cjk) & set(cjk_core(official)))):
         result['verdict'] = VERDICT_CODE_IS_OTHER_FUND
         result['reason'] = ('代码 %s 实为「%s」，与板块「%s」无任何汉字关联'
                             % (code, official, sector))
@@ -293,26 +443,35 @@ def sector_relevance(sector: str, official_name: str,
     判据必须带第二个条件："名册里存在名字含该板块核心词的基金"，否则会把
     市场→上证50、大盘→沪深300、资源股→有色 这类**故意的宽基代理**全判成不相关
     （实测单判据命中 102/145 行，毫无用处）。
+
+    核心词用 `sector_core` 而不是 `cjk_core`：后者把 `全A指数` 抽成"全指数"，
+    于是把合理的宽基代理误报成存疑（v7.1 实测 9 条里有 3 条假阳性）。
     """
-    core = cjk_core(sector)
-    if not core or core in GENERIC_MARKET_CORES:
+    core = sector_core(sector)
+    if not core:
         return True
+    variants = core_variants(core)
     # 只要共享一个汉字就当作相关：宁可漏报（少报几条给老板看），
     # 也不要误报——误报会让老板以为一堆正确映射有问题。
-    if set(core) & set(cjk_core(official_name or '')):
+    if any(contains_core(official_name or '', v) for v in variants):
+        return True
+    if set(cjk_core(core)) & set(cjk_core(official_name)):
         return True
     checker = has_alternative or _roster_has_fund_containing
-    return not checker(core)
+    return not any(checker(v) for v in variants)
 
 
 def contains_core(name: str, core: str) -> bool:
-    """板块核心词是否出现在基金官方名里。
+    """板块核心词是否出现在基金官方名（或指数段）里。
 
     刻意用朴素子串，不做整词边界：中文没有词边界，"建信创新驱动"确实会子串命中"信创"，
     但要求边界会把"富国中证核电ETF"里的"核电"也判成没命中——那是更坏的假阴性。
     相关性旗标只用于报告，允许的方向是**少报**，不是误报。
+    大小写统一后才比：`Ai应用`/`AI 应用`、`5g`/`5G` 必须等价。
     """
-    return bool(core) and core in (name or '')
+    if not core:
+        return False
+    return core.upper() in (name or '').upper()
 
 
 def _roster_has_fund_containing(core: str) -> bool:
@@ -327,6 +486,95 @@ def _roster_has_fund_containing(core: str) -> bool:
         if contains_core(entry.get('name') or '', core):
             return True
     return False
+
+
+def sector_core_names(db=None) -> List[str]:
+    """返回全量**板块名**（映射表在册 ∪ 静态表键）；核心词由调用方再算。"""
+    names: List[str] = []
+    if db is not None:
+        try:
+            from src.models.database import SectorFundMapping
+            names = [r[0] for r in db.query(SectorFundMapping.sector_name).distinct().all()
+                     if r[0]]
+        except Exception as exc:
+            logger.warning('[identity] 板块名取不到，只用静态表：%s', exc)
+    try:
+        from src.constants.sector_fund_map import SECTOR_FUND_MAP
+        names += list(SECTOR_FUND_MAP.keys())
+    except Exception:
+        pass
+    return list(dict.fromkeys(names))
+
+
+def etf_candidates(sector: str, db=None, roster: Optional[Dict] = None,
+                   all_cores: Optional[List[str]] = None,
+                   limit: int = 20) -> List[Dict]:
+    """板块核心词在基金域名册里能对上哪些**场内 ETF**（零请求、纯离线）。
+
+    四条硬条件（v7.2/v7.3 实测每条都对应一个真实踩坑）：
+    - 码段 `is_exchange_listed`：`code[:2] in ('15','5')` 会丢掉全部沪市 ETF；
+    - 官方名含 ETF **且不含「联接」**：162412「华宝医疗ETF联接A」名字带 ETF 却是场外联接；
+    - 命中位置在**指数段**（`储能电池ETF广发` → `储能电池`），公司名先剔掉；
+    - **最长认领**：一只候选只归"能命中它的最长核心词"。旧写法"候选名含别的板块名就作废"
+      实测方向完全错（既把 159687 从"亚太"里排掉，也把 4 只从"中概"里排掉）。
+      等长的多个核心词可以同时认领同一只（512070「证券保险ETF」本就该同时服务 证券 与 保险，
+      撞车由调用方的"本轮已占用"消解，不在这里作废）。
+    """
+    core = sector_core(sector)
+    if not core:
+        return []
+    try:
+        roster = roster or fund_api.load_fund_roster()
+    except Exception as exc:
+        logger.warning('[identity] 名册不可用，无法给「%s」找场内 ETF 候选：%s', sector, exc)
+        return []
+    by_code = roster.get('by_code') or {}
+    segments = {}
+    for code, entry in by_code.items():
+        name = entry.get('name') or ''
+        if not is_exchange_listed(code) or 'ETF' not in name.upper() or '联接' in name:
+            continue
+        segments[code] = (name, etf_index_segment(name))
+    if all_cores is None:
+        all_cores = sector_core_names(db)
+    # 必须把**本板块自己的核心词**并进认领宇宙：调用方传的 all_cores 可能只来自
+    # 静态表（122 个键），109/145 个在册板块不在里面，漏掉自己就等于全部候选
+    # 被判"归更长的核心词认领"而返回空（`--upgrade-etf` 实测静默变 no-op）。
+    cores = sorted(({core} if core else set()) |
+                   {c for c in (sector_core(s) for s in (all_cores or [])) if len(c) > 1},
+                   key=lambda c: (-len(c), c))
+    # 先用本板块核心词粗筛候选（1~2 个子串扫描 × 3000 只），再只对粗筛命中的
+    # 指数段算全量认领表。反过来做会让"最长认领"这一判据在每次调用里
+    # 重跑 3000 段 × 129 核心词 × 36 公司名，整轮体检拖到十几分钟。
+    # 字面匹配，不用 `core_variants`：同义词是语义等价，用它选标的就不"确定性"了
+    hit = [(code, name, seg) for code, (name, seg) in segments.items()
+           if contains_core(seg, core)]
+    variants_by_core = {c: (c,) for c in cores}      # 字面，不用同义词
+    claim_cache = {}
+    for seg in {item[2] for item in hit}:
+        hits = []
+        for candidate_core, candidate_variants in variants_by_core.items():
+            matched = max((len(v) for v in candidate_variants
+                           if contains_core(seg, v)), default=0)
+            if matched:
+                hits.append((candidate_core, matched))
+        hits.sort(key=lambda t: (-t[1], t[0]))
+        claim_cache[seg] = hits
+
+    out = []
+    # 指数段短的优先：`养殖ETF`（段=养殖）比 `农业养殖ETF` 更纯粹，截断时先留下它
+    for code, name, seg in sorted(hit, key=lambda t: (len(t[2]), t[0])):
+        claims = claim_cache[seg]
+        mine = max((length for c, length in claims if c == core), default=0)
+        # 只允许"本板块核心词是最长认领者之一"：更长的那只说明标的主题更窄
+        # （`证券保险` 认领 512070 时不该让 `保险` 抢走，但 `保险` 与 `证券` 等长时
+        #  两只都算命中——行业复合指数本来就同时覆盖两个板块）
+        if not mine or (claims and claims[0][1] > mine):
+            continue
+        out.append({'code': code, 'name': name, 'segment': seg, 'core': core})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def identity_view(row) -> Dict:
@@ -345,14 +593,18 @@ def identity_view(row) -> Dict:
         'is_fetchable': getattr(row, 'is_fetchable', None),
         # 前端筛选必须与读路径同一判据：只看列会漏掉"仅 verdict 被否"的行
         'servable': not row_unservable(row),
+        'realigned': None,
     }
     raw = getattr(row, 'evidence', None)
     if not raw:
         return view
     try:
-        identity = (json.loads(raw) or {}).get('identity') or {}
+        payload = json.loads(raw) or {}
     except Exception:
         return view
+    if not isinstance(payload, dict):
+        payload = {'tiers': payload}      # 旧数据是候选轨迹数组，没有身份结论可解析
+    identity = payload.get('identity') or {}
     view['identity_verdict'] = identity.get('verdict') or view['identity_verdict']
     view['identity_official_name'] = identity.get('official_name')
     view['identity_reason'] = identity.get('reason') or view['identity_reason']
@@ -365,6 +617,14 @@ def identity_view(row) -> Dict:
     # 相关性旗标由体检算好写进 evidence：判据要扫全量名册（2.7 万条），
     # 放在接口路径里会让每次 GET /sector-mappings 变成几百次全表扫描。
     view['relevance_low'] = bool(identity.get('relevance_low'))
+    # 被机器换过标的的行（确定性纠正 / ETF 升级）：老板要能看出这是机器改的、原来是什么。
+    # 读 `machine_swap_of` 而不是只看 `identity_realign`：只看 realign 会让 ETF 升级行
+    # 在分桶里隐身；只看 `match_source` 会被后续 agent 写入洗掉（v7.4 §十四 实测 2 行）。
+    swap = machine_swap_of(row)
+    view['realigned'] = ({
+        'from_code': swap.get('from_code'), 'from_name': swap.get('from_name'),
+        'core': swap.get('core'), 'reason': swap.get('reason'), 'kind': swap.get('kind'),
+    } if swap else None)
     return view
 
 
