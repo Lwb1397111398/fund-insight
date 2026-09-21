@@ -107,6 +107,41 @@ def test_proof_expires_and_source_is_asked_again(manager):
     assert len(calls) == 2, '凭据过期后必须重新问数据源（历史可能被补录）'
 
 
+def test_re_asking_refreshes_the_proof():
+    """第 13 轮 BLOCKER-1：过期后重问到的凭据**必须立刻可用**。
+
+    上一版把相邻/相交的空答复并成一条、时间戳钉在较旧的半段上 ⇒ 今天刚问到的凭据
+    从第一次问询起就计时，第 3 天起 `fresh()` 永远返回 None：
+    补拉每天照旧打接口（S7-b 要消灭的行为），结构性归因第 3 天翻回"数据不足"。
+    """
+    db = _session()
+    stale = datetime.now() - timedelta(days=backfill_proofs.EMPTY_TTL_DAYS + 1)
+    backfill_proofs.record_probe(db, '003033', date(2026, 6, 1), date(2026, 6, 30), 0)
+    db.commit()
+    row = db.query(SystemConfig).filter(
+        SystemConfig.config_key == backfill_proofs.proof_key('003033')).first()
+    payload = json.loads(row.config_value)
+    for probe in payload['probes']:
+        probe['checked_at'] = stale.isoformat()
+    row.config_value = json.dumps(payload, ensure_ascii=False)
+    db.commit()
+
+    start, end = date(2026, 6, 1), date(2026, 6, 30)
+    assert backfill_proofs.fresh(db, '003033', start, end) is None, '过期凭据不该继续生效'
+
+    # 今天重问，结果仍然是"没有" ⇒ 凭据必须重新可用（相邻/相同窗口都不许把时间戳钉回去）
+    backfill_proofs.record_probe(db, '003033', start, end, 0)
+    db.commit()
+    fresh_proof = backfill_proofs.fresh(db, '003033', start, end)
+    assert fresh_proof is not None, '刚问到的凭据当场不可用（BLOCKER-1 复现）'
+    # 相邻窗口也各自计时，不互相借时间戳、也不互相顶替
+    backfill_proofs.record_probe(db, '003033', date(2026, 7, 1), date(2026, 7, 31), 0)
+    db.commit()
+    probes = backfill_proofs.read_probes(db, '003033')
+    assert len(probes) == 2, '相邻空答复被并成一条（时间戳会互相污染）'
+    assert backfill_proofs.fresh(db, '003033', start, end) is not None
+
+
 def test_dense_window_still_skips_without_a_proof(manager):
     """原有意图不能退化：窗口本来就有数据的，不该为了留凭据去打接口。"""
     m, calls, box = manager
@@ -371,8 +406,13 @@ def test_disjoint_probes_do_not_cover_the_gap(manager):
     assert len(calls) == 3
 
 
-def test_adjacent_probes_merge_but_overlapping_counts_stay_separate(manager):
-    """相接且答复同为"0 条"的两次探测该并成一段（省请求），不同答复的不并。"""
+def test_adjacent_empty_probes_stay_separate(manager):
+    """第 13 轮 BLOCKER-1：相邻的空答复**不再合并**。
+
+    合并要么让今天刚问到的那条继承旧时间戳（当场过期 ⇒ 每天重问、归因天天翻脸），
+    要么让旧半段借新时间续命（谎称最近问过）。两个都不接受 ⇒ 一个窗口一条记录、
+    各自计 TTL。代价是相邻窗口各问各的，换来的是凭据语义可证伪。
+    """
     m, calls, box = manager
     db = _session()
     _seed(db, '158038', [date(2026, 10, 1)])
@@ -382,9 +422,26 @@ def test_adjacent_probes_merge_but_overlapping_counts_stay_separate(manager):
     m.backfill_history_range('158038', date(2026, 7, 11), date(2026, 7, 20), db=db)
     db.commit()
     probes = backfill_proofs.read_probes(db, '158038')
-    assert len(probes) == 1 and probes[0]['start'] == date(2026, 7, 1) \
-        and probes[0]['end'] == date(2026, 7, 20), '首尾相接的空答复没合并'
-    assert backfill_proofs.fresh(db, '158038', date(2026, 7, 5), date(2026, 7, 15)) is not None
+    assert len(probes) == 2, '两个窗口被并成一条，时间戳会互相污染'
+    assert backfill_proofs.fresh(db, '158038', date(2026, 7, 1), date(2026, 7, 10)) is not None
+    assert backfill_proofs.fresh(db, '158038', date(2026, 7, 1), date(2026, 7, 20)) is None, \
+        '拼出来的宽窗口不许被当作"问过"'
+
+
+def test_recent_window_proof_expires_faster_than_old_one():
+    """窗口终点还在近 30 天内时只信 1 天：那天的净值当晚就会发布（第 13 轮 MINOR-10）。"""
+    db = _session()
+    today = date.today()
+    backfill_proofs.record_probe(db, '588000', today - timedelta(days=5),
+                                 today - timedelta(days=1), 3)
+    db.commit()
+    recent = backfill_proofs.read_probes(db, '588000')[0]
+    assert backfill_proofs._ttl_for(recent) == 1
+    old_start = today - timedelta(days=200)
+    backfill_proofs.record_probe(db, '588001', old_start, old_start + timedelta(days=10), 3)
+    db.commit()
+    old = backfill_proofs.read_probes(db, '588001')[0]
+    assert backfill_proofs._ttl_for(old) == backfill_proofs.TTL_DAYS
 
 
 def test_availability_only_claims_unverifiable_when_proven(test_db):

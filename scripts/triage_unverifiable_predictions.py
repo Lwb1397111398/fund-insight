@@ -157,16 +157,14 @@ def main():
         scope = len(report)
         for label, n in sorted(counts.items(), key=lambda kv: -kv[1]):
             print('  %-24s %d' % (label, n))
-        # 自检要能真的失败（第 12 轮 M-7：上一版写成字面量 'OK'，等于没有检查）。
-        # 两件事：① 每行必须恰好被分类一次（对不上说明有行没进 counts）；
-        # ② 出现的 reason 必须在已知集合里（冒出没见过的 reason 要立刻看到）。
+        # 自检只报**真能失败**的两件事（第 13 轮 MAJOR-3：上一版留着一条恒等式
+        # —— 循环里 counts 与 report 各 +1 一次，永远相等，不是检查）：
+        # ① 出现了没登记过的 reason（判据新增分类时必须同步图例）；
+        # ② 日历口径与验证服务 reason 互相矛盾的行（命名差不算，见 CONSISTENT_WITH）。
         unknown = sorted(k for k in counts if k not in KNOWN_CLASSES)
-        print('  合计 %d / 本次分类 %d %s' % (total, scope,
-                                              'OK' if total == scope else '!! 有行没被分类'))
+        print('  分类计数 %d / 逐行 %d（仅信息，不做断言）' % (total, scope))
         if unknown:
-            print('  !! 出现未登记的判据分类：%s（脚本图例需要同步）' % unknown)
-        # 日历口径与验证服务 reason 是两套字母表，只有"互相矛盾"才值得报，
-        # 命名差（missing_history vs no_source_history）不算（第 12 轮 M-7）。
+            print('  !! 未登记的判据分类：%s（脚本图例需要同步）' % unknown)
         disagree = [r for r in report
                     if r['class'] not in CONSISTENT_WITH.get(r['local_class'], set())]
         print('  与日历口径矛盾的行：%d 条 %s'

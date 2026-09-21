@@ -106,3 +106,29 @@ def test_unmapped_sector_goes_straight_to_auto_manager(test_db):
     )
     assert manager.calls == ["不存在的板块XYZ"]
     assert code == "888888"
+
+
+def test_reviewed_mapping_beats_the_static_table(test_db):
+    """S5 交叉回归 BLOCKER-1：已审查的板块映射必须压过 `src/constants` 里的静态表。
+
+    静态表命中就直接 return 的话，S2/S3 整条"身份体检 + 人工审查"的结论会在
+    最上游的"帖子分析→生成预测"路径上被绕过（实测 15 个板块的静态码已在 fund_info，
+    例：有色金属 审查结论 512400，静态表 160221），下一轮 sync_sector_mappings
+    再改回来并抹掉已验证结论 —— 每条新预测都要重演一次"建→改标→清零"。
+    """
+    from src.models.database import SectorFundMapping
+    from src.services.sector_fund_service import SectorFundService
+
+    _add_fund(test_db, '160221', '国泰国证有色金属行业指数(LOF)A')
+    _add_fund(test_db, '512400', '有色ETF南方')
+    test_db.add(SectorFundMapping(sector_name='有色金属', fund_code='512400',
+                                  fund_name='有色ETF南方', is_active=True, reviewed=True))
+    test_db.commit()
+    SectorFundService._cache = {}          # 类级缓存会跨用例串味
+    SectorFundService._sector_fund_service = None
+
+    code, name = match_fund_with_fallback(
+        pred={}, sector='有色金属',
+        fund_auto_manager=_ExplodingManager(),   # 也不许掉到第 1 级（会打外网）
+        llm_analyzer=_FakeAnalyzer(), db=test_db)
+    assert code == '512400', f'静态表压过了已审查映射：{code} {name}'

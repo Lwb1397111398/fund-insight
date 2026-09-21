@@ -23,10 +23,12 @@ def match_fund_with_fallback(
     三级降级基金匹配机制
 
     优先级（按可靠性排序）：
-    1. 使用 fund_auto_manager 自动匹配（优先查本地映射表）
-    2. 使用 LLM 分析器的板块映射表（经过验证的映射）
-    3. 使用本地默认映射表
-    4. 使用LLM返回的fund_code（作为最后补充，需严格验证）
+    0. 已审查的板块→基金映射（`sector_fund_mapping`，带身份体检过滤）
+    1. 静态表快速路径（零网络，但只作降级，不得压过已审查映射）
+    2. 使用 fund_auto_manager 自动匹配（优先查本地映射表）
+    3. 使用 LLM 分析器的板块映射表（经过验证的映射）
+    4. 使用本地默认映射表
+    5. 使用LLM返回的fund_code（作为最后补充，需严格验证）
 
     Args:
         pred: 预测字典
@@ -38,6 +40,22 @@ def match_fund_with_fallback(
     Returns:
         (fund_code, fund_name)
     """
+    # 第负一级：老板/agent 审查过的板块→基金映射（DB 表）。
+    # 必须排在静态表**之前**：静态表是写死在 `src/constants` 里的第二套映射，
+    # 它一旦命中就直接 return，会把 S2/S3 整条"身份体检 + 人工审查"的结论绕过 ——
+    # 实测 15 个板块（有色金属/煤炭/化工/红利/保险/军工/券商…）静态码已在 `fund_info`，
+    # 于是新预测直接挂到旧标的上，下一轮 `sync_sector_mappings` 再改回来并抹掉已验证结论，
+    # 每条预测都要重演一次"建→改标→清零"（S5 交叉回归 BLOCKER-1）。
+    # 这一查是本地表查询，不破坏原"零网络快速路径"的意图。
+    if sector:
+        try:
+            from src.services.sector_fund_service import get_sector_fund_service
+            reviewed = get_sector_fund_service(db).get_fund_by_sector(sector) or {}
+            if reviewed.get('code') and reviewed.get('reviewed'):
+                return str(reviewed['code']), reviewed.get('name')
+        except Exception as e:
+            print(f"[Fund Match] Level -1 (Reviewed Mapping) failed: {e}")
+
     # 第零级：零网络快速路径。
     # 与第一级 auto_add 内部同源的硬编码映射表查 code，若该基金已入库则直接返回，
     # 省掉 auto_add 每次都发起的 fund_api.get_fund_info HTTP 验证

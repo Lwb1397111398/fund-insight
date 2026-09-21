@@ -249,10 +249,11 @@ def test_rollback_invalid_execution_records_prediction_change(monkeypatch, test_
     # （第 12 轮 MAJOR-4；姊妹入口 sync-sector-mapping 早就有了）
     assert (log.run_id or '').startswith('rollback-'), log.run_id
     assert result["data"]["run_id"] == log.run_id
-    # 结论字段清空后，verify_history 里要留一条墓碑，不然详情抽屉会继续
-    # 显示上一条历史的"判对/涨跌幅"
+    # 第 13 轮 MAJOR-1：不往 verify_history 塞墓碑 —— 前端历史表按
+    # `is_correct ? '正确' : '错误'` 与 `score || 0` 渲染，墓碑会凭空多出一条
+    # "验证失败 / 0 分 / 错误"的假历史。回溯的审计只留在 change log 里。
     row = test_db.query(Prediction).filter(Prediction.id == prediction.id).first()
-    assert row.verify_history and row.verify_history[-1].get("rolled_back") is True
+    assert all(not h.get("rolled_back") for h in (row.verify_history or [])), row.verify_history
 
 
 def test_rollback_with_only_ids_reports_filtered_rows_separately(monkeypatch, test_db):

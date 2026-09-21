@@ -24,6 +24,37 @@ from src.services.prediction_change_log_service import (
 logger = logging.getLogger(__name__)
 
 
+VERDICT_CLEAR_FIELDS = ('status', 'is_expired', 'has_active_prediction', 'verify_count',
+                        'verify_score', 'actual_change', 'is_correct', 'current_nav',
+                        'current_nav_date', 'end_nav', 'end_nav_date', 'start_nav',
+                        'start_nav_date', 'verified_at', 'last_verify_date')
+
+
+def clear_verification_fields(prediction) -> None:
+    """把一条预测退回"未验证"，字段清单只有这一处定义。
+
+    两个调用方共用：`rollback_invalid_verifications`（数据不再支撑结论）与
+    `scripts/revert_degenerate_verdicts.py`（结论本身是退化/未来函数判出来的）。
+    以前脚本靠调 service 的批量方法顺带清零，结果只能撤"今天已不可验"的行 ——
+    用未来数据判出来、但今天仍可验的那批根本撤不掉（第 13 轮实测 94 条只撤了 1 条）。
+    """
+    prediction.status = 'pending'
+    prediction.is_expired = False
+    prediction.has_active_prediction = True
+    prediction.verify_count = 0
+    prediction.verify_score = None
+    prediction.actual_change = None
+    prediction.is_correct = None
+    prediction.current_nav = None
+    prediction.current_nav_date = None
+    prediction.end_nav = None
+    prediction.end_nav_date = None
+    prediction.start_nav = None
+    prediction.start_nav_date = None
+    prediction.verified_at = None
+    prediction.last_verify_date = None
+
+
 class PredictionVerifyService:
     """预测验证服务"""
 
@@ -286,7 +317,8 @@ class PredictionVerifyService:
         if not fund_code or day is None:
             return None
         cached = self._nav_cache.get('_history', {}).get(fund_code) or []
-        dates = [self._as_date(r.nav_date) for r in cached]
+        # 缓存条目是 `(nav_date, nav)` 元组（见 `_warm_cache` 的 MAJOR-2 说明）
+        dates = [self._as_date(item[0]) for item in cached if item]
         dates = [d for d in dates if d is not None and d <= day]
         if dates:
             return max(dates)
@@ -400,7 +432,7 @@ class PredictionVerifyService:
                 return _fail(
                     f"目标日 {window_end} 及之前只有 {start_real} 这一条净值，起点与终点是同一条 ⇒ "
                     f"涨跌幅必然为 0，无法判定方向"
-                    + (f"（该基金在 {window_end} 之后已有净值 ⇒ 目标日是休市日）"
+                    + (f"（本地库里该基金在 {window_end} 之后已有净值 ⇒ 目标日那天没有独立净值行）"
                        if nav_after_target is not None
                        else f"（已按区间问过数据源：{backfill_proofs.describe(proven_empty)}）")
                     + f"。本系统按防未来函数策略不取目标日之后的行情；"
@@ -857,12 +889,13 @@ class PredictionVerifyService:
             )
             if backfilled:
                 self._invalidate_fund_cache(fund_code)
-            # 补拉到的净值与"源端这段给到几条"的凭据都是数据源事实，落定要提交；
-            # 条件不能只看 `Session.new/dirty` —— 凭据写入内部 flush 过，对象已经不在
-            # 那两个集合里（第 11 轮 M-A），所以它自己在 `db.info` 上计数。
-            # 反过来无条件 commit 又会让 identity map 全过期、把 `_warm_cache` 预热好的
-            # 实例作废成 N+1（第 10 轮 M-3），所以只在真写了东西时提交。
-            if backfilled or self.db.info.pop('proof_writes', 0) or self.db.new or self.db.dirty:
+            # `proof_writes` 必须**无条件取出**：写成 `backfilled or pop(...) or ...`
+            # 会在 backfilled 为真时短路，计数器留给下一条预测误消费（第 13 轮 MINOR-1）
+            proof_written = self.db.info.pop('proof_writes', 0)
+            # 补拉到的净值与凭据都是数据源事实，要提交；但只在真写了东西时提交 ——
+            # 空 commit 会让 identity map 全过期（`SessionLocal` 未设
+            # `expire_on_commit=False`），把预热的净值实例作废成 N+1（第 10 轮 M-3）。
+            if backfilled or proof_written or self.db.new or self.db.dirty:
                 try:
                     self.db.commit()
                 except Exception as commit_error:
@@ -1260,17 +1293,23 @@ class PredictionVerifyService:
             FundHistory.nav_date <= max_date
         ).order_by(FundHistory.fund_code, FundHistory.nav_date.asc()).all()
 
-        # 按基金代码分组存入缓存（使用 LRU 淘汰）
+        # 缓存里存**轻量元组**而不是 ORM 实例：`SessionLocal` 没设
+        # `expire_on_commit=False`，而批量路径每条预测都会 commit 一次
+        # （`prediction_verify_task.update_progress`），实例一旦被 expire，
+        # 之后每次读 `.nav_date` 都发一条 SELECT ⇒ 预热从"省查询"翻转成 N+1 放大器
+        # （实测 commit 前 0 条、commit 后 720 条，第 13 轮 MAJOR-2）。
         history_cache: Dict[str, List] = {}
         for r in all_records:
-            key = (r.fund_code, r.nav_date.isoformat())
-            self._add_to_cache(key, r.nav)
-            if r.fund_code not in history_cache:
-                history_cache[r.fund_code] = []
-            history_cache[r.fund_code].append(r)
+            nav_date = self._as_date(r.nav_date)
+            if nav_date is None:
+                continue
+            history_cache.setdefault(r.fund_code, []).append((nav_date, r.nav))
 
         self._nav_cache['_history'] = history_cache
 
+        # 顺带清掉一桩死代码：以前这里还往 LRU 里塞 `(fund_code, 日期)` 二元组的
+        # 单点净值，而 `get_nav_by_date` 查的键是 `(fund_code, 日期, strict_as_of)`
+        # 三元组 ⇒ 命中率恒为 0，却把 `_cache_order` 灌到上限、挤掉真实缓存条目。
         logger.info(f"[Verify] 预热完成：{len(all_records)} 条记录，{len(history_cache)} 个基金")
     
     def verify_expired_pending(self) -> Dict:
@@ -1457,34 +1496,14 @@ class PredictionVerifyService:
 
                     if not dry_run:
                         before_state = snapshot_prediction(prediction)
-                        # 回溯过的行留一条墓碑在 verify_history 里：详情抽屉原来会拿
-                        # 最后一条历史记录继续显示"判对/涨跌幅"，而 `is_correct` 已经是 NULL
-                        # —— 两套口径同屏（第 12 轮 MAJOR-4）。墓碑只加不改，历史仍完整保留。
-                        history = list(prediction.verify_history or [])
-                        history.append({
-                            'date': str(today),
-                            'rolled_back': True,
-                            'analysis': f"已回溯：原结论「{'判对' if old_is_correct else '判错'}」"
-                                        f"/{old_verify_score} 分已撤销，原因："
-                                        f"{(data_check['message'] or '')[:120]}",
-                        })
-                        prediction.verify_history = history
-                        attributes.flag_modified(prediction, 'verify_history')
+                        # 不往 verify_history 里塞"墓碑"：前端"验证历史"表按
+                        # `h.is_correct ? '正确' : '错误'`、`h.score || 0` 渲染，
+                        # 一条只有说明文字的墓碑会被画成"验证失败 / 0 分 / 错误"
+                        # —— 凭空多出一条假历史记录（第 13 轮 MAJOR-1）。
+                        # 回溯的审计走 prediction_change_logs（action=verification_rollback
+                        # + before_state + run_id），那才是可回滚、可核对的地方。
                         prediction.status = 'pending'
-                        prediction.is_expired = False
-                        prediction.has_active_prediction = True
-                        prediction.verify_count = 0
-                        prediction.verify_score = None
-                        prediction.actual_change = None
-                        prediction.is_correct = None
-                        prediction.current_nav = None
-                        prediction.current_nav_date = None
-                        prediction.end_nav = None
-                        prediction.end_nav_date = None
-                        prediction.start_nav = None
-                        prediction.start_nav_date = None
-                        prediction.verified_at = None
-                        prediction.last_verify_date = None
+                        clear_verification_fields(prediction)
                         add_prediction_change_log(
                             self.db,
                             prediction,

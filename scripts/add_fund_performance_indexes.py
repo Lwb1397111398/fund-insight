@@ -11,6 +11,11 @@ if project_root not in sys.path:
 
 from sqlalchemy import text
 
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _db_guard import pin_local_sqlite as _pin_local_db
+_pin_local_db()   # 钉死本地镜像库：.env 的 DATABASE_URL 指向生产，先 import ORM 就会连线上
+
 from src.models.database import SessionLocal
 
 

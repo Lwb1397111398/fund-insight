@@ -101,7 +101,7 @@ def main():
                  sum(1 for m in data['mappings'] if m['owner_locked']),
                  len(data['fund_info_needed']), data['sha256']))
         print('       回写前先在生产跑 alembic 到 add_sector_mapping_keywords，'
-              '再走 POST /api/config/sector-mappings/-/audit-import'
+              '再走 POST /api/config/sector-mappings/-/audit-import')
         return 0
     finally:
         db.close()

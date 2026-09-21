@@ -15,12 +15,18 @@ early-return，压根没发请求；反过来若不设缓存，Cron 又会每天
 
 实现约束：
 - 存进已有的 `system_config`（键 `nav_backfill_proof:<基金代码>`），**不加新表新列** ⇒ 不牵扯生产迁移；
-- 写入用**调用方的会话 + savepoint，只 flush 不 commit**：库代码不该替调用方提交事务，
-  而 flush 后对象就不在 `Session.new/dirty` 里了，所以额外在 `db.info['proof_writes']`
-  记一笔，让调用方知道"这次真的写了东西"（第 11 轮 M-A）；
-- 合并只发生在**相交/首尾相接且两边都是空答复**的区间之间；非空答复永不合并（M-B）；
-- 空答复（0 条）用更短的 TTL：现在 `None` 已经把"没问到"分出去了，但"合法信封 + 空列表"
-  仍可能是限流页，2 天后允许再问一次。
+- **一个窗口一条探测记录，绝不合并区间**：合并要么让新问到的凭据继承旧时间戳（当场过期、
+  从第 3 天起每天重问 —— 第 13 轮 BLOCKER-1），要么让旧半段借新时间戳续命（谎称问过）。
+  只有**单次**探测完整包含本次窗口且未过期才算"问过"；倒挂窗口不可被覆盖；
+  老的 v1 并集格式（`{'start','end','source_rows'}` 单 dict）在读侧一律判不可信丢弃 ⇒ 会重问一次；
+- 写入用**调用方的会话、只 flush**：调用方 rollback 时凭据一起消失（SQLite/PG 一致）。
+  flush 后对象不在 `Session.new/dirty` 里，故在 `db.info['proof_writes']` 记一笔，
+  由调用方无条件取出（`or` 短路会让它跨预测误消费，见 `verify_prediction`）；
+- TTL 分档：空答复 2 天、窗口终点在近 30 天内的 1 天（当天晚上就可能补出来）、其余 7 天。
+- 已知遗留（待 PG 实测）：并发首次插入会撞 `config_key` 唯一约束，PG 下事务进入 aborted，
+  调用方后续查询要 PendingRollbackError 才能恢复。现存的并发保护只有
+  `batch_analysis_tasks.status='running'` 那一行 DB 状态（进程锁与 advisory xact lock
+  都只覆盖 `start()` 那一瞬，见 `prediction_verify_task`），脚本直调服务还会绕过它。
 """
 import json
 import logging
@@ -32,7 +38,8 @@ KEY_PREFIX = 'nav_backfill_proof:'
 TTL_DAYS = 7                  # 源端给过数据 ⇒ 区间内那些行是事实，一周内不必再问
 EMPTY_TTL_DAYS = 2            # 源端答"没有" ⇒ 也存，但更短，防限流页被当成事实
 KEEP_DAYS = 30                # 太久以前的探测不再参与判断，直接丢掉
-MAX_PROBES = 40               # 单基金凭据条数上限，避免这行 JSON 无限膨胀
+# 不再合并区间后，一只基金的互不相交窗口数就是条目数（实测单只 515000 有 77 个）
+MAX_PROBES = 120              # 单基金凭据条数上限，避免这行 JSON 无限膨胀
 
 
 def _as_date(value):
@@ -97,7 +104,21 @@ def _fresh(probe, today: date, ttl_days: int = TTL_DAYS) -> bool:
 
 
 def _ttl_for(probe) -> int:
-    return TTL_DAYS if (probe.get('source_rows') or 0) > 0 else EMPTY_TTL_DAYS
+    """空答复 2 天；**窗口终点还在近 30 天内**的只信 1 天；其余 7 天。
+
+    为什么要给近期窗口单独收紧：`end_covered` 门让"目标日那天缺行"的窗口去问一次，
+    源端答"还没有"，但那条净值当天晚上就会发布 —— 用 7 天凭据压住补拉，
+    等于亲手把一条本可自愈的预测锁成"结构性不可验"（第 13 轮 MINOR-10）。
+    历史日期的净值是不可变的，所以久远的窗口才配 7 天。
+    """
+    if not (probe.get('source_rows') or 0):
+        return EMPTY_TTL_DAYS
+    try:
+        if (date.today() - probe['end']).days <= 30:
+            return 1
+    except (TypeError, KeyError):
+        pass
+    return TTL_DAYS
 
 
 def covering_probe(probes, start_date: date, end_date: date, today: date = None):
@@ -115,28 +136,6 @@ def fresh(db, fund_code: str, start_date: date, end_date: date, today: date = No
         return None
     return covering_probe(read_probes(db, fund_code), _as_date(start_date),
                           _as_date(end_date), today)
-
-
-def _merge_adjacent(probes):
-    """合并**首尾相接或相交**的区间，但只合并"两边都是空答复"的。
-
-    非空答复绝不并：`[07-01,08-31] 21 条` + `[08-31,09-30] 21 条` 并成
-    `[07-01,09-30] 21 条` 会直接破掉"单次探测完整包含"这条不变量
-    （第 11 轮 M-B：等于把 BLOCKER-2 的口子留了一半，条数还变成编的）。
-    合并后的 `checked_at` 取**较旧**的那个，让老的那半段不能借新探测的 TTL 续命。
-    """
-    out = []
-    for p in sorted(probes, key=lambda x: (x['start'], x['end'])):
-        last = out[-1] if out else None
-        touching = last and p['start'] <= last['end'] + timedelta(days=1)
-        both_empty = last and not (last.get('source_rows') or 0) and not (p.get('source_rows') or 0)
-        if touching and both_empty:
-            last['end'] = max(last['end'], p['end'])
-            if p['checked_at'] < last['checked_at']:
-                last['checked_at'] = p['checked_at']
-        else:
-            out.append(dict(p))
-    return out
 
 
 def record_probe(db, fund_code: str, start_date: date, end_date: date, source_rows: int = 0):
@@ -157,7 +156,16 @@ def record_probe(db, fund_code: str, start_date: date, end_date: date, source_ro
                    # 微秒精度：同一秒内连写多条探测时，"最近问过"的排序不能有并列
                    # （跑批/单测里一次就写几十条，秒级时间戳会让上限裁错人）
                    'checked_at': now.isoformat()})
-    probes = _merge_adjacent(probes)
+    # **不做区间合并**（第 13 轮 BLOCKER-1）：合并要么把时间戳钉在较旧的半段上
+    # （今天刚问到的凭据当场过期 ⇒ 从第 3 天起每天重问、结构性归因第 3 天翻回
+    # "数据不足"），要么钉在较新的半段上（拿新探测的 TTL 替老半段背书，是谎称问过）。
+    # 真实需求只是"每个窗口各问各的、各自计 TTL"，所以只按 (start,end) 去重保留最新一条。
+    merged = {}
+    for p in probes:
+        key = (p['start'], p['end'])
+        if key not in merged or p['checked_at'] > merged[key]['checked_at']:
+            merged[key] = p
+    probes = list(merged.values())
     # 超上限时保留**最近问过**的那些：按 start 排序再截尾会把老窗口的探测丢掉，
     # 而那些窗口正是每天要重问的（单只 515000 就有 77 个互不相交的窗口）
     # —— 第 11 轮 M-C。落盘前再按 start 排序，读侧遍历与展示更直观。

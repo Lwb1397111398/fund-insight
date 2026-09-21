@@ -1918,13 +1918,29 @@ def _run_import_background(payload: dict, replace: bool, session_factory=None):
 
 
 @router.post("/import")
-def import_data(req: ImportDataRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def import_data(req: ImportDataRequest, request: Request, background_tasks: BackgroundTasks,
+                db: Session = Depends(get_db)):
     """
     导入 JSON 数据（后台异步，立即返回，前端轮询 /import/status 拿结果）。
 
     默认合并模式（按 natural key 跳过已存在记录）；
     replace=True 时先清空所有数据表再导入（覆盖模式，用于本地清洗后整体同步到线上）。
+
+    `replace=True` 是全仓破坏性最强的一次操作（PG 侧先 TRUNCATE 再导，失败就是一片空表），
+    以前它只要一个 HTTP 请求就够了 —— 而仓库里另外 11 个破坏性入口全都要求确认头。
+    现在补齐两道闸：服务端总开关 `ENABLE_DATABASE_IMPORT=true`（默认关）
+    + 确认头 `X-Danger-Confirm: replace-database-import`，两者缺一律 403。
     """
+    if req.replace:
+        if os.getenv("ENABLE_DATABASE_IMPORT", "false").lower() != "true":
+            raise HTTPException(
+                status_code=403,
+                detail='覆盖式导入默认禁用：服务端需设 ENABLE_DATABASE_IMPORT=true 才开这个口')
+        if request.headers.get("X-Danger-Confirm") != "replace-database-import":
+            raise HTTPException(
+                status_code=403,
+                detail='覆盖式导入会清空全部数据表，需要确认头 '
+                       'X-Danger-Confirm: replace-database-import')
     # 防重入：已有任务在跑就直接返回当前状态
     status = DataPortabilityService(db).get_import_job_status()
     if status.get("status") == "running":

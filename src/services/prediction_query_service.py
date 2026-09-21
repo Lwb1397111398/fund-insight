@@ -90,7 +90,11 @@ class PredictionQueryService:
             return None
         detail = self._serialize(prediction)
         detail.update({
-            "verify_history": prediction.verify_history or [],
+            # 前端"本次验证详情"整块读的是 `verify_history[0]`（19 处绑定），
+            # 而后端是按时间**正序**追加的 ⇒ 有过多轮验证的预测（本地镜像 1168 条里
+            # 451 条 ≥2 轮）打开抽屉看到的是最早那一轮的结论（第 13 轮 MAJOR-1）。
+            # 在出口处倒序，比改 19 个模板绑定风险低；"验证历史"表顺带变成新→旧，更符合直觉。
+            "verify_history": list(reversed(prediction.verify_history or [])),
             "start_nav": prediction.start_nav,
             "start_nav_date": prediction.start_nav_date.isoformat() if prediction.start_nav_date else None,
             "end_nav": prediction.end_nav,

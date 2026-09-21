@@ -1,0 +1,1604 @@
+{
+ "created_at": "2026-09-22T00:07:54",
+ "judged_by": "退化终点（起点=终点同一条净值）或未来函数（终点晚于目标日）",
+ "rows": [
+  {
+   "id": 44,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-05",
+    "target_date": "2026-07-05",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "11.9991289198606",
+    "start_nav": "1.3776",
+    "start_nav_date": "2026-06-05",
+    "end_nav": "1.5429",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 77,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-07",
+    "target_date": "2026-07-07",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "12.1806039488966",
+    "start_nav": "1.3776",
+    "start_nav_date": "2026-06-07",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 245,
+   "fields": {
+    "fund_code": "160218",
+    "prediction_date": "2026-06-04",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-7.69490952139356",
+    "start_nav": "0.5913",
+    "start_nav_date": "2026-06-04",
+    "end_nav": "0.5458",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 326,
+   "fields": {
+    "fund_code": "518880",
+    "prediction_date": "2026-06-08",
+    "target_date": "2026-07-08",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-4.70624972119372",
+    "start_nav": "8.9668",
+    "start_nav_date": "2026-06-08",
+    "end_nav": "8.5448",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 395,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-09",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "11.4042675893887",
+    "start_nav": "1.3872",
+    "start_nav_date": "2026-06-09",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 463,
+   "fields": {
+    "fund_code": "159153",
+    "prediction_date": "2026-06-09",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "6.15878575598366",
+    "start_nav": "1.3704",
+    "start_nav_date": "2026-06-09",
+    "end_nav": "1.4548",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 465,
+   "fields": {
+    "fund_code": "512680",
+    "prediction_date": "2026-06-09",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "3.08118811881188",
+    "start_nav": "1.2625",
+    "start_nav_date": "2026-06-09",
+    "end_nav": "1.3014",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 476,
+   "fields": {
+    "fund_code": "516160",
+    "prediction_date": "2026-06-09",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "75",
+    "actual_change": "-11.4651875839735",
+    "start_nav": "2.9027",
+    "start_nav_date": "2026-06-09",
+    "end_nav": "2.5699",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 545,
+   "fields": {
+    "fund_code": "159527",
+    "prediction_date": "2026-06-13",
+    "target_date": "2026-07-13",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "6.8950458537532",
+    "start_nav": "2.0609",
+    "start_nav_date": "2026-06-13",
+    "end_nav": "2.203",
+    "end_nav_date": "2026-07-14",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 553,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-06-13",
+    "target_date": "2026-07-13",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-2.9838022165388",
+    "start_nav": "1.173",
+    "start_nav_date": "2026-06-13",
+    "end_nav": "1.138",
+    "end_nav_date": "2026-07-14",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 554,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-06-13",
+    "target_date": "2026-07-13",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-3.60950350289369",
+    "start_nav": "0.6566",
+    "start_nav_date": "2026-06-13",
+    "end_nav": "0.6329",
+    "end_nav_date": "2026-07-14",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 752,
+   "fields": {
+    "fund_code": "159915",
+    "prediction_date": "2026-06-17",
+    "target_date": "2026-07-17",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "50",
+    "actual_change": "-14.1168871558097",
+    "start_nav": "4.1801",
+    "start_nav_date": "2026-06-17",
+    "end_nav": "3.59",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 784,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-18",
+    "target_date": "2026-07-18",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "49",
+    "actual_change": "-11.8406611143392",
+    "start_nav": "1.5489",
+    "start_nav_date": "2026-06-18",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 794,
+   "fields": {
+    "fund_code": "006105",
+    "prediction_date": "2026-06-18",
+    "target_date": "2026-07-18",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-4.48454356344637",
+    "start_nav": "2.0671",
+    "start_nav_date": "2026-06-18",
+    "end_nav": "1.9744",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 841,
+   "fields": {
+    "fund_code": "159527",
+    "prediction_date": "2026-06-18",
+    "target_date": "2026-07-18",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-66.3948091740639",
+    "start_nav": "2.2193",
+    "start_nav_date": "2026-06-18",
+    "end_nav": "0.7458",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 864,
+   "fields": {
+    "fund_code": "516160",
+    "prediction_date": "2026-06-22",
+    "target_date": "2026-07-22",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-23.2552166934189",
+    "start_nav": "3.115",
+    "start_nav_date": "2026-06-22",
+    "end_nav": "2.3906",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 987,
+   "fields": {
+    "fund_code": "518880",
+    "prediction_date": "2026-06-24",
+    "target_date": "2026-07-01",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.83448551073344",
+    "start_nav": "8.5201",
+    "start_nav_date": "2026-06-24",
+    "end_nav": "8.6764",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 995,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-24",
+    "target_date": "2026-07-01",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "78",
+    "actual_change": "-3.61753882617103",
+    "start_nav": "1.6033",
+    "start_nav_date": "2026-06-24",
+    "end_nav": "1.5453",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1011,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-06-24",
+    "target_date": "2026-07-01",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "63",
+    "actual_change": "3.10701956271577",
+    "start_nav": "0.6083",
+    "start_nav_date": "2026-06-24",
+    "end_nav": "0.6272",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1053,
+   "fields": {
+    "fund_code": "159842",
+    "prediction_date": "2026-06-25",
+    "target_date": "2026-07-02",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "0",
+    "actual_change": "0.257921886514382",
+    "start_nav": "1.0856",
+    "start_nav_date": "2026-06-25",
+    "end_nav": "1.0884",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1068,
+   "fields": {
+    "fund_code": "512400",
+    "prediction_date": "2026-06-25",
+    "target_date": "2026-07-02",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-2.70180489425313",
+    "start_nav": "0.9031",
+    "start_nav_date": "2026-06-25",
+    "end_nav": "0.8787",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1157,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-06-29",
+    "target_date": "2026-07-02",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.01465614430665",
+    "start_nav": "0.6209",
+    "start_nav_date": "2026-06-29",
+    "end_nav": "0.6272",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1158,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-06-29",
+    "target_date": "2026-07-02",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.19409282700423",
+    "start_nav": "0.3555",
+    "start_nav_date": "2026-06-29",
+    "end_nav": "0.3633",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1208,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-01",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "4.06760240618734",
+    "start_nav": "0.3491",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "0.3633",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1209,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-01",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-9.5310579005913",
+    "start_nav": "1.7081",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "1.5453",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1242,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "2.64997561372134",
+    "start_nav": "0.6151",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "0.6314",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1268,
+   "fields": {
+    "fund_code": "516570",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.05914672017581",
+    "start_nav": "8.3724",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "8.5448",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1269,
+   "fields": {
+    "fund_code": "510500",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-5.64547751829906",
+    "start_nav": "9.1808",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "8.6625",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1270,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "3.98387701537308",
+    "start_nav": "1.0668",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "1.1093",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1271,
+   "fields": {
+    "fund_code": "006105",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-1.92532088681447",
+    "start_nav": "2.0568",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "2.0172",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1277,
+   "fields": {
+    "fund_code": "561170",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "73",
+    "actual_change": "-0.905298659802963",
+    "start_nav": "1.1267",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "1.1165",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1284,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-06-30",
+    "target_date": "2026-07-07",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-9.52520344242139",
+    "start_nav": "1.7081",
+    "start_nav_date": "2026-06-30",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1293,
+   "fields": {
+    "fund_code": "561170",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-0.876654685719296",
+    "start_nav": "1.1407",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.1307",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1294,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.97386711148179",
+    "start_nav": "0.3597",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "0.3668",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1296,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-02",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-7.62747325004484",
+    "start_nav": "1.6729",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.5453",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1308,
+   "fields": {
+    "fund_code": "513180",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.4022787028922",
+    "start_nav": "0.5705",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "0.5785",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1315,
+   "fields": {
+    "fund_code": "006105",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-1.65489304944921",
+    "start_nav": "2.0243",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.9908",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1329,
+   "fields": {
+    "fund_code": "518880",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "4.47476224426909",
+    "start_nav": "8.2753",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "8.6456",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1332,
+   "fields": {
+    "fund_code": "561170",
+    "prediction_date": "2026-07-02",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-1.39538991433366",
+    "start_nav": "1.1323",
+    "start_nav_date": "2026-07-02",
+    "end_nav": "1.1165",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1341,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-02",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "72",
+    "actual_change": "1.3993842709208",
+    "start_nav": "0.3573",
+    "start_nav_date": "2026-07-02",
+    "end_nav": "0.3623",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1361,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-08",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.96083163170596",
+    "start_nav": "1.0774",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.1093",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1363,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-7.77093669675415",
+    "start_nav": "1.6729",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.5429",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1368,
+   "fields": {
+    "fund_code": "561170",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-02",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-0.429560796002466",
+    "start_nav": "1.1407",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.1358",
+    "end_nav_date": "2026-07-03",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1375,
+   "fields": {
+    "fund_code": "561170",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-08",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-2.12150433944069",
+    "start_nav": "1.1407",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.1165",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1385,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "3.06292927417859",
+    "start_nav": "1.0774",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.1104",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1405,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-01",
+    "target_date": "2026-07-04",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-7.77093669675415",
+    "start_nav": "1.6729",
+    "start_nav_date": "2026-07-01",
+    "end_nav": "1.5429",
+    "end_nav_date": "2026-07-06",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1407,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-02",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "0.701754385964906",
+    "start_nav": "0.627",
+    "start_nav_date": "2026-07-02",
+    "end_nav": "0.6314",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1420,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-02",
+    "target_date": "2026-07-09",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "68",
+    "actual_change": "0.18800648298218",
+    "start_nav": "1.5425",
+    "start_nav_date": "2026-07-02",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1445,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-07-03",
+    "target_date": "2026-07-10",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.92024990812201",
+    "start_nav": "1.0884",
+    "start_nav_date": "2026-07-03",
+    "end_nav": "1.1093",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1452,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-03",
+    "target_date": "2026-07-10",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "0.00647123535884366",
+    "start_nav": "1.5453",
+    "start_nav_date": "2026-07-03",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1454,
+   "fields": {
+    "fund_code": "513520",
+    "prediction_date": "2026-07-03",
+    "target_date": "2026-07-10",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "0",
+    "actual_change": "1.32610006027727",
+    "start_nav": "1.9908",
+    "start_nav_date": "2026-07-03",
+    "end_nav": "2.0172",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1458,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-03",
+    "target_date": "2026-07-10",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "65",
+    "actual_change": "-0.275254610514726",
+    "start_nav": "0.3633",
+    "start_nav_date": "2026-07-03",
+    "end_nav": "0.3623",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1465,
+   "fields": {
+    "fund_code": "512400",
+    "prediction_date": "2026-07-03",
+    "target_date": "2026-07-10",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-10.4692052647443",
+    "start_nav": "0.9953",
+    "start_nav_date": "2026-07-03",
+    "end_nav": "0.8911",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1525,
+   "fields": {
+    "fund_code": "159992",
+    "prediction_date": "2026-07-06",
+    "target_date": "2026-07-07",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-1.92197360872061",
+    "start_nav": "0.6972",
+    "start_nav_date": "2026-07-06",
+    "end_nav": "0.6838",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1538,
+   "fields": {
+    "fund_code": "561170",
+    "prediction_date": "2026-07-06",
+    "target_date": "2026-07-13",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-1.00822499336695",
+    "start_nav": "1.1307",
+    "start_nav_date": "2026-07-06",
+    "end_nav": "1.1193",
+    "end_nav_date": "2026-07-14",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1541,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-07",
+    "target_date": "2026-07-08",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.52410984101958",
+    "start_nav": "1.5222",
+    "start_nav_date": "2026-07-07",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1579,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-15",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "8.36916021782746",
+    "start_nav": "0.3489",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "0.3781",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1583,
+   "fields": {
+    "fund_code": "518880",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-09",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-0.427664161277163",
+    "start_nav": "8.5815",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "8.5448",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1584,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-11",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.43934773962615",
+    "start_nav": "1.5086",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "1.5454",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1603,
+   "fields": {
+    "fund_code": "516160",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-11",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-2.56672732787382",
+    "start_nav": "2.6376",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "2.5699",
+    "end_nav_date": "2026-07-12",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1628,
+   "fields": {
+    "fund_code": "518880",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-15",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-0.255200139835699",
+    "start_nav": "8.5815",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "8.5596",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1629,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-15",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "7.69107771026544",
+    "start_nav": "0.6254",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1631,
+   "fields": {
+    "fund_code": "512980",
+    "prediction_date": "2026-07-08",
+    "target_date": "2026-07-15",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "50",
+    "actual_change": "-3.48721767187888",
+    "start_nav": "0.8058",
+    "start_nav_date": "2026-07-08",
+    "end_nav": "0.7777",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1647,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-09",
+    "target_date": "2026-07-16",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "8.76937984496124",
+    "start_nav": "0.6192",
+    "start_nav_date": "2026-07-09",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1649,
+   "fields": {
+    "fund_code": "516160",
+    "prediction_date": "2026-07-09",
+    "target_date": "2026-07-16",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-9.53948613160783",
+    "start_nav": "2.6427",
+    "start_nav_date": "2026-07-09",
+    "end_nav": "2.3906",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1651,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-09",
+    "target_date": "2026-07-16",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-15.4489164086687",
+    "start_nav": "1.615",
+    "start_nav_date": "2026-07-09",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1669,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-11",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.54568037537952",
+    "start_nav": "0.3623",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "0.3679",
+    "end_nav_date": "2026-07-14",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1670,
+   "fields": {
+    "fund_code": "516160",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-17",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-6.97692517218569",
+    "start_nav": "2.5699",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "2.3906",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1673,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-17",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-11.6409990940857",
+    "start_nav": "1.5454",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1674,
+   "fields": {
+    "fund_code": "512680",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-17",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-14.9018067556952",
+    "start_nav": "1.273",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "1.0833",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1685,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-13",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "69",
+    "actual_change": "0.237567310738051",
+    "start_nav": "0.6314",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "0.6329",
+    "end_nav_date": "2026-07-14",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1689,
+   "fields": {
+    "fund_code": "513520",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-17",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-7.76053215077604",
+    "start_nav": "0.6314",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "0.5824",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1706,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-17",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "6.66772252138106",
+    "start_nav": "0.6314",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1715,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-07-10",
+    "target_date": "2026-07-17",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "5.32768412512397",
+    "start_nav": "1.1093",
+    "start_nav_date": "2026-07-10",
+    "end_nav": "1.1684",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1732,
+   "fields": {
+    "fund_code": "516160",
+    "prediction_date": "2026-07-13",
+    "target_date": "2026-07-20",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-2.94738551477753",
+    "start_nav": "2.4632",
+    "start_nav_date": "2026-07-13",
+    "end_nav": "2.3906",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1739,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-13",
+    "target_date": "2026-07-20",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "6.80304471931493",
+    "start_nav": "0.6306",
+    "start_nav_date": "2026-07-13",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1748,
+   "fields": {
+    "fund_code": "512890",
+    "prediction_date": "2026-07-13",
+    "target_date": "2026-07-16",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "3.55401932110255",
+    "start_nav": "1.1283",
+    "start_nav_date": "2026-07-13",
+    "end_nav": "1.1684",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1790,
+   "fields": {
+    "fund_code": "510210",
+    "prediction_date": "2026-07-13",
+    "target_date": "2026-07-20",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-0.770791075050704",
+    "start_nav": "0.986",
+    "start_nav_date": "2026-07-13",
+    "end_nav": "0.9784",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1828,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-13",
+    "target_date": "2026-07-20",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-7.36092265943013",
+    "start_nav": "1.474",
+    "start_nav_date": "2026-07-13",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1858,
+   "fields": {
+    "fund_code": "518880",
+    "prediction_date": "2026-07-13",
+    "target_date": "2026-07-20",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "78",
+    "actual_change": "1.39783927217589",
+    "start_nav": "8.4416",
+    "start_nav_date": "2026-07-13",
+    "end_nav": "8.5596",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1867,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-16",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.65203475080018",
+    "start_nav": "0.6561",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1868,
+   "fields": {
+    "fund_code": "512680",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-22",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-5.18161925601752",
+    "start_nav": "1.1425",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "1.0833",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1870,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-16",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-6.86809439367071",
+    "start_nav": "1.4662",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1879,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-22",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-6.86809439367071",
+    "start_nav": "1.4662",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1880,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-18",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.65203475080018",
+    "start_nav": "0.6561",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1894,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-22",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-6.86809439367071",
+    "start_nav": "1.4662",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1927,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-22",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-0.526177321757433",
+    "start_nav": "0.3801",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "0.3781",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1931,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-15",
+    "target_date": "2026-07-16",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-0.526177321757433",
+    "start_nav": "0.3801",
+    "start_nav_date": "2026-07-15",
+    "end_nav": "0.3781",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1957,
+   "fields": {
+    "fund_code": "159928",
+    "prediction_date": "2026-07-16",
+    "target_date": "2026-07-19",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "1.46128351913228",
+    "start_nav": "0.6638",
+    "start_nav_date": "2026-07-16",
+    "end_nav": "0.6735",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1959,
+   "fields": {
+    "fund_code": "512170",
+    "prediction_date": "2026-07-14",
+    "target_date": "2026-07-21",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "2.7724925251427",
+    "start_nav": "0.3679",
+    "start_nav_date": "2026-07-14",
+    "end_nav": "0.3781",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1960,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-14",
+    "target_date": "2026-07-21",
+    "status": "success",
+    "is_correct": "True",
+    "verify_score": "100",
+    "actual_change": "-9.93338170305389",
+    "start_nav": "1.5161",
+    "start_nav_date": "2026-07-14",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1964,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-14",
+    "target_date": "2026-07-21",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-9.93338170305389",
+    "start_nav": "1.5161",
+    "start_nav_date": "2026-07-14",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1967,
+   "fields": {
+    "fund_code": "515000",
+    "prediction_date": "2026-07-14",
+    "target_date": "2026-07-15",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-9.93338170305389",
+    "start_nav": "1.5161",
+    "start_nav_date": "2026-07-14",
+    "end_nav": "1.3655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  },
+  {
+   "id": 1972,
+   "fields": {
+    "fund_code": "512400",
+    "prediction_date": "2026-07-14",
+    "target_date": "2026-07-21",
+    "status": "failed",
+    "is_correct": "False",
+    "verify_score": "0",
+    "actual_change": "-0.417395228157248",
+    "start_nav": "1.7729",
+    "start_nav_date": "2026-07-14",
+    "end_nav": "1.7655",
+    "end_nav_date": "2026-07-23",
+    "verify_count": "1"
+   }
+  }
+ ]
+}

@@ -365,7 +365,9 @@ class PredictionService(BaseService[Prediction]):
             "actual_change": prediction.actual_change,
             "is_expired": prediction.is_expired,
             "verify_count": prediction.verify_count,
-            "verify_history": prediction.verify_history or [],
+            # 与 prediction_query_service 同一口径：倒序输出，让 UI 的
+            # `verify_history[0]` 真的是"最近一次验证"（第 13 轮 MAJOR-1）
+            "verify_history": list(reversed(prediction.verify_history or [])),
             "start_nav": prediction.start_nav,
             "end_nav": prediction.end_nav,
             "current_nav": prediction.current_nav,
