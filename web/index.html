@@ -1201,8 +1201,12 @@
                                 </tbody>
                             </table>
                         </div>
-                        <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0"
+                        <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0 && predictionDetail.is_correct !== null && predictionDetail.is_correct !== undefined"
                             style="background: #fff; padding: 12px; border-radius: 6px;">
+                            <!-- 必须同时要求"现在真的有结论"：被回溯过的预测 `is_correct` 已是 NULL，
+                                 而 verify_history 仍留着被撤销那一轮（出口是倒序，`[0]` 就是它）⇒
+                                 抽屉会一边显示"待验证"一边显示"本次验证详情：+1.55% 判对"
+                                 （第 14 轮 MAJOR-3，实测 11 行中招）。-->
                             <h5 class="mb-8 text-secondary">🔍 本次验证详情</h5>
                             <div style="font-size: 13px; line-height: 1.8;">
                                 <div v-if="predictionDetail.verify_history[0].process_metrics">
@@ -2759,9 +2763,14 @@ const fetchWeChatBatch = async () => {
                         const text = await importFile.value.text();
                         const data = JSON.parse(text);
                         // 启动后台导入（立即返回），然后轮询状态直到完成
+                        // 覆盖式导入服务端要两道闸：ENABLE_DATABASE_IMPORT 总开关 + 这个确认头。
+                        // 以前 UI 只发 {data, replace} ⇒ 即便总开关开了，"覆盖模式"也是必然 403
+                        // 的死控件（第 14 轮 MAJOR-4）。用户已在弹窗里明确确认过覆盖才带上这个头。
                         await axios.post('/api/config/import',
                             { data, replace: importReplace.value },
-                            { timeout: 120000 });
+                            { timeout: 120000,
+                              headers: importReplace.value
+                                  ? { 'X-Danger-Confirm': 'replace-database-import' } : {} });
                         importResult.value = { success: true, message: '⏳ 导入中，请耐心等待（约1~3分钟），请勿关闭页面...' };
                         // 每3秒轮询一次任务状态，running 时显示后端回报的实际进度
                         const finalResult = await new Promise((resolve) => {
@@ -2791,7 +2800,9 @@ const fetchWeChatBatch = async () => {
                         if (e instanceof SyntaxError) {
                             importResult.value = { success: false, message: '文件格式错误：不是有效的 JSON 文件' };
                         } else {
-                            importResult.value = { success: false, message: '导入失败: ' + (e.response?.data?.message || e.message) };
+                            // FastAPI 的 4xx 文案在 `detail` 里，只读 `message` 会把
+                            // "需要总开关 + 确认头"这类整改指引整句吞掉（第 14 轮 MAJOR-4）
+                            importResult.value = { success: false, message: '导入失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message) };
                         }
                     }
                     importLoading.value = false;

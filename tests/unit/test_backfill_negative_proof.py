@@ -463,3 +463,38 @@ def test_availability_only_claims_unverifiable_when_proven(test_db):
                                            today=date(2026, 9, 21))
     assert r2['reason'] == 'no_source_history', r2
     assert '结构性不可验' in r2['message'] and '数据源在' in r2['message'], r2
+
+
+def test_ttl_does_not_depend_on_the_wall_clock():
+    """第 14 轮 MAJOR-5：`covering_probe/fresh` 支持注入"今天是哪天"，
+    而 TTL 分档以前自己调 `date.today()` ⇒ 同入参、不同墙上时钟给出相反答案，
+    历史回放会凭一个当时并不存在的宽限判"这段问过"。
+
+    同一条凭据（窗口终点 06-04、07-01 问过的、给了几条）：
+    "今天"= 07-04 时终点距今 30 天 ⇒ 落进"近期只信 1 天"档 ⇒ 已过期；
+    "今天"= 07-05 时距今 31 天 ⇒ 回到 7 天档 ⇒ 仍新鲜。
+    """
+    probes = [{'start': date(2026, 5, 1), 'end': date(2026, 6, 4),
+               'source_rows': 5, 'checked_at': '2026-07-01T10:00:00'}]
+    assert backfill_proofs.covering_probe(
+        probes, date(2026, 5, 10), date(2026, 6, 1), today=date(2026, 7, 4)) is None, \
+        '近期窗口该只信 1 天，注入的 today 被忽略就会判成"问过"'
+    assert backfill_proofs.covering_probe(
+        probes, date(2026, 5, 10), date(2026, 6, 1), today=date(2026, 7, 5)) is not None, \
+        '久远窗口按 7 天档，4 天前问过应当算新鲜'
+
+
+def test_future_timestamped_proof_is_not_believed():
+    """第 14 轮 MINOR-1：`checked_at` 来自未来的凭据不能永不过期。"""
+    db = _session()
+    future = (datetime.now() + timedelta(days=400)).isoformat()
+    backfill_proofs.record_probe(db, '510300', date(2026, 6, 1), date(2026, 6, 30), 0)
+    db.commit()
+    row = db.query(SystemConfig).filter(
+        SystemConfig.config_key == backfill_proofs.proof_key('510300')).first()
+    payload = json.loads(row.config_value)
+    payload['probes'][0]['checked_at'] = future
+    row.config_value = json.dumps(payload, ensure_ascii=False)
+    db.commit()
+    assert backfill_proofs.fresh(db, '510300', date(2026, 6, 5), date(2026, 6, 20),
+                                 today=date(2026, 9, 22)) is None, '未来时间戳 = 永久免检'

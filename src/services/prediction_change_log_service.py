@@ -9,6 +9,12 @@ from src.models.database import Prediction, PredictionChangeLog
 
 
 SNAPSHOT_FIELDS = (
+    # 第 14 轮 MAJOR-6：`clear_verification_fields` 会清 15 个判定字段却不动
+    # `verify_history`，快照里又没有它 ⇒ `restore_prediction_batch.py --run-id` 还原后
+    # "结论回来了、历史还是重判那一轮"（verify_count=1 而历史 2 条，UI 与准确率互相打脸）。
+    # 加进快照才能让"整批还原"这句承诺真的成立；代价是日志行变大（历史条目本身很小，
+    # 且清理任务会连带删日志）。
+    "verify_history",
     "fund_code",
     "fund_name",
     "sector",

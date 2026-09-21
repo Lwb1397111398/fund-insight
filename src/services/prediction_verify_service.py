@@ -24,12 +24,6 @@ from src.services.prediction_change_log_service import (
 logger = logging.getLogger(__name__)
 
 
-VERDICT_CLEAR_FIELDS = ('status', 'is_expired', 'has_active_prediction', 'verify_count',
-                        'verify_score', 'actual_change', 'is_correct', 'current_nav',
-                        'current_nav_date', 'end_nav', 'end_nav_date', 'start_nav',
-                        'start_nav_date', 'verified_at', 'last_verify_date')
-
-
 def clear_verification_fields(prediction) -> None:
     """把一条预测退回"未验证"，字段清单只有这一处定义。
 
@@ -1502,7 +1496,6 @@ class PredictionVerifyService:
                         # —— 凭空多出一条假历史记录（第 13 轮 MAJOR-1）。
                         # 回溯的审计走 prediction_change_logs（action=verification_rollback
                         # + before_state + run_id），那才是可回滚、可核对的地方。
-                        prediction.status = 'pending'
                         clear_verification_fields(prediction)
                         add_prediction_change_log(
                             self.db,

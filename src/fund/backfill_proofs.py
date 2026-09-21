@@ -100,21 +100,32 @@ def _fresh(probe, today: date, ttl_days: int = TTL_DAYS) -> bool:
         checked = datetime.fromisoformat(probe['checked_at']).date()
     except (TypeError, ValueError):
         return False
-    return (today - checked) <= timedelta(days=ttl_days)
+    age = (today - checked).days
+    # 负数＝时间戳来自"未来"。只容忍 1 天的时钟偏移（Render 是 UTC、本机是本地时区），
+    # 更远的按"不可信"处理：否则一条被污染的 `checked_at='2099-…'` 就是永不过期的
+    # 负凭据，`KEEP_DAYS` 剪枝也剪不掉它（第 14 轮 MINOR-1）。
+    if age < -1:
+        return False
+    return age <= ttl_days
 
 
-def _ttl_for(probe) -> int:
+def _ttl_for(probe, today: date = None) -> int:
     """空答复 2 天；**窗口终点还在近 30 天内**的只信 1 天；其余 7 天。
 
     为什么要给近期窗口单独收紧：`end_covered` 门让"目标日那天缺行"的窗口去问一次，
     源端答"还没有"，但那条净值当天晚上就会发布 —— 用 7 天凭据压住补拉，
     等于亲手把一条本可自愈的预测锁成"结构性不可验"（第 13 轮 MINOR-10）。
     历史日期的净值是不可变的，所以久远的窗口才配 7 天。
+
+    `today` 必须由调用方传进来：`covering_probe/fresh` 支持注入"今天是哪天"，
+    而这里原先自己调 `date.today()` ⇒ 同一个入参、不同墙上时钟给出相反答案
+    （历史回放会凭一个当时并不存在的宽限判"问过"，第 14 轮 MAJOR-5）。
     """
     if not (probe.get('source_rows') or 0):
         return EMPTY_TTL_DAYS
+    ref = _as_date(today) or date.today()
     try:
-        if (date.today() - probe['end']).days <= 30:
+        if (ref - probe['end']).days <= 30:
             return 1
     except (TypeError, KeyError):
         pass
@@ -127,7 +138,8 @@ def covering_probe(probes, start_date: date, end_date: date, today: date = None)
         return None        # 倒挂窗口（脏数据）不许被任何凭据"盖住"（第 11 轮 MINOR-4）
     today = _as_date(today) or date.today()
     hits = [p for p in probes or []
-            if p['start'] <= start_date and p['end'] >= end_date and _fresh(p, today, _ttl_for(p))]
+            if p['start'] <= start_date and p['end'] >= end_date
+            and _fresh(p, today, _ttl_for(p, today))]
     return max(hits, key=lambda p: p['checked_at']) if hits else None
 
 

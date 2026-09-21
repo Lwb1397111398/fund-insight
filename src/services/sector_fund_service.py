@@ -44,6 +44,12 @@ class SectorFundService:
 
         db = self._get_db()
         try:
+            # 重灌时**先清空**：`existing.get('reviewed') and not m.reviewed → continue`
+            # 那条守卫的本意是"同板块多行里，未审查的行不许盖掉已审查的行"，
+            # 但它同时挡住了"上一轮缓存里那个已被取消审查的旧条目"（第 14 轮 MAJOR-1）：
+            # 体检/审查写在 Cron 进程里，Web 进程 TTL 到了重灌却仍保留旧的 reviewed 条目，
+            # 于是被取消审查的标的继续驱动新预测挂错基金。
+            SectorFundService._cache = {}
             # sector_name 不是唯一列：没有 ORDER BY 时"同名多行"取哪一条取决于
             # 数据库返回顺序，SQLite 与 Postgres 可能给出不同基金（同一板块两种结论）。
             # 固定为"已审查优先、id 最小优先"，且已审查条目不被未审查条目覆盖。
@@ -79,6 +85,10 @@ class SectorFundService:
     def get_fund_by_sector(self, sector_name: str) -> Optional[Dict]:
         """获取板块对应的基金（优先返回 reviewed=True 的映射）"""
         from src.services.sector_identity_audit import servable_predicate
+        # 先走 TTL 检查再读缓存：以前"命中 reviewed 就 return"从不过期 ⇒
+        # Cron 里取消审查/降级永远传不到 Web 进程，而这条路径现在在匹配链最前端
+        # （第 14 轮 MAJOR-1）。`_load_cache` 自带"没到期就直接返回"，代价是每 60 秒一次查询。
+        self._load_cache()
         if sector_name in self._cache:
             cached = self._cache[sector_name]
             if cached.get('reviewed'):
@@ -278,8 +288,17 @@ class SectorFundService:
                     continue
                 row.reviewed = reviewed
                 if reviewed:
-                    row.reviewed_by = 'owner'
-                    row.owner_locked = True
+                    if owner_confirm:
+                        # 老板明确确认过：署名 owner + 锁定（可追溯、享受体检豁免）
+                        row.reviewed_by = 'owner'
+                        row.owner_locked = True
+                    else:
+                        # 第 14 轮 MAJOR-2：以前不管 owner_confirm 真假都盖 `reviewed_by='owner'`
+                        # + `owner_locked=True` ⇒ 一次点击就让 23 行拿到永久体检免疫，
+                        # 而弹窗写的是"不会冒充老板署名"。现在不确认就不署名、不锁定，
+                        # 只承认"这些行有机器证据、已批量看过"；署名与豁免留给逐行确认。
+                        row.reviewed_by = row.reviewed_by or 'batch_review'
+                        row.owner_locked = bool(row.owner_locked)
                     row.match_source = row.match_source or 'manual'
                     row.updated_at = _dt.now()
                 else:
