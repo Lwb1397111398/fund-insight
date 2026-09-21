@@ -445,6 +445,53 @@ def test_audit_import_absent_column_keeps_value_explicit_null_clears_it(monkeypa
         app.dependency_overrides.pop(get_db, None)
 
 
+def test_audit_import_guards_read_the_row_before_it_is_mutated(test_db, monkeypatch):
+    """第 8 轮 MAJOR-2/4：判据必须取**改之前**的行，且拒行前不许先去补档案。
+
+    以前的写法是 `setattr` 完再判 verdict / 机器换标的章 —— 载荷里带一份
+    `evidence={"identity":{"verdict":"ok"}}` 就能把行上原有的未确认换标章连旧结论
+    一起洗掉，然后 `reviewed=True` 顺利进门；而 `ensure_fund_info_exists` 内部会
+    commit，拒掉的行照常留下一只没人认领的基金档案。
+    """
+    from src.api.routes.config import _audit_apply_row
+    from src.models.database import SectorFundMapping
+    monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                        lambda c, n, s: (None, None))
+    row = SectorFundMapping(sector_name='T-改前判据', fund_code='159877',
+                            fund_name='医疗ETF', reviewed=False, is_active=True,
+                            evidence=json.dumps({'etf_upgrade': {'code': '159877',
+                                                                 'from_code': '162412'}}))
+    test_db.add(row)
+    test_db.commit()
+
+    class _CountingService:
+        def __init__(self):
+            self.calls = 0
+
+        def ensure_fund_info_exists(self, *a, **k):
+            self.calls += 1
+            return True
+
+    svc = _CountingService()
+    payload = {'fund_code': '159877', 'fund_name': '医疗ETF', 'reviewed': True,
+               'is_fetchable': True,
+               'evidence': json.dumps({'identity': {'verdict': 'ok'}})}
+    assert _audit_apply_row(test_db, svc, row, 'T-改前判据', dict(payload)) == \
+        'unacknowledged_machine_swap'
+    assert svc.calls == 0, '拒行之前就去补档案 = 生产里多一只没人认领的基金'
+    test_db.refresh(row)
+    assert row.reviewed is False
+    assert json.loads(row.evidence).get('etf_upgrade'), '换标章被载荷洗掉了'
+
+    # 老板在页面上确认过（章被人工编辑摘掉）之后，同样的载荷就该放行
+    row.evidence = json.dumps({'identity': {'verdict': 'ok'}})
+    row.reviewed = True
+    test_db.commit()
+    assert _audit_apply_row(test_db, svc, row, 'T-改前判据',
+                            dict(payload)) is None
+    assert svc.calls == 1
+
+
 def test_audit_import_reports_per_row_outcomes(monkeypatch, tmp_path):
     """混合批次逐行报 outcome：updated / created / unchanged / refused(原因)。"""
     session_factory = _database(tmp_path)

@@ -1377,28 +1377,55 @@ def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Op
         if isinstance(kws, str):
             return 'keywords_must_be_a_list'
     try:
+        # 判据一律取**改之前**的行状态：先 setattr 再判的话，载荷里带一份
+        # `evidence={"identity":{"verdict":"ok"}}` 就能把行上原有的"机器换标的未确认"章
+        # 连同旧结论一起洗掉（第 8 轮 MAJOR-2 实测：改完再看 → 旗标消失、reviewed=True 落地）。
+        prev_verdict = identity_verdict_of(row) if row is not None else None
+        prev_unacked_swap = machine_swap_of(row) if row is not None else None
+        incoming_verdict = None
+        if values.get('evidence'):
+            try:
+                incoming_verdict = ((json.loads(values['evidence']) or {})
+                                    .get('identity') or {}).get('verdict')
+            except Exception:
+                incoming_verdict = None
+        will_review = bool(values.get('reviewed',
+                                      getattr(row, 'reviewed', False) if row else False))
+        verdict_after = incoming_verdict if 'evidence' in values else prev_verdict
+
+        # 三条"不许进门"的判断全部前置 —— `ensure_fund_info_exists` 内部会 commit，
+        # 先补档案再拒行，就会留下一只没人认领的基金被同步任务拉净值（第 8 轮 MAJOR-4）。
+        if will_review and verdict_after in UNSERVABLE_VERDICTS:
+            return 'unservable_but_reviewed'
+        if will_review and prev_unacked_swap is not None:
+            return 'unacknowledged_machine_swap'
+        if verdict_after in UNSERVABLE_VERDICTS:
+            values['is_fetchable'] = False      # 镜像不变量：verdict 否 ⇒ 列必须 False
         # 外键保障：sector_fund_mapping.fund_code 指向 fund_info，先补最小档案再改映射
         # （复用 PUT/POST 同一个 helper，别再抄一份）
-        service.ensure_fund_info_exists(values.get('fund_code'),
-                                        values.get('fund_name'), sector)
+        created_archive = service.ensure_fund_info_exists(
+            values.get('fund_code'), values.get('fund_name'), sector)
         if row is None:
             row = SectorFundMapping(sector_name=sector,
                                     fund_code=values.get('fund_code'))
             db.add(row)
         for field, value in values.items():
             setattr(row, field, value)
-        if identity_verdict_of(row) in UNSERVABLE_VERDICTS:
-            row.is_fetchable = False      # 镜像不变量：verdict 否 ⇒ 列必须 False
-            if getattr(row, 'reviewed', None):
-                db.rollback()
-                return 'unservable_but_reviewed'
-        if getattr(row, 'reviewed', None) and machine_swap_of(row) is not None:
-            db.rollback()
-            return 'unacknowledged_machine_swap'
         db.commit()
         return None
     except Exception as exc:
         db.rollback()
+        # 已经 commit 的最小档案不在映射事务里：写映射失败就把它一并撤掉，
+        # 否则生产会多出只查得到净值、却没有任何板块引用它的基金。
+        if locals().get('created_archive') and values.get('fund_code'):
+            try:
+                from src.models.database import FundInfo
+                db.query(FundInfo).filter(
+                    FundInfo.fund_code == values['fund_code']).delete()
+                db.commit()
+            except Exception:
+                db.rollback()
+                print('[warn] 审计回写失败且孤儿档案未清除：%s' % values.get('fund_code'))
         return 'write_failed:%s' % str(exc)[:160]
 
 

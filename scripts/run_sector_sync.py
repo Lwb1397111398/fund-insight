@@ -17,6 +17,7 @@ import io
 import json
 import os
 import sys
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -66,7 +67,18 @@ def main():
             print('\n未写库。确认无误后加 --apply --run-id <id> 执行。')
             return 0
 
-        run_id = args.run_id or 'rematch-%s' % args.tag
+        run_id = args.run_id or 'rematch-%s-%s' % (
+            args.tag, datetime.now().strftime('%Y%m%d-%H%M%S'))
+        # run_id 是**唯一**的回滚钥匙：同一个 id 挂两批改动 = 一条回滚命令把两批
+        # 一起退掉。第 8 轮实测 `rematch-20260921b` 上挂着 645 条 change log，
+        # 其中 530 条是上一批（commit 48feaf6）的，而 `--expect` 只看条数看不出串批。
+        from src.models.database import PredictionChangeLog
+        used = db.query(PredictionChangeLog).filter(
+            PredictionChangeLog.run_id == run_id).count()
+        if used:
+            print('[abort] run_id=%s 已经用过（%d 条改动记录），回滚会连旧账一起退；'
+                  '换一个 id（不带 --run-id 会自动生成带时间戳的）' % (run_id, used))
+            return 4
         result = service.sync_sector_mappings(
             dry_run=False, min_confidence=args.min_confidence, run_id=run_id)
         report = os.path.join(OUT_DIR, 'remap-%s-applied.json' % args.tag)
