@@ -373,8 +373,18 @@ class PredictionVerifyService:
             if latest_record:
                 latest_date = self._as_date(latest_record.nav_date)
                 days_behind = (window_end - latest_date).days if latest_date else None
+                # 括号里这句是本轮实测加的：`days_behind` 是**负数**时数据并不陈旧
+                # （最新净值 2026-09-18 比窗口终点 2026-07-13 还晚 77 天），真正缺的是
+                # **目标日附近**那几条历史净值。这时提示"请更新基金数据"会把人带去
+                # 跑同步任务，而同步只会补最近端、永远补不到那个窗口 —— 实测 80 条
+                # 到期预测全部卡在这里（本地镜像 ETF 只有 6~40 行、起点在 2026 年中）。
+                stale_hint = (
+                    '' if days_behind is None or days_behind >= 0 else
+                    '（窗口内净值记录不足：最新净值已晚于窗口终点 %d 天，'
+                    '缺的是目标日前后的历史净值，补拉最新数据不会解决）' % -days_behind)
                 return _fail(
-                    f"基金数据不足，最新数据为 {latest_date}，落后 {days_behind} 天，请更新基金数据后再验证",
+                    f"基金数据不足，最新数据为 {latest_date}，落后 {days_behind} 天，请更新基金数据后再验证"
+                    + stale_hint,
                     reason='insufficient_points',
                     days_behind=days_behind,
                 )

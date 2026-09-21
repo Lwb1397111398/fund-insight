@@ -1306,7 +1306,9 @@ def _find_mapping_by_sector(db: Session, sector: str):
 
     row = _pick(sector)
     if row is not None:
-        return row, 'exact'
+        # 命中 inactive 行也要说出来：导入本身合法（该行可能被重新启用），但回执只写
+        # "updated" 会让老板以为页面少了 1 行其实是筛掉了（第 7 轮 MINOR 复现）。
+        return row, ('exact' if row.is_active is not False else 'exact|inactive')
     try:
         from src.constants.sector_fund_map import normalize_sector_name
         normalized = normalize_sector_name(sector)

@@ -1,0 +1,1043 @@
+{
+ "run_id": "rematch-20260921b",
+ "min_confidence": 0.85,
+ "updated": 115,
+ "verified_reset": 84,
+ "details": [
+  {
+   "prediction_id": 60,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 310,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 325,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 537,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 539,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 541,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 618,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 683,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 871,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 926,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 928,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 992,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 996,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1014,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1071,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1074,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1136,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1140,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1197,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1198,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1207,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1217,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1231,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1238,
+   "sector": "京A",
+   "old_fund_code": "000725",
+   "old_fund_name": "京东方Ａ",
+   "new_fund_code": "012765",
+   "new_fund_name": "广发大盘价值混合A",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1286,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1291,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1319,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1321,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1325,
+   "sector": "京A",
+   "old_fund_code": "002273",
+   "old_fund_name": null,
+   "new_fund_code": "012765",
+   "new_fund_name": "广发大盘价值混合A",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1344,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1358,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1394,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1429,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1479,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1517,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1557,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1578,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1581,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1589,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1646,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1783,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1801,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1833,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1889,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 1920,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1954,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 1965,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2003,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2006,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2041,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2096,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2113,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2149,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2202,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2233,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2237,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2243,
+   "sector": "A股",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "515440",
+   "new_fund_name": "A股ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2288,
+   "sector": "保险",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "512070",
+   "new_fund_name": "证券保险ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2290,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2291,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2303,
+   "sector": "A股",
+   "old_fund_code": "515000",
+   "old_fund_name": "互联网ETF",
+   "new_fund_code": "515440",
+   "new_fund_name": "A股ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2304,
+   "sector": "A股",
+   "old_fund_code": "515000",
+   "old_fund_name": "互联网ETF",
+   "new_fund_code": "515440",
+   "new_fund_name": "A股ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2322,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2382,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2415,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2437,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2459,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2482,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2483,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2510,
+   "sector": "A股",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "515440",
+   "new_fund_name": "A股ETF南方",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2538,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2544,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2580,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2599,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2602,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2612,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2629,
+   "sector": "A股",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515440",
+   "new_fund_name": "A股ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2658,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2681,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2691,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2708,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2806,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2817,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2833,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2871,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2872,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2889,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2908,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2915,
+   "sector": "A股",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "515440",
+   "new_fund_name": "A股ETF南方",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2918,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2940,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 2987,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 2997,
+   "sector": "场内第一持仓",
+   "old_fund_code": "159527",
+   "old_fund_name": "云计算ETF广发",
+   "new_fund_code": "510300",
+   "new_fund_name": "沪深300ETF华泰柏瑞",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3015,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3026,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3037,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3071,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3078,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3098,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3103,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3147,
+   "sector": "保险",
+   "old_fund_code": "512890",
+   "old_fund_name": "红利低波ETF华泰柏瑞",
+   "new_fund_code": "512070",
+   "new_fund_name": "证券保险ETF易方达",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3151,
+   "sector": "矿泉水",
+   "old_fund_code": "159928",
+   "old_fund_name": "消费ETF汇添富",
+   "new_fund_code": "515170",
+   "new_fund_name": "食品饮料ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3155,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3181,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3185,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3193,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3206,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3217,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3220,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3230,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3233,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3246,
+   "sector": "光伏",
+   "old_fund_code": "516160",
+   "old_fund_name": "新能源ETF南方",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": false
+  },
+  {
+   "prediction_id": 3270,
+   "sector": "美债",
+   "old_fund_code": "000801",
+   "old_fund_name": null,
+   "new_fund_code": "511100",
+   "new_fund_name": "国债ETF华夏",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3309,
+   "sector": "光伏",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "159857",
+   "new_fund_name": "光伏ETF天弘",
+   "reset_verified": true
+  },
+  {
+   "prediction_id": 3334,
+   "sector": "人工智能",
+   "old_fund_code": "515000",
+   "old_fund_name": "科技ETF华宝",
+   "new_fund_code": "515070",
+   "new_fund_name": "人工智能ETF华夏",
+   "reset_verified": true
+  }
+ ]
+}
