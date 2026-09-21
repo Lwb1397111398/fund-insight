@@ -297,8 +297,17 @@ class FundAPI:
                     # 不能读成"该区间没有净值"，只能读成"这次没问到"。
                     logger.error(f"基金 {fund_code} 历史净值第{page_index}页响应不是合法信封")
                     break
-                payload = data.get('Data') or {}
+                payload = data.get('Data')
+                if not isinstance(payload, dict) or 'LSJZList' not in payload:
+                    # 实测（2026-09-21 打真接口三种情形）：**真·没有数据**长这样 ——
+                    # `Data` 是 dict 且带 `LSJZList: []`、`ErrCode=0`、`TotalCount=0`。
+                    # 所以"`Data:null` / 缺 LSJZList 键"只能判成"没问到"，不能记凭据
+                    # （第 11 轮 BLOCKER-1：否则一次限流就伪造出"源端确实没有"）。
+                    logger.error(f"基金 {fund_code} 历史净值第{page_index}页信封缺 LSJZList")
+                    break
                 lsjz_list = payload.get('LSJZList') or []
+                total = (data.get('TotalCount') if isinstance(data.get('TotalCount'), int)
+                         else len(lsjz_list))
                 if not lsjz_list:
                     complete = True          # 问完了，这段确实没有
                     break
@@ -315,8 +324,9 @@ class FundAPI:
                         logger.warning(f"解析基金 {fund_code} 补拉净值失败: {e}, 数据项: {item}")
                         continue
 
-                # 不足一页说明已到末尾；同时做节流，降低被限流概率
-                if len(lsjz_list) < page_size:
+                # 接口自己报了总行数：取够 `TotalCount` 才算整段问完；
+                # 不足一页也到底（老接口行为）。两者任一成立才允许把结果当证据。
+                if len(results) >= total or len(lsjz_list) < page_size:
                     complete = True
                     break
                 time.sleep(0.2)

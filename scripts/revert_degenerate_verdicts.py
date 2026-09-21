@@ -43,8 +43,26 @@ SNAPSHOT_FIELDS = ('fund_code', 'prediction_date', 'target_date', 'status', 'is_
 EPS = 1e-9
 
 
+def _nav_row_date_for(db, fund_code, day, want_nav):
+    """找"`<= day` 且净值正好等于 `want_nav`"的那一天；找不到返回 None。
+
+    为什么不直接用"≤day 的最近一条"：那是**推测**它用了哪天，证明不了那天真有行；
+    而老数据的 `end_nav_date` 存的是请求的目标日（周末），按日期比必然对不上。
+    按"值 + 日期"双锚定还顺带挡住了改标行 —— 两端净值来自另一只基金时，
+    在这只基金的净值序列里根本找不到，只能算"证不了"。（第 11 轮 MINOR-9）
+    """
+    from src.models.database import FundHistory
+    if fund_code is None or day is None or want_nav is None:
+        return None
+    rows = db.query(FundHistory.nav_date, FundHistory.nav).filter(
+        FundHistory.fund_code == fund_code,
+        FundHistory.nav_date <= day).all()
+    hits = [r[0] for r in rows if r[1] is not None and abs(float(r[1]) - float(want_nav)) <= EPS]
+    return max(hits) if hits else None
+
+
 def find_degenerate(db, service):
-    """从落库证据里找退化结论，分成"能确证"与"看着像但证不了"两堆。"""
+    """从**落库证据**里找退化结论，分成"能确证"与"看着像但证不了"两堆。"""
     rows = db.query(Prediction).filter(
         Prediction.is_deleted == False,
         Prediction.is_correct.isnot(None),
@@ -52,16 +70,24 @@ def find_degenerate(db, service):
         Prediction.end_nav.isnot(None)).all()
     damaged, unsure = [], []
     for p in rows:
-        flat_value = abs(p.end_nav - p.start_nav) <= EPS and abs(p.actual_change or 0) <= EPS
-        if not flat_value:
+        if abs(p.end_nav - p.start_nav) > EPS or abs(p.actual_change or 0) > EPS:
             continue
-        start_real = service._real_nav_date(p.fund_code, p.start_nav_date or p.prediction_date)
-        end_real = service._real_nav_date(p.fund_code, p.end_nav_date or p.target_date)
-        if start_real is not None and end_real is not None and start_real == end_real:
-            damaged.append(p)
-        else:
-            # 真·平盘（比如 000801 那天净值就是没动）或本地缺数据无法归一 —— 一律不动
+        start_day = p.start_nav_date or p.prediction_date
+        end_day = p.end_nav_date or p.target_date
+        start_real = _nav_row_date_for(db, p.fund_code, start_day, p.start_nav)
+        end_real = _nav_row_date_for(db, p.fund_code, end_day, p.end_nav)
+        if not (start_real is not None and end_real is not None and start_real == end_real):
             unsure.append(p)
+            continue
+        # 再加一条硬证据：起点那天之后、终点请求日之前**没有任何净值行**。
+        # 少了这条，"07-09 与 07-10 净值恰好都是 1.3014"的真平盘会被误判成退化
+        # —— 那是两个不同的行，只是数值相同。
+        from src.models.database import FundHistory
+        later = db.query(FundHistory.nav_date).filter(
+            FundHistory.fund_code == p.fund_code,
+            FundHistory.nav_date > start_real,
+            FundHistory.nav_date <= end_day).first()
+        (unsure if later is not None else damaged).append(p)
     return damaged, unsure
 
 
@@ -80,9 +106,10 @@ def main():
         print('[证据扫描] 涨跌幅恒为 0 的已验证结论：%d 条，其中起点终点确证同一条 %d 条、'
               '证不了（多为真平盘）%d 条' % (len(damaged) + len(unsure), len(damaged), len(unsure)))
         for p in damaged:
-            print('   该撤 id=%-5s %s %s→%s 起=%s@%s end=@%s 判为%s'
-                  % (p.id, p.prediction_date, p.target_date, p.start_nav, p.start_nav_date,
-                     p.end_nav_date, '错' if p.is_correct is False else '对'))
+            print('   该撤 id=%-5s %s %s→%s 起=%s@%s end=%s@%s 判为%s'
+                  % (p.id, p.fund_code, p.prediction_date, p.target_date, p.start_nav,
+                     p.start_nav_date, p.end_nav, p.end_nav_date,
+                     '错' if p.is_correct is False else '对'))
         for p in unsure[:10]:
             print('   不动 id=%-5s %s 涨跌幅 0 但两端日期证不了（start@%s end@%s）'
                   % (p.id, p.fund_code, p.start_nav_date, p.end_nav_date))
@@ -120,8 +147,8 @@ def main():
         result = service.rollback_invalid_verifications(
             dry_run=False, only_ids=tuple(p.id for p in damaged))
         print('[applied] %s' % result['message'])
+        db.expire_all()          # 一次就够：循环里 expire 会把整表反复作废（MINOR-10）
         for p in damaged:
-            db.expire_all()
             row = db.query(Prediction).filter(Prediction.id == p.id).first()
             print('   复核 id=%s：status=%s is_correct=%s end_nav_date=%s change=%s'
                   % (row.id, row.status, row.is_correct, row.end_nav_date, row.actual_change))

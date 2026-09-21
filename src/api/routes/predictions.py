@@ -136,22 +136,36 @@ def restore_prediction(prediction_id: int, db: Session = Depends(get_db)):
 def rollback_invalid_verifications(
     request: Request,
     dry_run: bool = Query(True),
+    ids: str = Query(None, description='逗号分隔的 prediction id；真写必须给'),
     db: Session = Depends(get_db),
 ):
     """预览或回溯数据不足的已验证预测。
 
-    真写走的是 service 的定向口径：不带 `only_ids` 的真写在 service 层被拒
-    （必须显式 `allow_full_sweep=True`，而这个入口故意不传）——
-    不限定 id 的全库回溯会抹掉上千条历史结论，其中多数只是本地镜像缺那段历史
-    （第 10 轮 M-5）。要真做全量回溯请用脚本，别用这个按钮。
+    真写**必须**带 `ids`（定向回溯）。不限定 id 的全库回溯会抹掉上千条历史结论，
+    其中多数只是本地镜像缺那段历史（第 10 轮 M-5、第 11 轮 M-F），
+    因此那个口径只能由脚本显式 `allow_full_sweep=True` 发起，不给 HTTP 入口。
+    以前这里没有定向参数 ⇒ 按钮"确认执行"其实一行都撤不了，
+    却返回 200 让前端表现得像成功了 —— 所以缺 ids 现在直接 400。
     """
+    only_ids = None
+    if ids:
+        try:
+            only_ids = tuple(int(x) for x in ids.split(',') if x.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail='ids 必须是逗号分隔的预测 id')
+    if not dry_run and not only_ids:
+        raise HTTPException(
+            status_code=400,
+            detail='执行回溯必须指定预测 id（ids=…）；整库回溯请走脚本并显式 allow_full_sweep',
+        )
     if not dry_run and request.headers.get("X-Danger-Confirm") != "rollback-predictions":
         raise HTTPException(
             status_code=403,
             detail="执行回溯需要确认头 X-Danger-Confirm: rollback-predictions",
         )
     service = PredictionVerifyService(db)
-    result = service.rollback_invalid_verifications(min_data_points=2, dry_run=dry_run)
+    result = service.rollback_invalid_verifications(
+        min_data_points=2, dry_run=dry_run, only_ids=only_ids)
 
     return result
 

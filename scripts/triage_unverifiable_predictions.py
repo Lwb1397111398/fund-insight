@@ -5,14 +5,14 @@
 计划案 v1 因此把"顺延到下一个净值日"当成修法，评审用真数据推翻后才看清
 分布完全不同。改判据之前必须先把**每一条**的成因摊开，否则下一次还是猜。
 
-输出三张表：
+输出两张表：
 1. 到期未验证队列逐行诊断（窗口、窗口内净值条数、本地最早/最新净值、
    起点净值日、终点净值日、终态分类）；
-2. 已验证但 `start_nav_date == end_nav_date` 的行 —— 起点终点是同一条净值，
-   涨跌幅恒为 0，那是**退化结论**，不该计入准确率；
-3. 分类合计，必须正好等于队列长度（对不上说明分诊漏了分支）。
+2. 分类合计 + 脚本日历口径与验证服务 reason 的不一致清单（不一致不代表错，
+   但必须看得见，否则两套口径会悄悄分家）。
 
-终态分类含义：
+终态分类含义（`判据分类` 那一列取自**验证服务的 reason**，是唯一口径；
+下面这套日历口径的 `local_class` 只写进 JSON 供对照，两者不一致会在末尾报出来）：
 - `verifiable_now`     窗口内起点/终点是两条不同净值，立刻可验；
 - `waiting_target_nav` 目标日就是今天或净值还没发布，等一次净值即可（会自行消化）；
 - `degenerate_gap`     终点净值日 == 起点净值日（目标日休市且之前只有那一条），
@@ -24,6 +24,11 @@
     python scripts/triage_unverifiable_predictions.py            # 全量
     python scripts/triage_unverifiable_predictions.py --limit 40
     python scripts/triage_unverifiable_predictions.py --json out.json
+
+已验证结论里有没有 0% 假结论，请用 `scripts/revert_degenerate_verdicts.py` 判 ——
+它按"净值值 + 日期"双锚定，能覆盖老口径下 `end_nav_date` 存成请求日的行；
+本脚本以前那份 `start_nav_date == end_nav_date` 的自检对老行天生漏判（第 11 轮 MINOR-8），
+所以这里不再放第二套结论。
 """
 import argparse
 import io
@@ -129,23 +134,16 @@ def main():
         total = sum(counts.values())
         for label, n in sorted(counts.items(), key=lambda kv: -kv[1]):
             print('  %-24s %d' % (label, n))
-        # 分母必须是"本轮真的分类了多少条"，否则 --limit 下永远报"对不上"（评审 MINOR-6）
-        scope = min(len(due), args.limit) if args.limit else len(due)
-        print('  合计 %d / 本次分类 %d %s' % (total, scope,
-                                              'OK' if total == scope else '!! 对不上，分诊漏分支'))
-
-        degenerate = db.query(Prediction).filter(
-            Prediction.is_deleted == False,
-            Prediction.is_correct.isnot(None),
-            Prediction.start_nav_date.isnot(None),
-            Prediction.end_nav_date.isnot(None),
-            Prediction.start_nav_date == Prediction.end_nav_date).all()
-        print('\n[退化结论] 已验证且 start_nav_date == end_nav_date：%d 条'
-              % len(degenerate))
-        for p in degenerate[:20]:
-            print('   id=%s %s 起点=终点=%s actual_change=%s is_correct=%s score=%s'
-                  % (p.id, p.fund_code, p.start_nav_date, p.actual_change,
-                     p.is_correct, p.verify_score))
+        # 自检不能写成恒等式（每轮 +1 与循环次数天然相等，永远 OK —— 第 11 轮 MINOR-7）。
+        # 真正要报的是"脚本自己按日历算的分类"和"验证服务的 reason"对不上的行。
+        scope = len(report)
+        disagree = [r for r in report if r['local_class'] != r['class']
+                    and not (r['local_class'] == 'verifiable_now'
+                             and r['class'] in ('exact_target', 'weekend_previous',
+                                                'waited_previous', 'waiting_target_nav'))]
+        print('  合计 %d / 本次分类 %d OK' % (total, scope))
+        print('  脚本日历分类与验证服务 reason 不一致：%d 条 %s'
+              % (len(disagree), [(d['id'], d['local_class'], d['class']) for d in disagree[:6]]))
 
         if args.json:
             with io.open(args.json, 'w', encoding='utf-8') as f:

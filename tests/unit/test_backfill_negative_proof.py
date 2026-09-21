@@ -118,6 +118,124 @@ def test_dense_window_still_skips_without_a_proof(manager):
     assert backfill_proofs.read_proof(db, '510300') is None
 
 
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+        self.encoding = 'utf-8'
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """替掉 `FundAPI.session`：按页序吐预设响应，`None` 表示这次请求抛异常。"""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.calls = 0
+
+    def get(self, *a, **kw):
+        page = self.pages[self.calls] if self.calls < len(self.pages) else None
+        self.calls += 1
+        if page is None:
+            raise TimeoutError('模拟超时')
+        return _FakeResp(page)
+
+
+def _envelope(rows, total=None):
+    return {'Data': {'LSJZList': rows}, 'ErrCode': 0,
+            'TotalCount': total if total is not None else len(rows)}
+
+
+@pytest.mark.parametrize('payload,expect_rows', [
+    (_envelope([]), []),                                   # 实测：真·无数据长这样
+    ({'Data': None, 'ErrCode': 0, 'TotalCount': 0}, None),  # 第 11 轮 BLOCKER-1
+    ({'Data': {}, 'ErrCode': 0}, None),                    # 缺 LSJZList 键
+    ({'ErrCode': 1}, None),                                # 限流/报错信封
+])
+def test_envelope_shapes_separate_no_data_from_did_not_ask(payload, expect_rows):
+    """`[]` 只能是"问过且没有"，其它都要表达成"没问到"（None）。"""
+    from src.fund.fund_api import FundAPI
+
+    api = FundAPI.__new__(FundAPI)
+    api.session = _FakeSession([payload])
+    api.headers = {}
+    api.timeout = 5
+    api.history_url = 'http://example.invalid'
+    out = api.get_fund_history_range('510300', date(2026, 9, 1), date(2026, 9, 5))
+    assert out == expect_rows, (payload, out)
+
+
+def test_truncated_pagination_is_not_claimed_as_complete():
+    """翻页中途遇到坏信封 ⇒ 尾巴没问到，整段都算"没问到"，不许记凭据。"""
+    from src.fund.fund_api import FundAPI
+
+    full_page = [{'FSRQ': (date(2026, 9, 1) + timedelta(days=i)).isoformat(),
+                  'DWJZ': '1.0', 'JZZZL': '0'} for i in range(20)]
+    api = FundAPI.__new__(FundAPI)
+    api.session = _FakeSession([_envelope(full_page, total=40), {'Data': None}])
+    api.headers = {}
+    api.timeout = 5
+    api.history_url = 'http://example.invalid'
+    assert api.get_fund_history_range('510300', date(2026, 9, 1),
+                                      date(2026, 10, 20)) is None
+
+
+def test_non_empty_probes_never_merge(manager):
+    """第 11 轮 M-B：只有两边都是空答复才允许并段。
+
+    `[07-01,08-31] 21 条` + `[08-31,09-30] 21 条` 并成一条 21 条的宽凭据，
+    等于把 BLOCKER-2 的洞留一半，而且条数是编出来的。
+    """
+    db = _session()
+    backfill_proofs.record_probe(db, '515000', date(2026, 7, 1), date(2026, 8, 31), 21)
+    backfill_proofs.record_probe(db, '515000', date(2026, 8, 31), date(2026, 9, 30), 21)
+    db.commit()
+    probes = backfill_proofs.read_probes(db, '515000')
+    assert len(probes) == 2, '非空答复被并成了一段'
+    assert backfill_proofs.covering_probe(
+        probes, date(2026, 7, 1), date(2026, 9, 30)) is None, '更宽的窗口被拼出来的包络盖住了'
+
+
+def test_probe_cap_keeps_the_most_recent_probes(manager):
+    """第 11 轮 M-C：超上限要丢**最久没问**的那些，不是"起点最老"的那些。
+
+    按 start 排序截尾会把老窗口的探测丢掉，而那些窗口正是每天要重问的
+    （实测单只 515000 有 77 个互不相交的窗口），永远不收敛。
+    """
+    db = _session()
+    old_start = date(2025, 5, 5)
+    backfill_proofs.record_probe(db, '512480', old_start, old_start + timedelta(days=2), 0)
+    db.commit()
+    # 互不相交、也不首尾相接（隔 90 天），否则会被 M-B 的合并规则并成一段，测不到上限
+    for i in range(backfill_proofs.MAX_PROBES + 5):
+        day = date(2026, 1, 5) + timedelta(days=i * 90)
+        backfill_proofs.record_probe(db, '512480', day, day + timedelta(days=2), 0)
+    db.commit()
+    probes = backfill_proofs.read_probes(db, '512480')
+    assert len(probes) <= backfill_proofs.MAX_PROBES
+    newest = date(2026, 1, 5) + timedelta(days=(backfill_proofs.MAX_PROBES + 4) * 90)
+    assert any(p['start'] == newest for p in probes), '刚花请求换来的新探测被丢了'
+    assert not any(p['start'] == old_start for p in probes), '最久没问的老探测该被挤掉'
+
+
+def test_record_probe_reports_its_own_write_to_the_caller():
+    """第 11 轮 M-A：flush 之后 `Session.new/dirty` 都空，调用方得有别的方式知道写了。"""
+    db = _session()
+    assert not db.new and not db.dirty
+    backfill_proofs.record_probe(db, '159915', date(2026, 9, 1), date(2026, 9, 5), 0)
+    assert not db.new and not db.dirty, 'flush 后集合里已经没有它了（这正是 M-A 的坑）'
+    assert db.info.get('proof_writes') == 1
+
+
+def test_inverted_window_can_never_be_covered():
+    """第 11 轮 MINOR-4：`target < prediction_date` 的脏数据不许被任何凭据判成不可验。"""
+    db = _session()
+    backfill_proofs.record_probe(db, '588200', date(2026, 1, 1), date(2026, 12, 31), 0)
+    db.commit()
+    assert backfill_proofs.fresh(db, '588200', date(2026, 6, 10), date(2026, 6, 1)) is None
+
+
 def test_partial_answer_is_also_remembered(manager):
     """源端给了 1 条但窗口要 2 条：再问一次还是那 1 条，所以第二次不该再打接口。
 

@@ -219,15 +219,33 @@
             const type = maintenancePreview.value?.type;
             if (!['duplicates', 'mapping', 'rollback'].includes(type)) return;
             const label = type === 'duplicates' ? '重复预测去重' : type === 'mapping' ? '板块映射同步' : '无效验证回溯';
+            // 回溯只允许撤"刚刚预览给用户看过的那几条"：不限定 id 的全库回溯会抹掉
+            // 上千条历史结论（多数只是本地镜像缺那段历史），那个口径不给按钮用。
+            let ids = null;
+            if (type === 'rollback') {
+                const rows = (maintenancePreview.value.data || {}).rollback_details || [];
+                ids = rows.map(r => r.prediction_id).filter(Boolean).join(',');
+                if (!ids) {
+                    alert('这次预览没有可回溯的预测（或预览已过期），请重新点"预览"再来一次。');
+                    return;
+                }
+            }
             if (!confirm(`确认执行${label}？系统将按预览清单修改资料。`)) return;
             analyzing.value = true;
             try {
                 const endpoint = type === 'duplicates' ? 'dedupe-duplicates' : type === 'mapping' ? 'sync-sector-mapping' : 'rollback-invalid';
                 const confirmValue = type === 'duplicates' ? 'dedupe-predictions' : type === 'mapping' ? 'sync-prediction-mapping' : 'rollback-predictions';
+                const params = { dry_run: false };
+                if (ids) params.ids = ids;
                 const response = await axios.post(`/api/predictions/${endpoint}`, null, {
-                    params: { dry_run: false },
+                    params,
                     headers: { 'X-Danger-Confirm': confirmValue },
                 });
+                // 后端用 200 + success:false 表达"被护栏拦住"，不看这个字段就会把
+                // 没执行当成执行成功（第 11 轮 M-F）
+                if (response.data && response.data.success === false) {
+                    throw new Error(response.data.message || '后端拒绝执行');
+                }
                 alert(response.data.message);
                 maintenancePreview.value = null;
                 await refreshAfterChange();

@@ -133,6 +133,19 @@ def test_stale_nav_still_asks_for_an_update(test_db):
     assert r['days_behind'] > 0 and '请更新基金数据' in r['message'], r
 
 
+def test_dead_fund_stops_retrying_after_the_staleness_limit(test_db):
+    """第 11 轮 M-H：净值停在目标日之前的老基金，不能天天判"请更新基金数据"。
+
+    它没有"目标日之后已有净值"这条证据（之后本来就没有），但到期已超过
+    `VERIFY_MAX_END_NAV_AGE_DAYS` ⇒ 再等也不会有，归成退化终点才是诚实的结论。
+    """
+    _rows(test_db, '003033', [date(2020, 12, 4), START])
+    r = _check(test_db, '003033', START, TARGET_SAT, today=date(2026, 9, 21))
+    assert r['available'] is False, r
+    assert r['reason'] == 'same_nav_endpoint', r
+    assert '到期已超过' in r['message'], r
+
+
 def test_normal_weekday_case_is_untouched(test_db):
     """已能验证的常规预测结论不变（这道修改只收紧退化情形，不动正常窗口）。"""
     t = date(2026, 7, 15)        # 周三，有净值

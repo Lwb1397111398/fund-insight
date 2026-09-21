@@ -15,13 +15,18 @@ early-return，压根没发请求；反过来若不设缓存，Cron 又会每天
 
 实现约束：
 - 存进已有的 `system_config`（键 `nav_backfill_proof:<基金代码>`），**不加新表新列** ⇒ 不牵扯生产迁移；
-- 写入用**调用方的会话且只 flush**：缓存不该把调用方事务里没写完的东西一起提交，
-  提交时机由调用方决定（验证侧补拉那一步会立刻提交，否则本次验证一失败回滚，凭据就跟着丢）；
+- 写入用**调用方的会话 + savepoint，只 flush 不 commit**：库代码不该替调用方提交事务，
+  而 flush 后对象就不在 `Session.new/dirty` 里了，所以额外在 `db.info['proof_writes']`
+  记一笔，让调用方知道"这次真的写了东西"（第 11 轮 M-A）；
+- 合并只发生在**相交/首尾相接且两边都是空答复**的区间之间；非空答复永不合并（M-B）；
 - 空答复（0 条）用更短的 TTL：现在 `None` 已经把"没问到"分出去了，但"合法信封 + 空列表"
   仍可能是限流页，2 天后允许再问一次。
 """
 import json
+import logging
 from datetime import date, datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 KEY_PREFIX = 'nav_backfill_proof:'
 TTL_DAYS = 7                  # 源端给过数据 ⇒ 区间内那些行是事实，一周内不必再问
@@ -51,6 +56,8 @@ def _parse(text):
     items = data.get('probes') if isinstance(data, dict) else None
     if items is None:
         return []          # v1 的并集格式：它可能盖住从没问过的窗口，不认
+    if not isinstance(items, list):
+        return []          # `{"probes": 5}` 这种脏值不能让整批验证崩掉（第 11 轮 MINOR-3）
     probes = []
     for raw in items:
         try:
@@ -95,6 +102,8 @@ def _ttl_for(probe) -> int:
 
 def covering_probe(probes, start_date: date, end_date: date, today: date = None):
     """存在**单次**探测完整包含 [start,end] 且未过期 ⇒ 返回它，否则 None。"""
+    if start_date is None or end_date is None or start_date > end_date:
+        return None        # 倒挂窗口（脏数据）不许被任何凭据"盖住"（第 11 轮 MINOR-4）
     today = _as_date(today) or date.today()
     hits = [p for p in probes or []
             if p['start'] <= start_date and p['end'] >= end_date and _fresh(p, today, _ttl_for(p))]
@@ -102,22 +111,28 @@ def covering_probe(probes, start_date: date, end_date: date, today: date = None)
 
 
 def fresh(db, fund_code: str, start_date: date, end_date: date, today: date = None):
-    if db is None or not fund_code or start_date is None or end_date is None:
+    if db is None or not fund_code:
         return None
     return covering_probe(read_probes(db, fund_code), _as_date(start_date),
                           _as_date(end_date), today)
 
 
 def _merge_adjacent(probes):
-    """只合并**相交或首尾相接**的区间 —— 相隔两周的两段绝不并成一段。"""
+    """合并**首尾相接或相交**的区间，但只合并"两边都是空答复"的。
+
+    非空答复绝不并：`[07-01,08-31] 21 条` + `[08-31,09-30] 21 条` 并成
+    `[07-01,09-30] 21 条` 会直接破掉"单次探测完整包含"这条不变量
+    （第 11 轮 M-B：等于把 BLOCKER-2 的口子留了一半，条数还变成编的）。
+    合并后的 `checked_at` 取**较旧**的那个，让老的那半段不能借新探测的 TTL 续命。
+    """
     out = []
     for p in sorted(probes, key=lambda x: (x['start'], x['end'])):
         last = out[-1] if out else None
         touching = last and p['start'] <= last['end'] + timedelta(days=1)
-        both_same_day_count = last and (last.get('source_rows') or 0) == (p.get('source_rows') or 0)
-        if touching and both_same_day_count:
+        both_empty = last and not (last.get('source_rows') or 0) and not (p.get('source_rows') or 0)
+        if touching and both_empty:
             last['end'] = max(last['end'], p['end'])
-            if p['checked_at'] > last['checked_at']:
+            if p['checked_at'] < last['checked_at']:
                 last['checked_at'] = p['checked_at']
         else:
             out.append(dict(p))
@@ -139,8 +154,20 @@ def record_probe(db, fund_code: str, start_date: date, end_date: date, source_ro
               if _fresh(p, now.date(), KEEP_DAYS)]        # 太旧的丢掉
     probes.append({'start': start_date, 'end': end_date,
                    'source_rows': int(source_rows or 0),
-                   'checked_at': now.isoformat(timespec='seconds')})
-    probes = _merge_adjacent(probes)[-MAX_PROBES:]
+                   # 微秒精度：同一秒内连写多条探测时，"最近问过"的排序不能有并列
+                   # （跑批/单测里一次就写几十条，秒级时间戳会让上限裁错人）
+                   'checked_at': now.isoformat()})
+    probes = _merge_adjacent(probes)
+    # 超上限时保留**最近问过**的那些：按 start 排序再截尾会把老窗口的探测丢掉，
+    # 而那些窗口正是每天要重问的（单只 515000 就有 77 个互不相交的窗口）
+    # —— 第 11 轮 M-C。落盘前再按 start 排序，读侧遍历与展示更直观。
+    if len(probes) > MAX_PROBES:
+        dropped = len(probes) - MAX_PROBES
+        probes = sorted(probes, key=lambda p: (p['checked_at'], p['start']),
+                        reverse=True)[:MAX_PROBES]
+        logger.warning('基金 %s 凭据超出 %d 条上限，丢掉最久的 %d 条（这些窗口会再问一次）'
+                       % (fund_code, MAX_PROBES, dropped))
+    probes = sorted(probes, key=lambda p: (p['start'], p['end']))
     payload = json.dumps({'version': 2,
                           'probes': [{k: (v.isoformat() if isinstance(v, date) else v)
                                       for k, v in p.items()} for p in probes]},
@@ -148,17 +175,22 @@ def record_probe(db, fund_code: str, start_date: date, end_date: date, source_ro
     try:
         row = db.query(SystemConfig).filter(
             SystemConfig.config_key == proof_key(fund_code)).first()
-        if row is None:
-            row = SystemConfig(config_key=proof_key(fund_code), config_value=payload,
-                               description='数据源历史净值探测凭据（S7-2 结构性不可验归因）')
-            db.add(row)
-        else:
-            row.config_value = payload
-        db.flush()
+        # 并发首次写会撞 config_key 唯一约束。PG 下事务会直接进入 aborted，
+        # 后面任何查询都抛 PendingRollbackError 把整批验证打断（第 11 轮 M-G），
+        # 所以这条写放在**嵌套事务（savepoint）**里：失败只回滚它自己。
+        with db.begin_nested():
+            if row is None:
+                row = SystemConfig(config_key=proof_key(fund_code), config_value=payload,
+                                   description='数据源历史净值探测凭据（S7-2 结构性不可验归因）')
+                db.add(row)
+            else:
+                row.config_value = payload
+            db.flush()
+        # 让调用方知道"这次真的写了东西"：flush 会把对象从 Session.new/dirty 里清掉，
+        # 只看那两个集合会漏提交（第 11 轮 M-A）
+        db.info['proof_writes'] = int(db.info.get('proof_writes') or 0) + 1
         return probes
     except Exception:
-        # 并发首次写会撞 config_key 唯一约束：这一条凭据丢了无所谓（明天会再问一次），
-        # 但**不能**把会话留在 aborted 状态 —— 交回调用方决定回滚，这里只标记失败。
         return None
 
 

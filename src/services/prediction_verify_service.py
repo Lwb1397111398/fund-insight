@@ -355,27 +355,16 @@ class PredictionVerifyService:
         today = self._as_date(today) or date.today()
         target_date = self._as_date(target_date) or window_end
 
-        records = None
-        history_cache = self._nav_cache.get('_history', {})
-        if fund_code in history_cache:
-            cached_records = history_cache[fund_code]
-            records = [
-                r for r in cached_records
-                if nav_start_date <= self._as_date(r.nav_date) <= window_end
-            ]
-            records.sort(key=lambda r: self._as_date(r.nav_date))
-            # `_warm_cache` 只装 [今天-120d, 今天+14d]，而 `filter_due_for_verify` 没有时限
-            # ⇒ 一条 120 天以外的到期预测在**批量**路径上会被缓存算成 0 点、
-            # 单条路径却有数据（第 10 轮评审列为既有隐患）。空结果一律回落 DB 再问一次。
-            if not records:
-                records = None
-
-        if records is None:
-            records = self.db.query(FundHistory).filter(
-                FundHistory.fund_code == fund_code,
-                FundHistory.nav_date >= nav_start_date,
-                FundHistory.nav_date <= window_end
-            ).order_by(FundHistory.nav_date.asc()).all()
+        # 窗口内的净值点数**一律走 DB**，不吃 `_history` 缓存：缓存只装
+        # [今天-120d, 今天+14d]，命中但**只盖住窗口一半**时会算出偏小的点数
+        # —— 同一条预测"手动验得过、Cron 里永远数据不足"（第 11 轮 M-D）。
+        # 第 10 轮我只补了"过滤后为空才回落"，那只堵了一半；这里干脆全走 DB：
+        # `data_points` 只是一个比较用的标量，走缓存省不下多少，却把偏差留在判据里。
+        records = self.db.query(FundHistory).filter(
+            FundHistory.fund_code == fund_code,
+            FundHistory.nav_date >= nav_start_date,
+            FundHistory.nav_date <= window_end
+        ).order_by(FundHistory.nav_date.asc()).all()
 
         data_points = len(records)
         latest_date = self._as_date(records[-1].nav_date) if records else None
@@ -404,14 +393,23 @@ class PredictionVerifyService:
             nav_after_target = self.db.query(FundHistory.nav_date).filter(
                 FundHistory.fund_code == fund_code,
                 FundHistory.nav_date > window_end).first()
-            if (data_points >= 1 and nav_after_target is not None
+            days_since_target = (today - window_end).days if window_end else None
+            # "目标日之后已有净值" ＝ 目标日确是休市日；"过了陈旧上限还没有" ＝ 再等也不会有
+            # （第 11 轮 M-H：只有前一种证据的话，1 天期 + 净值停在目标日之前的老基金会被
+            # 判成"数据不足、请更新数据"无限重试，而这类窗口补拉豁免根本不会发请求）。
+            permanently_degenerate = nav_after_target is not None or (
+                days_since_target is not None and days_since_target > max_end_nav_age_days)
+            if (data_points >= 1 and permanently_degenerate
                     and start_real is not None and end_real is not None
                     and end_real <= start_real):
                 return _fail(
-                    f"目标日 {window_end} 不是交易日（该基金在 {window_end} 之后已有净值，"
-                    f"而窗口内只有 {start_real} 这一条），起点与终点是同一条净值 ⇒ 涨跌幅必然为 0，"
-                    f"无法判定方向。本系统按防未来函数策略不取目标日之后的行情，"
-                    f"这条预测要判就得在录入时把目标日落到交易日（历史目标日不自动改）",
+                    f"目标日 {window_end} 及之前只有 {start_real} 这一条净值，起点与终点是同一条 ⇒ "
+                    f"涨跌幅必然为 0，无法判定方向"
+                    + (f"（该基金在 {window_end} 之后已有净值 ⇒ 目标日是休市日）"
+                       if nav_after_target is not None else
+                       f"（到期已超过 {max_end_nav_age_days} 天仍没有目标日净值 ⇒ 等待不会变可验）")
+                    + f"。本系统按防未来函数策略不取目标日之后的行情；"
+                      f"要判这条只能在录入时把目标日落到交易日，历史目标日不自动改",
                     reason='same_nav_endpoint',
                     start_nav_date=start_real,
                     end_nav_date=end_real,
@@ -420,25 +418,27 @@ class PredictionVerifyService:
             # (2) 问过数据源且它给不出这段 ⇒ 结构性不可验，提示语里带凭据原文。
             proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date, window_end)
             if proven_empty:
+                proof_text = backfill_proofs.describe(proven_empty)
+                if (proven_empty.get('source_rows') or 0) > 0:
+                    # 源端给过几条、但本地窗口仍凑不够：措辞不能写成"拿不到"（第 11 轮 MINOR-5）
+                    tail = ('已按区间向数据源要过（%s），仍凑不够 ⇒ 需按区间重放补拉本地历史'
+                            % proof_text)
+                else:
+                    tail = ('%s ⇒ 属**结构性不可验**，补拉最新数据不会改变结论。'
+                            '出口只有两个：人工处置这条预测，或等这段历史被补录后自动重验'
+                            % proof_text)
                 return _fail(
-                    f"目标日附近这段历史净值拿不到（窗口 [{nav_start_date} ~ {window_end}] 内 "
-                    f"{data_points} 条，需 {min_data_points} 条）：{backfill_proofs.describe(proven_empty)}"
-                    f" ⇒ 属**结构性不可验**，补拉最新数据不会改变结论。"
-                    f"出口只有两个：人工处置这条预测，或等这段历史被补录后自动重验",
+                    f"目标日附近这段历史净值不足（窗口 [{nav_start_date} ~ {window_end}] 内 "
+                    f"{data_points} 条，需 {min_data_points} 条）：" + tail,
                     reason='no_source_history',
                     source_proof=proven_empty,
                 )
 
             # (3) 条数不够：分清"数据太旧该更新"与"缺目标日附近那段历史"。
-            latest_record = None
-            if fund_code in history_cache:
-                cached = history_cache[fund_code]
-                if cached:
-                    latest_record = max(cached, key=lambda r: self._as_date(r.nav_date))
-            else:
-                latest_record = self.db.query(FundHistory).filter(
-                    FundHistory.fund_code == fund_code
-                ).order_by(FundHistory.nav_date.desc()).first()
+            # 全局最新那条也走 DB（同上，缓存切片不能代表"这只基金最新到哪一天"）。
+            latest_record = self.db.query(FundHistory).filter(
+                FundHistory.fund_code == fund_code
+            ).order_by(FundHistory.nav_date.desc()).first()
 
             if latest_record:
                 latest_date = self._as_date(latest_record.nav_date)
@@ -864,11 +864,11 @@ class PredictionVerifyService:
             if backfilled:
                 self._invalidate_fund_cache(fund_code)
             # 补拉到的净值与"源端这段给到几条"的凭据都是数据源事实，落定要提交；
-            # 但**只在真有 pending 写操作时提交** —— 无条件的 commit() 会把 identity map
-            # 里所有对象过期（`SessionLocal` 没设 expire_on_commit=False），
-            # 于是 `_warm_cache` 预热的 FundHistory 实例在第 1 条预测上就全部作废，
-            # 之后每行属性访问各发一条 SELECT，批量验证退化成 N+1（第 10 轮 M-3）。
-            if backfilled or self.db.new or self.db.dirty:
+            # 条件不能只看 `Session.new/dirty` —— 凭据写入内部 flush 过，对象已经不在
+            # 那两个集合里（第 11 轮 M-A），所以它自己在 `db.info` 上计数。
+            # 反过来无条件 commit 又会让 identity map 全过期、把 `_warm_cache` 预热好的
+            # 实例作废成 N+1（第 10 轮 M-3），所以只在真写了东西时提交。
+            if backfilled or self.db.info.pop('proof_writes', 0) or self.db.new or self.db.dirty:
                 try:
                     self.db.commit()
                 except Exception as commit_error:
