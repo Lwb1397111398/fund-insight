@@ -295,6 +295,50 @@ def test_batch_review_refuses_rows_without_evidence(monkeypatch, tmp_path):
         check.close()
 
 
+def test_single_row_review_route_needs_explicit_owner_confirm(monkeypatch, tmp_path):
+    """逐行"审查"给的免疫必须在 API 边界上也要求显式确认（第 16 轮 m-2）。
+
+    上一版路由从不转发 `owner_confirm` ⇒ "明确确认"只存在于浏览器弹窗里，
+    任何人直接 POST 一次就能拿到 owner 署名 + 体检锁定。
+    失败原因也要分开说：一律回"映射不存在"会让老板对着一条真实存在的行反复点。
+    """
+    from src.models.database import FundInfo, SectorFundMapping
+
+    session_factory = _database(tmp_path)
+    db = session_factory()
+    db.add(FundInfo(fund_code='512481', fund_name='半导体设备ETF'))
+    db.add(SectorFundMapping(sector_name='逐行确认板块', fund_code='512481',
+                             fund_name='半导体设备ETF', reviewed=False, is_active=True))
+    db.commit()
+    mapping_id = db.query(SectorFundMapping).first().id
+    db.close()
+
+    app, client = _client(monkeypatch, session_factory)
+
+    refused = client.post(f"/api/config/sector-mappings/{mapping_id}/review",
+                          headers=AUTH_HEADERS)
+    assert refused.status_code == 200
+    body = refused.json()
+    assert body['success'] is False, '没有证据的行不该被一次裸 POST 买到免疫'
+    assert '映射不存在' not in body['message'], body['message']
+    assert 'owner_confirm' in body['message'], body['message']
+
+    granted = client.post(f"/api/config/sector-mappings/{mapping_id}/review",
+                          params={'owner_confirm': True}, headers=AUTH_HEADERS)
+    assert granted.json()['success'] is True
+    check = session_factory()
+    try:
+        row = check.query(SectorFundMapping).get(mapping_id)
+        assert row.reviewed is True and row.owner_locked is True
+        assert row.reviewed_by == 'owner'
+    finally:
+        check.close()
+
+    missing = client.post("/api/config/sector-mappings/999999/review",
+                          params={'owner_confirm': True}, headers=AUTH_HEADERS)
+    assert '映射不存在' in missing.json()['message']
+
+
 def test_fund_search_endpoint(monkeypatch, tmp_path):
     from src.fund.fund_api import fund_api as api_instance
 

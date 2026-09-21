@@ -87,6 +87,27 @@ def _isolate_sector_service_caches():
     _reset()
 
 
+@pytest.fixture(autouse=True)
+def _block_real_http(monkeypatch):
+    """零网络**由夹具强制**，不再靠每个文件自觉写桩（第 16 轮实测：单测里有 2 条真打了东财）。
+
+    为什么必须换做法：`from src.fund import fund_api` 拿到的是 **`FundAPI` 实例**
+    （`src/fund/__init__.py` 把包属性 `fund_api` 重绑成了实例），所以在它身上
+    `setattr(..., 'fund_data_manager', 桩)` 是空操作，而验证侧走
+    `from src.fund.fund_api import fund_data_manager`（模块属性）拿到的还是真管理器 ——
+    用例照样绿，结论却取决于第三方实时数据。与其一处一处修，不如把 HTTP 层本身掐掉：
+    漏网的取数会变成**看得见的失败**，而不是悄悄改变的判定。
+    """
+    import requests
+
+    def _refuse(self, request, *args, **kwargs):
+        raise AssertionError(
+            '测试禁止真实外呼（请把这条取数路径注入桩）：%s'
+            % getattr(request, 'url', request))
+
+    monkeypatch.setattr(requests.Session, 'send', _refuse)
+
+
 @pytest.fixture
 def sample_blogger_data():
     """示例博主数据（使用 UUID 避免名称冲突）"""

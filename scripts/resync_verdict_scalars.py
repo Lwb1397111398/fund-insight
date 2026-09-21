@@ -42,8 +42,14 @@ def find_desynced(rows):
     """按行内证据找出可自动同步的行与必须人工判断的行。
 
     返回 (fixable, manual)：
-      fixable: [(prediction, 现值, 应为)]
+      fixable: [(prediction, 字段名, 现值, 应为)]
       manual:  [(prediction, 原因)]
+
+    同步方向只有一个：**台账（`verify_history` 末条）是当次验证的原场记录**。
+    但"末条"必须先被证明**就是产生这些标量的那一次观察** ——
+    `PredictionService.verify()`（人工确认）只改 `is_correct/actual_change/ai_judgment`、
+    既不追加台账也不动 `verify_score`（`prediction_service.py:151-157`），
+    那种行的末条属于另一个观察窗口，照它覆盖等于把无关窗口的分数写进来（第 16 轮 m-3）。
     """
     fixable, manual = [], []
     for p in rows:
@@ -61,12 +67,16 @@ def find_desynced(rows):
                               '哪个是当次真实结论无法从行内判断'
                            % (ledger['is_correct'], p.is_correct)))
             continue
-        if p.verify_score is None:
-            manual.append((p, 'verify_score 为空却仍有结论'))
+        if not _same_observation(ledger, p):
+            manual.append((p, '台账末条与标量不是同一次观察（涨跌幅 %s vs %s）'
+                              % (ledger.get('change'), p.actual_change)))
             continue
         raw = ledger.get('score')
         if raw is None:
             manual.append((p, '台账末条没有 score'))
+            continue
+        if p.verify_score is None:
+            manual.append((p, 'verify_score 为空却仍有结论'))
             continue
         try:
             want = int(raw)
@@ -75,8 +85,36 @@ def find_desynced(rows):
             continue
         have = int(p.verify_score)
         if want != have:
-            fixable.append((p, have, want))
+            fixable.append((p, 'verify_score', have, want))
+        # m-1 的遗留行：同一端点在 `current_nav_date` 与 `end_nav_date` 里是两个日期
+        # （新代码已经同口径，2026-09-22 之前落库的 21 行不是）。只有两处净值确实同一个
+        # 数时才敢按 `end_nav_date` 改日期，否则说明它们描述的是两回事，交给人看。
+        if (p.end_nav_date and p.current_nav_date
+                and p.current_nav_date != p.end_nav_date):
+            if _same_number(p.current_nav, p.end_nav):
+                fixable.append((p, 'current_nav_date', p.current_nav_date, p.end_nav_date))
+            else:
+                manual.append((p, 'current_nav %s 与 end_nav %s 不是同一个数，'
+                                  '两个日期字段谁对无法判断'
+                               % (p.current_nav, p.end_nav)))
     return fixable, manual
+
+
+def _same_number(a, b, tol=1e-6):
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        return abs(float(a) - float(b)) <= tol * max(1.0, abs(float(a)), abs(float(b)))
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _same_observation(ledger, prediction):
+    """台账末条的涨跌幅必须与标量 `actual_change` 是同一次算出来的，才算"当次原场"。"""
+    tail = ledger.get('change')
+    if tail is None or prediction.actual_change is None:
+        return True          # 缺一侧就退回"方向一致"这个弱锚，别把正常行挡在门外
+    return _same_number(tail, prediction.actual_change)
 
 
 def main():
@@ -104,11 +142,11 @@ def main():
         rows = [p for p in q.all() if wanted is None or p.id in wanted]
         fixable, manual = find_desynced(rows)
 
-        print('[扫描] %d 行；可按台账同步 %d 行；需要人工判断 %d 行'
+        print('[扫描] %d 行；可按台账同步 %d 处；需要人工判断 %d 行'
               % (len(rows), len(fixable), len(manual)))
-        for p, have, want in fixable:
-            print('   [不同步] id=%-5s %s 目标%s 结论=%s verify_score %s → %s（台账末条）'
-                  % (p.id, p.fund_code, p.target_date, p.is_correct, have, want))
+        for p, field, have, want in fixable:
+            print('   [不同步] id=%-5s %s 目标%s 结论=%s %s：%s → %s'
+                  % (p.id, p.fund_code, p.target_date, p.is_correct, field, have, want))
         for p, why in manual:
             print('   [人工] id=%-5s %s：%s' % (p.id, p.fund_code, why))
 
@@ -123,9 +161,9 @@ def main():
             add_prediction_change_log, snapshot_prediction)
         run_id = args.run_id or 'verify-score-resync-%s' % date.today().strftime('%Y%m%d')
         touched_bloggers = set()
-        for p, _have, want in fixable:
+        for p, field, _have, want in fixable:
             before = snapshot_prediction(p)
-            p.verify_score = want
+            setattr(p, field, want)
             add_prediction_change_log(db, p, action='scalar_resync', source='maintenance',
                                       before_state=before, run_id=run_id)
             touched_bloggers.add(p.blogger_id)
@@ -135,7 +173,7 @@ def main():
             if blogger_id:
                 recalculate_blogger_stats(db, blogger_id, commit=False)
         db.commit()
-        print('[applied] 已按台账同步 %d 行（run_id=%s；整批撤销用 '
+        print('[applied] 已按台账同步 %d 处（run_id=%s；整批撤销用 '
               'python scripts/restore_prediction_batch.py --run-id %s）'
               % (len(fixable), run_id, run_id))
 
@@ -146,7 +184,8 @@ def main():
             if wanted is None or p.id in wanted]
         still, manual_now = find_desynced(rows)
         if still:
-            print('[warn] 同步后仍有 %d 行不一致：%s' % (len(still), [p.id for p, _a, _b in still][:10]))
+            print('[warn] 同步后仍有 %d 处不一致：%s'
+                  % (len(still), [(p.id, f) for p, f, _a, _b in still][:10]))
             return 3
         if manual_now:
             print('[need-human] %d 行证据矛盾，本脚本不动：%s'

@@ -146,6 +146,10 @@ class SectorFundService:
         from src.services.sector_identity_audit import row_unservable
         return row_unservable(row)
 
+    # 路由要区分"这行不存在"与"这行被体检拒绝"，所以这个判断得是公开 API
+    # （让调用方去碰 `_unservable` 私有名，等于鼓励它在外面自己抄一遍判据）。
+    is_unservable = _unservable
+
     def get_all_mappings(self) -> Dict[str, Dict]:
         self._load_cache()
         return self._cache.copy()

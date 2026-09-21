@@ -155,6 +155,31 @@ def test_one_row_window_with_empty_source_leaves_a_proof(manager):
     assert len(calls) == 1, '已有凭据还重复打接口 = Cron 空转'
 
 
+def test_backfill_passes_injected_today_to_the_proof_check(manager, monkeypatch):
+    """第 16 轮 m-3 的另一半：补拉这道门也要吃注入的 `today`，不许自己看墙上时钟。
+
+    上一轮只把 `today` 传到验证服务那一侧的凭据判定，`backfill_history_range` 里
+    那次 `fresh()` 仍是默认参数 ⇒ 固定日期的回放会凭一条"当时还不存在"的凭据跳过请求。
+    """
+    from src.fund import backfill_proofs
+
+    seen = {}
+
+    def _spy(db, code, start, end, today=None):
+        seen['today'] = today
+        return None
+
+    monkeypatch.setattr(backfill_proofs, 'fresh', _spy)
+    m, calls = manager
+    db = _session()
+    code, start, end = '159998', date(2026, 5, 16), date(2026, 5, 20)
+    _seed(db, code, [date(2026, 5, 20)])          # 起点没被覆盖 ⇒ 一定会走到凭据那一问
+    injected = date(2026, 5, 21)
+    m.backfill_history_range(code, start, end, db=db, today=injected)
+    assert seen.get('today') == injected, (
+        '补拉路径把 today 丢了（拿到 %r）⇒ 凭据 TTL 按墙上时钟算' % (seen.get('today'),))
+
+
 def test_out_of_window_rows_do_not_inflate_the_proof(manager):
     """第 15 轮 m-4：凭据正文"数据源在区间内给到 N 条"只能数区间**内**的行。
 

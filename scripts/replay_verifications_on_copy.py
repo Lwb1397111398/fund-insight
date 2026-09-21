@@ -66,7 +66,7 @@ def _same(a, b):
     return a == b
 
 
-def _explain(diffs, before, after, target, refused, last_ledger=None):
+def _explain(diffs, before, after, target, refused):
     """差异能不能解释。解释不了就必须留在报告里，别让"看起来合理"糊过去。"""
     if refused:
         return '新判据拒判（拿不到数据就不下结论）'
@@ -82,34 +82,23 @@ def _explain(diffs, before, after, target, refused, last_ledger=None):
             and 'end_nav' in diffs):
         return ('同一天标签下数值不同：旧结论写的是"当时能取到的更早净值"，而 `end_nav_date` '
                 '存的是请求日（S7-2 之前的老口径），所以看不出来；与本轮判据无关')
-    return _llm_leg_explanation(diffs, before, last_ledger)
+    return None
 
 
-# 旧结论里 LLM 复核那一腿改过的字段：端点/净值不在这里，只有判定输出。
-_LLM_LEG_FIELDS = {'is_correct', 'status', 'verify_score'}
+def last_entry_is_llm_verify(row) -> bool:
+    """这条预测**最后一次**验证走过 LLM 复核那一腿吗（台账末条 `verify_type=llm_verify`）。
 
-
-def _llm_leg_explanation(diffs, before, last_ledger):
-    """判据没动结论、只有"LLM 复核那一腿"消失 —— 这不是漂移，是离线重放少了一条腿。
-
-    触发条件全是行内证据，缺一条就不算解释：
-      1. 台账最后一条的 `verify_type` 就是 `llm_verify`（当次确实被 LLM 改判过）；
-      2. 它的 score / is_correct 与旧标量一致（说明旧结论来自那一腿，不是别处）；
-      3. 差异只落在判定输出上（端点一模一样 → 确定性判据的输入没变）。
-    `--offline` 断的是数据源，LLM 那一路本来也要密钥；重放只复现确定性判据，
-    所以这类行的 `is_correct` 必然与库里存的不同。首版没这条分类，
-    3180 就被报成"未解释漂移"（它同时也是那次漏还原 `verify_score` 的受害者）。
+    为什么单独判它：那一腿只在边界情形介入（分数 20~80、涨跌幅在震荡阈值附近、
+    或方向与实际相反，见 `prediction_verify_service.py:1009-1022`），且**只抬分不降分**
+    （`if llm_score > score` ⇒ `is_correct = llm_score >= 60`）。离线重放不含 LLM，
+    这类行的 `is_correct` 必然与库里存的不同 —— 那是"少一条腿"，不是判据回归。
+    第 16 轮 MAJOR-1 把我上一版的"可解释桶"证伪了：桶的条件全是旧值侧证据，
+    对重放出来的值毫无约束 ⇒ 确定性判据整体坏掉（把边界行算成 0 分）也会被它吞掉，
+    而盲区恰好覆盖闸门最该盯的那批边界行。所以这里**不做解释、只做排除**：
+    离线模式把这些行从抽样里拿掉并如实报数，闸门不许拿它们充当"0 未解释"的分母。
     """
-    if not last_ledger or set(diffs) - _LLM_LEG_FIELDS:
-        return None
-    if last_ledger.get('verify_type') != 'llm_verify':
-        return None
-    if last_ledger.get('score') != before.get('verify_score'):
-        return None
-    if bool(last_ledger.get('is_correct')) != bool(before.get('is_correct')):
-        return None
-    return ('旧结论由 LLM 复核那一腿改判（台账 verify_type=llm_verify），'
-            '离线重放只跑确定性判据，不含这一腿')
+    ledger = row.verify_history or []
+    return bool(ledger) and ledger[-1].get('verify_type') == 'llm_verify'
 
 
 def _sqlite_path(url):
@@ -117,19 +106,27 @@ def _sqlite_path(url):
     return body.replace('\\', '/')
 
 
-def _sample(db, model, limit, ids):
+def _sample(db, model, limit, ids, offline=False):
+    """挑一批**已验证**的预测来重放。offline 时先把"末轮走过 LLM 复核那一腿"的行整体让出去。
+
+    返回 (要重放的行, 被让出的行)。让出的那些不参与比对、也不算通过比对 ——
+    闸门不许拿它们当"未解释漂移=0"的分母（第 16 轮 MAJOR-1）。
+    """
     q = db.query(model).filter(model.is_deleted == False,
                                model.is_correct.isnot(None),
                                model.prediction_type != 'flat',
                                model.target_date.isnot(None))
-    if ids:
-        return q.filter(model.id.in_(ids)).all()
+    rows = q.filter(model.id.in_(ids)).all() if ids else q.order_by(model.target_date.asc()).all()
+    deferred = []
+    if offline:
+        keep = [p for p in rows if not last_entry_is_llm_verify(p)]
+        deferred = [p for p in rows if last_entry_is_llm_verify(p)]
+        rows = keep
     # 分层抽样：按目标日升序取，覆盖不同周期与不同博主，而不是随手取前 N 条
-    rows = q.order_by(model.target_date.asc()).all()
-    if limit and len(rows) > limit:
+    if not ids and limit and len(rows) > limit:
         step = len(rows) / float(limit)
         rows = [rows[int(i * step)] for i in range(limit)]
-    return rows
+    return rows, deferred
 
 
 def _bind_session_factory_to(copy_path):
@@ -144,18 +141,30 @@ def _bind_session_factory_to(copy_path):
     import src.models.database as models
 
     engine = create_engine('sqlite:///' + copy_path.replace('\\', '/'))
-    models.SessionLocal = sessionmaker(bind=engine)
+    # `class_` 要照抄生产那份工厂（`_RetrySession`，见 `src/models/database.py:120`）：
+    # 裸 sessionmaker 会让副本上的会话形态与生产不同，重放出的"一致"就不算数
+    # （第 16 轮 BLOCKER-1 的附带项）。
+    kwargs = {'bind': engine}
+    original_class = getattr(models.SessionLocal, 'class_', None)
+    if original_class is not None:
+        kwargs['class_'] = original_class
+    for key in ('expire_on_commit', 'autoflush'):
+        if key in getattr(models.SessionLocal, 'kw', {}):
+            kwargs[key] = models.SessionLocal.kw[key]
+    models.SessionLocal = sessionmaker(**kwargs)
     return models.SessionLocal
 
 
 def _assert_factories_bound_to(copy_path):
     """进程内**所有** `SessionLocal` 引用都必须绑在副本上，返回还指向别处的模块。
 
-    第 15 轮 m-5：原来那句自检是"造一个新工厂、再问它绑在哪"，永远为真，等于没检查。
+    第 16 轮 BLOCKER-1：上一版这里写的是 `hasattr(factory, 'bind')`，而 SQLAlchemy 2.0
+    的 `sessionmaker` **没有** `.bind`（`.bind` 在 Session 实例上），于是每个候选都被
+    skip、函数永远返回空列表 —— 我修一条同义反复自检，转头又写了一条更隐蔽的。
+    工厂上的绑定要从 `factory.kw['bind']` 拿。
     真正会重演事故的是：某个模块在换绑之前就把旧工厂抓进了自己的命名空间 ——
-    `src/fund/fund_api.py`、`src/fund/fund_sync_manager.py` 这些都是模块级
-    `from src.models.database import SessionLocal`，它们写起来照样落在源库上。
-    那种"抓住旧引用"的模块在这里会被点名。
+    `src/fund/fund_api.py`、`src/fund/fund_sync_manager.py`、`src/models/__init__.py`
+    都是模块级 `from src.models.database import SessionLocal`，它们写起来照样落在源库上。
     """
     import sys
 
@@ -163,12 +172,10 @@ def _assert_factories_bound_to(copy_path):
     stale = []
     for module in list(sys.modules.values()):
         factory = getattr(module, 'SessionLocal', None)
-        if factory is None or not hasattr(factory, 'bind'):
-            continue
-        try:
-            url = str(factory.bind.url)
-        except Exception:
-            continue
+        bind = getattr(factory, 'kw', {}).get('bind') if factory is not None else None
+        if bind is None:
+            continue                       # 不是 sessionmaker 工厂（或没绑东西）
+        url = str(getattr(bind, 'url', bind))
         if needle not in url.lower():
             stale.append('%s → %s' % (getattr(module, '__name__', '?'), url))
     return stale
@@ -221,7 +228,18 @@ def main():
     from src.services.prediction_verify_service import PredictionVerifyService
 
     if args.offline:
-        from src.fund import fund_api as fa
+        import importlib
+
+        import requests as _requests
+
+        # `from src.fund import fund_api as fa` 拿到的是 **`FundAPI` 实例** ——
+        # `src/fund/__init__.py` 把包属性 `fund_api` 重绑成了实例，在它身上赋值
+        # `fund_data_manager` 等于什么都没做，而验证侧走的是
+        # `from src.fund.fund_api import fund_data_manager`（函数级 import，取模块属性）。
+        # 第 16 轮 BLOCKER-1 实测：号称 `--offline` 的重放真的打了东财 `f10/lsjz`，
+        # 副本里凭空多出镜像没有的 4 行净值和一条凭据 ⇒ 之前那句"未解释漂移=0"
+        # 根本不是可复现判据。要改模块属性必须走 sys.modules。
+        fa = importlib.import_module('src.fund.fund_api')
 
         class _NoNet:
             @staticmethod
@@ -229,16 +247,22 @@ def main():
                 return 0
         fa.fund_data_manager = _NoNet()
 
+        # 只桩调用点不够（`get_nav_by_date` 还有接口兜底等多条取数路径）：
+        # 直接把 HTTP 层掐掉，任何漏网的取数都会变成**看得见的异常**，
+        # 而不是悄悄改掉结论。
+        def _refuse(self, request, *args, **kwargs):
+            raise RuntimeError('--offline 禁止真实外呼：%s' % getattr(request, 'url', request))
+        _requests.Session.send = _refuse
+
         # `--offline` 还必须关掉 LLM 那一腿，否则"未解释漂移=0"是环境依赖的：
         # 边界分（20~80）、涨跌幅在阈值附近、方向相反这几类都会去问 LLM 改判
-        # （`prediction_verify_service.py:996-1060`），有密钥时闸门带随机性并花配额，
-        # 没密钥时那 15 条 `verify_type=llm_verify` 的行必然被判成"未解释"。
+        # （`prediction_verify_service.py:1009-1072`），有密钥时闸门带随机性并花配额。
         # 关掉之后本闸门只复现**确定性判据**，差异归因才说得清（第 15 轮 MAJOR-3）。
         class _NoLLM:
             def verify_prediction(self, *a, **kw):
                 return None
         PredictionVerifyService.llm_analyzer = property(lambda self: _NoLLM())
-        print('[offline] 已断数据源补拉与 LLM 复核腿：只复现确定性判据')
+        print('[offline] 已掐 requests 外呼 + 断数据源补拉 + 断 LLM 复核腿：只复现确定性判据')
 
     # 进程内**所有** SessionLocal 引用都必须指向副本（见 `_assert_factories_bound_to`）：
     # 检查放在这里，是因为要被点名的模块（`src/fund/fund_api.py`、
@@ -252,18 +276,29 @@ def main():
 
     probe = SessionLocal()
     wanted = [int(x) for x in args.ids.split(',')] if args.ids else []
-    rows = _sample(probe, Prediction, args.limit, wanted)
+    rows, deferred = _sample(probe, Prediction, args.limit, wanted, offline=args.offline)
     ids = [p.id for p in rows]
     expected = {p.id: {f: getattr(p, f) for f in VERDICT_FIELDS} for p in rows}
-    # 台账末条要在这里（会话关闭前）抓下来：它记录"当次验证到底走了哪条腿"，
-    # 是判断某条差异能不能解释的证据（见 `_llm_leg_explanation`）。
-    ledger_tail = {p.id: ((p.verify_history or [None])[-1] if p.verify_history else None)
-                   for p in rows}
     print('[抽样] 已验证预测 %d 条重放' % len(ids))
+    if deferred:
+        print('[离线] 让出 %d 条末轮由 LLM 复核改判的预测：重放不含这一腿，比对无意义，'
+              '它们既不计入"可解释"也不计入"未解释"（要核这批就带密钥跑一次不加 --offline）：%s'
+              % (len(deferred), [p.id for p in deferred][:20]))
     probe.close()
 
     db = SessionLocal()
     service = PredictionVerifyService(db)
+    # 副本的"取证据"基线：离线模式下这次跑批不该新增任何净值或凭据。
+    # 这是 B-1 那类"桩其实是空操作"的**唯一硬证据**（打印出来的一切声明都替代不了它）。
+    from src.models.database import FundHistory, SystemConfig
+
+    def _copy_evidence_counts():
+        hist = db.query(FundHistory).count()
+        proofs = db.query(SystemConfig).filter(
+            SystemConfig.config_key.like('nav_backfill_proof:%')).count()
+        return hist, proofs
+
+    hist0, proofs0 = _copy_evidence_counts()
     drift, unexplained, errors = [], [], []
     try:
         for pid in ids:
@@ -289,8 +324,7 @@ def main():
             refused = (result.get('success') is False
                        and after.get('is_correct') is None
                        and before.get('is_correct') is not None)
-            why = _explain(diffs, before, after, p.target_date, refused,
-                           last_ledger=ledger_tail.get(pid))
+            why = _explain(diffs, before, after, p.target_date, refused)
             entry = {'id': pid, 'fund_code': p.fund_code, 'target_date': str(p.target_date),
                      'diffs': {k: [str(v[0]), str(v[1])] for k, v in diffs.items()},
                      'reason': ((result.get('data') or {}).get('data_status') or {}).get('reason'),
@@ -318,10 +352,22 @@ def main():
         if args.json:
             with io.open(args.json, 'w', encoding='utf-8') as f:
                 json.dump({'copy_db': tmp, 'sampled': len(ids), 'drift': drift,
-                           'unexplained': unexplained, 'errors': errors},
+                           'unexplained': unexplained, 'errors': errors,
+                           'deferred_llm_leg': [p.id for p in deferred]},
                           f, ensure_ascii=False, indent=1)
             print('[ok] 对照明细：%s' % args.json)
         rc = 3 if unexplained or errors else 0
+        if args.offline:
+            hist1, proofs1 = _copy_evidence_counts()
+            if hist1 != hist0 or proofs1 != proofs0:
+                print('[!!] 离线重放竟然改变了副本的取数证据：净值 %d→%d、凭据 %d→%d。'
+                      '\n     说明"断网"里有桩没盖住的路径（第 16 轮 BLOCKER-1 就是这个形状：'
+                      '包属性被重绑成实例，桩打在了实例上），这次的差异归因不可信。'
+                      % (hist0, hist1, proofs0, proofs1))
+                rc = 7
+            else:
+                print('[ok] 离线重放未新增任何净值/凭据（副本取数证据 %d/%d 未变）'
+                      % (hist1, proofs1))
         # 事后证据：源库文件一个字节都不该变。工厂扫描挡"指向错库"，这一道挡
         # "某个模块早就抓走了旧工厂"这类扫不到的写法 —— 首版事故就是它把 88 行
         # 写进了镜像库，当时两道检查都没有（第 15 轮 m-5）。

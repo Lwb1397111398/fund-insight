@@ -178,17 +178,24 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22，第 15 轮修复之后）：
+最近一次核对（2026-09-22，第 16 轮修复之后）：
 
-- `pytest tests/unit -q` → **700 passed / 16 skipped / 0 failed**（约 150 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **709 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **712 passed / 16 skipped / 0 failed**（约 125 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **721 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-- 准确率基线在 2026-09-22 被纠正过两次：① 撤掉并重判 94 条"用目标日之后的净值判出来"的
+- **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
+  `requests.Session.send` 换成抛异常。为什么必须这样：`from src.fund import fund_api`
+  拿到的是 **`FundAPI` 实例**（`src/fund/__init__.py` 把包属性重绑成了实例），在它身上
+  `setattr(..., 'fund_data_manager', 桩)` 是空操作 ⇒ 第 16 轮实测有 2 条用例每次跑批都
+  真打东财接口，用例照样全绿、结论却取决于第三方实时数据。新增会打站的代码时会直接看到
+  `测试禁止真实外呼：<url>`，请给那条取数路径注入桩（桩要打在**模块**上：
+  `importlib.import_module('src.fund.fund_api')`）。
+- 准确率基线在 2026-09-22 被纠正过三次：① 撤掉并重判 94 条"用目标日之后的净值判出来"的
   结论（S7-1 遗留，违反防未来函数策略），本地镜像判对 608→598、判错 560→569；
-  ② 第 15 轮按台账同步了 11 行的标量 `verify_score`（一次还原脚本漏字段造成"结论与分数
-  打脸"），**只动分数、不动判对/判错条数**，但博主平均分口径随之变化。
+  ② 第 15 轮按台账同步 11 行的标量 `verify_score`（还原脚本漏字段造成"结论与分数打脸"，
+  只动分数、不动判对/判错条数）；③ 第 16 轮撤掉 4 条"端点早于目标日、又证不了那几天休市"
+  的终局结论（`run_id=revert-lag-endpoint-20260922`），判对 598→597、判错 569→566。
   拿历史截图/旧导出的准确率数字做对比前先确认是不是这一批。
-- 单测必须零网络：`tests/unit/test_sector_identity_audit.py` 用 autouse fixture 挡掉基金域名册下载；新增会打站的代码要照样注入桩。验证侧的用例（`test_prediction_verify_weekend_deferral.py`）用 `fund_api.fund_data_manager` 桩挡住按需补拉。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

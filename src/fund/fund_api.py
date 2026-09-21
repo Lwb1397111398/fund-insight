@@ -648,6 +648,26 @@ class FundAPI:
         return {'status': 'error', 'name': None, 'fund_type': None, 'source': 'pingzhong'}
 
 
+def weekday_capacity(start_date, end_date) -> int:
+    """窗口内**最多可能**有多少条净值：只数周一~周五（法定节假日只会更少，不会更多）。
+
+    为什么需要它（第 16 轮 MAJOR-2）：密度门槛必须夹在"窗口物理容量"之内，
+    否则永不可达。上一版用**自然日**夹取（`max(1, span_days)`），于是"周六→周一"
+    这种容量只有 1 天的窗口仍要求 2 条 ⇒ 永远拉不满、天天真发一次请求
+    （终点在 30 天内时负凭据 TTL 只有 1 天，等于无限期日问）。
+    """
+    days = (end_date - start_date).days + 1
+    if days <= 0:
+        return 0
+    full_weeks, remainder = divmod(days, 7)
+    count = full_weeks * 5
+    start_weekday = start_date.weekday()
+    for offset in range(remainder):
+        if (start_weekday + offset) % 7 < 5:
+            count += 1
+    return count
+
+
 class FundDataManager:
     """基金数据管理器 - 处理数据库存储和查询"""
     
@@ -814,12 +834,17 @@ class FundDataManager:
         start_date: date,
         end_date: date,
         db: Session = None,
+        today: date = None,
     ) -> int:
         """按需补拉数据库缺失的历史净值。
 
         只有当**区间起点缺数据**、或**窗口内已有条数不够密**时才发起网络补拉，
         否则直接返回 0，避免对每笔验证都打数据源接口。
         （以前只看"最早一天"，中间断档永远补不上 —— 见下方注释。）
+
+        `today` 要一路传到凭据判定：TTL 分档与"未来时间戳"防线都按天算，
+        不传就让固定日期的回放拿到一个"当时还不存在"的宽限（第 16 轮 m-3 的另一半：
+        上一轮只把 today 传到了验证服务那一侧，补拉这道门仍吃墙上时钟）。
 
         Args:
             fund_code: 基金代码
@@ -854,26 +879,20 @@ class FundDataManager:
                     FundHistory.nav_date >= start_date,
                     FundHistory.nav_date <= end_date,
                 ).count()
-                span_days = max(0, (end_date - start_date).days)
-                # 门槛不能超过窗口**物理上可能有的净值天数**：短窗口（跨周末的
-                # start+4→end 只有 1 个交易日）会永远达不到 min_inside=2，
-                # 于是每次验证都发一轮拉取、永远拉不满（第 9 轮 MAJOR-2 实测
-                # 预测 1709：512680，2026-07-10→07-11 周六，inside=1、门槛=2）。
-                # 14 天以内的窗口干脆只看起点覆盖不看密度：密度样本太少，判它"缺"没意义。
-                min_inside = min(max(2, int(span_days * 5 / 7 * 0.6)), max(1, span_days))
-                # `inside > 0` 是 S7-2 补的：短窗口"只看起点覆盖"会让**整段窗口空着**的行
-                # （实测 003033：本地净值停在 2020-12-08，预测窗口在 2026 年 9 月）
-                # 永远走不进补拉分支 ⇒ "源端到底有没有"这件事永远无从证明，
-                # 结构性不可验的负凭据也就永远建不起来（Cron 只能天天报"数据不足"）。
-                # `end_covered` 也是 S7-2 补的：短窗口只看"起点被覆盖 + 窗内有 1 条"就免问，
+                # 门槛不能超过窗口**物理上可能有的净值天数**，否则永不可达（第 9 轮
+                # MAJOR-2 实测预测 1709：512680，2026-07-10→07-11 周六，inside=1、门槛=2）。
+                # 第 15 轮删掉了"14 天以内只看起点覆盖"这条短路（它让 inside=1 的行
+                # 既不补拉也永不归因），第 16 轮把夹取从自然日改成**工作日容量**：
+                # `max(1, span_days)` 挡不住"周六→周一"那种容量 1 天、门槛 2 条的窗口，
+                # 而终点在 30 天内时负凭据 TTL 只有 1 天 ⇒ 那种行会天天真发一次请求。
+                capacity = weekday_capacity(start_date, end_date)
+                min_inside = max(1, min(capacity, max(2, int(capacity * 0.6)))) if capacity else 1
+                # `end_covered` 是 S7-2 补的：短窗口只看"起点被覆盖 + 窗内有 1 条"就免问，
                 # 于是"目标日那天本地缺行"的行永远问不到凭据，验证侧只能在"猜"与"无限重试"
                 # 之间二选一（第 12 轮 MAJOR-3）。要求终点也被覆盖才允许免打接口。
-                # 第 15 轮 M-1：短窗口原来在 `span_days < 14` 时**整体跳过密度检查**，
-                # 于是"窗口里只有终点那一行"（inside=1）也直接免问 —— 而验证门要 ≥2 个点，
-                # 这种行既不补拉、又因起点在窗口之前而落不进退化终点判据、又拿不到凭据，
-                # 只能天天进到期队列天天拒判（第 9 轮 MAJOR-2 的修法过头留下的另一半）。
-                # 密度门槛对**所有**窗口都生效；`min_inside` 自己已经被
-                # `max(1, span_days)` 夹到窗口物理上可能有的天数，不会再出现"永远拉不满"。
+                # 整段窗口空着的行（实测 003033：本地净值停在 2020-12-08，预测窗口在
+                # 2026 年 9 月）也一律要问：不问就永远拿不到"源端到底有没有"的证据，
+                # 结构性不可验的归因也就建不起来 —— 现在的 `min_inside >= 1` 正好涵盖这条。
                 end_covered = db.query(FundHistory.nav_date).filter(
                     FundHistory.fund_code == fund_code,
                     FundHistory.nav_date == end_date).first() is not None
@@ -884,7 +903,8 @@ class FundDataManager:
             # 有未过期的负凭据就直接跳过重复请求 —— 否则 Cron 每天为同样的窗口白跑一趟。
             from src.fund import backfill_proofs
 
-            proven_empty = backfill_proofs.fresh(db, fund_code, start_date, end_date)
+            proven_empty = backfill_proofs.fresh(db, fund_code, start_date, end_date,
+                                                 today=today)
             if proven_empty:
                 logger.debug(f"[FundData] 基金 {fund_code} {start_date}~{end_date} "
                              f"已有负凭据，跳过重复补拉")

@@ -13,6 +13,7 @@ import logging
 from src.models.database import Prediction, FundInfo, FundHistory, Blogger
 from src.analyzer.llm_analyzer import get_analyzer
 from src.fund.fund_api import FundAPI
+from src.fund import backfill_proofs
 from src.utils.prediction_utils import PERIOD_MAP, ULTRA_SHORT_PERIODS, parse_period_to_days
 from src.analyzer.local_trend_analyzer import get_local_trend_analyzer
 from src.core.config import config
@@ -22,6 +23,23 @@ from src.services.prediction_change_log_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def weekdays_between_exclusive(after_date, through_date) -> int:
+    """(`after_date`, `through_date`] 里周一~周五有几天 —— 0 表示这段"本就不该有净值"。
+
+    用来区分两种"端点早于目标日"：目标日是周六/周日而前一个交易日就是端点（日历可证，
+    可以直接判），与中间还空着若干个工作日（可能只是本地缺行，见第 16 轮 BLOCKER-2）。
+    法定节假日也算在内，所以这里只给"日历上应有几天"，剩下要靠证据判据去区分。
+    """
+    if after_date is None or through_date is None or through_date <= after_date:
+        return 0
+    count, day = 0, after_date + timedelta(days=1)
+    while day <= through_date:
+        if day.weekday() < 5:
+            count += 1
+        day += timedelta(days=1)
+    return count
 
 
 def clear_verification_fields(prediction) -> None:
@@ -409,8 +427,8 @@ class PredictionVerifyService:
 
         if data_points < min_data_points:
             # 点数不足。缺的可能是三种东西，按"最具体"的顺序判：退化终点 → 问过且源端没有 → 单纯不够。
-            from src.fund import backfill_proofs
-
+            # （`backfill_proofs` 现在从模块顶层 import：函数内 import 会让这个名字变成本地变量，
+            #  端点证据那一支先用到它就会 UnboundLocalError —— 第 16 轮 BLOCKER-2 的新代码踩到过）
             # (1) 退化终点：窗口里只有起点那一天 ⇒ 起点与终点是同一条净值、涨跌幅恒为 0，
             # 那不是"验过了"而是"没有信息"（1709 实测：起 07-10 周五、目标 07-11 周六）。
             # 必须同时满足"目标日之后已有净值"才这么判 —— 那才证明目标日真的是休市日；
@@ -550,6 +568,37 @@ class PredictionVerifyService:
                 data_wait_days=data_wait_days,
                 end_nav_age_days=end_nav_age_days,
             )
+
+        # 端点落在目标日**之前**时，先证明"目标日那几天确实没有净值可取"，再允许下终局结论。
+        # 为什么这是硬门（第 16 轮 BLOCKER-2）：`is_correct` 一旦非空就永不重判
+        # （`filter_due_for_verify` 只捞 NULL），拿一条早于目标日的净值把结论落死，
+        # 等于把"本地缺那一行"当成"市场上那一天没有净值"。实测镜像里 4 条已判死的行
+        # （3267/3283/3304/3334，端点比目标日早 2~4 个工作日、中间都是工作日、
+        # 库里也没有目标日之后的行），其中 515070 那条按前值判"错 0 分"，
+        # 而数据源其实有目标日净值 —— 现取回来后判对 100 分。
+        # 三条合法证据，与"点数不足"那一支同源（第 12 轮 MAJOR-3 不许纯日历推断）：
+        #   ① 端点到目标日之间全是周末 ⇒ 日历上本就不该有净值（周六目标日用周五端点）；
+        #   ② 库里已有目标日之后的净值 ⇒ 那些空着的工作日确实是法定节假日；
+        #   ③ 已按区间问过数据源并留下未过期凭据。
+        gap_weekdays = weekdays_between_exclusive(latest_date, target_date)
+        if gap_weekdays:
+            after_target_row = self.db.query(FundHistory.nav_date).filter(
+                FundHistory.fund_code == fund_code,
+                FundHistory.nav_date > target_date).order_by(
+                FundHistory.nav_date.asc()).first()
+            endpoint_proof = backfill_proofs.fresh(self.db, fund_code, nav_start_date,
+                                                   window_end, today=today)
+            if after_target_row is None and endpoint_proof is None:
+                return _fail(
+                    f"端点 {latest_date} 早于目标日 {target_date}，中间还有 {gap_weekdays} 个"
+                    f"工作日没有净值行，而库里既没有目标日之后的净值（那才能证明这几天休市）、"
+                    f"也没有\u300c已按区间问过数据源\u300d的凭据 ⇒ 无法区分\u300c市场没有\u300d与"
+                    f"\u300c本地缺行\u300d，不能拿这条前值下终局结论。"
+                    f"先按区间回补该基金历史或更新基金数据，到位后会自动重验",
+                    reason='endpoint_lag_unproven',
+                    end_nav_date=latest_date,
+                    gap_weekdays=gap_weekdays,
+                )
 
         return {
             'available': True,
@@ -891,7 +940,7 @@ class PredictionVerifyService:
         try:
             from src.fund.fund_api import fund_data_manager
             backfilled = fund_data_manager.backfill_history_range(
-                fund_code, nav_start_date, window_end, db=self.db
+                fund_code, nav_start_date, window_end, db=self.db, today=today
             )
             if backfilled:
                 self._invalidate_fund_cache(fund_code)

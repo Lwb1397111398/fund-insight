@@ -63,15 +63,18 @@ KNOWN_CLASSES = {
     # 验证服务的 reason
     'exact_target', 'weekend_previous', 'waited_previous', 'waiting_target_nav',
     'insufficient_points', 'no_history', 'no_source_history', 'same_nav_endpoint',
-    'end_nav_too_old',
+    'end_nav_too_old', 'endpoint_lag_unproven',
     # 脚本自己的日历口径（只在服务给不出 reason 时兜底出现）
     'verifiable_now', 'missing_history', 'degenerate_gap', 'no_fund_code',
 }
 
 # 日历口径 → 允许出现的 reason 集合。命名差不是矛盾，方向相反才是。
 CONSISTENT_WITH = {
+    # 'verifiable_now' 只数"窗口里点数够不够"，端点是否落在目标日它不看：
+    # 第 16 轮 BLOCKER-2 新增的 `endpoint_lag_unproven`（点数够、但端点早于目标日且
+    # 拿不到"那几天确实休市"的证据）正是这种"日历说够、判据说不能落死"的组合。
     'verifiable_now': {'exact_target', 'weekend_previous', 'waited_previous',
-                       'waiting_target_nav'},
+                       'waiting_target_nav', 'endpoint_lag_unproven'},
     'degenerate_gap': {'same_nav_endpoint', 'insufficient_points', 'no_source_history',
                        'no_history', 'end_nav_too_old'},
     'missing_history': {'insufficient_points', 'no_history', 'no_source_history'},
@@ -129,6 +132,10 @@ def main():
                 svc_reason = svc._check_fund_data_availability(
                     fund_code=code, nav_start_date=row.prediction_date,
                     window_end=row.target_date, target_date=row.target_date,
+                    # 分诊要的是"结构性归因"，所以强制跳过等待期：同一条预测
+                    # 在 Cron 里可能显示 `waiting_target_nav`（再等等就有），
+                    # 在这里显示 `endpoint_lag_unproven`（拿不到证据就别判）。
+                    # 两边标签不同是设计，不是矛盾。
                     skip_wait=True).get('reason')
             label = svc_reason or ('no_fund_code' if not code else kind)
             counts[label] = counts.get(label, 0) + 1

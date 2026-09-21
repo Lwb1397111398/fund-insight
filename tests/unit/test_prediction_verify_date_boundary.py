@@ -163,8 +163,13 @@ def test_weekend_target_accepts_friday_nav(test_db, monkeypatch):
     assert date(2026, 1, 12) not in history_dates
 
 
-def test_after_wait_accepts_compliant_previous(test_db, monkeypatch):
-    """工作日 + 等待期结束 + 最近前值 age 合规 => 可完成"""
+def test_after_wait_needs_evidence_before_judging_on_a_previous_endpoint(test_db, monkeypatch):
+    """工作日目标日缺净值、等待期已过 ⇒ **先要证据**，不能直接拿前值判死（第 16 轮 BLOCKER-2）。
+
+    原用例的名字与断言就是"等待期结束 + age 合规 ⇒ 可完成"，可这两件事都证不了
+    "目标日那天没有净值"：本地少那一行与市场那天休市，在数据上长得一模一样。
+    `is_correct` 一旦非空就永不重判，所以这条路径必须先补数据或留下凭据。
+    """
     target = date(2026, 1, 9)  # 周五
     _fix_today(monkeypatch, date(2026, 1, 11))  # 已过 2 个自然日等待
     prediction = _seed_prediction(test_db, target_date=target)
@@ -176,7 +181,34 @@ def test_after_wait_accepts_compliant_previous(test_db, monkeypatch):
         [
             (date(2026, 1, 1), 1.00),
             (date(2026, 1, 7), 1.00),
-            (date(2026, 1, 8), 1.01),  # 周四，缺周五
+            (date(2026, 1, 8), 1.01),  # 周四，缺周五，且没有更晚的行
+        ],
+    )
+
+    service = PredictionVerifyService(test_db)
+    result = service.verify_prediction(prediction.id)
+
+    assert result["success"] is False, result
+    test_db.refresh(prediction)
+    assert prediction.is_correct is None, '拿无证据的前值下了终局结论'
+    assert prediction.status == 'pending'
+
+
+def test_after_wait_accepts_previous_once_a_later_row_proves_the_gap(test_db, monkeypatch):
+    """合法证据②：库里已有目标日之后的净值 ⇒ 那几天确实没行情，可以用前值完成验证。"""
+    target = date(2026, 1, 9)  # 周五（该行为节假日，没有净值）
+    _fix_today(monkeypatch, date(2026, 1, 13))
+    prediction = _seed_prediction(test_db, target_date=target)
+
+    _add_nav(
+        test_db,
+        prediction.fund_code,
+        prediction.fund_name,
+        [
+            (date(2026, 1, 1), 1.00),
+            (date(2026, 1, 7), 1.00),
+            (date(2026, 1, 8), 1.01),   # 周四：窗口内最新，也就是端点
+            (date(2026, 1, 12), 1.02),  # 目标日之后已有行 ⇒ 周五确实没有行情
         ],
     )
 
@@ -185,7 +217,10 @@ def test_after_wait_accepts_compliant_previous(test_db, monkeypatch):
 
     assert result["success"] is True, result
     assert abs(result["data"]["end_nav"] - 1.01) < 1e-9
-    assert result["data"]["verify_end_date"] == target.isoformat()
+    test_db.refresh(prediction)
+    assert prediction.end_nav_date == date(2026, 1, 8), '端点日期要写实际用到的那一天'
+    assert prediction.current_nav_date == prediction.end_nav_date, (
+        '同一端点在两个字段里给了两个日期')
 
 
 def test_old_end_nav_rejected_even_with_enough_points(test_db, monkeypatch):

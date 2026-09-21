@@ -1,4 +1,27 @@
+import importlib
+
+import pytest
+
 from datetime import date, timedelta
+
+
+@pytest.fixture(autouse=True)
+def _no_on_demand_backfill(monkeypatch):
+    """本文件的假基金码（AUDIT01）不许去打真实接口。
+
+    第 16 轮：自动验证路径会按需补拉历史，而 `from src.fund import fund_api` 拿到的
+    是 `FundAPI` **实例**（`src/fund/__init__.py` 把包属性重绑成了实例），在它身上打桩
+    是空操作 ⇒ `test_automatic_verification_creates_change_log` 每跑一次就向东财请求一次
+    AUDIT01（根 conftest 新加的零网络闸门实测抓到）。要桩得桩模块属性。
+    """
+    module = importlib.import_module('src.fund.fund_api')
+
+    class _NoProbe:
+        @staticmethod
+        def backfill_history_range(*args, **kwargs):
+            return 0
+
+    monkeypatch.setattr(module, 'fund_data_manager', _NoProbe())
 
 
 def _seed_prediction(db):

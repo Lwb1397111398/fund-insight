@@ -22,6 +22,8 @@ REASON_LABELS = {
     'no_history': '该基金本地无历史净值',
     'waiting_target_nav': '目标日净值尚未发布，等待中',
     'end_nav_too_old': '终点净值太旧，超过允许陈旧期限',
+    'endpoint_lag_unproven': '端点早于目标日且中间还有工作日没有净值，'
+                             '无法区分"市场没有"与"本地缺行" ⇒ 需按区间回补历史',
 }
 
 class PredictionVerifyTask:

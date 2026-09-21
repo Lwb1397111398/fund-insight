@@ -141,8 +141,8 @@ def main():
         from resync_verdict_scalars import find_desynced
         repaired = db.query(Prediction).filter(Prediction.id.in_([r.id for r in rows])).all()
         still, manual = find_desynced(repaired)
-        for p, have, want in still:
-            print('[残留] id=%s 的 verify_score 仍是 %s（台账 %s）' % (p.id, have, want))
+        for p, field, have, want in still:
+            print('[残留] id=%s 的 %s 仍是 %s（应为 %s）' % (p.id, field, have, want))
         for p, why in manual:
             print('[需人工] id=%s：%s' % (p.id, why))
         if still or manual:

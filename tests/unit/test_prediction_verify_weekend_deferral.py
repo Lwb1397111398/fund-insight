@@ -13,7 +13,11 @@ from datetime import date
 import pytest
 
 from src.models.database import Blogger, FundHistory, Post, Prediction
-from src.fund import fund_api as fund_api_module
+import importlib
+# 注意：**不能**写 `from src.fund import fund_api as fund_api_module` —— 那个包属性是
+# `FundAPI` 实例（`src/fund/__init__.py` 干的），在它身上打桩是空操作，
+# 本文件的用例因此真打过东财接口（第 16 轮 BLOCKER-1）。要桩就桩模块。
+fund_api_module = importlib.import_module('src.fund.fund_api')
 from src.services.prediction_verify_service import PredictionVerifyService
 
 START = date(2026, 7, 10)        # 周五：预测起点，也是唯一一条落在目标日及之前的净值
@@ -216,5 +220,72 @@ def test_injected_today_reaches_the_proof_ttl(test_db, monkeypatch):
     _rows(test_db, '515440', [date(2026, 9, 2), date(2026, 9, 3)])
     injected = date(2026, 5, 6)
     _check(test_db, '515440', date(2026, 7, 27), date(2026, 7, 28), today=injected)
-    assert seen.get('today') == injected, (
+    assert seen['today'] == injected, (
         '凭据判定没吃到注入的 today（拿到的是 %r）' % (seen.get('today'),))
+
+
+# --- 第 16 轮 BLOCKER-2：端点早于目标日时，"市场没有那一行"与"本地缺那一行"必须可区分 ---
+
+def test_lagging_endpoint_without_evidence_is_not_finalized(test_db):
+    """点数够、但端点比目标日早 2 个工作日且拿不到"那几天休市"的证据 ⇒ 不许落死结论。
+
+    复现镜像实测：515070 / 端点 09-11 / 目标 09-17 被 `waited_previous` 判成"判错 0 分"，
+    而数据源其实有目标日净值（现取回来判对 100 分）。`is_correct` 一旦非空就永不重判
+    （`filter_due_for_verify` 只捞 NULL），所以这种"用前值定终身"必须挡在写库之前。
+    """
+    _rows(test_db, '515070', [date(2026, 9, 10), date(2026, 9, 11)])
+    r = _check(test_db, '515070', date(2026, 9, 10), date(2026, 9, 15),
+               today=date(2026, 9, 22))
+    assert r['available'] is False, r
+    assert r['reason'] == 'endpoint_lag_unproven', r
+    assert '不能拿这条前值下终局结论' in r['message'], r
+
+
+def test_lagging_endpoint_refuses_without_writing_a_verdict(test_db, monkeypatch):
+    """拒判必须真的不落库：结论、状态、台账都不许多出一条。"""
+    from src.services import prediction_verify_service as pvs
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 9, 22)
+
+    _rows(test_db, '515180', [date(2026, 9, 10), date(2026, 9, 11)])
+    p = _seed(test_db, '515180', date(2026, 9, 10), date(2026, 9, 15))
+    monkeypatch.setattr(pvs, 'date', FixedDate)
+    result = PredictionVerifyService(test_db).verify_prediction(p.id)
+    test_db.refresh(p)
+    assert result.get('success') is False, result
+    assert p.is_correct is None and p.status == 'pending', (p.is_correct, p.status)
+    assert not p.verify_history
+
+
+def test_a_row_after_the_target_proves_those_days_were_holidays(test_db):
+    """合法证据②：库里已有目标日之后的净值 ⇒ 中间空着的工作日确实是法定节假日，可判。"""
+    _rows(test_db, '512400', [date(2026, 9, 10), date(2026, 9, 11), date(2026, 9, 16)])
+    r = _check(test_db, '512400', date(2026, 9, 10), date(2026, 9, 15),
+               today=date(2026, 9, 22))
+    assert r['available'] is True, r
+    assert r['reason'] == 'waited_previous', r
+
+
+def test_a_fresh_proof_also_legitimises_the_previous_endpoint(test_db):
+    """合法证据③：已按区间问过数据源并留下凭据 ⇒ 可以再判，且提示语要带凭据原文。"""
+    from src.fund import backfill_proofs
+
+    _rows(test_db, '159501', [date(2026, 9, 10), date(2026, 9, 11)])
+    db_session = test_db
+    backfill_proofs.record_probe(db_session, '159501', date(2026, 9, 10), date(2026, 9, 15),
+                                 source_rows=2)
+    db_session.commit()
+    r = _check(test_db, '159501', date(2026, 9, 10), date(2026, 9, 15),
+               today=date(2026, 9, 22))
+    assert r['available'] is True, r
+
+
+def test_saturday_target_needs_no_evidence_to_use_friday(test_db):
+    """不能收紧过头：周六目标日 + 周五端点是**日历可证**的，不该因此卡住。"""
+    _rows(test_db, '159995', [PREV, START])          # 07-09(四)、07-10(五)，之后没有行
+    r = _check(test_db, '159995', PREV, TARGET_SAT, today=date(2026, 7, 13))
+    assert r['available'] is True, r
+    assert r['reason'] == 'weekend_previous', r

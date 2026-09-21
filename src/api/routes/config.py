@@ -1735,15 +1735,40 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
 
 
 @router.post("/sector-mappings/{mapping_id}/review")
-def review_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
-    """标记映射为已审查"""
+def review_sector_mapping(mapping_id: int, owner_confirm: bool = False,
+                          db: Session = Depends(get_db)):
+    """标记映射为已审查（逐行确认才给 owner 署名与体检豁免）。
+
+    `owner_confirm` 必须显式传 true：服务层的行为是"给 `reviewed_by='owner'` +
+    `owner_locked`"，而上一版路由从不转发这个参数 ⇒ "明确确认"只活在浏览器弹窗里，
+    直接 POST 一次就能买到同样的免疫（第 16 轮 m-2）。
+    """
+    from src.models.database import SectorFundMapping
     from src.services.sector_fund_service import get_sector_fund_service
 
     service = get_sector_fund_service(db)
-    success = service.mark_reviewed_by_id(mapping_id, reviewed=True)
+    success = service.mark_reviewed_by_id(mapping_id, reviewed=True,
+                                          owner_confirm=owner_confirm)
 
     if not success:
-        return {"success": False, "message": "映射不存在"}
+        # 三种失败原因分开说。全报"映射不存在"会让老板对着一条明明存在的行
+        # 反复点，而被体检拒绝的行根本点不动（第 16 轮 MINOR-1）。
+        row = db.query(SectorFundMapping).filter(
+            SectorFundMapping.id == mapping_id).first()
+        if row is None:
+            return {"success": False, "message": "映射不存在"}
+        if service.is_unservable(row):
+            return {
+                "success": False,
+                "message": ("身份体检判定该行不可服务（%s），逐行确认也不能复活 —— "
+                            "先改成正确的基金标的再审查"
+                            % (row.verify_message or row.verify_reason or '身份判定未通过')),
+            }
+        return {
+            "success": False,
+            "message": "这行没有机器审查证据（match_source / verified_at 为空），"
+                       "需要显式 owner_confirm=true 才允许标记为已审查",
+        }
 
     return {
         "success": True,

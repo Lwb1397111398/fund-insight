@@ -1171,28 +1171,28 @@
                                 </thead>
                                 <tbody>
                                     <tr
-                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'final' ? '#f6ffed' : '' }">
+                                        :style="{ background: predictionDetail.is_correct !== null && predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'final' ? '#f6ffed' : '' }">
                                         <td class="p-6">✅ 最终正确</td>
                                         <td class="p-6 text-center font-semibold text-success">
                                             100分</td>
                                         <td class="p-6">最终涨跌方向与预测一致</td>
                                     </tr>
                                     <tr
-                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'process' ? '#f6ffed' : '' }">
+                                        :style="{ background: predictionDetail.is_correct !== null && predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'process' ? '#f6ffed' : '' }">
                                         <td class="p-6">📈 过程正确</td>
                                         <td class="p-6 text-center font-semibold text-success">
                                             60-90分</td>
                                         <td class="p-6">过程中≥50%时间方向正确</td>
                                     </tr>
                                     <tr
-                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'partial' ? '#fffbe6' : '' }">
+                                        :style="{ background: predictionDetail.is_correct !== null && predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'partial' ? '#fffbe6' : '' }">
                                         <td class="p-6">⚠️ 部分正确</td>
                                         <td style="padding: 6px; text-align: center; font-weight: 600; color: #faad14;">
                                             40-60分</td>
                                         <td class="p-6">过程中30%-50%时间方向正确</td>
                                     </tr>
                                     <tr
-                                        :style="{ background: predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'failed' ? '#fff2f0' : '' }">
+                                        :style="{ background: predictionDetail.is_correct !== null && predictionDetail.verify_history && predictionDetail.verify_history[0]?.verify_type === 'failed' ? '#fff2f0' : '' }">
                                         <td class="p-6">❌ 验证失败</td>
                                         <td style="padding: 6px; text-align: center; font-weight: 600; color: #ff4d4f;">
                                             0分</td>
@@ -2698,12 +2698,16 @@ const fetchWeChatBatch = async () => {
                 };
                 const reviewMapping = async (id) => {
                     // 批量弹窗写着"豁免需要逐行确认"，那这句 confirm 就是它唯一的兑现点：
-                    // 后端 `mark_reviewed_by_id` 一律给 owner 署名 + 锁定，没有这一句就等于
-                    // 逐行点 23 次也能买到批量被拒绝的免疫（第 15 轮 MINOR-1）。
-                    if (!confirm('确认逐行审查通过这一行？\n\n这一行会记成"老板已审查"（reviewed_by=owner）并被锁定，'
-                                 + '身份体检不再把它判成不可服务；要撤销就再点一次"取消审查"。')) return;
+                    // 服务层一律给 owner 署名 + 锁定，没有这一句就是逐行点 23 次也能买到
+                    // 批量被拒绝的免疫（第 15 轮 MINOR-1）。确认过才显式带 owner_confirm，
+                    // 让"明确确认"这件事在 API 边界上也成立（第 16 轮 m-2）。
+                    if (!confirm('确认逐行审查通过这一行？\n\n这一行会记成"老板已审查"（reviewed_by=owner）'
+                                 + '并被锁定，之后的身份体检不再把它判成不可服务。\n'
+                                 + '（体检已经判为不可服务的行点不动，服务端会直接说明原因。）\n'
+                                 + '要撤销就再点一次"取消审查"。')) return;
                     try {
-                        const res = await axios.post(`/api/config/sector-mappings/${id}/review`);
+                        const res = await axios.post(`/api/config/sector-mappings/${id}/review`,
+                                                     null, { params: { owner_confirm: true } });
                         if (res.data.success) { await loadSectorMappings(mappingFilter.value); }
                         else { alert(res.data.message); }
                     } catch (e) { alert('操作失败'); }
