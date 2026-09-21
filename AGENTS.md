@@ -178,10 +178,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-21，S4a 之后）：
+最近一次核对（2026-09-21，S7-2 之后）：
 
-- `pytest tests/unit -q` → **506 passed / 16 skipped / 0 failed**（约 90 秒）。
-- 单测必须零网络：`tests/unit/test_sector_identity_audit.py` 用 autouse fixture 挡掉基金域名册下载；新增会打站的代码要照样注入桩。
+- `pytest tests/unit -q` → **644 passed / 16 skipped / 0 failed**（约 110 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **653 passed / 16 skipped / 0 failed**。
+  报数时要写清是哪个口径，两个数都对但常被人当成回归。
+- 单测必须零网络：`tests/unit/test_sector_identity_audit.py` 用 autouse fixture 挡掉基金域名册下载；新增会打站的代码要照样注入桩。验证侧的用例（`test_prediction_verify_weekend_deferral.py`）用 `fund_api.fund_data_manager` 桩挡住按需补拉。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

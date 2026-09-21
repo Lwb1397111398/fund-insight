@@ -282,39 +282,32 @@ class PredictionVerifyService:
             return value
         return None
 
-    def _deferred_points_enough(self, fund_code: str, nav_start_date: date,
-                                window_end: date, min_data_points: int,
-                                grace_days: int = 7) -> bool:
-        """目标日休市时，顺延几天看能否凑够净值点数。
+    def _real_nav_date(self, fund_code: str, day: date) -> Optional[date]:
+        """该基金**实际**有净值的那一天：`<= day` 的最近一条，取不到返回 None。
 
-        为什么需要（S7-1，实测复现）：预测 1709（512680，周期 1 天，目标 2026-07-11 **周六**）
-        在 `[起点, 目标日]` 窗口里只有 1 条净值（07-10），永远达不到 `min_data_points=2`，
-        于是被判"基金数据不足"；但本类后面**本来就有**"目标日是周末就用最近净值验证"的分支
-        （`weekend_previous` / `waited_previous`），只是被这道充分性门挡在前面走不到。
-        这里只放宽判据：顺延 grace_days 天内能凑够就放行，
-        **终点净值怎么取一律不变**（`get_nav_by_date` 的 DB 路径本来就带
-        `nav_date <= target_date`，仍取目标日前最近那条），所以不会改变任何已能验证的预测的结论。
-
-        **窄化（第 10 轮评审指出，成立）**：必须至少有一条**目标日及之前**的净值才允许顺延放行。
-        只数"目标日之后 7 天内有几条"会放过 158038 这类行 —— 目标日 09-04、
-        本地净值最早 09-07，目标日前一条都没有；那种行放行了也没有合法终点，
-        真实终点只能落到 API 兜底的"当前最新净值"，那是**未来函数**。
-        它不是休市顺延，是缺历史，该留在 insufficient_points 里由 S7-2 归成结构性不可验。
+        为什么要单独问一遍：`get_nav_by_date` 只回数值不回日期，而目标日落在休市日时它会
+        悄悄回退到目标日之前那条 —— 于是 `end_nav_date` 被写成请求的周末日，库里看起来
+        "已按目标日验证"，其实用的是周五那条净值。S7-2 的退化终点判据也依赖真实的两端日期。
+        缓存窗口只有 ±120 天，所以缓存里查不到时要回落到 DB（否则会把"有历史"看成"没有"）。
         """
-        if not fund_code or nav_start_date is None or window_end is None:
-            return False
-        try:
-            end = window_end + _dt.timedelta(days=grace_days)
-        except Exception:
-            return False
-        dates = [r[0] for r in self.db.query(FundHistory.nav_date).filter(
+        if not fund_code or day is None:
+            return None
+        cached = self._nav_cache.get('_history', {}).get(fund_code) or []
+        dates = [self._as_date(r.nav_date) for r in cached]
+        dates = [d for d in dates if d is not None and d <= day]
+        if dates:
+            return max(dates)
+        row = self.db.query(FundHistory.nav_date).filter(
             FundHistory.fund_code == fund_code,
-            FundHistory.nav_date >= nav_start_date,
-            FundHistory.nav_date <= end,
-        ).all() if r[0] is not None]
-        if not any(d <= window_end for d in dates):
-            return False            # 目标日前一条净值都没有 = 缺历史，不是休市
-        return len(dates) >= (min_data_points or 1)
+            FundHistory.nav_date <= day,
+        ).order_by(FundHistory.nav_date.desc()).first()
+        return self._as_date(row[0]) if row else None
+
+    def _endpoint_dates(self, fund_code: str, nav_start_date: date,
+                        window_end: date) -> tuple:
+        """起点/终点各自**实际**取到的净值日（任一取不到时返回 None，交给后续分支）。"""
+        return (self._real_nav_date(fund_code, nav_start_date),
+                self._real_nav_date(fund_code, window_end))
 
     def _check_fund_data_availability(
         self,
@@ -393,10 +386,27 @@ class PredictionVerifyService:
             payload.update(extra)
             return payload
 
-        if data_points < min_data_points and not self._deferred_points_enough(
-                fund_code, nav_start_date, window_end, min_data_points):
-            # 第二个条件是 S7-1：目标日落在休市日、顺延几天就凑得够点数的短期预测，
-            # 不该在这里被判"数据不足"，要让它走到下面的 weekend_previous / waited_previous。
+        # S7-2 退化终点门：起点与终点落到**同一条**净值 ⇒ 涨跌幅恒为 0，没有信息量。
+        # 必须先于点数门判断 —— 1 天期、目标日落在休市日的预测（实测 1709：起 07-10 周五、
+        # 目标 07-11 周六）一旦被点数门放行，就会走 weekend_previous 判成
+        # "预测方向错误，最终涨跌+0.00%" 并计入准确率，那是**假结论**而不是"验过了"。
+        # `data_points >= 1` 把这道门限定在"窗口内本来就有净值、只是全挤在起点那天"；
+        # 窗口空着（0 条）属缺历史/净值太旧，交给下面的分支说清是哪种。
+        start_real, end_real = self._endpoint_dates(fund_code, nav_start_date, window_end)
+        if (data_points >= 1 and start_real is not None and end_real is not None
+                and end_real <= start_real):
+            return _fail(
+                f"目标日及之前只有起点那一条净值（起点 {start_real}，终点也是 {end_real}），"
+                f"涨跌幅必然为 0 ⇒ 无法判定方向。等下一交易日净值后仍不可验"
+                f"（本系统按防未来函数策略，不取目标日之后的行情）；"
+                f"如需判定，要把目标日调整到下一个交易日",
+                reason='same_nav_endpoint',
+                start_nav_date=start_real,
+                end_nav_date=end_real,
+            )
+
+        if data_points < min_data_points:
+            # 点数不足。到这里起点/终点已不是同一条，缺的是**窗口内**的历史净值。
             latest_record = None
             if fund_code in history_cache:
                 cached = history_cache[fund_code]
@@ -410,18 +420,20 @@ class PredictionVerifyService:
             if latest_record:
                 latest_date = self._as_date(latest_record.nav_date)
                 days_behind = (window_end - latest_date).days if latest_date else None
-                # 括号里这句是本轮实测加的：`days_behind` 是**负数**时数据并不陈旧
-                # （最新净值 2026-09-18 比窗口终点 2026-07-13 还晚 77 天），真正缺的是
-                # **目标日附近**那几条历史净值。这时提示"请更新基金数据"会把人带去
-                # 跑同步任务，而同步只会补最近端、永远补不到那个窗口 —— 实测 80 条
-                # 到期预测全部卡在这里（本地镜像 ETF 只有 6~40 行、起点在 2026 年中）。
-                stale_hint = (
-                    '' if days_behind is None or days_behind >= 0 else
-                    '（窗口内净值记录不足：最新净值已晚于窗口终点 %d 天，'
-                    '缺的是目标日前后的历史净值，补拉最新数据不会解决）' % -days_behind)
+                if days_behind is not None and days_behind < 0:
+                    # 最新净值**晚于**窗口终点（实测 515440/158038：本地只有 9 月以后的净值，
+                    # 预测窗口在 7~8 月）：缺的是目标日附近那段历史，不是"数据没更新"。
+                    # 这时候提示"请更新基金数据"会把人带去跑同步，而同步只补最近端，永远补不到。
+                    return _fail(
+                        f"目标日附近缺历史净值：窗口 [{nav_start_date} ~ {window_end}] 内只有 "
+                        f"{data_points} 条（需 {min_data_points} 条），"
+                        f"本地最新净值 {latest_date} 已晚于窗口终点 {-days_behind} 天，"
+                        f"补拉最新数据补不到这个窗口，需按区间回补历史或改判不可验",
+                        reason='insufficient_points',
+                        days_behind=days_behind,
+                    )
                 return _fail(
-                    f"基金数据不足，最新数据为 {latest_date}，落后 {days_behind} 天，请更新基金数据后再验证"
-                    + stale_hint,
+                    f"基金数据不足，最新数据为 {latest_date}，落后 {days_behind} 天，请更新基金数据后再验证",
                     reason='insufficient_points',
                     days_behind=days_behind,
                 )
@@ -891,6 +903,7 @@ class PredictionVerifyService:
             if not start_nav:
                 start_nav = prediction.start_nav
 
+        end_nav_real_date = self._real_nav_date(fund_code, window_end)
         end_nav = self.get_nav_by_date(
             fund_code, window_end, strict_as_of=True
         )
@@ -1038,7 +1051,10 @@ class PredictionVerifyService:
         if target_date and today >= target_date:
             prediction.is_expired = True
             prediction.end_nav = end_nav
-            prediction.end_nav_date = window_end
+            # 写**实际**取到的净值日，不写请求的目标日：目标日落在休市日时后者是个谎
+            # （1709 存成 07-11 周六，用的其实是 07-10 那条），会让"已按目标日验证"的
+            # 假象进报表，也让退化终点无法被事后审计出来。
+            prediction.end_nav_date = end_nav_real_date or window_end
             # status 已在上方与 is_correct 同步；此处只补到期收口字段
             if before_state.get("status") == "pending" or before_state.get("is_correct") is None:
                 is_newly_completed = True
@@ -1305,7 +1321,8 @@ class PredictionVerifyService:
         else:
             return 0
     
-    def rollback_invalid_verifications(self, min_data_points: int = 2, dry_run: bool = True) -> Dict:
+    def rollback_invalid_verifications(self, min_data_points: int = 2, dry_run: bool = True,
+                                       only_ids: tuple = None) -> Dict:
         """
         回溯已验证但数据不足的预测
         
@@ -1314,6 +1331,9 @@ class PredictionVerifyService:
         
         Args:
             min_data_points: 最少需要的数据点数
+            only_ids: 只在这些预测 id 里回溯。默认 None = 判不过门槛的全撤 ——
+                那是上千条的量级，且会把"当年用真实两条净值判出、如今本地镜像已丢失那段
+                历史"的结论一起抹掉（实测 1208/1669 就是这种），所以定向修复必须显式传。
             
         Returns:
             {
@@ -1374,7 +1394,8 @@ class PredictionVerifyService:
                     skip_wait=True,  # rollback 不等待，直接判断是否可验证
                 )
                 
-                if not data_check['available']:
+                if not data_check['available'] and (
+                        only_ids is None or prediction.id in only_ids):
                     would_rollback += 1
                     old_status = prediction.status
                     old_verify_score = prediction.verify_score
