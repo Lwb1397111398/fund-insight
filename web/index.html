@@ -1552,6 +1552,9 @@
                         <span class="text-sm text-muted">共 {{ sectorMappings.total }} 条</span>
                         <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}</span>
                         <span style="font-size: 13px; color: #faad14;">待审查 {{ sectorMappings.unreviewed_count }}</span>
+                        <button v-if="identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
+                        <button v-if="identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
+                        <button v-if="identityStats.realigned" class="action-btn small" @click="identityFilter = identityFilter === 'realigned' ? 'all' : 'realigned'" :style="{ background: identityFilter === 'realigned' ? '#13c2c2' : '#e6fffb', color: identityFilter === 'realigned' ? '#fff' : '#13c2c2', border: '1px solid #87e8de' }">机器已纠正待复核 {{ identityStats.realigned }}</button>
                         <span class="flex-1"></span>
                         <input v-model="mappingSearchKeyword" placeholder="搜索板块名、基金名称或基金代码" style="width: 220px; padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px;">
                         <button class="action-btn small" @click="loadSectorMappings(null)" :style="{ background: mappingFilter === null ? '#1890ff' : '#f5f5f5', color: mappingFilter === null ? '#fff' : '#666' }">全部</button>
@@ -1614,6 +1617,14 @@
                                     <td class="table-cell">
                                         <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
                                         <span v-else>{{ m.fund_name }}</span>
+                                        <div v-if="m.realigned && !m.reviewed" style="font-size: 11px; color: #13c2c2; margin-top: 2px;">
+                                            机器已按板块核心词「{{ m.realigned.core }}」换成字面对口标的（原 {{ m.realigned.from_code }} {{ m.realigned.from_name }}），请复核
+                                        </div>
+                                        <div v-if="m.identity_verdict && m.identity_verdict !== 'ok'" style="font-size: 11px; color: #ff4d4f; margin-top: 2px;">
+                                            {{ m.identity_reason }}
+                                            <span v-if="m.identity_suggestion" style="color: #1890ff;">（可换成 {{ m.identity_suggestion.code }} {{ m.identity_suggestion.name }}）</span>
+                                        </div>
+                                        <div v-else-if="m.relevance_low" style="font-size: 11px; color: #d46b08; margin-top: 2px;">标的与板块字面无关，待 AI 重匹配</div>
                                     </td>
                                     <td class="table-cell">
                                         <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_code" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
@@ -2525,13 +2536,28 @@ const fetchWeChatBatch = async () => {
                 const aiBatch = ref({ running: false, status: 'idle', total: 0, done: 0, counts: {}, current: '', results: [] });
                 const verifyAllVerifying = ref(false);
                 const verifyAllResult = ref(null);
+                // 身份体检结论：'all' | 'unservable' | 'relevance' | 'realigned'
+                const identityFilter = ref('all');
+                const identityStats = computed(() => {
+                    const list = sectorMappings.value.mappings || [];
+                    return {
+                        unservable: list.filter(m => m.servable === false).length,
+                        relevance: list.filter(m => m.relevance_low).length,
+                        realigned: list.filter(m => m.realigned && !m.reviewed).length
+                    };
+                });
                 const filteredMappings = computed(() => {
+                    let list = sectorMappings.value.mappings || [];
+                    if (identityFilter.value === 'unservable') list = list.filter(m => m.servable === false);
+                    else if (identityFilter.value === 'relevance') list = list.filter(m => m.relevance_low);
+                    else if (identityFilter.value === 'realigned') list = list.filter(m => m.realigned && !m.reviewed);
                     const keyword = mappingSearchKeyword.value.trim().toLowerCase();
-                    if (!keyword) return sectorMappings.value.mappings || [];
-                    return (sectorMappings.value.mappings || []).filter(m =>
+                    if (!keyword) return list;
+                    return list.filter(m =>
                         m.sector_name?.toLowerCase().includes(keyword) ||
                         m.fund_name?.toLowerCase().includes(keyword) ||
-                        m.fund_code?.toLowerCase().includes(keyword)
+                        m.fund_code?.toLowerCase().includes(keyword) ||
+                        (m.identity_official_name || '').toLowerCase().includes(keyword)
                     );
                 });
                 const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await axios.get(url); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
@@ -2815,6 +2841,7 @@ const fetchWeChatBatch = async () => {
                     cleanupCategoryLabel, cleanupWarningLabel, loadTestData, previewTestData, cleanupTestData,
                     parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias,
                     loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter,
+                    identityFilter, identityStats,
                     mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping,
                     loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping,
                     mappingVerifying, mappingVerifyResult, verifyMappingFund,
