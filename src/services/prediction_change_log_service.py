@@ -1,5 +1,6 @@
 """Create prediction audit records inside the caller's transaction."""
 
+import copy
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 
@@ -53,6 +54,13 @@ SNAPSHOT_FIELDS = (
 def _json_value(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, (list, dict)):
+        # 快照要的是"按下快门那一刻的值"，不是那个对象的引用。
+        # 验证路径对 `verify_history` 是原地 `list.append`（prediction_verify_service.py:1086），
+        # 前像/后像因此指向同一个 list ⇒ 日志里的"变更前历史"其实是变更**之后**的，
+        # `changed_fields` 也永远报不出 verify_history（第 15 轮 MAJOR-1）。
+        # 还原清单今天收进了 verify_history，不 deepcopy 就会从"审计说谎"变成"还原写错数据"。
+        return copy.deepcopy(value)
     return value
 
 

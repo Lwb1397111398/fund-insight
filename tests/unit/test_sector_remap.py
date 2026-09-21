@@ -13,7 +13,7 @@ from src.models.database import (
     SectorAlias, SectorFundMapping,
 )
 from src.services.prediction_maintenance_service import PredictionMaintenanceService
-from scripts.restore_prediction_batch import RESTORE_FIELDS, coerce_value
+from scripts.restore_prediction_batch import apply_before_state
 
 
 def _seed(db, *, sector='RMAP白酒', mapping_fund='RMAP01', confidence=None,
@@ -116,13 +116,10 @@ def test_run_id_written_and_rollback_restores_previous_state(db_session):
     assert len(logs) == 1, 'run_id 必须写进变更日志，否则无法整批回滚'
     assert logs[0].before_state['fund_code'] == old_fund
 
-    # 回滚：取该 run 最早一条 before_state 全量还原
+    # 回滚：取该 run 最早一条 before_state 全量还原（走脚本里那份真代码，
+    # 别在测试里抄一遍遍历 —— 抄的那份永远测不出清单少字段）
     log = min(logs, key=lambda x: x.id)
-    columns = Prediction.__table__.columns
-    for field in RESTORE_FIELDS:
-        if field in log.before_state:
-            setattr(prediction, field,
-                    coerce_value(columns.get(field), log.before_state[field]))
+    apply_before_state(prediction, log.before_state)
     db_session.flush()
     recalculate_blogger_stats(db_session, prediction.blogger_id, commit=False)
     db_session.commit()

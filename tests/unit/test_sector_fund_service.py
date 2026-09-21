@@ -87,3 +87,53 @@ def test_batch_review_without_owner_confirm_grants_no_immunity(test_db):
     SectorFundService(test_db).batch_mark_reviewed([row2.id], reviewed=True, owner_confirm=True)
     test_db.refresh(row2)
     assert row2.owner_locked is True and row2.reviewed_by == 'owner'
+
+
+class _BoomSession:
+    """查询必抛异常：模拟一次 Supabase 抖动 / 连接池超时。"""
+
+    def query(self, *args, **kwargs):
+        raise RuntimeError('simulated connection drop')
+
+    def close(self):
+        pass
+
+
+def test_failed_reload_keeps_the_previous_cache(test_db, monkeypatch):
+    """第 15 轮 MAJOR-2：重灌失败不许把好那份缓存一起销毁。
+
+    上一版为了"取消审查立刻生效"在查询之前 `SectorFundService._cache = {}`，
+    于是任何一次查询异常都会留下空表；`fund_matching` Level -1 与
+    `llm_analyzer._get_sector_fund_map` 各自 `except` 之后静默退回**写死的静态表** ——
+    那正是 S5 BLOCKER-1 认定的"绕过身份体检 + 人工审查"的口。
+    """
+    _reset_sector_cache()
+    test_db.add(SectorFundMapping(sector_name='算力', fund_code='510300',
+                                  fund_name='沪深300ETF', is_active=True, reviewed=True))
+    test_db.commit()
+    svc = SectorFundService(test_db)
+    svc._load_cache()
+    assert SectorFundService._cache.get('算力', {}).get('code') == '510300'
+
+    SectorFundService._cache_at = 0                     # TTL 到期，强制重灌
+    monkeypatch.setattr(svc, '_get_db', lambda: _BoomSession())
+    monkeypatch.setattr(svc, '_should_close', lambda db: False)
+    svc._load_cache()
+
+    assert SectorFundService._cache.get('算力', {}).get('code') == '510300', \
+        '重灌失败后缓存被清空，调用方会静默降级到静态表'
+    assert SectorFundService._cache_loaded is True
+
+
+def test_failed_first_load_still_raises(test_db, monkeypatch):
+    """一份缓存都没有时无处可退，异常必须照旧抛出去，别装作加载成功了。"""
+    _reset_sector_cache()
+    svc = SectorFundService(test_db)
+    monkeypatch.setattr(svc, '_get_db', lambda: _BoomSession())
+    monkeypatch.setattr(svc, '_should_close', lambda db: False)
+    try:
+        svc._load_cache()
+        assert False, '没有旧缓存可退时应该抛出异常，而不是留下"已加载"的假状态'
+    except RuntimeError:
+        pass
+    assert SectorFundService._cache_loaded is False

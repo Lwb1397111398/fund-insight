@@ -178,13 +178,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22，S7 完成 + 第 13 轮/S5 修复之后）：
+最近一次核对（2026-09-22，第 15 轮修复之后）：
 
-- `pytest tests/unit -q` → **679 passed / 16 skipped / 0 failed**（约 200 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **688 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **700 passed / 16 skipped / 0 failed**（约 150 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **709 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-- 准确率基线在 2026-09-22 被纠正过一次：撤掉并重判了 94 条"用目标日之后的净值判出来"的
-  结论（S7-1 遗留，违反防未来函数策略），本地镜像判对 608→598、判错 560→569。
+- 准确率基线在 2026-09-22 被纠正过两次：① 撤掉并重判 94 条"用目标日之后的净值判出来"的
+  结论（S7-1 遗留，违反防未来函数策略），本地镜像判对 608→598、判错 560→569；
+  ② 第 15 轮按台账同步了 11 行的标量 `verify_score`（一次还原脚本漏字段造成"结论与分数
+  打脸"），**只动分数、不动判对/判错条数**，但博主平均分口径随之变化。
   拿历史截图/旧导出的准确率数字做对比前先确认是不是这一批。
 - 单测必须零网络：`tests/unit/test_sector_identity_audit.py` 用 autouse fixture 挡掉基金域名册下载；新增会打站的代码要照样注入桩。验证侧的用例（`test_prediction_verify_weekend_deferral.py`）用 `fund_api.fund_data_manager` 桩挡住按需补拉。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。

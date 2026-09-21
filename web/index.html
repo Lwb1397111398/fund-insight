@@ -1801,7 +1801,9 @@
                         <div class="mb-12" style="display: flex; align-items: center; gap: 6px;">
                             <input type="checkbox" id="importReplace" v-model="importReplace" style="margin: 0;">
                             <label for="importReplace" style="font-size: 13px; color: #d46b08; cursor: pointer;">
-                                ⚠️ 覆盖模式：先清空现有数据再导入（用于本地清洗后同步线上）
+                                ⚠️ 覆盖模式：先清空现有数据再导入（用于本地清洗后同步线上）。
+                                需服务端开着总开关 <code>ENABLE_DATABASE_IMPORT=true</code>，
+                                生产默认关着 —— 勾上也会被告知"导入接口未启用"。
                             </label>
                         </div>
 
@@ -2694,7 +2696,18 @@ const fetchWeChatBatch = async () => {
                         if (res.data.success) { editingMappingKey.value = null; await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); }
                     } catch (e) { alert('保存失败: ' + (e.response?.data?.detail || e.message)); }
                 };
-                const reviewMapping = async (id) => { try { const res = await axios.post(`/api/config/sector-mappings/${id}/review`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
+                const reviewMapping = async (id) => {
+                    // 批量弹窗写着"豁免需要逐行确认"，那这句 confirm 就是它唯一的兑现点：
+                    // 后端 `mark_reviewed_by_id` 一律给 owner 署名 + 锁定，没有这一句就等于
+                    // 逐行点 23 次也能买到批量被拒绝的免疫（第 15 轮 MINOR-1）。
+                    if (!confirm('确认逐行审查通过这一行？\n\n这一行会记成"老板已审查"（reviewed_by=owner）并被锁定，'
+                                 + '身份体检不再把它判成不可服务；要撤销就再点一次"取消审查"。')) return;
+                    try {
+                        const res = await axios.post(`/api/config/sector-mappings/${id}/review`);
+                        if (res.data.success) { await loadSectorMappings(mappingFilter.value); }
+                        else { alert(res.data.message); }
+                    } catch (e) { alert('操作失败'); }
+                };
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定批量标记 ${unreviewed.length} 个映射为已审查？\n\n这次点击只代表"机器证据已看过"，不会冒充老板署名、也不会给行加上"体检免疫"（那需要逐行用"已审查"按钮并明确确认）。没有审查证据的行会被后端拒绝。`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true, owner_confirm: false }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); if (res.data.message) alert(res.data.message); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
                 // ===== 数据导入导出 =====
@@ -2801,8 +2814,13 @@ const fetchWeChatBatch = async () => {
                             importResult.value = { success: false, message: '文件格式错误：不是有效的 JSON 文件' };
                         } else {
                             // FastAPI 的 4xx 文案在 `detail` 里，只读 `message` 会把
-                            // "需要总开关 + 确认头"这类整改指引整句吞掉（第 14 轮 MAJOR-4）
-                            importResult.value = { success: false, message: '导入失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message) };
+                            // "需要总开关 + 确认头"这类整改指引整句吞掉（第 14 轮 MAJOR-4）；
+                            // 422 的 detail 是数组，直接拼会渲染成 [object Object]（第 15 轮 MINOR-4）
+                            const d = e.response?.data?.detail;
+                            const text = Array.isArray(d)
+                                ? d.map(x => ((x.loc || []).slice(1).join('.') || 'body') + '：' + x.msg).join('；')
+                                : (d || e.response?.data?.message || e.message);
+                            importResult.value = { success: false, message: '导入失败: ' + text };
                         }
                     }
                     importLoading.value = false;

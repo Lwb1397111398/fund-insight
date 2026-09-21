@@ -37,19 +37,21 @@ class SectorFundService:
     def _load_cache(self):
         # TTL：体检跑在 Render Cron 进程里，Web 进程的类级缓存若永不过期，
         # 降级就要等到下次重启才生效——那等于"这轮白做"，而且没有任何报错。
-        import time as _time
+        import time
         if SectorFundService._cache_loaded and \
-                (_time.time() - SectorFundService._cache_at) < _CACHE_TTL:
+                (time.time() - SectorFundService._cache_at) < _CACHE_TTL:
             return
 
         db = self._get_db()
+        # 先灌进这张局部表，全部成功后才整体替换 `_cache`（第 15 轮 MAJOR-2）。
+        # 上一版为了"取消审查要立刻生效"在查询**之前**清空类级缓存，于是任何一次
+        # 查询失败（Supabase 抖一下、连接池超时）都会把好那份整体销毁：
+        # `fund_matching` Level -1 的 except 与 `llm_analyzer._get_sector_fund_map`
+        # 的 except 会把空结果静默降级成**写死的静态表** —— 那正是 S5 BLOCKER-1
+        # 认定的绕过口（静态表一命中就绕过身份体检 + 人工审查的结论）。
+        # "旧但完整"永远比"空表 + 静默降级"安全，所以失败时保留上一份继续服务。
+        loaded: Dict[str, Dict] = {}
         try:
-            # 重灌时**先清空**：`existing.get('reviewed') and not m.reviewed → continue`
-            # 那条守卫的本意是"同板块多行里，未审查的行不许盖掉已审查的行"，
-            # 但它同时挡住了"上一轮缓存里那个已被取消审查的旧条目"（第 14 轮 MAJOR-1）：
-            # 体检/审查写在 Cron 进程里，Web 进程 TTL 到了重灌却仍保留旧的 reviewed 条目，
-            # 于是被取消审查的标的继续驱动新预测挂错基金。
-            SectorFundService._cache = {}
             # sector_name 不是唯一列：没有 ORDER BY 时"同名多行"取哪一条取决于
             # 数据库返回顺序，SQLite 与 Postgres 可能给出不同基金（同一板块两种结论）。
             # 固定为"已审查优先、id 最小优先"，且已审查条目不被未审查条目覆盖。
@@ -66,18 +68,28 @@ class SectorFundService:
                     # 不进缓存：它既不该服务帖子分析，也不该挡住同板块另一条可服务的行。
                     # 管理界面走 get_all_mappings_with_status，仍然看得见。
                     continue
-                existing = self._cache.get(m.sector_name)
+                # 清空重灌的语义由"这是一张全新的局部表"提供：上一轮那个已被取消审查的
+                # 旧条目不会再混进来（第 14 轮 MAJOR-1 要修的正是这个）。
+                existing = loaded.get(m.sector_name)
                 if existing and existing.get('reviewed') and not (m.reviewed or False):
                     continue
-                self._cache[m.sector_name] = {
+                loaded[m.sector_name] = {
                     'code': m.fund_code,
                     'name': m.fund_name,
                     'reviewed': m.reviewed or False,
                 }
 
+            SectorFundService._cache = loaded
             SectorFundService._cache_loaded = True
-            import time as _time
-            SectorFundService._cache_at = _time.time()
+            SectorFundService._cache_at = time.time()
+        except Exception as exc:
+            if SectorFundService._cache_loaded:
+                age = int(time.time() - SectorFundService._cache_at)
+                logger.warning('板块映射重灌失败（%s），继续用上一份缓存（%d 条，%d 秒前）；'
+                               '清空重灌会让上层静默退回写死的静态表，绕过体检与人工审查'
+                               % (exc, len(SectorFundService._cache), age))
+                return
+            raise
         finally:
             if self._should_close(db):
                 db.close()
@@ -298,7 +310,9 @@ class SectorFundService:
                         # 而弹窗写的是"不会冒充老板署名"。现在不确认就不署名、不锁定，
                         # 只承认"这些行有机器证据、已批量看过"；署名与豁免留给逐行确认。
                         row.reviewed_by = row.reviewed_by or 'batch_review'
-                        row.owner_locked = bool(row.owner_locked)
+                        # owner_locked 一律不动。（上一版这里写 `= bool(row.owner_locked)`，
+                        # 除把 NULL 变成 0 之外什么都不做，而全仓读者都是 `== True`/真值判断
+                        # —— 空操作反而让"这行没被批量点击锁住"这件事看不出来，第 15 轮 m-2）
                     row.match_source = row.match_source or 'manual'
                     row.updated_at = _dt.now()
                 else:

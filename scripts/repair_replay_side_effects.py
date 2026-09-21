@@ -44,10 +44,10 @@ CUTOFF = datetime(2026, 9, 21, 20, 43)
 RUN_ID = 'replay-repair-20260921a'
 DATE_FIELDS = ('start_nav_date', 'end_nav_date', 'current_nav_date',
                'last_verify_date', 'verified_at')
-RESTORE_FIELDS = ('actual_change', 'ai_judgment', 'confidence', 'current_nav',
-                  'current_nav_date', 'end_nav', 'end_nav_date', 'is_correct', 'is_expired',
-                  'last_verify_date', 'start_nav', 'start_nav_date', 'status', 'verified_at',
-                  'verify_count', 'verify_history')
+# 还原清单不再手抄：第 15 轮漂移闸门抓到这条手抄清单**漏了 `verify_score`**，
+# 于是 88 行还原后 11 行的标量分数停在误写值上（`is_correct=True` 配 49 分，
+# 台账那条明明是 100），博主平均分一起偏。清单只有 restore_prediction_batch 一处。
+from restore_prediction_batch import RESTORE_FIELDS  # noqa: E402
 
 
 def _coerce(field, value):
@@ -135,6 +135,21 @@ def main():
             if blogger_id:
                 recalculate_blogger_stats(db, blogger_id, commit=False)
         db.commit()
+
+        # 还原之后必须自查"标量与台账是否还打脸"：首版就是漏了这一步，
+        # 还原清单少一个 verify_score 也照样报"已还原 88 条"（第 15 轮 MAJOR）。
+        from resync_verdict_scalars import find_desynced
+        repaired = db.query(Prediction).filter(Prediction.id.in_([r.id for r in rows])).all()
+        still, manual = find_desynced(repaired)
+        for p, have, want in still:
+            print('[残留] id=%s 的 verify_score 仍是 %s（台账 %s）' % (p.id, have, want))
+        for p, why in manual:
+            print('[需人工] id=%s：%s' % (p.id, why))
+        if still or manual:
+            print('[fail] 还原后还有 %d 行字段互相矛盾，别把这句当"修好了"'
+                  % (len(still) + len(manual)))
+            return 6
+
         yes = db.query(Prediction).filter(Prediction.is_deleted == False,
                                           Prediction.is_correct == True).count()
         no = db.query(Prediction).filter(Prediction.is_deleted == False,

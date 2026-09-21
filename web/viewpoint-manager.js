@@ -37,7 +37,13 @@
         const taskRunning = computed(() => ['pending', 'running'].includes(viewpointTask.value?.status));
         let pollTimer = null;
 
-        const errorMessage = (error) => error.response?.data?.detail || error.response?.data?.message || error.message;
+        // FastAPI 的 422 把 detail 写成数组（[{loc, msg}, ...]），直接插进模板就变成
+        // "[object Object]"，等于把唯一的报错线索吞掉（第 15 轮 MINOR-4）。
+        const errorMessage = (error) => {
+            const d = error.response?.data?.detail;
+            if (Array.isArray(d)) return d.map(x => ((x.loc || []).slice(1).join('.') || 'body') + '：' + x.msg).join('；');
+            return d || error.response?.data?.message || error.message;
+        };
         const selectedSourceList = () => fetchSourceOptions
             .map((item) => item.value)
             .filter((value) => selectedSources[value]);

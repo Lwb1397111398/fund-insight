@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 def clear_verification_fields(prediction) -> None:
     """把一条预测退回"未验证"，字段清单只有这一处定义。
 
-    两个调用方共用：`rollback_invalid_verifications`（数据不再支撑结论）与
-    `scripts/revert_degenerate_verdicts.py`（结论本身是退化/未来函数判出来的）。
+    `scripts/resync_verdict_scalars.py` 与还原清单都以本函数为准（少一个字段就会
+    在还原之后留下"结论与台账打脸"的半成品）。
+    三个调用方共用：`rollback_invalid_verifications`（数据不再支撑结论）、
+    `scripts/revert_degenerate_verdicts.py`（结论本身是退化/未来函数判出来的）、
+    `PredictionMaintenanceService._reset_verification`（改标/改周期后重验）。
     以前脚本靠调 service 的批量方法顺带清零，结果只能撤"今天已不可验"的行 ——
     用未来数据判出来、但今天仍可验的那批根本撤不掉（第 13 轮实测 94 条只撤了 1 条）。
     """
@@ -39,6 +42,11 @@ def clear_verification_fields(prediction) -> None:
     prediction.verify_score = None
     prediction.actual_change = None
     prediction.is_correct = None
+    # AI 复核那一腿的判词也是结论的一部分：结论撤了还留着判词，等于让一条
+    # status=pending 的预测挂着"预测下跌…方向判断正确"这种话（第 15 轮 m-2，
+    # 与 `prediction_maintenance_service._reset_verification` 是同一份清单，
+    # 现在那边直接调本函数）。
+    prediction.ai_judgment = None
     prediction.current_nav = None
     prediction.current_nav_date = None
     prediction.end_nav = None
@@ -413,7 +421,11 @@ class PredictionVerifyService:
                 FundHistory.fund_code == fund_code,
                 FundHistory.nav_date > window_end).order_by(
                 FundHistory.nav_date.asc()).first()
-            proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date, window_end)
+            # `today` 必须一路传到底：TTL 分档（窗口终点距今 <30 天 ⇒ 只信 1 天）与
+            # "未来时间戳"防线都按天算，历史回放/固定日期用例里不传就会拿墙上时钟
+            # 判出一个"当时并不存在的宽限"（第 15 轮 m-3；上一轮只修到 covering_probe 那层）。
+            proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date,
+                                                 window_end, today=today)
             # 两条合法证据，都必须建立在"问过"之上（第 12 轮 MAJOR-3：不能拿"到期很久了"
             # 这种纯日历推断替代凭据，那等于把 S7-b 的硬约束从后门放掉）：
             # ① 目标日之后已有净值 ⇒ 目标日确实是休市日；
@@ -1061,7 +1073,10 @@ class PredictionVerifyService:
         
         before_state = snapshot_prediction(prediction)
         prediction.current_nav = end_nav
-        prediction.current_nav_date = window_end
+        # 与 `end_nav_date` 同一个口径：写**实际用到**的那一天。上一版这里写请求的
+        # `window_end`，于是同一端点在两个字段里日期不一致（1106 那段注释正是为
+        # `end_nav_date` 说的），而两个字段都会进快照与前端"当前净值"（第 15 轮 m-1）。
+        prediction.current_nav_date = end_nav_real_date or window_end
         prediction.actual_change = actual_change
         prediction.is_correct = is_correct
         # 台账与状态同事务：有结论则 status 不得再留 pending（防二次扫待验证）

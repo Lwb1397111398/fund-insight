@@ -28,9 +28,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
-from _db_guard import pin_local_sqlite  # noqa: E402  只为拿到源库路径
+from _db_guard import pin_local_sqlite  # noqa: E402
 
-SOURCE_URL = pin_local_sqlite()
+# 钉库动作放在 main() 里：本模块的 `_explain` 要被单测直接 import，
+# 顶层调用 `pin_local_sqlite()` 会在测试进程里改 DATABASE_URL。
 
 # 首版在这里 `from src.models.database import ...` —— **那是事故根源**：
 # SQLAlchemy 的 engine 在 import 那一刻就按当时的 DATABASE_URL 建好并绑死，
@@ -65,7 +66,7 @@ def _same(a, b):
     return a == b
 
 
-def _explain(diffs, before, after, target, refused):
+def _explain(diffs, before, after, target, refused, last_ledger=None):
     """差异能不能解释。解释不了就必须留在报告里，别让"看起来合理"糊过去。"""
     if refused:
         return '新判据拒判（拿不到数据就不下结论）'
@@ -81,7 +82,34 @@ def _explain(diffs, before, after, target, refused):
             and 'end_nav' in diffs):
         return ('同一天标签下数值不同：旧结论写的是"当时能取到的更早净值"，而 `end_nav_date` '
                 '存的是请求日（S7-2 之前的老口径），所以看不出来；与本轮判据无关')
-    return None
+    return _llm_leg_explanation(diffs, before, last_ledger)
+
+
+# 旧结论里 LLM 复核那一腿改过的字段：端点/净值不在这里，只有判定输出。
+_LLM_LEG_FIELDS = {'is_correct', 'status', 'verify_score'}
+
+
+def _llm_leg_explanation(diffs, before, last_ledger):
+    """判据没动结论、只有"LLM 复核那一腿"消失 —— 这不是漂移，是离线重放少了一条腿。
+
+    触发条件全是行内证据，缺一条就不算解释：
+      1. 台账最后一条的 `verify_type` 就是 `llm_verify`（当次确实被 LLM 改判过）；
+      2. 它的 score / is_correct 与旧标量一致（说明旧结论来自那一腿，不是别处）；
+      3. 差异只落在判定输出上（端点一模一样 → 确定性判据的输入没变）。
+    `--offline` 断的是数据源，LLM 那一路本来也要密钥；重放只复现确定性判据，
+    所以这类行的 `is_correct` 必然与库里存的不同。首版没这条分类，
+    3180 就被报成"未解释漂移"（它同时也是那次漏还原 `verify_score` 的受害者）。
+    """
+    if not last_ledger or set(diffs) - _LLM_LEG_FIELDS:
+        return None
+    if last_ledger.get('verify_type') != 'llm_verify':
+        return None
+    if last_ledger.get('score') != before.get('verify_score'):
+        return None
+    if bool(last_ledger.get('is_correct')) != bool(before.get('is_correct')):
+        return None
+    return ('旧结论由 LLM 复核那一腿改判（台账 verify_type=llm_verify），'
+            '离线重放只跑确定性判据，不含这一腿')
 
 
 def _sqlite_path(url):
@@ -120,6 +148,44 @@ def _bind_session_factory_to(copy_path):
     return models.SessionLocal
 
 
+def _assert_factories_bound_to(copy_path):
+    """进程内**所有** `SessionLocal` 引用都必须绑在副本上，返回还指向别处的模块。
+
+    第 15 轮 m-5：原来那句自检是"造一个新工厂、再问它绑在哪"，永远为真，等于没检查。
+    真正会重演事故的是：某个模块在换绑之前就把旧工厂抓进了自己的命名空间 ——
+    `src/fund/fund_api.py`、`src/fund/fund_sync_manager.py` 这些都是模块级
+    `from src.models.database import SessionLocal`，它们写起来照样落在源库上。
+    那种"抓住旧引用"的模块在这里会被点名。
+    """
+    import sys
+
+    needle = os.path.basename(copy_path).lower()
+    stale = []
+    for module in list(sys.modules.values()):
+        factory = getattr(module, 'SessionLocal', None)
+        if factory is None or not hasattr(factory, 'bind'):
+            continue
+        try:
+            url = str(factory.bind.url)
+        except Exception:
+            continue
+        if needle not in url.lower():
+            stale.append('%s → %s' % (getattr(module, '__name__', '?'), url))
+    return stale
+
+
+def _fingerprint(path):
+    """源库文件的 (大小, sha256)：重放结束后再算一遍，变了就说明保护失效过。"""
+    import hashlib
+
+    stat = os.stat(path)
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return (stat.st_size, digest.hexdigest())
+
+
 def main():
     ap = argparse.ArgumentParser(description='库副本上的验证重放（判据漂移闸门）')
     ap.add_argument('--limit', type=int, default=30)
@@ -130,7 +196,7 @@ def main():
     ap.add_argument('--json', help='把逐条对照写成 JSON')
     args = ap.parse_args()
 
-    src = _sqlite_path(SOURCE_URL)
+    src = _sqlite_path(pin_local_sqlite())     # 必须在 import ORM 之前
     if not os.path.exists(src):
         print('[abort] 找不到源库：%s' % src)
         return 4
@@ -138,14 +204,17 @@ def main():
     shutil.copy2(src, tmp)
     os.environ['DATABASE_URL'] = 'sqlite:///' + tmp.replace('\\', '/')
     print('[副本] %s → %s' % (src, tmp))
+    # 源库指纹：副本保护失效时（首版就是这么把 88 行写进镜像库的）唯一能**事后**
+    # 抓住它的证据就是"源文件变了"。绑定自检挡得住"工厂指错库"，挡不住"某个模块
+    # 在换绑前就把旧工厂抓进自己命名空间"，所以两道都要。
+    src_fp = _fingerprint(src)
 
     SessionLocal = _bind_session_factory_to(tmp)
     from src.models.database import Prediction
 
     bound = str(SessionLocal().bind.url)
     if os.path.basename(tmp) not in bound:
-        print('[abort] 会话绑到了 %s 而不是副本 %s —— 拒绝运行，绝不写源库'
-              % (bound, tmp))
+        print('[abort] 换绑后的工厂指向 %s 而不是副本 %s —— 拒绝运行' % (bound, tmp))
         return 5
     print('[副本] 会话已绑定副本：%s' % bound)
 
@@ -160,11 +229,36 @@ def main():
                 return 0
         fa.fund_data_manager = _NoNet()
 
+        # `--offline` 还必须关掉 LLM 那一腿，否则"未解释漂移=0"是环境依赖的：
+        # 边界分（20~80）、涨跌幅在阈值附近、方向相反这几类都会去问 LLM 改判
+        # （`prediction_verify_service.py:996-1060`），有密钥时闸门带随机性并花配额，
+        # 没密钥时那 15 条 `verify_type=llm_verify` 的行必然被判成"未解释"。
+        # 关掉之后本闸门只复现**确定性判据**，差异归因才说得清（第 15 轮 MAJOR-3）。
+        class _NoLLM:
+            def verify_prediction(self, *a, **kw):
+                return None
+        PredictionVerifyService.llm_analyzer = property(lambda self: _NoLLM())
+        print('[offline] 已断数据源补拉与 LLM 复核腿：只复现确定性判据')
+
+    # 进程内**所有** SessionLocal 引用都必须指向副本（见 `_assert_factories_bound_to`）：
+    # 检查放在这里，是因为要被点名的模块（`src/fund/fund_api.py`、
+    # `src/fund/fund_sync_manager.py` 都是模块级 `from src.models.database import SessionLocal`）
+    # 到这会儿才全部 import 完。
+    stale = _assert_factories_bound_to(tmp)
+    if stale:
+        print('[abort] 这些模块手里的会话工厂还指着副本之外，重放会写进源库：\n   %s'
+              % '\n   '.join(stale))
+        return 5
+
     probe = SessionLocal()
     wanted = [int(x) for x in args.ids.split(',')] if args.ids else []
     rows = _sample(probe, Prediction, args.limit, wanted)
     ids = [p.id for p in rows]
     expected = {p.id: {f: getattr(p, f) for f in VERDICT_FIELDS} for p in rows}
+    # 台账末条要在这里（会话关闭前）抓下来：它记录"当次验证到底走了哪条腿"，
+    # 是判断某条差异能不能解释的证据（见 `_llm_leg_explanation`）。
+    ledger_tail = {p.id: ((p.verify_history or [None])[-1] if p.verify_history else None)
+                   for p in rows}
     print('[抽样] 已验证预测 %d 条重放' % len(ids))
     probe.close()
 
@@ -195,8 +289,8 @@ def main():
             refused = (result.get('success') is False
                        and after.get('is_correct') is None
                        and before.get('is_correct') is not None)
-            why = _extend_explanation = None
-            why = _explain(diffs, before, after, p.target_date, refused)
+            why = _explain(diffs, before, after, p.target_date, refused,
+                           last_ledger=ledger_tail.get(pid))
             entry = {'id': pid, 'fund_code': p.fund_code, 'target_date': str(p.target_date),
                      'diffs': {k: [str(v[0]), str(v[1])] for k, v in diffs.items()},
                      'reason': ((result.get('data') or {}).get('data_status') or {}).get('reason'),
@@ -227,7 +321,21 @@ def main():
                            'unexplained': unexplained, 'errors': errors},
                           f, ensure_ascii=False, indent=1)
             print('[ok] 对照明细：%s' % args.json)
-        return 3 if unexplained or errors else 0
+        rc = 3 if unexplained or errors else 0
+        # 事后证据：源库文件一个字节都不该变。工厂扫描挡"指向错库"，这一道挡
+        # "某个模块早就抓走了旧工厂"这类扫不到的写法 —— 首版事故就是它把 88 行
+        # 写进了镜像库，当时两道检查都没有（第 15 轮 m-5）。
+        try:
+            if _fingerprint(src) != src_fp:
+                print('[!!] 源库文件在这次重放里被改动了：%s\n'
+                      '     副本保护失效，这次结果不能当"只动了副本"用，先核对镜像库。' % src)
+                rc = 6
+            else:
+                print('[ok] 源库未被改动（大小与 sha256 与开跑前一致）：%s' % os.path.basename(src))
+        except OSError as exc:
+            print('[warn] 源库指纹读不了，无法证明没被写：%s' % exc)
+            rc = rc or 6
+        return rc
     finally:
         db.close()
         if not args.keep and os.path.exists(tmp):

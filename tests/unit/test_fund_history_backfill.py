@@ -100,13 +100,86 @@ def test_short_window_does_not_demand_impossible_density(manager):
 
 
 def test_short_window_with_end_nav_covered_still_skips_the_network(manager):
-    """目标日自己有净值行、窗口 <14 天 ⇒ 仍然免打接口（第 9 轮那条保护不许退化）。"""
+    """目标日自己有净值行、窗口密度够 ⇒ 仍然免打接口（第 9 轮那条保护不许退化）。"""
     m, calls = manager
     db = _session()
     code, start, end = '512680', date(2026, 7, 10), date(2026, 7, 13)
     _seed(db, code, [date(2026, 7, 9), date(2026, 7, 10), date(2026, 7, 13)])
     assert m.backfill_history_range(code, start, end, db=db) == 0
     assert calls == []
+
+
+def test_one_row_short_window_must_ask_instead_of_spinning(manager):
+    """第 15 轮 M-1：窗口里只有终点那一行时，"短窗口免密度检查"会把它永远放过。
+
+    旧行为：`span_days < 14` 整体跳过密度检查 ⇒ inside=1 也直接 return 0，
+    既不补拉也拿不到凭据；验证门要 ≥2 个点（`VERIFY_MIN_DATA_POINTS`），
+    起点行又在窗口之前（所以落不进退化终点判据）⇒ 这条预测天天进到期队列、
+    天天拒判、永远归不了因。窗口装得下 2 个交易日，就该去问一次。
+    """
+    m, calls = manager
+    db = _session()
+    code, start, end = '159995', date(2026, 5, 16), date(2026, 5, 20)   # 周六→周三
+    _seed(db, code, [date(2026, 5, 14), date(2026, 5, 20)])             # 窗内只有终点
+    assert m.backfill_history_range(code, start, end, db=db) > 0, '只有一行就不问了'
+    assert len(calls) == 1
+    db.commit()
+    inside = db.query(FundHistory).filter(
+        FundHistory.fund_code == code, FundHistory.nav_date >= start,
+        FundHistory.nav_date <= end).count()
+    assert inside >= 2, '问过之后窗口仍不够判据所需的点数'
+    assert m.backfill_history_range(code, start, end, db=db) == 0
+    assert len(calls) == 1, '补齐之后第二次不该再打接口'
+
+
+def test_one_row_window_with_empty_source_leaves_a_proof(manager):
+    """问过了、源端这段真没有 ⇒ 记凭据，下一轮凭它跳过，而不是每天白跑一趟。"""
+    m, calls = manager
+
+    class _Empty:
+        def get_fund_history_range(self, code, start, end):
+            calls.append((code, start, end))
+            return []
+
+    m.api = _Empty()
+    db = _session()
+    code, start, end = '159996', date(2026, 5, 16), date(2026, 5, 20)
+    _seed(db, code, [date(2026, 5, 14), date(2026, 5, 20)])
+    assert m.backfill_history_range(code, start, end, db=db) == 0
+    assert len(calls) == 1, '没问过就把窗口判成"只有 1 行"是不成立的'
+    db.commit()
+
+    from src.fund import backfill_proofs
+    assert backfill_proofs.read_probes(db, code), '问过并拿到空结果，却没留下凭据'
+    assert m.backfill_history_range(code, start, end, db=db) == 0
+    assert len(calls) == 1, '已有凭据还重复打接口 = Cron 空转'
+
+
+def test_out_of_window_rows_do_not_inflate_the_proof(manager):
+    """第 15 轮 m-4：凭据正文"数据源在区间内给到 N 条"只能数区间**内**的行。
+
+    接口对空区间回吐区间外的行时，照 `len(history)` 记会让凭据说谎，
+    并在 TTL 内压住本该重问的窗口。
+    """
+    m, calls = manager
+
+    class _OffRange:
+        def get_fund_history_range(self, code, start, end):
+            calls.append((code, start, end))
+            return [{'date': date(2020, 1, 6), 'nav': 1.0, 'growth': 0.0}]
+
+    m.api = _OffRange()
+    db = _session()
+    code, start, end = '159997', date(2026, 5, 16), date(2026, 5, 20)
+    _seed(db, code, [date(2026, 5, 14), date(2026, 5, 20)])
+    m.backfill_history_range(code, start, end, db=db)
+    db.commit()
+
+    from src.fund import backfill_proofs
+    probes = backfill_proofs.read_probes(db, code)
+    assert probes, '问过却没记凭据'
+    assert probes[-1]['source_rows'] == 0, probes[-1]
+    assert '给到 0 条' in backfill_proofs.describe(probes[-1]), backfill_proofs.describe(probes[-1])
 
 
 def test_missing_start_still_backfills(manager):

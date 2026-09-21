@@ -161,3 +161,60 @@ def test_normal_weekday_case_is_untouched(test_db):
     _rows(test_db, '159915', [date(2026, 7, 14), t, date(2026, 7, 16)])
     r = _check(test_db, '159915', date(2026, 7, 14), t)
     assert r['available'] is True and r['reason'] == 'exact_target', r
+
+
+def test_current_nav_date_uses_the_nav_actually_used(test_db, monkeypatch):
+    """第 15 轮 m-1：同一端点不能在两个字段里是两个日期。
+
+    `end_nav_date` 在 S7-2 改成"实际取到的那一天"（周六没有净值就是周五），
+    但 `current_nav_date` 还写着请求的 `window_end` —— 同一笔净值两个日期，
+    而两个字段都会进快照与前端"当前净值"。
+    """
+    from src.services import prediction_verify_service as pvs
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 9, 21)
+
+    class _NoLLM:
+        def verify_prediction(self, *a, **kw):
+            return None
+
+    monkeypatch.setattr(pvs, 'date', FixedDate)
+    # 边界分才会去问 LLM，这里把那一腿关掉：本用例测的是落库日期，不是评分
+    monkeypatch.setattr(pvs.PredictionVerifyService, 'llm_analyzer',
+                        property(lambda self: _NoLLM()))
+    _rows(test_db, '159206', [PREV, START, NEXT_MON])
+    p = _seed(test_db, '159206', PREV, TARGET_SAT)
+    result = PredictionVerifyService(test_db).verify_prediction(p.id)
+    test_db.refresh(p)
+    assert result.get('success') is True, result
+    assert p.end_nav_date == START, p.end_nav_date          # 用的是周五那条
+    assert p.current_nav_date == START, (
+        'current_nav_date 仍写请求的周六 %s，与 end_nav_date %s 打脸'
+        % (p.current_nav_date, p.end_nav_date))
+    assert p.current_nav == p.end_nav
+
+
+def test_injected_today_reaches_the_proof_ttl(test_db, monkeypatch):
+    """第 15 轮 m-3：注入的 `today` 要一路传到凭据判定。
+
+    TTL 分档（窗口终点距今 <30 天 ⇒ 只信 1 天）与"未来时间戳"防线都按天算；
+    上一轮只把 today 传到了 `covering_probe`，凭据入口这一层仍吃墙上时钟 ⇒
+    固定日期的回放会拿到一个"当时并不存在的宽限"。
+    """
+    from src.fund import backfill_proofs
+
+    seen = {}
+
+    def _spy(db, code, start, end, today=None):
+        seen['today'] = today
+        return None
+
+    monkeypatch.setattr(backfill_proofs, 'fresh', _spy)
+    _rows(test_db, '515440', [date(2026, 9, 2), date(2026, 9, 3)])
+    injected = date(2026, 5, 6)
+    _check(test_db, '515440', date(2026, 7, 27), date(2026, 7, 28), today=injected)
+    assert seen.get('today') == injected, (
+        '凭据判定没吃到注入的 today（拿到的是 %r）' % (seen.get('today'),))

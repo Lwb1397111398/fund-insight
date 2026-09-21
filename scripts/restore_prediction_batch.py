@@ -28,6 +28,10 @@ RESTORE_FIELDS = (
     "current_nav_date", "end_nav", "end_nav_date", "actual_change", "is_correct",
     "verify_score", "ai_judgment", "verified_at", "verify_count", "last_verify_date",
     "next_verify_date", "is_expired", "has_active_prediction",
+    # 第 14 轮把 verify_history 加进了 SNAPSHOT_FIELDS，但还原侧只遍历这张表 ——
+    # 结果"结论回来了、历史还是重判那一轮"依旧成立（第 15 轮查出，见
+    # scripts/resync_verdict_scalars.py 的来由）。快照里有就必须在这里还回去。
+    "verify_history",
 )
 
 # 快照把日期写成了 ISO 字符串，直接塞回 Date/DateTime 列 SQLite 会拒绝
@@ -55,6 +59,26 @@ def coerce_value(column, value):
     if isinstance(value, datetime) and type_name.startswith(_DATE_TYPES):
         return value.date()
     return value
+
+
+def apply_before_state(prediction, before_state, columns=None):
+    """把一条 `before_state` 里认识的字段写回预测，返回真正发生变化的字段名。
+
+    字段清单**只有 `RESTORE_FIELDS` 这一处**，而且还原走这里：以前 main() 里内联一段
+    遍历，单测又自己抄一段同样的遍历，于是"清单少一个字段"这种错两头都测不出来
+    （第 15 轮：`verify_history` 在快照里有、在还原清单里没有）。
+    """
+    if columns is None:
+        columns = type(prediction).__table__.columns
+    changed = []
+    for field in RESTORE_FIELDS:
+        if field not in before_state:
+            continue
+        value = coerce_value(columns.get(field), before_state[field])
+        if getattr(prediction, field, None) != value:
+            changed.append(field)
+        setattr(prediction, field, value)
+    return changed
 
 
 def main():
@@ -104,10 +128,7 @@ def main():
                 continue
             before = dict(log.before_state or {})
             snapshot = snapshot_prediction(prediction)
-            columns = Prediction.__table__.columns
-            for field in RESTORE_FIELDS:
-                if field in before:
-                    setattr(prediction, field, coerce_value(columns.get(field), before[field]))
+            apply_before_state(prediction, before)
             add_prediction_change_log(
                 db, prediction, action='rollback',
                 source='restore:%s' % args.run_id[:40],

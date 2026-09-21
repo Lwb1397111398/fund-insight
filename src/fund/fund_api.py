@@ -868,11 +868,16 @@ class FundDataManager:
                 # `end_covered` 也是 S7-2 补的：短窗口只看"起点被覆盖 + 窗内有 1 条"就免问，
                 # 于是"目标日那天本地缺行"的行永远问不到凭据，验证侧只能在"猜"与"无限重试"
                 # 之间二选一（第 12 轮 MAJOR-3）。要求终点也被覆盖才允许免打接口。
+                # 第 15 轮 M-1：短窗口原来在 `span_days < 14` 时**整体跳过密度检查**，
+                # 于是"窗口里只有终点那一行"（inside=1）也直接免问 —— 而验证门要 ≥2 个点，
+                # 这种行既不补拉、又因起点在窗口之前而落不进退化终点判据、又拿不到凭据，
+                # 只能天天进到期队列天天拒判（第 9 轮 MAJOR-2 的修法过头留下的另一半）。
+                # 密度门槛对**所有**窗口都生效；`min_inside` 自己已经被
+                # `max(1, span_days)` 夹到窗口物理上可能有的天数，不会再出现"永远拉不满"。
                 end_covered = db.query(FundHistory.nav_date).filter(
                     FundHistory.fund_code == fund_code,
                     FundHistory.nav_date == end_date).first() is not None
-                if oldest_date <= start_date and inside > 0 and end_covered and (
-                        span_days < 14 or inside >= min_inside):
+                if oldest_date <= start_date and end_covered and inside >= min_inside:
                     return 0
 
             # S7-2/S7-b：先问"这段历史是不是已经向数据源要过、且源端给不出"。
@@ -910,10 +915,13 @@ class FundDataManager:
             )
 
             count = 0
+            in_window = 0
             for item in history:
                 item_date = item['date']
                 if isinstance(item_date, datetime):
                     item_date = item_date.date()
+                if isinstance(item_date, date) and start_date <= item_date <= end_date:
+                    in_window += 1
                 if item_date in existing_dates:
                     continue
                 db.add(FundHistory(
@@ -928,7 +936,10 @@ class FundDataManager:
 
             # 源端"给了几条"也要记：给了 1 条而窗口需要 2 条时，再问一次还是那 1 条
             # （158038 实测如此），不记就会每天重问、每天照旧报"数据不足"。
-            backfill_proofs.record_probe(db, fund_code, start_date, end_date, len(history))
+            # 数的是**落在请求区间内**的行数，不是 len(history)：源端偶尔会就着一个空
+            # 区间回吐区间外的行，照 len 记会让凭据正文（"数据源在 start~end 内给到 N 条"）
+            # 说谎，并在 TTL 内压住本该重问的窗口（第 15 轮 m-4）。
+            backfill_proofs.record_probe(db, fund_code, start_date, end_date, in_window)
 
             if close_db:
                 db.commit()

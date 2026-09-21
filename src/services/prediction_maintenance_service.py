@@ -334,22 +334,12 @@ class PredictionMaintenanceService:
 
     @staticmethod
     def _reset_verification(prediction: Prediction) -> None:
-        prediction.status = "pending"
-        prediction.is_expired = False
-        prediction.has_active_prediction = True
-        prediction.is_correct = None
-        prediction.actual_change = None
-        prediction.verify_count = 0
-        prediction.verify_score = None
-        prediction.ai_judgment = None
-        prediction.verified_at = None
-        prediction.last_verify_date = None
-        prediction.start_nav = None
-        prediction.start_nav_date = None
-        prediction.current_nav = None
-        prediction.current_nav_date = None
-        prediction.end_nav = None
-        prediction.end_nav_date = None
+        # 清单只有 `clear_verification_fields` 一处。这里以前自己抄了一份 16 行赋值，
+        # 结果两份各自漂移：撤结论时 `ai_judgment` 该不该清，只有其中一份知道
+        # （第 15 轮 m-2）。
+        from src.services.prediction_verify_service import clear_verification_fields
+
+        clear_verification_fields(prediction)
 
     def _refresh_fund_counts(self, fund_codes) -> None:
         for fund_code in fund_codes:
