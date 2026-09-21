@@ -231,7 +231,14 @@ class SectorFundService:
 
             mapping.reviewed = reviewed
             if reviewed:
-                mapping.reviewed_by = 'owner' if owner_confirm else (mapping.reviewed_by or 'agent')
+                # 人在页面上点"标记已审查"就是**老板的结论**：署名必须是 'owner' 并锁定，
+                # 不能保留 agent 行原来的 'agent'。第 8 轮实测：秦安股份(conf 0.7975)、
+                # 硬件(0.755) 两个 agent 行被点过审查后是 `owner_locked=1 + reviewed_by='agent'`
+                # —— 一边靠 owner 分支绕过了 agent 自己的 0.80 门槛去驱动预测改标，
+                # 一边又被回写脚本当成"老板手定的有意代理"报给老板，两处都在说谎。
+                # 保留"一次点击即老板确认"的语义（老板明确要这个覆盖通道），
+                # 但署名与锁定必须一致、可追溯。
+                mapping.reviewed_by = 'owner'
                 mapping.owner_locked = True
                 mapping.match_source = mapping.match_source or 'manual'
             else:

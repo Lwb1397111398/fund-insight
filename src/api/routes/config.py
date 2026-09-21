@@ -1364,6 +1364,18 @@ def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Op
         values.get('fund_code'), values.get('fund_name'), sector)
     if accusation:
         return 'identity_unproven:%s' % accusation[:120]
+    if row is None:
+        # 新建行要有能看的东西：`fund_name=None` 会顺着改标传到
+        # `prediction.fund_name`（第 8 轮 MAJOR-3 实测），置信度越界则会让审查门与
+        # 改标门槛比出一个永远不成立的数。
+        if not values.get('fund_name'):
+            return 'created_row_needs_fund_name'
+        conf = values.get('confidence')
+        if conf is not None and not (0.0 <= float(conf) <= 1.0):
+            return 'confidence_out_of_range:%s' % conf
+        kws = values.get('keywords')
+        if isinstance(kws, str):
+            return 'keywords_must_be_a_list'
     try:
         # 外键保障：sector_fund_mapping.fund_code 指向 fund_info，先补最小档案再改映射
         # （复用 PUT/POST 同一个 helper，别再抄一份）

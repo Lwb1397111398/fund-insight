@@ -387,6 +387,37 @@ def test_realign_survives_legacy_array_evidence(test_db, monkeypatch):
     assert evidence['identity_realign']['from_code'] == '516810'
 
 
+def test_human_review_is_attributed_to_the_owner(test_db):
+    """第 8 轮 BLOCKER：点一次"标记已审查"= 老板的结论，署名与锁定必须一致。
+
+    以前的写法让 agent 行保留 `reviewed_by='agent'` 却拿到 `owner_locked=1`：
+    一边用 owner 分支绕过 agent 自己的置信度门槛去驱动预测改标，
+    一边在回写脚本里被报成"老板手定的有意代理"（实测 秦安股份 0.7975、硬件 0.755）。
+    """
+    row = _row('T-审查署名', '562700', '汽车零部件ETF', reviewed=False,
+               match_source='agent', reviewed_by='agent', confidence=0.7975,
+               verified_at=datetime.now())
+    test_db.add(row)
+    test_db.commit()
+    from src.services.sector_fund_service import SectorFundService
+    assert SectorFundService(test_db).mark_reviewed_by_id(row.id) is True
+    test_db.refresh(row)
+    assert row.reviewed is True
+    assert row.reviewed_by == 'owner', '人点的审查不许署成 agent 的名'
+    assert row.owner_locked is True
+
+
+def test_audit_import_still_refuses_a_row_the_owner_blessed(test_db):
+    """上一例的下游：真被老板批过的行，机器回写必须拒绝覆盖（不能拿'agent'当挡箭牌）。"""
+    from src.api.routes.config import _audit_owner_guard
+    blessed = _row('T-审查署名2', '512480', '半导体ETF', reviewed=True,
+                   reviewed_by='owner', owner_locked=True)
+    assert _audit_owner_guard(blessed) == 'owner_locked'
+    stale_agent_lock = _row('T-审查署名3', '512480', '半导体ETF', reviewed=True,
+                            reviewed_by='agent', owner_locked=True)
+    assert _audit_owner_guard(stale_agent_lock) == 'owner_locked'
+
+
 def test_manifest_write_failure_still_reports_created_codes():
     """M6：清单写坏时，已提交的基金档案必须被喊出来（否则回滚漏删）。"""
     import inspect
