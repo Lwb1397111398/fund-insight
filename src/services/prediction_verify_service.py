@@ -292,7 +292,14 @@ class PredictionVerifyService:
         于是被判"基金数据不足"；但本类后面**本来就有**"目标日是周末就用最近净值验证"的分支
         （`weekend_previous` / `waited_previous`），只是被这道充分性门挡在前面走不到。
         这里只放宽判据：顺延 grace_days 天内能凑够就放行，
-        **终点净值怎么取一律不变**（仍取目标日前最近那条），所以不会改变任何已能验证的预测的结论。
+        **终点净值怎么取一律不变**（`get_nav_by_date` 的 DB 路径本来就带
+        `nav_date <= target_date`，仍取目标日前最近那条），所以不会改变任何已能验证的预测的结论。
+
+        **窄化（第 10 轮评审指出，成立）**：必须至少有一条**目标日及之前**的净值才允许顺延放行。
+        只数"目标日之后 7 天内有几条"会放过 158038 这类行 —— 目标日 09-04、
+        本地净值最早 09-07，目标日前一条都没有；那种行放行了也没有合法终点，
+        真实终点只能落到 API 兜底的"当前最新净值"，那是**未来函数**。
+        它不是休市顺延，是缺历史，该留在 insufficient_points 里由 S7-2 归成结构性不可验。
         """
         if not fund_code or nav_start_date is None or window_end is None:
             return False
@@ -300,11 +307,14 @@ class PredictionVerifyService:
             end = window_end + _dt.timedelta(days=grace_days)
         except Exception:
             return False
-        return self.db.query(FundHistory).filter(
+        dates = [r[0] for r in self.db.query(FundHistory.nav_date).filter(
             FundHistory.fund_code == fund_code,
             FundHistory.nav_date >= nav_start_date,
             FundHistory.nav_date <= end,
-        ).count() >= (min_data_points or 1)
+        ).all() if r[0] is not None]
+        if not any(d <= window_end for d in dates):
+            return False            # 目标日前一条净值都没有 = 缺历史，不是休市
+        return len(dates) >= (min_data_points or 1)
 
     def _check_fund_data_availability(
         self,

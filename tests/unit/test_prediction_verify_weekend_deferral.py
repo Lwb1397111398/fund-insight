@@ -50,6 +50,19 @@ def test_genuinely_missing_history_still_fails(test_db):
     assert r['reason'] == 'insufficient_points', r
 
 
+def test_no_nav_before_target_is_not_treated_as_a_weekend(test_db):
+    """第 10 轮评审的窄化：目标日前一条净值都没有 = 缺历史，不是休市顺延。
+
+    158038 就是这种：目标日 09-04，本地净值最早 09-07。放它过门的话，
+    验证侧拿不到 `nav_date <= target` 的终点净值，只能靠 API 兜底取"当前最新"，
+    那是未来函数 —— 准确率核心不允许这种口子。
+    """
+    _rows(test_db, '158038', [date(2026, 9, 7), date(2026, 9, 8)])
+    r = _check(test_db, '158038', date(2026, 8, 28), date(2026, 9, 4))
+    assert r['available'] is False, r
+    assert r['reason'] == 'insufficient_points', r
+
+
 def test_normal_weekday_case_is_untouched(test_db):
     """已能验证的常规预测结论不变（这道修改只放宽、不收紧）。"""
     t = date(2026, 7, 15)        # 周三，有净值
