@@ -407,6 +407,19 @@ class PredictionVerifyService:
 
         if data_points < min_data_points:
             # 点数不足。到这里起点/终点已不是同一条，缺的是**窗口内**的历史净值。
+            # 先分清"问过数据源、它确实给不出"与"还没问过"：只有前者才配叫结构性不可验。
+            from src.fund import backfill_proofs
+
+            proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date, window_end)
+            if proven_empty:
+                return _fail(
+                    f"目标日附近这段历史净值拿不到（窗口 [{nav_start_date} ~ {window_end}] 内 "
+                    f"{data_points} 条，需 {min_data_points} 条）：{backfill_proofs.describe(proven_empty)}"
+                    f" ⇒ 属**结构性不可验**，补拉最新数据不会改变结论。"
+                    f"出口只有两个：人工处置这条预测，或等这段历史被补录后自动重验",
+                    reason='no_source_history',
+                    source_proof=proven_empty,
+                )
             latest_record = None
             if fund_code in history_cache:
                 cached = history_cache[fund_code]
@@ -835,17 +848,20 @@ class PredictionVerifyService:
         # 先按区间从数据源补齐再检查；补拉失败不阻断，继续用现有数据走原判断。
         try:
             from src.fund.fund_api import fund_data_manager
-            if fund_data_manager.backfill_history_range(
+            backfilled = fund_data_manager.backfill_history_range(
                 fund_code, nav_start_date, window_end, db=self.db
-            ):
+            )
+            if backfilled:
                 self._invalidate_fund_cache(fund_code)
-                # 补拉到的是数据源事实数据，独立提交保存；
-                # 否则本次验证若失败回滚，下次又要重新拉一遍。
-                try:
-                    self.db.commit()
-                except Exception as commit_error:
-                    logger.warning(f"[Verify] 基金 {fund_code} 补拉数据提交失败: {commit_error}")
-                    self.db.rollback()
+            # 补拉到的净值与"源端这段确实没有"的负凭据都是数据源事实，独立提交保存；
+            # 否则本次验证一失败回滚，下次又要重拉一遍、又重问一遍数据源
+            # （凭据写入自己只 flush 不 commit —— 库代码不该替调用方提交事务）。
+            # 这里没有别的东西在事务里：起点/终点净值都在本行之后才取。
+            try:
+                self.db.commit()
+            except Exception as commit_error:
+                logger.warning(f"[Verify] 基金 {fund_code} 补拉数据提交失败: {commit_error}")
+                self.db.rollback()
         except Exception as backfill_error:
             logger.warning(
                 f"[Verify] 基金 {fund_code} 历史净值补拉异常，按现有数据检查: {backfill_error}"

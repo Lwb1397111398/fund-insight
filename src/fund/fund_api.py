@@ -819,11 +819,31 @@ class FundDataManager:
                 # 预测 1709：512680，2026-07-10→07-11 周六，inside=1、门槛=2）。
                 # 14 天以内的窗口干脆只看起点覆盖不看密度：密度样本太少，判它"缺"没意义。
                 min_inside = min(max(2, int(span_days * 5 / 7 * 0.6)), max(1, span_days))
-                if oldest_date <= start_date and (span_days < 14 or inside >= min_inside):
+                # `inside > 0` 是 S7-2 补的：短窗口"只看起点覆盖"会让**整段窗口空着**的行
+                # （实测 003033：本地净值停在 2020-12-08，预测窗口在 2026 年 9 月）
+                # 永远走不进补拉分支 ⇒ "源端到底有没有"这件事永远无从证明，
+                # 结构性不可验的负凭据也就永远建不起来（Cron 只能天天报"数据不足"）。
+                if oldest_date <= start_date and inside > 0 and (
+                        span_days < 14 or inside >= min_inside):
                     return 0
+
+            # S7-2/S7-b：先问"这段历史是不是已经向数据源要过、且源端给不出"。
+            # 有未过期的负凭据就直接跳过重复请求 —— 否则 Cron 每天为同样的窗口白跑一趟。
+            from src.fund import backfill_proofs
+
+            proven_empty = backfill_proofs.fresh(db, fund_code, start_date, end_date)
+            if proven_empty:
+                logger.debug(f"[FundData] 基金 {fund_code} {start_date}~{end_date} "
+                             f"已有负凭据，跳过重复补拉")
+                return 0
 
             history = self.api.get_fund_history_range(fund_code, start_date, end_date)
             if not history:
+                # 真的问过数据源、它对这个区间一条都没给 —— 这是"结构性不可验"的合法证据
+                # （没问过就下这个结论是瞎猜，见 S7-2 工单）。
+                backfill_proofs.record_probe(db, fund_code, start_date, end_date, 0)
+                if close_db:
+                    db.commit()
                 return 0
 
             fund_info = db.query(FundInfo).filter(FundInfo.fund_code == fund_code).first()
@@ -851,6 +871,10 @@ class FundDataManager:
                 ))
                 existing_dates.add(item_date)
                 count += 1
+
+            # 源端"给了几条"也要记：给了 1 条而窗口需要 2 条时，再问一次还是那 1 条
+            # （158038 实测如此），不记就会每天重问、每天照旧报"数据不足"。
+            backfill_proofs.record_probe(db, fund_code, start_date, end_date, len(history))
 
             if close_db:
                 db.commit()

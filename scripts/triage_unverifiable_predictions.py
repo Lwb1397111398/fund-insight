@@ -75,8 +75,10 @@ def main():
     args = ap.parse_args()
 
     from src.models.database import SessionLocal
+    from src.services.prediction_verify_service import PredictionVerifyService
     db = SessionLocal()
     try:
+        svc = PredictionVerifyService(db)
         due = filter_due_for_verify(db)
         print('[队列] 到期未验证 %d 条' % len(due))
         calendar_cache = {}
@@ -93,6 +95,14 @@ def main():
                              if row.prediction_date <= d <= row.target_date]) if (
                 row.prediction_date and row.target_date) else 0
             kind = classify(row, start_day, end_day, in_window)
+            # 判据口径直接问验证服务（只读、skip_wait=True），免得脚本自己另立一套分类
+            svc_reason = None
+            if code and row.prediction_date and row.target_date:
+                svc_reason = svc._check_fund_data_availability(
+                    fund_code=code, nav_start_date=row.prediction_date,
+                    window_end=row.target_date, target_date=row.target_date,
+                    skip_wait=True).get('reason')
+            kind = '%s/%s' % (kind, svc_reason) if svc_reason else kind
             counts[kind] = counts.get(kind, 0) + 1
             report.append({'id': row.id, 'fund_code': code, 'fund_name': row.fund_name,
                            'prediction_date': str(row.prediction_date),
@@ -103,17 +113,18 @@ def main():
                            'local_last': str(dates[-1]) if dates else None,
                            'start_nav_date': str(start_day) if start_day else None,
                            'end_nav_date': str(end_day) if end_day else None,
+                           'judge_reason': svc_reason,
                            'class': kind})
 
         print('\n%-6s %-8s %-10s %-10s %-5s %-10s %-10s %s'
-              % ('id', 'code', '起日', '目标', '点数', '起点净值', '终点净值', '分类'))
-        print('-' * 78)
+              % ('id', 'code', '起日', '目标', '点数', '起点净值', '终点净值', '分类/判据'))
+        print('-' * 92)
         for r in report:
             print('%-6s %-8s %-10s %-10s %-5s %-10s %-10s %s'
                   % (r['id'], r['fund_code'] or '-', r['prediction_date'] or '-',
                      r['target_date'] or '-', r['points_in_window'],
                      r['start_nav_date'] or '无', r['end_nav_date'] or '无', r['class']))
-        print('-' * 78)
+        print('-' * 92)
         total = sum(counts.values())
         for kind, n in sorted(counts.items(), key=lambda kv: -kv[1]):
             print('  %-20s %d' % (kind, n))
