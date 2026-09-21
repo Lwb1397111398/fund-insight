@@ -42,6 +42,8 @@ OUT_DIR = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20')
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true', help='只补空 fund_name，别的一律不写')
+    ap.add_argument('--rename-to-official', action='store_true',
+                    help='把"股票名挂在别人基金码"的行改成基金域真名（加性改名，不删数据）')
     ap.add_argument('--limit', type=int, default=None, help='只处理前 N 行（先在云上小批试）')
     args = ap.parse_args()
 
@@ -55,7 +57,7 @@ def main():
         if args.limit:
             rows = rows[:args.limit]
         print('[体检] fund_info %d 行' % len(rows))
-        report, filled = [], 0
+        report, filled, renamed = [], 0, 0
         for r in rows:
             try:
                 v = arbitrate_mapping(r.fund_code, r.fund_name or '', '')
@@ -78,6 +80,22 @@ def main():
             report.append({'fund_code': r.fund_code, 'stored_name': r.fund_name,
                            'official_name': official, 'verdict': verdict,
                            'reason': (v.get('reason') or '')[:120]})
+            if verdict == 'not_a_fund' and official and args.rename_to_official:
+                # 改名是加性的（净值与预测都不动），但只在**没有活预测引用**时才做：
+                # 名字一改，博主那些"我说的就是这只股票"的历史线索就找不回来了。
+                from src.models.database import Prediction
+                live = db.query(Prediction).filter(
+                    Prediction.fund_code == r.fund_code,
+                    Prediction.is_deleted.is_(False)).count()
+                if live:
+                    print('   [跳过] %s 仍被 %d 条未删除预测引用，先不动'
+                          % (r.fund_code, live))
+                elif args.apply:
+                    r.fund_name = official
+                    renamed += 1
+                else:
+                    print('   [可改名] %s %s → %s'
+                          % (r.fund_code, r.fund_name, official))
         if args.apply:
             db.commit()
         os.makedirs(OUT_DIR, exist_ok=True)
