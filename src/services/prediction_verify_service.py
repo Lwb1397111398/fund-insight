@@ -282,6 +282,30 @@ class PredictionVerifyService:
             return value
         return None
 
+    def _deferred_points_enough(self, fund_code: str, nav_start_date: date,
+                                window_end: date, min_data_points: int,
+                                grace_days: int = 7) -> bool:
+        """目标日休市时，顺延几天看能否凑够净值点数。
+
+        为什么需要（S7-1，实测复现）：预测 1709（512680，周期 1 天，目标 2026-07-11 **周六**）
+        在 `[起点, 目标日]` 窗口里只有 1 条净值（07-10），永远达不到 `min_data_points=2`，
+        于是被判"基金数据不足"；但本类后面**本来就有**"目标日是周末就用最近净值验证"的分支
+        （`weekend_previous` / `waited_previous`），只是被这道充分性门挡在前面走不到。
+        这里只放宽判据：顺延 grace_days 天内能凑够就放行，
+        **终点净值怎么取一律不变**（仍取目标日前最近那条），所以不会改变任何已能验证的预测的结论。
+        """
+        if not fund_code or nav_start_date is None or window_end is None:
+            return False
+        try:
+            end = window_end + _dt.timedelta(days=grace_days)
+        except Exception:
+            return False
+        return self.db.query(FundHistory).filter(
+            FundHistory.fund_code == fund_code,
+            FundHistory.nav_date >= nav_start_date,
+            FundHistory.nav_date <= end,
+        ).count() >= (min_data_points or 1)
+
     def _check_fund_data_availability(
         self,
         fund_code: str,
@@ -359,7 +383,10 @@ class PredictionVerifyService:
             payload.update(extra)
             return payload
 
-        if data_points < min_data_points:
+        if data_points < min_data_points and not self._deferred_points_enough(
+                fund_code, nav_start_date, window_end, min_data_points):
+            # 第二个条件是 S7-1：目标日落在休市日、顺延几天就凑得够点数的短期预测，
+            # 不该在这里被判"数据不足"，要让它走到下面的 weekend_previous / waited_previous。
             latest_record = None
             if fund_code in history_cache:
                 cached = history_cache[fund_code]
