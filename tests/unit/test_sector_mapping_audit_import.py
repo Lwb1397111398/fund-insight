@@ -445,6 +445,41 @@ def test_audit_import_absent_column_keeps_value_explicit_null_clears_it(monkeypa
         app.dependency_overrides.pop(get_db, None)
 
 
+def test_audit_import_cannot_wipe_the_fund_name(test_db, monkeypatch):
+    """第 9 轮 BLOCKER：显式把 `fund_name` 抹空必须拒 —— 名字一空，体检就永远
+    判"没法比对"（unknown = 不指控），这行等于永久免疫，还能带着 reviewed=True 服务。
+    但"没给这一列"是合法的局部更新，必须保留现值。
+    """
+    from src.api.routes.config import _audit_apply_row
+    from src.models.database import FundInfo, SectorFundMapping
+    monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                        lambda c, n, s: (None, None))
+    test_db.add(FundInfo(fund_code='512000', fund_name='券商ETF华宝'))
+    row = SectorFundMapping(sector_name='T-抹名', fund_code='512000',
+                            fund_name='券商ETF华宝', reviewed=True, is_active=True,
+                            match_source='agent', verified_at=datetime.now())
+    test_db.add(row)
+    test_db.commit()
+    assert _audit_apply_row(test_db, _NoopService(), row, 'T-抹名',
+                            {'fund_code': '512000', 'fund_name': None,
+                             'reviewed': True}) == 'fund_name_wiped'
+    test_db.refresh(row)
+    assert row.fund_name == '券商ETF华宝', '名字被载荷洗掉了'
+    # 没给 fund_name 这一列：保留现值，正常更新
+    assert _audit_apply_row(test_db, _NoopService(), row, 'T-抹名',
+                            {'fund_code': '512000', 'confidence': 0.42}) is None
+    test_db.refresh(row)
+    assert row.fund_name == '券商ETF华宝' and row.confidence == pytest.approx(0.42)
+    # 库里本来就无名的行：先补名字才允许回写
+    nameless = SectorFundMapping(sector_name='T-本就无名', fund_code='512000',
+                                 fund_name='', reviewed=False, is_active=True)
+    test_db.add(nameless)
+    test_db.commit()
+    assert _audit_apply_row(test_db, _NoopService(), nameless, 'T-本就无名',
+                            {'fund_code': '512000', 'reviewed': True}) == \
+        'row_has_no_fund_name'
+
+
 def test_audit_import_guards_read_the_row_before_it_is_mutated(test_db, monkeypatch):
     """第 8 轮 MAJOR-2/4：判据必须取**改之前**的行，且拒行前不许先去补档案。
 

@@ -418,6 +418,24 @@ def test_audit_import_still_refuses_a_row_the_owner_blessed(test_db):
     assert _audit_owner_guard(stale_agent_lock) == 'owner_locked'
 
 
+def test_batch_unreview_also_lifts_the_owner_lock(test_db):
+    """第 9 轮 MAJOR-1：批量取消审查以前只翻 `reviewed`，留下
+    "未审查 + reviewed_by='owner' + owner_locked=True" 的僵尸行 ——
+    它躲开体检（owner 例外）、照样驱动预测改标、还把"机器已纠正待复核"的旗标藏起来。
+    """
+    from src.services.sector_fund_service import SectorFundService
+    row = _row('T-取消审查', '159915', '创业板ETF', reviewed=True,
+               match_source='agent', verified_at=datetime.now(),
+               reviewed_by='owner', owner_locked=True)
+    test_db.add(row)
+    test_db.commit()
+    assert SectorFundService(test_db).batch_mark_reviewed([row.id], reviewed=False) == 1
+    test_db.refresh(row)
+    assert row.reviewed is False
+    assert row.reviewed_by is None and row.owner_locked is False, '僵尸行：没审查却还锁着'
+    assert audit.identity_view(row)['servable'] is True
+
+
 def test_manifest_write_failure_still_reports_created_codes():
     """M6：清单写坏时，已提交的基金档案必须被喊出来（否则回滚漏删）。"""
     import inspect
