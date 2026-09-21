@@ -1735,19 +1735,22 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
 
 
 @router.post("/sector-mappings/{mapping_id}/review")
-def review_sector_mapping(mapping_id: int, owner_confirm: bool = False,
+def review_sector_mapping(mapping_id: int, reviewed: bool = True, owner_confirm: bool = False,
                           db: Session = Depends(get_db)):
-    """标记映射为已审查（逐行确认才给 owner 署名与体检豁免）。
+    """标记 / 取消标记映射为已审查（逐行确认才给 owner 署名与体检豁免）。
 
     `owner_confirm` 必须显式传 true：服务层的行为是"给 `reviewed_by='owner'` +
     `owner_locked`"，而上一版路由从不转发这个参数 ⇒ "明确确认"只活在浏览器弹窗里，
-    直接 POST 一次就能买到同样的免疫（第 16 轮 m-2）。
+    直接 POST 一次就能买到同样的免疫（第 16 轮 m-2；第 17 轮 MAJOR-1 进一步指出
+    服务层对有机器证据的行仍然无条件盖 owner，等于两头都没兑现，已一并修掉）。
+    `reviewed=false` 是撤销入口：页面上那句"要撤销就再点一次取消审查"以前
+    根本没有对应按钮（第 17 轮 MAJOR-2），误点一次就成了永久免疫且不可撤回。
     """
     from src.models.database import SectorFundMapping
     from src.services.sector_fund_service import get_sector_fund_service
 
     service = get_sector_fund_service(db)
-    success = service.mark_reviewed_by_id(mapping_id, reviewed=True,
+    success = service.mark_reviewed_by_id(mapping_id, reviewed=reviewed,
                                           owner_confirm=owner_confirm)
 
     if not success:
@@ -1772,7 +1775,8 @@ def review_sector_mapping(mapping_id: int, owner_confirm: bool = False,
 
     return {
         "success": True,
-        "message": "已标记为已审查"
+        "message": ("已标记为已审查" if reviewed else "已取消审查（署名与体检锁定一并撤销）")
+                   + ("，并记为老板署名 + 体检锁定" if reviewed and owner_confirm else ""),
     }
 
 

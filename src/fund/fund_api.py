@@ -36,6 +36,19 @@ _ROSTER_LOCK = threading.Lock()
 _IDENTITY_STRIP = re.compile(r"[\s\-—·、,，。'\"!！()\[\]（）【】]")
 
 
+def _probe_clock(today):
+    """凭据时间戳与注入的 `today` 用同一个时钟（第 17 轮 MINOR-1）。
+
+    不传 `today` 时返回 None ⇒ `record_probe` 自己打墙上时钟（生产行为不变）；
+    固定日期的回放/用例里则把戳记落在那一天，免得种下一条"相对今天永远对不上"的凭据。
+    """
+    if today is None:
+        return None
+    if isinstance(today, datetime):
+        return today
+    return datetime.combine(today, datetime.min.time())
+
+
 def normalize_for_identity(name) -> str:
     """把名称折成可比较形式：全角转半角（京东方Ａ→京东方A）、去空白与分隔符（报 喜 鸟→报喜鸟）。
 
@@ -920,7 +933,8 @@ class FundDataManager:
             if not history:
                 # 真的问过数据源、它对这个区间一条都没给 —— 这是"结构性不可验"的合法证据
                 # （没问过就下这个结论是瞎猜，见 S7-2 工单）。
-                backfill_proofs.record_probe(db, fund_code, start_date, end_date, 0)
+                backfill_proofs.record_probe(db, fund_code, start_date, end_date, 0,
+                                       now=_probe_clock(today))
                 if close_db:
                     db.commit()
                 return 0
@@ -959,7 +973,8 @@ class FundDataManager:
             # 数的是**落在请求区间内**的行数，不是 len(history)：源端偶尔会就着一个空
             # 区间回吐区间外的行，照 len 记会让凭据正文（"数据源在 start~end 内给到 N 条"）
             # 说谎，并在 TTL 内压住本该重问的窗口（第 15 轮 m-4）。
-            backfill_proofs.record_probe(db, fund_code, start_date, end_date, in_window)
+            backfill_proofs.record_probe(db, fund_code, start_date, end_date, in_window,
+                                   now=_probe_clock(today))
 
             if close_db:
                 db.commit()

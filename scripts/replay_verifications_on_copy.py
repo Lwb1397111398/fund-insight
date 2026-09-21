@@ -67,21 +67,36 @@ def _same(a, b):
 
 
 def _explain(diffs, before, after, target, refused):
-    """差异能不能解释。解释不了就必须留在报告里，别让"看起来合理"糊过去。"""
+    """差异能不能解释。解释不了就必须留在报告里，别让"看起来合理"糊过去。
+
+    第 17 轮两份复评共同指出：原来的第 3/4 桶只约束"端点取的是哪条净值"，
+    **不约束方向结论** ⇒ 9 条 `is_correct` 翻转（含 1.39%→-71.6%、-3.6%→+143.9%）
+    被贴上一句"与本轮判据无关"就免检了。留红 2602 只是因为它连日期标签都变了 ——
+    谁红不该由"标签变没变"决定。所以现在立一条总则：
+    **方向翻转（`is_correct`/`status` 变了）一律不解释**，只有两类例外，
+    它们本身就在说"这条结论原本就是错的/原本根本不该有结论"：
+      ① 新判据直接拒判（`refused`）；
+      ② 旧结论用了目标日之后的净值（防未来函数修正）。
+    """
     if refused:
         return '新判据拒判（拿不到数据就不下结论）'
     old_end, new_end = before.get('end_nav_date'), after.get('end_nav_date')
     if isinstance(old_end, date) and isinstance(target, date) and old_end > target:
         if not isinstance(new_end, date) or new_end <= target:
             return '旧结论用了目标日之后的净值（防未来函数修正），本次按目标日及之前判定'
+    flipped = (before.get('is_correct') != after.get('is_correct')) or \
+              ('status' in diffs and before.get('is_correct') is not None
+               and after.get('is_correct') is not None)
+    if flipped:
+        return None
     if before.get('is_correct') == after.get('is_correct') and 'verify_score' not in diffs:
         return '数值端点差异（本地镜像与当时线上取到的行不同），方向结论未变'
-    if before.get('is_correct') == after.get('is_correct') and set(diffs) == {'verify_score'}:
+    if set(diffs) == {'verify_score'}:
         return '只有分数差异（过程指标随端点取哪条而变），方向结论未变'
     if ('end_nav_date' not in diffs and before.get('end_nav_date') == after.get('end_nav_date')
             and 'end_nav' in diffs):
         return ('同一天标签下数值不同：旧结论写的是"当时能取到的更早净值"，而 `end_nav_date` '
-                '存的是请求日（S7-2 之前的老口径），所以看不出来；与本轮判据无关')
+                '存的是请求日（S7-2 之前的老口径），所以看不出来；方向结论未变')
     return None
 
 
@@ -277,12 +292,32 @@ def main():
     probe = SessionLocal()
     wanted = [int(x) for x in args.ids.split(',')] if args.ids else []
     rows, deferred = _sample(probe, Prediction, args.limit, wanted, offline=args.offline)
+    if args.offline:
+        # 端点证据已经与"当前标的的净值表"对不上的行，重放必然判得不同 —— 那是数据问题
+        # （见 scripts/audit_verdict_evidence.py），不是判据回归。继续放进比对只会把
+        # 真信号埋掉，所以同样**让出并如实报数**（第 17 轮 MAJOR：闸门不得吞方向翻转，
+        # 但也不该拿失效证据当漂移）。
+        from audit_verdict_evidence import verdict_evidence_is_stale
+        from src.models.database import FundHistory as _FH
+
+        stale = []
+        keep = []
+        for p in rows:
+            end_row = probe.query(_FH).filter(
+                _FH.fund_code == p.fund_code,
+                _FH.nav_date == p.end_nav_date).first() if p.end_nav_date else None
+            (stale if verdict_evidence_is_stale(p, end_row) else keep).append(p)
+        rows = keep
+        if stale:
+            print('[离线] 让出 %d 条"端点证据已与当前标的对不上"的预测（数据侧缺陷，'
+                  '重放判不同属正常）：%s' % (len(stale), [p.id for p in stale][:20]))
+        deferred = deferred + stale
     ids = [p.id for p in rows]
     expected = {p.id: {f: getattr(p, f) for f in VERDICT_FIELDS} for p in rows}
     print('[抽样] 已验证预测 %d 条重放' % len(ids))
     if deferred:
-        print('[离线] 让出 %d 条末轮由 LLM 复核改判的预测：重放不含这一腿，比对无意义，'
-              '它们既不计入"可解释"也不计入"未解释"（要核这批就带密钥跑一次不加 --offline）：%s'
+        print('[离线] 共让出 %d 条：重放不含 LLM 那一腿、或端点证据已失效的行，'
+              '既不计入"可解释"也不计入"未解释"（要核这批就带密钥跑一次不加 --offline）：%s'
               % (len(deferred), [p.id for p in deferred][:20]))
     probe.close()
 
@@ -293,12 +328,20 @@ def main():
     from src.models.database import FundHistory, SystemConfig
 
     def _copy_evidence_counts():
+        """副本的"取数证据"指纹：行数 + 凭据条数 + 净值内容合计。
+
+        只数行数对 `update_fund_history` 那种**就地改写 nav** 完全失明（第 17 轮 MINOR-2），
+        所以再压一个 SUM(nav)：任何被改写过的净值都会让它变。
+        """
+        from sqlalchemy import func
+
         hist = db.query(FundHistory).count()
+        total = db.query(func.sum(FundHistory.nav)).scalar() or 0.0
         proofs = db.query(SystemConfig).filter(
             SystemConfig.config_key.like('nav_backfill_proof:%')).count()
-        return hist, proofs
+        return (hist, round(float(total), 4), proofs)
 
-    hist0, proofs0 = _copy_evidence_counts()
+    evidence0 = _copy_evidence_counts()
     drift, unexplained, errors = [], [], []
     try:
         for pid in ids:
@@ -358,16 +401,16 @@ def main():
             print('[ok] 对照明细：%s' % args.json)
         rc = 3 if unexplained or errors else 0
         if args.offline:
-            hist1, proofs1 = _copy_evidence_counts()
-            if hist1 != hist0 or proofs1 != proofs0:
-                print('[!!] 离线重放竟然改变了副本的取数证据：净值 %d→%d、凭据 %d→%d。'
-                      '\n     说明"断网"里有桩没盖住的路径（第 16 轮 BLOCKER-1 就是这个形状：'
-                      '包属性被重绑成实例，桩打在了实例上），这次的差异归因不可信。'
-                      % (hist0, hist1, proofs0, proofs1))
+            if _copy_evidence_counts() != evidence0:
+                print('[!!] 离线重放改变了副本的取数证据：%s → %s\n'
+                      '     （净值行数 / SUM(nav) / 凭据条数）说明"断网"里有桩没盖住的路径'
+                      '—— 第 16 轮 BLOCKER-1 就是这个形状：桩打在了被重绑的包属性上，'
+                      '那次号称离线的跑批真的取了新数据。这次的差异归因不可信。'
+                      % (evidence0, _copy_evidence_counts()))
                 rc = 7
             else:
-                print('[ok] 离线重放未新增任何净值/凭据（副本取数证据 %d/%d 未变）'
-                      % (hist1, proofs1))
+                print('[ok] 离线重放未新增、未改写任何净值/凭据（证据指纹 %s 未变）'
+                      % (evidence0,))
         # 事后证据：源库文件一个字节都不该变。工厂扫描挡"指向错库"，这一道挡
         # "某个模块早就抓走了旧工厂"这类扫不到的写法 —— 首版事故就是它把 88 行
         # 写进了镜像库，当时两道检查都没有（第 15 轮 m-5）。

@@ -1651,6 +1651,9 @@
                                             <button @click="aiMatchMapping(m)" :disabled="!!aiMatchBusy" style="color: #13c2c2; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">{{ aiMatchBusy === m.sector_name ? 'AI 匹配中…' : 'AI 匹配' }}</button>
                                             <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
                                             <button v-if="!m.reviewed && m.source !== 'builtin'" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
+                                            <!-- 确认文案写着"要撤销就再点一次取消审查"，那这个入口必须真存在
+                                                 （第 17 轮 MAJOR-2：以前没有，误点一次就是永久体检免疫）。 -->
+                                            <button v-if="m.reviewed && m.source !== 'builtin'" @click="unreviewMapping(m.id)" style="color: #faad14; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">取消审查</button>
                                             <button v-if="m.source !== 'builtin'" @click="deleteMapping(m.id, m.sector_name)" style="color: #ff4d4f; background: none; border: none; cursor: pointer; font-size: 12px;">删除</button>
                                             <span v-if="m.source === 'builtin'" class="text-tertiary text-2xs">编辑后覆盖</span>
                                         </template>
@@ -2698,9 +2701,10 @@ const fetchWeChatBatch = async () => {
                 };
                 const reviewMapping = async (id) => {
                     // 批量弹窗写着"豁免需要逐行确认"，那这句 confirm 就是它唯一的兑现点：
-                    // 服务层一律给 owner 署名 + 锁定，没有这一句就是逐行点 23 次也能买到
-                    // 批量被拒绝的免疫（第 15 轮 MINOR-1）。确认过才显式带 owner_confirm，
-                    // 让"明确确认"这件事在 API 边界上也成立（第 16 轮 m-2）。
+                    // 没有这一句，逐行点 23 次就能买到批量被拒绝的免疫（第 15 轮 MINOR-1）。
+                    // 确认过才显式带 owner_confirm：署名与体检锁定在 API 边界上也只认这一个参数
+                    // （第 16 轮 m-2 只做了 UI 那一半；第 17 轮 MAJOR-1 指出服务层对有机器证据
+                    //  的行仍然无条件盖 owner，现在两边一起吃这个参数）。
                     if (!confirm('确认逐行审查通过这一行？\n\n这一行会记成"老板已审查"（reviewed_by=owner）'
                                  + '并被锁定，之后的身份体检不再把它判成不可服务。\n'
                                  + '（体检已经判为不可服务的行点不动，服务端会直接说明原因。）\n'
@@ -2711,6 +2715,17 @@ const fetchWeChatBatch = async () => {
                         if (res.data.success) { await loadSectorMappings(mappingFilter.value); }
                         else { alert(res.data.message); }
                     } catch (e) { alert('操作失败'); }
+                };
+                // 上一版只有「审查」没有撤销入口：一次误点即永久体检免疫且不可撤回，
+                // 而确认文案明明写着「要撤销就再点一次取消审查」（第 17 轮 MAJOR-2）。
+                const unreviewMapping = async (id) => {
+                    if (!confirm('取消这一行的审查？\n\n老板署名与「体检豁免」锁定会一并撤销，这行重新回到待审查队列。')) return;
+                    try {
+                        const res = await axios.post(`/api/config/sector-mappings/${id}/review`,
+                                                     null, { params: { reviewed: false } });
+                        if (res.data.success) { await loadSectorMappings(mappingFilter.value); }
+                        else { alert(res.data.message); }
+                    } catch (e) { alert('操作失败: ' + (e.response?.data?.detail || e.message)); }
                 };
                 const deleteMapping = async (id, name) => { if (!confirm(`确定删除映射"${name}"？`)) return; try { const res = await axios.delete(`/api/config/sector-mappings/${id}`); if (res.data.success) { await loadSectorMappings(mappingFilter.value); } else { alert(res.data.message); } } catch (e) { alert('删除失败'); } };
                 const batchReviewAll = async () => { const unreviewed = sectorMappings.value.mappings.filter(m => !m.reviewed).map(m => m.id); if (unreviewed.length === 0) return; if (!confirm(`确定批量标记 ${unreviewed.length} 个映射为已审查？\n\n这次点击只代表"机器证据已看过"，不会冒充老板署名、也不会给行加上"体检免疫"（那需要逐行用"已审查"按钮并明确确认）。没有审查证据的行会被后端拒绝。`)) return; try { const res = await axios.post('/api/config/sector-mappings/batch-review', { ids: unreviewed, reviewed: true, owner_confirm: false }); if (res.data.success) { await loadSectorMappings(mappingFilter.value); if (res.data.message) alert(res.data.message); } else { alert(res.data.message); } } catch (e) { alert('操作失败'); } };
@@ -2876,7 +2891,7 @@ const fetchWeChatBatch = async () => {
                     loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter,
                     identityFilter, identityStats,
                     mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping,
-                    loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping,
+                    loadSectorMappings, startEditMapping, saveMappingEdit, reviewMapping, unreviewMapping,
                     mappingVerifying, mappingVerifyResult, verifyMappingFund,
                     verifyAllVerifying, verifyAllResult, verifyAllFunds,
                     aiMatchBusy, aiResult, aiBatch, aiMatchMapping, applyAiMatch, aiBatchMatch,

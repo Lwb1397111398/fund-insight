@@ -270,14 +270,19 @@ def test_a_row_after_the_target_proves_those_days_were_holidays(test_db):
 
 
 def test_a_fresh_proof_also_legitimises_the_previous_endpoint(test_db):
-    """合法证据③：已按区间问过数据源并留下凭据 ⇒ 可以再判，且提示语要带凭据原文。"""
+    """合法证据③：已按区间问过数据源并留下凭据 ⇒ 可以再判，且提示语要带凭据原文。
+
+    凭据时间戳必须与注入的 `today` 同一时钟（第 17 轮 MINOR-1）：写入侧原来只能打墙上
+    时钟，真实日期一走到 09-24 这条用例就会因 TTL 判不可信而**与代码无关地**变红。
+    """
+    from datetime import datetime
+
     from src.fund import backfill_proofs
 
     _rows(test_db, '159501', [date(2026, 9, 10), date(2026, 9, 11)])
-    db_session = test_db
-    backfill_proofs.record_probe(db_session, '159501', date(2026, 9, 10), date(2026, 9, 15),
-                                 source_rows=2)
-    db_session.commit()
+    backfill_proofs.record_probe(test_db, '159501', date(2026, 9, 10), date(2026, 9, 15),
+                                 source_rows=2, now=datetime(2026, 9, 22, 9, 30))
+    test_db.commit()
     r = _check(test_db, '159501', date(2026, 9, 10), date(2026, 9, 15),
                today=date(2026, 9, 22))
     assert r['available'] is True, r
@@ -289,3 +294,18 @@ def test_saturday_target_needs_no_evidence_to_use_friday(test_db):
     r = _check(test_db, '159995', PREV, TARGET_SAT, today=date(2026, 7, 13))
     assert r['available'] is True, r
     assert r['reason'] == 'weekend_previous', r
+
+
+def test_weekend_target_with_a_stale_midweek_endpoint_is_still_refused(test_db):
+    """第 17 轮 BLOCKER-1：证据门必须挡在周末分支**之前**。
+
+    上一版门放在 `weekend_previous` 之后，于是"目标日是周六、端点却停在周三"
+    （周四、周五本地缺行）仍然纯日历判死 —— 评审在内存库上拿同一份稠密数据对照实测：
+    目标 09-19(六) 放行、09-18(五) 拒判。周六只免除"周六本身没有净值"这一件事，
+    不免除"周四周五那两行本地没有"。
+    """
+    _rows(test_db, '159996', [date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)])
+    r = _check(test_db, '159996', date(2026, 7, 6), TARGET_SAT, today=date(2026, 7, 13))
+    assert r['available'] is False, r
+    assert r['reason'] == 'endpoint_lag_unproven', r
+    assert r['gap_weekdays'] == 2, r        # 周四 07-09、周五 07-10 两行本地没有

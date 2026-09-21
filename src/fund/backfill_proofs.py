@@ -150,17 +150,22 @@ def fresh(db, fund_code: str, start_date: date, end_date: date, today: date = No
                           _as_date(end_date), today)
 
 
-def record_probe(db, fund_code: str, start_date: date, end_date: date, source_rows: int = 0):
+def record_probe(db, fund_code: str, start_date: date, end_date: date, source_rows: int = 0,
+                 now=None):
     """追加一次探测记录（区间 + 源端给了几条 + 核验时间），返回写入后的列表或 None。
 
     只 flush 不 commit：库代码不该替调用方提交事务（S4 为此踩过一次）。
+
+    `now` 可注入（第 17 轮 MINOR-1）：读取侧的 `today` 上一轮已经能注入，写入侧仍写
+    墙上时钟 ⇒ 固定日期的用例/回放会种下一条"相对今天永远对不上"的凭据
+    （真实日期一走过 TTL，那些用例就与代码无关地变红）。
     """
     from src.models.database import SystemConfig
 
     if db is None or not fund_code or start_date is None or end_date is None:
         return None
     start_date, end_date = _as_date(start_date), _as_date(end_date)
-    now = datetime.now()
+    now = now or datetime.now()
     probes = [p for p in read_probes(db, fund_code)
               if _fresh(p, now.date(), KEEP_DAYS)]        # 太旧的丢掉
     probes.append({'start': start_date, 'end': end_date,

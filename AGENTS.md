@@ -178,10 +178,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22，第 16 轮修复之后）：
+最近一次核对（2026-09-22，第 17 轮修复之后）：
 
-- `pytest tests/unit -q` → **712 passed / 16 skipped / 0 failed**（约 125 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **721 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **720 passed / 16 skipped / 0 failed**（约 136 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **729 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛异常。为什么必须这样：`from src.fund import fund_api`

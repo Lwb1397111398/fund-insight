@@ -97,15 +97,39 @@ def _block_real_http(monkeypatch):
     `from src.fund.fund_api import fund_data_manager`（模块属性）拿到的还是真管理器 ——
     用例照样绿，结论却取决于第三方实时数据。与其一处一处修，不如把 HTTP 层本身掐掉：
     漏网的取数会变成**看得见的失败**，而不是悄悄改变的判定。
+
+    两条腿都要掐（第 17 轮 MINOR-1）：基金数据走 `requests`，LLM 走
+    `openai → httpx`。只掐 requests 的话，"零网络由夹具强制"这句只兑现了一半。
     """
     import requests
 
-    def _refuse(self, request, *args, **kwargs):
+    def _refuse_requests(self, request, *args, **kwargs):
         raise AssertionError(
             '测试禁止真实外呼（请把这条取数路径注入桩）：%s'
             % getattr(request, 'url', request))
 
-    monkeypatch.setattr(requests.Session, 'send', _refuse)
+    monkeypatch.setattr(requests.Session, 'send', _refuse_requests)
+    try:
+        import httpx
+    except ImportError:                       # 没装 httpx 就少一条腿，不影响 requests 那一条
+        httpx = None
+    if httpx is not None:
+        # Starlette 的 TestClient 就是 httpx.Client 的子类，请求走同一个 `send`。
+        # 一刀切会把所有 API 用例打死（第 17 轮我就这么干过一次），所以放行 ASGI 传输
+        # 用的占位域名，其余一律拒绝 —— 判据是"要不要出网"，不是"用的是哪个库"。
+        local_hosts = {'testserver', 'testserver.local'}
+        original_client_send = httpx.Client.send
+
+        def _refuse_httpx(self, request, *args, **kwargs):
+            url = getattr(request, 'url', None)
+            host = getattr(url, 'host', '') or ''
+            if host in local_hosts:
+                return original_client_send(self, request, *args, **kwargs)
+            raise AssertionError(
+                '测试禁止真实外呼（LLM 走 httpx，请把 analyzer 注入桩）：%s' % url)
+
+        monkeypatch.setattr(httpx.Client, 'send', _refuse_httpx)
+        monkeypatch.setattr(httpx.AsyncClient, 'send', _refuse_httpx)
 
 
 @pytest.fixture

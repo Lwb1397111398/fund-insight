@@ -400,7 +400,11 @@ def test_human_review_is_attributed_to_the_owner(test_db):
     test_db.add(row)
     test_db.commit()
     from src.services.sector_fund_service import SectorFundService
-    assert SectorFundService(test_db).mark_reviewed_by_id(row.id) is True
+    # 第 17 轮 MAJOR-1：署名与体检锁定改由**显式确认**换来（页面弹窗确认后带
+    # owner_confirm=true）。这里模拟的就是"老板确认过的那一次点击"，
+    # 断言的目标没变：不许出现 owner_locked=1 却 reviewed_by='agent' 的两面派行。
+    assert SectorFundService(test_db).mark_reviewed_by_id(
+        row.id, owner_confirm=True) is True
     test_db.refresh(row)
     assert row.reviewed is True
     assert row.reviewed_by == 'owner', '人点的审查不许署成 agent 的名'

@@ -541,8 +541,48 @@ class PredictionVerifyService:
                 max_end_nav_age_days=max_end_nav_age_days,
             )
 
+        # 端点落在目标日**之前**时，先证明"目标日那几天确实没有净值可取"，再允许下终局结论。
+        # 为什么这是硬门（第 16 轮 BLOCKER-2）：`is_correct` 一旦非空就永不重判
+        # （`filter_due_for_verify` 只捞 NULL），拿一条早于目标日的净值把结论落死，
+        # 等于把"本地缺那一行"当成"市场上那一天没有净值"。实测镜像里 4 条已判死的行
+        # （3267/3283/3304/3334，端点比目标日早 2~4 个工作日、中间都是工作日、
+        # 库里也没有目标日之后的行），其中 515070 那条按前值判"错 0 分"，
+        # 而数据源其实有目标日净值 —— 现取回来后判对 100 分。
+        # 三条合法证据，与"点数不足"那一支同源（第 12 轮 MAJOR-3 不许纯日历推断）：
+        #   ① 端点到目标日之间全是周末 ⇒ 日历上本就不该有净值（周六目标日用周五端点）；
+        #   ② 库里已有目标日之后的净值 ⇒ 那些空着的工作日确实是法定节假日；
+        #   ③ 已按区间问过数据源并留下未过期凭据。
+        # 第 17 轮 BLOCKER-1（两份复评同一发现）：这道门原先只挡在 `waited_previous` 之前，
+        # `weekend_previous` 在它就整块绕过 —— 于是"目标日周六、端点停在周三"（周四周五
+        # 本地缺行）仍然纯日历判死。内存库对照实测：同一份稠密数据，目标 09-19(六) 放行、
+        # 09-18(五) 拒判。周末目标日靠证据①天然免证（周五端点 gap=0），不会因此误伤。
+        gap_weekdays = weekdays_between_exclusive(latest_date, target_date)
+        lag_evidence_missing = False
+        if gap_weekdays:
+            after_target_row = self.db.query(FundHistory.nav_date).filter(
+                FundHistory.fund_code == fund_code,
+                FundHistory.nav_date > target_date).order_by(
+                FundHistory.nav_date.asc()).first()
+            endpoint_proof = backfill_proofs.fresh(self.db, fund_code, nav_start_date,
+                                                   window_end, today=today)
+            lag_evidence_missing = after_target_row is None and endpoint_proof is None
+
+        def _refuse_lag() -> Dict:
+            return _fail(
+                f"端点 {latest_date} 早于目标日 {target_date}，中间还有 {gap_weekdays} 个"
+                f"工作日没有净值行，而库里既没有目标日之后的净值（那才能证明这几天休市）、"
+                f"也没有「已按区间问过数据源」的凭据 ⇒ 无法区分「市场没有」与"
+                f"「本地缺行」，不能拿这条前值下终局结论。"
+                f"先按区间回补该基金历史或更新基金数据，到位后会自动重验",
+                reason='endpoint_lag_unproven',
+                end_nav_date=latest_date,
+                gap_weekdays=gap_weekdays,
+            )
+
         is_weekend_target = target_date.weekday() >= 5
         if is_weekend_target:
+            if lag_evidence_missing:
+                return _refuse_lag()
             return {
                 'available': True,
                 'message': (
@@ -569,37 +609,8 @@ class PredictionVerifyService:
                 end_nav_age_days=end_nav_age_days,
             )
 
-        # 端点落在目标日**之前**时，先证明"目标日那几天确实没有净值可取"，再允许下终局结论。
-        # 为什么这是硬门（第 16 轮 BLOCKER-2）：`is_correct` 一旦非空就永不重判
-        # （`filter_due_for_verify` 只捞 NULL），拿一条早于目标日的净值把结论落死，
-        # 等于把"本地缺那一行"当成"市场上那一天没有净值"。实测镜像里 4 条已判死的行
-        # （3267/3283/3304/3334，端点比目标日早 2~4 个工作日、中间都是工作日、
-        # 库里也没有目标日之后的行），其中 515070 那条按前值判"错 0 分"，
-        # 而数据源其实有目标日净值 —— 现取回来后判对 100 分。
-        # 三条合法证据，与"点数不足"那一支同源（第 12 轮 MAJOR-3 不许纯日历推断）：
-        #   ① 端点到目标日之间全是周末 ⇒ 日历上本就不该有净值（周六目标日用周五端点）；
-        #   ② 库里已有目标日之后的净值 ⇒ 那些空着的工作日确实是法定节假日；
-        #   ③ 已按区间问过数据源并留下未过期凭据。
-        gap_weekdays = weekdays_between_exclusive(latest_date, target_date)
-        if gap_weekdays:
-            after_target_row = self.db.query(FundHistory.nav_date).filter(
-                FundHistory.fund_code == fund_code,
-                FundHistory.nav_date > target_date).order_by(
-                FundHistory.nav_date.asc()).first()
-            endpoint_proof = backfill_proofs.fresh(self.db, fund_code, nav_start_date,
-                                                   window_end, today=today)
-            if after_target_row is None and endpoint_proof is None:
-                return _fail(
-                    f"端点 {latest_date} 早于目标日 {target_date}，中间还有 {gap_weekdays} 个"
-                    f"工作日没有净值行，而库里既没有目标日之后的净值（那才能证明这几天休市）、"
-                    f"也没有\u300c已按区间问过数据源\u300d的凭据 ⇒ 无法区分\u300c市场没有\u300d与"
-                    f"\u300c本地缺行\u300d，不能拿这条前值下终局结论。"
-                    f"先按区间回补该基金历史或更新基金数据，到位后会自动重验",
-                    reason='endpoint_lag_unproven',
-                    end_nav_date=latest_date,
-                    gap_weekdays=gap_weekdays,
-                )
-
+        if lag_evidence_missing:
+            return _refuse_lag()
         return {
             'available': True,
             'message': (
@@ -804,6 +815,26 @@ class PredictionVerifyService:
             "analysis": f"预测方向错误，最终涨跌{final_change:+.2f}%"
         }
     
+    def fund_code_is_servable(self, fund_code: str) -> bool:
+        """这个代码有没有被身份体检判成"不可服务"—— 只认体检的结论，不另起一套判据。
+
+        规则刻意保守：**没有任何映射行提到这个代码时返回 True**（体检对这只基金没有意见，
+        不该因此停掉验证）。只有"所有带这个代码的映射行都被判不可服务"才算数，
+        避免一条不相关的行把正常的历史预测卡死。
+        """
+        if not fund_code:
+            return True
+        from src.models.database import SectorFundMapping
+        from src.services.sector_fund_service import SectorFundService
+
+        rows = self.db.query(SectorFundMapping).filter(
+            SectorFundMapping.fund_code == fund_code,
+            SectorFundMapping.is_active == True            # noqa: E712
+        ).all()
+        if not rows:
+            return True
+        return not all(SectorFundService.is_unservable(row) for row in rows)
+
     def match_fund_for_prediction(self, prediction: Prediction) -> Tuple:
         """为预测匹配基金
 
@@ -815,7 +846,15 @@ class PredictionVerifyService:
         5. sector 查 FundInfo 模糊匹配
         """
         if prediction.fund_code:
-            return prediction.fund_code, prediction.fund_name
+            # 自带代码不是免检通道（第 17 轮 MAJOR-2）：本函数下面三条分支都过身份体检，
+            # 只有这一条直接 return。板块映射行被填成另一只真基金、后来被体检判不可服务时，
+            # 新预测不再命中它，但**已入库的预测仍按这个代码验证** ⇒ 结论挂到错标的上
+            # （`scripts/audit_verdict_evidence.py` 里 `old_fund_verdict` 那一族的成因之一）。
+            if self.fund_code_is_servable(prediction.fund_code):
+                return prediction.fund_code, prediction.fund_name
+            logger.warning(
+                '[Verify] 预测 %s 自带代码 %s 被身份体检判为不可服务，改按板块重新解析标的',
+                prediction.id, prediction.fund_code)
 
         if prediction.fund_name:
             fund = self.db.query(FundInfo).filter(
