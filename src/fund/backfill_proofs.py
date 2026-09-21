@@ -175,17 +175,21 @@ def record_probe(db, fund_code: str, start_date: date, end_date: date, source_ro
     try:
         row = db.query(SystemConfig).filter(
             SystemConfig.config_key == proof_key(fund_code)).first()
-        # 并发首次写会撞 config_key 唯一约束。PG 下事务会直接进入 aborted，
-        # 后面任何查询都抛 PendingRollbackError 把整批验证打断（第 11 轮 M-G），
-        # 所以这条写放在**嵌套事务（savepoint）**里：失败只回滚它自己。
-        with db.begin_nested():
-            if row is None:
-                row = SystemConfig(config_key=proof_key(fund_code), config_value=payload,
-                                   description='数据源历史净值探测凭据（S7-2 结构性不可验归因）')
-                db.add(row)
-            else:
-                row.config_value = payload
-            db.flush()
+        # 写进调用方的会话、只 flush：调用方 rollback 时凭据一起消失（两条路径都在
+        # 同一事务里，SQLite/PG 语义一致）。第 12 轮 MAJOR-5 指出用 SAVEPOINT 反而破这个
+        # 一致性 —— SQLite 上"没有外层事务时 SAVEPOINT 自己就是事务"，RELEASE 等于提交，
+        # 于是回滚后凭据留下、会话认知与库不一致，所以这里不使用 savepoint。
+        #
+        # 已知遗留（待 PG 实测）：并发首次插入会撞 config_key 唯一约束，PG 下事务会进入
+        # aborted。现存的并发保护是 `prediction_verify_task` 的进程锁 + advisory xact lock，
+        # 同一时刻只有一个批量验证进程；真要放开并发，这里得换成 ON CONFLICT DO UPDATE。
+        if row is None:
+            row = SystemConfig(config_key=proof_key(fund_code), config_value=payload,
+                               description='数据源历史净值探测凭据（S7-2 结构性不可验归因）')
+            db.add(row)
+        else:
+            row.config_value = payload
+        db.flush()
         # 让调用方知道"这次真的写了东西"：flush 会把对象从 Session.new/dirty 里清掉，
         # 只看那两个集合会漏提交（第 11 轮 M-A）
         db.info['proof_writes'] = int(db.info.get('proof_writes') or 0) + 1

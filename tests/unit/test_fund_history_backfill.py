@@ -81,15 +81,30 @@ def test_dense_window_skips_the_network(manager):
 
 
 def test_short_window_does_not_demand_impossible_density(manager):
-    """第 9 轮 MAJOR-2：跨周末的 1 天窗口最多只有 1 条净值，门槛不能是 2。
+    """第 9 轮 MAJOR-2 + 第 12 轮 MAJOR-3：短窗口不要求"物理上放不下的条数"，
+    但**目标日那天没有净值行**时必须真去问一次，否则结构性归因永远拿不到凭据。
 
-    旧密度公式会让这类窗口**每次验证都发一轮拉取且永远拉不满**（实测预测 1709：
-    512680，2026-07-10→07-11 周六）。起点已覆盖 + 窗口 <14 天就不该再打接口。
+    旧行为：起点被覆盖 + 窗口 <14 天 ⇒ 直接返回 0，从不发请求 ⇒
+    验证侧只能在"猜它不可验"和"每天无限重试"之间二选一。
+    新行为：问一次、把结果记成凭据；第二次同样的窗口凭据盖住 ⇒ 不再打接口。
     """
     m, calls = manager
     db = _session()
     code, start, end = '512680', date(2026, 7, 10), date(2026, 7, 11)
     _seed(db, code, [date(2026, 7, 10), date(2026, 7, 9)])
+    assert m.backfill_history_range(code, start, end, db=db) >= 0
+    assert len(calls) == 1, '目标日缺行却没问过数据源'
+    db.commit()
+    assert m.backfill_history_range(code, start, end, db=db) == 0
+    assert len(calls) == 1, '已经问过并留下凭据，第二次不该再打接口'
+
+
+def test_short_window_with_end_nav_covered_still_skips_the_network(manager):
+    """目标日自己有净值行、窗口 <14 天 ⇒ 仍然免打接口（第 9 轮那条保护不许退化）。"""
+    m, calls = manager
+    db = _session()
+    code, start, end = '512680', date(2026, 7, 10), date(2026, 7, 13)
+    _seed(db, code, [date(2026, 7, 9), date(2026, 7, 10), date(2026, 7, 13)])
     assert m.backfill_history_range(code, start, end, db=db) == 0
     assert calls == []
 

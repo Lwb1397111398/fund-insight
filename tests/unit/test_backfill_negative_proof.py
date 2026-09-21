@@ -147,11 +147,15 @@ def _envelope(rows, total=None):
             'TotalCount': total if total is not None else len(rows)}
 
 
+
 @pytest.mark.parametrize('payload,expect_rows', [
-    (_envelope([]), []),                                   # 实测：真·无数据长这样
-    ({'Data': None, 'ErrCode': 0, 'TotalCount': 0}, None),  # 第 11 轮 BLOCKER-1
-    ({'Data': {}, 'ErrCode': 0}, None),                    # 缺 LSJZList 键
-    ({'ErrCode': 1}, None),                                # 限流/报错信封
+    (_envelope([]), []),                                    # 实测：真·无数据长这样
+    ({'Data': None, 'ErrCode': 0, 'TotalCount': 0}, None),   # 第 11 轮 BLOCKER-1
+    ({'Data': {}, 'ErrCode': 0}, None),                      # 缺 LSJZList 键
+    ({'Data': {'LSJZList': None}, 'ErrCode': 0}, None),      # 键在、值是 null（第 12 轮 B-1）
+    ({'Data': {'LSJZList': {}}, 'ErrCode': 0}, None),        # 键在、值不是列表
+    ({'Data': {'LSJZList': []}, 'ErrCode': 'E_LIMIT'}, None),  # 报错信封不许读成"没有"
+    ({'ErrCode': 1}, None),                                  # 限流/报错信封
 ])
 def test_envelope_shapes_separate_no_data_from_did_not_ask(payload, expect_rows):
     """`[]` 只能是"问过且没有"，其它都要表达成"没问到"（None）。"""
@@ -164,6 +168,84 @@ def test_envelope_shapes_separate_no_data_from_did_not_ask(payload, expect_rows)
     api.history_url = 'http://example.invalid'
     out = api.get_fund_history_range('510300', date(2026, 9, 1), date(2026, 9, 5))
     assert out == expect_rows, (payload, out)
+
+
+def test_missing_total_count_still_pages_to_the_end():
+    """第 12 轮 BLOCKER-2：`TotalCount` 缺失时**不许**把首页当整段问完。
+
+    上一版把 total 回落成"当页行数"，于是 `len(results) >= total` 首页即恒真，
+    翻页保护整体失效 —— 比改动前更差（东财倒序返回，丢的恰是区间最早那段）。
+    """
+    from src.fund.fund_api import FundAPI
+
+    def page(n, offset):
+        return {'Data': {'LSJZList': [
+            {'FSRQ': (date(2026, 9, 1) + timedelta(days=offset + i)).isoformat(),
+             'DWJZ': '1.0', 'JZZZL': '0'} for i in range(n)]}}
+
+    api = FundAPI.__new__(FundAPI)
+    sess = _FakeSession([page(20, 0), page(20, 20), page(7, 40)])   # 共 47 条，末页不足一页
+    api.session = sess
+    api.headers = {}
+    api.timeout = 5
+    api.history_url = 'http://example.invalid'
+    rows = api.get_fund_history_range('510300', date(2026, 9, 1), date(2026, 10, 20))
+    assert sess.calls == 3, '没 TotalCount 就只翻了一页'
+    assert rows is not None and len(rows) == 47
+
+
+def test_page_with_unparseable_rows_is_not_claimed_complete():
+    """整页里有一行解析失败 ⇒ 丢了某一天，不能算"问完了"。"""
+    from src.fund.fund_api import FundAPI
+
+    bad = {'Data': {'LSJZList': [{'FSRQ': '2026/09/01', 'DWJZ': '1.0', 'JZZZL': '0'}],
+                    }, 'TotalCount': 1}
+    api = FundAPI.__new__(FundAPI)
+    api.session = _FakeSession([bad])
+    api.headers = {}
+    api.timeout = 5
+    api.history_url = 'http://example.invalid'
+    assert api.get_fund_history_range('510300', date(2026, 9, 1),
+                                      date(2026, 9, 5)) is None
+
+
+def test_rolled_back_transaction_leaves_no_proof():
+    """第 12 轮 MAJOR-5：SQLite 上"没有外层事务时 SAVEPOINT 自己就是事务"，
+    RELEASE 等于提交 ⇒ 调用方回滚后凭据不该存在。上一版正是这样漏的。"""
+    db = _session()
+    db.query  # 只做过只读操作，没有开启写事务
+    backfill_proofs.record_probe(db, '510300', date(2026, 9, 1), date(2026, 9, 5), 0)
+    db.rollback()
+    assert backfill_proofs.read_probes(db, '510300') == [], '回滚后凭据还留在库里'
+
+
+def test_warm_and_cold_paths_agree_on_history_and_points(test_db):
+    """第 12 轮 MAJOR-6：预热与不预热必须给出同样的点数与同样的净值序列。
+
+    `_history` 切片只有 ±120 天，窗口部分越界时旧代码会采信"非空但残缺"的结果，
+    而它是 `calculate_process_metrics` 的输入 ⇒ Cron 与手动按钮能判出相反结论。
+    """
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    code = '510500'
+    today = date(2026, 9, 21)
+    days = [today - timedelta(days=i) for i in range(1, 161)]
+    _seed(test_db, code, list(reversed(days)))
+    svc = PredictionVerifyService(test_db)
+    start = today - timedelta(days=150)
+    end = today - timedelta(days=100)
+    cold_points = svc._check_fund_data_availability(
+        fund_code=code, nav_start_date=start, window_end=end, target_date=end,
+        today=today)['data_points']
+    cold_hist = len(svc.get_nav_history(code, start, end))
+    svc._warm_cache([type('P', (), {'fund_code': code, 'prediction_date': start,
+                                    'target_date': end})()], today)
+    warm_points = svc._check_fund_data_availability(
+        fund_code=code, nav_start_date=start, window_end=end, target_date=end,
+        today=today)['data_points']
+    warm_hist = len(svc.get_nav_history(code, start, end))
+    assert warm_points == cold_points == 51, (warm_points, cold_points)
+    assert warm_hist == cold_hist == 51, (warm_hist, cold_hist)
 
 
 def test_truncated_pagination_is_not_claimed_as_complete():

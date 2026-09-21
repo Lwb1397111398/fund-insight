@@ -224,9 +224,20 @@
             let ids = null;
             if (type === 'rollback') {
                 const rows = (maintenancePreview.value.data || {}).rollback_details || [];
-                ids = rows.map(r => r.prediction_id).filter(Boolean).join(',');
-                if (!ids) {
+                if (!rows.length) {
                     alert('这次预览没有可回溯的预测（或预览已过期），请重新点"预览"再来一次。');
+                    return;
+                }
+                // 预览是全库扫出来的，不设界就等于把"allow_full_sweep"藏进按钮里：
+                // 这里只提交后端允许的一次上限，剩下的明确告诉用户要去脚本处理。
+                const cap = 200;
+                if (rows.length > cap) {
+                    if (!confirm(`预览有 ${rows.length} 条可回溯，一次只处理前 ${cap} 条，` +
+                                 `剩下的请走脚本（scripts/revert_degenerate_verdicts.py）。继续吗？`)) return;
+                }
+                ids = rows.slice(0, cap).map(r => r.prediction_id).filter(Boolean).join(',');
+                if (!ids) {
+                    alert('预览数据里没有可用的预测 id，请重新点"预览"。');
                     return;
                 }
             }

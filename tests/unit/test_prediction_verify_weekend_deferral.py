@@ -133,17 +133,26 @@ def test_stale_nav_still_asks_for_an_update(test_db):
     assert r['days_behind'] > 0 and '请更新基金数据' in r['message'], r
 
 
-def test_dead_fund_stops_retrying_after_the_staleness_limit(test_db):
-    """第 11 轮 M-H：净值停在目标日之前的老基金，不能天天判"请更新基金数据"。
+def test_dead_fund_needs_evidence_before_being_called_unverifiable(test_db):
+    """第 12 轮 MAJOR-3：结构性归因必须有凭据，"到期很久了"这种日历推断不算证据。
 
-    它没有"目标日之后已有净值"这条证据（之后本来就没有），但到期已超过
-    `VERIFY_MAX_END_NAV_AGE_DAYS` ⇒ 再等也不会有，归成退化终点才是诚实的结论。
+    净值停在目标日之前的老基金：
+    - 没问过数据源 ⇒ 只能报"数据不足"，继续重试（可能就是我们自己的镜像坏了）；
+    - 问过并留下凭据 ⇒ 才允许判 `same_nav_endpoint`，措辞引用凭据。
+    配套修复在补拉侧：短窗口免补拉现在要求"终点那天也有净值行"，
+    否则这种窗口永远问不到凭据。
     """
-    _rows(test_db, '003033', [date(2020, 12, 4), START])
-    r = _check(test_db, '003033', START, TARGET_SAT, today=date(2026, 9, 21))
-    assert r['available'] is False, r
-    assert r['reason'] == 'same_nav_endpoint', r
-    assert '到期已超过' in r['message'], r
+    from src.fund import backfill_proofs
+    code = '003033'
+    _rows(test_db, code, [date(2020, 12, 4), START])
+    r = _check(test_db, code, START, TARGET_SAT, today=date(2026, 9, 21))
+    assert r['available'] is False and r['reason'] == 'insufficient_points', r
+
+    backfill_proofs.record_probe(test_db, code, START, TARGET_SAT, 0)
+    test_db.commit()
+    r2 = _check(test_db, code, START, TARGET_SAT, today=date(2026, 9, 21))
+    assert r2['reason'] == 'same_nav_endpoint', r2
+    assert '已按区间问过数据源' in r2['message'], r2
 
 
 def test_normal_weekday_case_is_untouched(test_db):

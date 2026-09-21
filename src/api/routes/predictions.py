@@ -19,6 +19,10 @@ from src.services.prediction_maintenance_service import PredictionMaintenanceSer
 from src.services.prediction_query_service import PredictionQueryService
 
 router = APIRouter(prefix="/predictions", tags=["预测"])
+
+# 定向回溯一次的上限：预览口径是全库扫描，不设界的话"确认执行"就等于
+# 第 10 轮 M-5 明令禁止的 allow_full_sweep（第 12 轮 MAJOR-4）
+MAX_ROLLBACK_IDS = 200
 logger = logging.getLogger(__name__)
 
 
@@ -153,6 +157,12 @@ def rollback_invalid_verifications(
             only_ids = tuple(int(x) for x in ids.split(',') if x.strip())
         except ValueError:
             raise HTTPException(status_code=400, detail='ids 必须是逗号分隔的预测 id')
+    if only_ids is not None and len(only_ids) > MAX_ROLLBACK_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f'一次最多定向回溯 {MAX_ROLLBACK_IDS} 条（当前 {len(only_ids)} 条）；'
+                   f'更大范围请走脚本并显式 allow_full_sweep',
+        )
     if not dry_run and not only_ids:
         raise HTTPException(
             status_code=400,

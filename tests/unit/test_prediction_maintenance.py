@@ -245,6 +245,14 @@ def test_rollback_invalid_execution_records_prediction_change(monkeypatch, test_
     assert log.source == "maintenance"
     assert log.before_state["status"] == "success"
     assert log.after_state["status"] == "pending"
+    # 真写必须自带 run_id，否则 `restore_prediction_batch.py --run-id` 撤不回来
+    # （第 12 轮 MAJOR-4；姊妹入口 sync-sector-mapping 早就有了）
+    assert (log.run_id or '').startswith('rollback-'), log.run_id
+    assert result["data"]["run_id"] == log.run_id
+    # 结论字段清空后，verify_history 里要留一条墓碑，不然详情抽屉会继续
+    # 显示上一条历史的"判对/涨跌幅"
+    row = test_db.query(Prediction).filter(Prediction.id == prediction.id).first()
+    assert row.verify_history and row.verify_history[-1].get("rolled_back") is True
 
 
 def test_rollback_with_only_ids_reports_filtered_rows_separately(monkeypatch, test_db):

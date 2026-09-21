@@ -245,18 +245,11 @@ class PredictionVerifyService:
         Returns:
             净值历史列表 [{date, nav}, ...]
         """
-        # 尝试从缓存获取
-        history_cache = self._nav_cache.get('_history', {})
-        if fund_code in history_cache:
-            cached_records = history_cache[fund_code]
-            result = [
-                {"date": r.nav_date, "nav": r.nav}
-                for r in cached_records
-                if start_date <= r.nav_date <= end_date
-            ]
-            if result:
-                return sorted(result, key=lambda x: x["date"])
-
+        # 不读 `_history` 缓存：那个切片只有 [今天-120d, 今天+14d]，窗口**部分命中**时
+        # 这里会返回"非空但残缺"的序列 —— 而它是 `calculate_process_metrics` 的输入，
+        # `peak_hit_ratio` / `daily_direction_hit_ratio` 会直接决定 `is_correct`
+        # ⇒ 同一条预测在 Cron 与手动按钮下能判出相反结论（第 12 轮 MAJOR-6）。
+        # 点数（`_check_fund_data_availability`）已经全走 DB，这里也必须同源才可比。
         records = self.db.query(FundHistory).filter(
             FundHistory.fund_code == fund_code,
             FundHistory.nav_date >= start_date,
@@ -392,13 +385,15 @@ class PredictionVerifyService:
             start_real, end_real = self._endpoint_dates(fund_code, nav_start_date, window_end)
             nav_after_target = self.db.query(FundHistory.nav_date).filter(
                 FundHistory.fund_code == fund_code,
-                FundHistory.nav_date > window_end).first()
-            days_since_target = (today - window_end).days if window_end else None
-            # "目标日之后已有净值" ＝ 目标日确是休市日；"过了陈旧上限还没有" ＝ 再等也不会有
-            # （第 11 轮 M-H：只有前一种证据的话，1 天期 + 净值停在目标日之前的老基金会被
-            # 判成"数据不足、请更新数据"无限重试，而这类窗口补拉豁免根本不会发请求）。
-            permanently_degenerate = nav_after_target is not None or (
-                days_since_target is not None and days_since_target > max_end_nav_age_days)
+                FundHistory.nav_date > window_end).order_by(
+                FundHistory.nav_date.asc()).first()
+            proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date, window_end)
+            # 两条合法证据，都必须建立在"问过"之上（第 12 轮 MAJOR-3：不能拿"到期很久了"
+            # 这种纯日历推断替代凭据，那等于把 S7-b 的硬约束从后门放掉）：
+            # ① 目标日之后已有净值 ⇒ 目标日确实是休市日；
+            # ② 已按区间问过数据源、它给不出足够净值 ⇒ 再等也不会有。
+            permanently_degenerate = (nav_after_target is not None
+                                      or proven_empty is not None)
             if (data_points >= 1 and permanently_degenerate
                     and start_real is not None and end_real is not None
                     and end_real <= start_real):
@@ -406,8 +401,8 @@ class PredictionVerifyService:
                     f"目标日 {window_end} 及之前只有 {start_real} 这一条净值，起点与终点是同一条 ⇒ "
                     f"涨跌幅必然为 0，无法判定方向"
                     + (f"（该基金在 {window_end} 之后已有净值 ⇒ 目标日是休市日）"
-                       if nav_after_target is not None else
-                       f"（到期已超过 {max_end_nav_age_days} 天仍没有目标日净值 ⇒ 等待不会变可验）")
+                       if nav_after_target is not None
+                       else f"（已按区间问过数据源：{backfill_proofs.describe(proven_empty)}）")
                     + f"。本系统按防未来函数策略不取目标日之后的行情；"
                       f"要判这条只能在录入时把目标日落到交易日，历史目标日不自动改",
                     reason='same_nav_endpoint',
@@ -416,7 +411,6 @@ class PredictionVerifyService:
                 )
 
             # (2) 问过数据源且它给不出这段 ⇒ 结构性不可验，提示语里带凭据原文。
-            proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date, window_end)
             if proven_empty:
                 proof_text = backfill_proofs.describe(proven_empty)
                 if (proven_empty.get('source_rows') or 0) > 0:
@@ -1194,7 +1188,11 @@ class PredictionVerifyService:
             results.append({
                 "prediction_id": prediction.id,
                 "success": ok,
-                "message": result.get("message")
+                "message": result.get("message"),
+                # 分组键用 reason，不用整条文案：新措辞每条都嵌两个日期，按 message
+                # 分组会得到 N 句各不相同的长文案，前端"未成功原因"变成一堵墙
+                # （第 12 轮 MINOR-5）
+                "reason": ((result.get('data') or {}).get('data_status') or {}).get('reason')
             })
 
             if ok:
@@ -1353,7 +1351,8 @@ class PredictionVerifyService:
             return 0
     
     def rollback_invalid_verifications(self, min_data_points: int = 2, dry_run: bool = True,
-                                       only_ids=None, allow_full_sweep: bool = False) -> Dict:
+                                       only_ids=None, allow_full_sweep: bool = False,
+                                       run_id: str = None) -> Dict:
         """
         回溯已验证但数据不足的预测
         
@@ -1393,6 +1392,10 @@ class PredictionVerifyService:
                          'rollback_details': []},
             }
         wanted = set(only_ids) if only_ids is not None else None
+        if not dry_run and run_id is None:
+            # 真写必须带 run_id：变更日志里没有它，`restore_prediction_batch.py --run-id`
+            # 就撤不回来（第 12 轮 MAJOR-4；姊妹入口 sync-sector-mapping 早就补了这条）
+            run_id = 'rollback-%s' % datetime.now().strftime('%Y%m%d-%H%M%S')
         today = date.today()
 
         predictions = self.db.query(Prediction).filter(
@@ -1454,6 +1457,19 @@ class PredictionVerifyService:
 
                     if not dry_run:
                         before_state = snapshot_prediction(prediction)
+                        # 回溯过的行留一条墓碑在 verify_history 里：详情抽屉原来会拿
+                        # 最后一条历史记录继续显示"判对/涨跌幅"，而 `is_correct` 已经是 NULL
+                        # —— 两套口径同屏（第 12 轮 MAJOR-4）。墓碑只加不改，历史仍完整保留。
+                        history = list(prediction.verify_history or [])
+                        history.append({
+                            'date': str(today),
+                            'rolled_back': True,
+                            'analysis': f"已回溯：原结论「{'判对' if old_is_correct else '判错'}」"
+                                        f"/{old_verify_score} 分已撤销，原因："
+                                        f"{(data_check['message'] or '')[:120]}",
+                        })
+                        prediction.verify_history = history
+                        attributes.flag_modified(prediction, 'verify_history')
                         prediction.status = 'pending'
                         prediction.is_expired = False
                         prediction.has_active_prediction = True
@@ -1475,6 +1491,7 @@ class PredictionVerifyService:
                             action="verification_rollback",
                             source="maintenance",
                             before_state=before_state,
+                            run_id=run_id,
                         )
                         affected_bloggers.add(prediction.blogger_id)
                         rolled_back += 1
@@ -1511,7 +1528,12 @@ class PredictionVerifyService:
         
         return {
             'success': True,
-            'message': f"{'预览' if dry_run else '回溯'}完成：检查 {total_checked} 个预测，{'将回溯' if dry_run else '已回溯'} {would_rollback if dry_run else rolled_back} 个，保留 {kept} 个，错误 {errors} 个",
+            'message': f"{'预览' if dry_run else '回溯'}完成：检查 {total_checked} 个预测，"
+                       f"{'将回溯' if dry_run else '已回溯'} {would_rollback if dry_run else rolled_back} 个，"
+                       f"保留 {kept} 个，错误 {errors} 个"
+                       + ('' if dry_run or not run_id
+                          else f'（run_id={run_id}，要整批撤销用 '
+                               f'python scripts/restore_prediction_batch.py --run-id {run_id}）'),
             'data': {
                 'dry_run': dry_run,
                 'total_checked': total_checked,
@@ -1519,6 +1541,7 @@ class PredictionVerifyService:
                 'rolled_back': rolled_back,
                 'kept': kept,
                 'skipped_by_filter': skipped_by_filter,
+                'run_id': run_id,
                 'errors': errors,
                 'rollback_details': rollback_details
             }

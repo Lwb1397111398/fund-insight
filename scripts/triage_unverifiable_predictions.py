@@ -59,6 +59,28 @@ def _le(dates, day):
     return earlier[-1] if earlier else None
 
 
+KNOWN_CLASSES = {
+    # 验证服务的 reason
+    'exact_target', 'weekend_previous', 'waited_previous', 'waiting_target_nav',
+    'insufficient_points', 'no_history', 'no_source_history', 'same_nav_endpoint',
+    'end_nav_too_old',
+    # 脚本自己的日历口径（只在服务给不出 reason 时兜底出现）
+    'verifiable_now', 'missing_history', 'degenerate_gap', 'no_fund_code',
+}
+
+# 日历口径 → 允许出现的 reason 集合。命名差不是矛盾，方向相反才是。
+CONSISTENT_WITH = {
+    'verifiable_now': {'exact_target', 'weekend_previous', 'waited_previous',
+                       'waiting_target_nav'},
+    'degenerate_gap': {'same_nav_endpoint', 'insufficient_points', 'no_source_history',
+                       'no_history', 'end_nav_too_old'},
+    'missing_history': {'insufficient_points', 'no_history', 'no_source_history'},
+    'no_fund_code': {'insufficient_points', 'no_history'},
+    'waiting_target_nav': {'waiting_target_nav', 'insufficient_points',
+                           'weekend_previous', 'waited_previous', 'exact_target'},
+}
+
+
 def classify(row, start_day, end_day, in_window):
     if not row.fund_code:
         return 'no_fund_code'
@@ -132,24 +154,30 @@ def main():
                      r['start_nav_date'] or '无', r['end_nav_date'] or '无', r['class']))
         print('-' * 92)
         total = sum(counts.values())
+        scope = len(report)
         for label, n in sorted(counts.items(), key=lambda kv: -kv[1]):
             print('  %-24s %d' % (label, n))
-        # 自检不能写成恒等式（每轮 +1 与循环次数天然相等，永远 OK —— 第 11 轮 MINOR-7）。
-        # 真正要报的是"脚本自己按日历算的分类"和"验证服务的 reason"对不上的行。
-        scope = len(report)
-        disagree = [r for r in report if r['local_class'] != r['class']
-                    and not (r['local_class'] == 'verifiable_now'
-                             and r['class'] in ('exact_target', 'weekend_previous',
-                                                'waited_previous', 'waiting_target_nav'))]
-        print('  合计 %d / 本次分类 %d OK' % (total, scope))
-        print('  脚本日历分类与验证服务 reason 不一致：%d 条 %s'
+        # 自检要能真的失败（第 12 轮 M-7：上一版写成字面量 'OK'，等于没有检查）。
+        # 两件事：① 每行必须恰好被分类一次（对不上说明有行没进 counts）；
+        # ② 出现的 reason 必须在已知集合里（冒出没见过的 reason 要立刻看到）。
+        unknown = sorted(k for k in counts if k not in KNOWN_CLASSES)
+        print('  合计 %d / 本次分类 %d %s' % (total, scope,
+                                              'OK' if total == scope else '!! 有行没被分类'))
+        if unknown:
+            print('  !! 出现未登记的判据分类：%s（脚本图例需要同步）' % unknown)
+        # 日历口径与验证服务 reason 是两套字母表，只有"互相矛盾"才值得报，
+        # 命名差（missing_history vs no_source_history）不算（第 12 轮 M-7）。
+        disagree = [r for r in report
+                    if r['class'] not in CONSISTENT_WITH.get(r['local_class'], set())]
+        print('  与日历口径矛盾的行：%d 条 %s'
               % (len(disagree), [(d['id'], d['local_class'], d['class']) for d in disagree[:6]]))
 
         if args.json:
             with io.open(args.json, 'w', encoding='utf-8') as f:
                 json.dump({'as_of': str(date.today()), 'queue': len(due), 'counts': counts,
                            'rows': report,
-                           'degenerate_verified': [p.id for p in degenerate]},
+                           'contradictions': [(d['id'], d['local_class'], d['class'])
+                                              for d in disagree]},
                           f, ensure_ascii=False, indent=1)
             print('[ok] 明细：%s' % args.json)
         return 0

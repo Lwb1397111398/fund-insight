@@ -242,7 +242,7 @@ class FundAPI:
         start_date: date,
         end_date: date,
         max_pages: int = 40,
-    ) -> List[Dict]:
+    ) -> Optional[List[Dict]]:
         """按日期区间分页获取基金历史净值（用于补拉数据库缺失的早期数据）。
 
         与 get_fund_history 不同：这里显式传 startDate/endDate 并自动翻页，
@@ -252,17 +252,18 @@ class FundAPI:
             fund_code: 基金代码
             start_date: 区间起始日（含）
             end_date: 区间结束日（含）
-            max_pages: 最大翻页数兜底（每页 60 条，40 页约 2400 个交易日）
+            max_pages: 最大翻页数兜底（实测接口每页最多 20 条，40 页约 800 个交易日）
 
         Returns:
             [{'date': date, 'nav': float, 'growth': float}, ...]，按接口返回顺序；
-            **返回 `None` 表示"这次没问到"**（超时、非 JSON、信封不合法、翻页触顶被截断）。
-            这个区分是 S7-b 第 10 轮评审逼出来的：以前传输失败与"源端确实没有"都返回 `[]`，
+            **返回 `None` 表示"这次没问到"**（超时、非 JSON、`ErrCode≠0`、`Data`/`LSJZList`
+            形状不对、有行解析失败、翻页触顶未取满 `TotalCount`）。
+            这个区分是 S7-b 第 10~12 轮评审逼出来的：以前传输失败与"源端确实没有"都返回 `[]`，
             于是 `backfill_history_range` 会把一次抖动写成"已证明该区间无净值"的凭据，
-            并被后续 7 天引用 —— 真数据就永远拿不回来了。
+            并被后续 TTL 期内引用 —— 真数据就永远拿不回来了。
         """
         if not start_date or not end_date or start_date > end_date:
-            return []
+            return None
 
         # 注意：东财 lsjz 接口实测每页最多返回 20 条（请求更大的 pageSize 也会被截断），
         # 因此按 20 条/页翻页，并以"返回不足 20 条"作为结束标志。
@@ -298,20 +299,30 @@ class FundAPI:
                     logger.error(f"基金 {fund_code} 历史净值第{page_index}页响应不是合法信封")
                     break
                 payload = data.get('Data')
-                if not isinstance(payload, dict) or 'LSJZList' not in payload:
-                    # 实测（2026-09-21 打真接口三种情形）：**真·没有数据**长这样 ——
-                    # `Data` 是 dict 且带 `LSJZList: []`、`ErrCode=0`、`TotalCount=0`。
-                    # 所以"`Data:null` / 缺 LSJZList 键"只能判成"没问到"，不能记凭据
-                    # （第 11 轮 BLOCKER-1：否则一次限流就伪造出"源端确实没有"）。
-                    logger.error(f"基金 {fund_code} 历史净值第{page_index}页信封缺 LSJZList")
+                err_code = data.get('ErrCode')
+                if err_code not in (None, 0, '0'):
+                    # 接口自己报了错（限流、参数、风控）：答案未知，不能记凭据
+                    logger.error(f"基金 {fund_code} 历史净值第{page_index}页 ErrCode={err_code}")
                     break
-                lsjz_list = payload.get('LSJZList') or []
-                total = (data.get('TotalCount') if isinstance(data.get('TotalCount'), int)
-                         else len(lsjz_list))
+                if not isinstance(payload, dict) or not isinstance(payload.get('LSJZList'), list):
+                    # 实测（2026-09-21 打真接口三种"无数据"）真·没有数据是
+                    # `Data` 为 dict + `LSJZList: []` + `ErrCode=0`。
+                    # 所以"缺键 / 值为 null / 值不是列表"这一整族都只能判成"没问到"
+                    # —— 第 12 轮 BLOCKER-1：上一版只查了键存在，`LSJZList: null` 照样漏过去。
+                    logger.error(f"基金 {fund_code} 历史净值第{page_index}页 LSJZList 不是列表")
+                    break
+                lsjz_list = payload['LSJZList']
+                # `TotalCount` 只在它是个非负 int 时才当总行数用；缺省**不许**回落成"当页行数"
+                # （那样首页就满足 `len(results) >= total`，翻页保护整体失效，比改动前更差 ——
+                # 第 12 轮 BLOCKER-2）。拿不到总数时只靠"不足一页"判完。
+                total_raw = data.get('TotalCount')
+                total = (total_raw if isinstance(total_raw, int) and not isinstance(total_raw, bool)
+                         and total_raw >= 0 else None)
                 if not lsjz_list:
                     complete = True          # 问完了，这段确实没有
                     break
 
+                page_ok = 0
                 for item in lsjz_list:
                     try:
                         nav_date = datetime.strptime(item.get('FSRQ'), '%Y-%m-%d').date()
@@ -320,13 +331,20 @@ class FundAPI:
                             'nav': float(item.get('DWJZ', 0) or 0),
                             'growth': float(item.get('JZZZL', 0) or 0)
                         })
+                        page_ok += 1
                     except Exception as e:
                         logger.warning(f"解析基金 {fund_code} 补拉净值失败: {e}, 数据项: {item}")
                         continue
 
-                # 接口自己报了总行数：取够 `TotalCount` 才算整段问完；
-                # 不足一页也到底（老接口行为）。两者任一成立才允许把结果当证据。
-                if len(results) >= total or len(lsjz_list) < page_size:
+                # 有一行没解析出来就是**丢了某一天**，此时整段答案都不完整：
+                # 继续翻页只会把这个洞留在凭据里（第 12 轮 BLOCKER-1 第 3 条路径）
+                if page_ok < len(lsjz_list):
+                    logger.error(f"基金 {fund_code} 第{page_index}页有 "
+                                 f"{len(lsjz_list) - page_ok} 行解析失败，不判为问完")
+                    break
+
+                # 取够接口自报的 `TotalCount` 才算问完；没有总数时只靠"不足一页"判到底
+                if (total is not None and len(results) >= total) or len(lsjz_list) < page_size:
                     complete = True
                     break
                 time.sleep(0.2)
@@ -847,7 +865,13 @@ class FundDataManager:
                 # （实测 003033：本地净值停在 2020-12-08，预测窗口在 2026 年 9 月）
                 # 永远走不进补拉分支 ⇒ "源端到底有没有"这件事永远无从证明，
                 # 结构性不可验的负凭据也就永远建不起来（Cron 只能天天报"数据不足"）。
-                if oldest_date <= start_date and inside > 0 and (
+                # `end_covered` 也是 S7-2 补的：短窗口只看"起点被覆盖 + 窗内有 1 条"就免问，
+                # 于是"目标日那天本地缺行"的行永远问不到凭据，验证侧只能在"猜"与"无限重试"
+                # 之间二选一（第 12 轮 MAJOR-3）。要求终点也被覆盖才允许免打接口。
+                end_covered = db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code,
+                    FundHistory.nav_date == end_date).first() is not None
+                if oldest_date <= start_date and inside > 0 and end_covered and (
                         span_days < 14 or inside >= min_inside):
                     return 0
 

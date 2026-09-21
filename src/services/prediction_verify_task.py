@@ -13,6 +13,17 @@ _ACTIVE_STATUSES = ("pending", "running")
 _POSTGRES_LOCK_ID = 73462025
 
 
+# 判据 reason 的人话名字：前端"上次验证未成功原因"按这个合并展示，
+# 没有登记的 reason 原样透出（不猜、不编）。
+REASON_LABELS = {
+    'same_nav_endpoint': '目标日没有独立净值（起点与终点是同一天），无法判定方向',
+    'no_source_history': '已问过数据源，该区间它给不出足够净值 ⇒ 结构性不可验',
+    'insufficient_points': '窗口内净值条数不足',
+    'no_history': '该基金本地无历史净值',
+    'waiting_target_nav': '目标日净值尚未发布，等待中',
+    'end_nav_too_old': '终点净值太旧，超过允许陈旧期限',
+}
+
 class PredictionVerifyTask:
     """Track batch verification in the database, with an in-memory fallback for tests."""
 
@@ -262,7 +273,10 @@ class PredictionVerifyTask:
         for entry in entries:
             if entry.get("success"):
                 continue
-            reason = entry.get("message") or entry.get("reason") or "未知原因"
+            # 先按 reason 合并：message 每条都嵌日期，直接当分组键会把
+            # "N 条同一类原因"打成 N 行不可读的长文案（第 12 轮 MINOR-5）
+            key = entry.get("reason") or entry.get("message") or "未知原因"
+            reason = REASON_LABELS.get(key, key)[:80]
             counts[reason] = counts.get(reason, 0) + 1
         return "；".join(f"{reason}（{count} 条）" for reason, count in counts.items())
 
