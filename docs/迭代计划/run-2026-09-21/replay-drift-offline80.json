@@ -1,0 +1,36 @@
+{
+ "copy_db": "C:\\Users\\李文彬\\AppData\\Local\\Temp\\fi_replay_2026-09-21.db",
+ "sampled": 80,
+ "drift": [
+  {
+   "id": 2206,
+   "fund_code": "159842",
+   "target_date": "2026-08-21",
+   "diffs": {
+    "verify_score": [
+     "40",
+     "0"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌-4.53%",
+   "explained": "只有分数差异（过程指标随端点取哪条而变），方向结论未变"
+  },
+  {
+   "id": 3180,
+   "fund_code": "515000",
+   "target_date": "2026-09-09",
+   "diffs": {
+    "verify_score": [
+     "50",
+     "49"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：过程中33%交易日相对起点方向正确，判定部分正确",
+   "explained": "只有分数差异（过程指标随端点取哪条而变），方向结论未变"
+  }
+ ],
+ "unexplained": [],
+ "errors": []
+}

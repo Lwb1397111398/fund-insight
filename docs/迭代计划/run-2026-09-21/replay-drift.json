@@ -1,0 +1,317 @@
+{
+ "copy_db": "C:\\Users\\李文彬\\AppData\\Local\\Temp\\fi_replay_2026-09-21.db",
+ "sampled": 12,
+ "drift": [
+  {
+   "id": 848,
+   "fund_code": "515000",
+   "target_date": "2026-06-29",
+   "diffs": {
+    "is_correct": [
+     "True",
+     "False"
+    ],
+    "verify_score": [
+     "66",
+     "0"
+    ],
+    "actual_change": [
+     "2.35404896421846",
+     "4.908976773383556"
+    ],
+    "status": [
+     "success",
+     "failed"
+    ],
+    "end_nav": [
+     "1.6305",
+     "1.6712"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌+4.91%",
+   "explained": false
+  },
+  {
+   "id": 1282,
+   "fund_code": "159943",
+   "target_date": "2026-07-07",
+   "diffs": {
+    "actual_change": [
+     "-5.96453821119964",
+     "-5.964538211199645"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌-5.96%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 1867,
+   "fund_code": "159928",
+   "target_date": "2026-07-16",
+   "diffs": {
+    "actual_change": [
+     "2.65203475080018",
+     "1.173601585124208"
+    ],
+    "end_nav": [
+     "0.6735",
+     "0.6638"
+    ],
+    "end_nav_date": [
+     "2026-07-23",
+     "2026-07-16"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌+1.17%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 2141,
+   "fund_code": "515000",
+   "target_date": "2026-07-22",
+   "diffs": {
+    "actual_change": [
+     "-1.71309292449435",
+     "-1.7130929244943527"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌-1.71%",
+   "explained": false
+  },
+  {
+   "id": 2306,
+   "fund_code": "159928",
+   "target_date": "2026-07-30",
+   "diffs": {
+    "actual_change": [
+     "5.37845596011482",
+     "5.378455960114816"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌+5.38%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 2865,
+   "fund_code": "512890",
+   "target_date": "2026-08-19",
+   "diffs": {
+    "actual_change": [
+     "1.20606478290834",
+     "1.2060647829083402"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌+1.21%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 2918,
+   "fund_code": "515070",
+   "target_date": "2026-08-26",
+   "diffs": {
+    "verify_score": [
+     "0",
+     "40"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：方向全错，仅部分日涨跌对",
+   "explained": false
+  },
+  {
+   "id": 3169,
+   "fund_code": "516160",
+   "target_date": "2026-09-07",
+   "diffs": {
+    "actual_change": [
+     "0.304542762879625",
+     "0.30454276287962506"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌+0.30%",
+   "explained": false
+  },
+  {
+   "id": 3225,
+   "fund_code": "515000",
+   "target_date": "2026-09-14",
+   "diffs": {
+    "actual_change": [
+     "-1.7168746522534033",
+     "-3.521182735871553"
+    ],
+    "end_nav": [
+     "1.2365",
+     "1.2138"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌-3.52%",
+   "explained": false
+  }
+ ],
+ "unexplained": [
+  {
+   "id": 848,
+   "fund_code": "515000",
+   "target_date": "2026-06-29",
+   "diffs": {
+    "is_correct": [
+     "True",
+     "False"
+    ],
+    "verify_score": [
+     "66",
+     "0"
+    ],
+    "actual_change": [
+     "2.35404896421846",
+     "4.908976773383556"
+    ],
+    "status": [
+     "success",
+     "failed"
+    ],
+    "end_nav": [
+     "1.6305",
+     "1.6712"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌+4.91%",
+   "explained": false
+  },
+  {
+   "id": 1282,
+   "fund_code": "159943",
+   "target_date": "2026-07-07",
+   "diffs": {
+    "actual_change": [
+     "-5.96453821119964",
+     "-5.964538211199645"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌-5.96%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 1867,
+   "fund_code": "159928",
+   "target_date": "2026-07-16",
+   "diffs": {
+    "actual_change": [
+     "2.65203475080018",
+     "1.173601585124208"
+    ],
+    "end_nav": [
+     "0.6735",
+     "0.6638"
+    ],
+    "end_nav_date": [
+     "2026-07-23",
+     "2026-07-16"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌+1.17%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 2141,
+   "fund_code": "515000",
+   "target_date": "2026-07-22",
+   "diffs": {
+    "actual_change": [
+     "-1.71309292449435",
+     "-1.7130929244943527"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌-1.71%",
+   "explained": false
+  },
+  {
+   "id": 2306,
+   "fund_code": "159928",
+   "target_date": "2026-07-30",
+   "diffs": {
+    "actual_change": [
+     "5.37845596011482",
+     "5.378455960114816"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌+5.38%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 2865,
+   "fund_code": "512890",
+   "target_date": "2026-08-19",
+   "diffs": {
+    "actual_change": [
+     "1.20606478290834",
+     "1.2060647829083402"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：最终涨跌+1.21%，预测正确",
+   "explained": false
+  },
+  {
+   "id": 2918,
+   "fund_code": "515070",
+   "target_date": "2026-08-26",
+   "diffs": {
+    "verify_score": [
+     "0",
+     "40"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：方向全错，仅部分日涨跌对",
+   "explained": false
+  },
+  {
+   "id": 3169,
+   "fund_code": "516160",
+   "target_date": "2026-09-07",
+   "diffs": {
+    "actual_change": [
+     "0.304542762879625",
+     "0.30454276287962506"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌+0.30%",
+   "explained": false
+  },
+  {
+   "id": 3225,
+   "fund_code": "515000",
+   "target_date": "2026-09-14",
+   "diffs": {
+    "actual_change": [
+     "-1.7168746522534033",
+     "-3.521182735871553"
+    ],
+    "end_nav": [
+     "1.2365",
+     "1.2138"
+    ]
+   },
+   "reason": null,
+   "message": "验证完成：预测方向错误，最终涨跌-3.52%",
+   "explained": false
+  }
+ ],
+ "errors": []
+}
