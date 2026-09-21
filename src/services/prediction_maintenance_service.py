@@ -152,6 +152,12 @@ class PredictionMaintenanceService:
         - 板块匹配走别名归一（`sector_alias`），否则"绿电/绿色电力"这类同义板块会漏改。
         """
         from src.services.sector_identity_audit import servable_predicate
+        if not dry_run and not run_id:
+            # 真写却没带 run_id = 这批改动**永远无法整批回滚**
+            # （`scripts/restore_prediction_batch.py` 就是按 run_id 过滤的；
+            #  库里已经有 795 条这样的历史行，占 267 个预测）。以后一律自动生成一个。
+            from datetime import datetime as _dt
+            run_id = 'sync-%s' % _dt.now().strftime('%Y%m%d-%H%M%S')
         mappings = self.db.query(SectorFundMapping).filter(
             SectorFundMapping.is_active == True,
             SectorFundMapping.reviewed == True,
