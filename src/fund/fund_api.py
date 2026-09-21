@@ -255,7 +255,11 @@ class FundAPI:
             max_pages: 最大翻页数兜底（每页 60 条，40 页约 2400 个交易日）
 
         Returns:
-            [{'date': date, 'nav': float, 'growth': float}, ...]，按接口返回顺序
+            [{'date': date, 'nav': float, 'growth': float}, ...]，按接口返回顺序；
+            **返回 `None` 表示"这次没问到"**（超时、非 JSON、信封不合法、翻页触顶被截断）。
+            这个区分是 S7-b 第 10 轮评审逼出来的：以前传输失败与"源端确实没有"都返回 `[]`，
+            于是 `backfill_history_range` 会把一次抖动写成"已证明该区间无净值"的凭据，
+            并被后续 7 天引用 —— 真数据就永远拿不回来了。
         """
         if not start_date or not end_date or start_date > end_date:
             return []
@@ -264,6 +268,7 @@ class FundAPI:
         # 因此按 20 条/页翻页，并以"返回不足 20 条"作为结束标志。
         page_size = 20
         results: List[Dict] = []
+        complete = False          # 只有"整段区间问完了"才允许调用方把它当证据
         for page_index in range(1, max_pages + 1):
             try:
                 params = {
@@ -287,8 +292,15 @@ class FundAPI:
                 response.encoding = 'utf-8'
                 data = response.json()
 
-                lsjz_list = (data.get('Data') or {}).get('LSJZList') or []
+                if not isinstance(data, dict) or 'Data' not in data:
+                    # 限流页/错误页也可能 200 + 可解析 JSON：这种"没有 Data 键"
+                    # 不能读成"该区间没有净值"，只能读成"这次没问到"。
+                    logger.error(f"基金 {fund_code} 历史净值第{page_index}页响应不是合法信封")
+                    break
+                payload = data.get('Data') or {}
+                lsjz_list = payload.get('LSJZList') or []
                 if not lsjz_list:
+                    complete = True          # 问完了，这段确实没有
                     break
 
                 for item in lsjz_list:
@@ -305,13 +317,15 @@ class FundAPI:
 
                 # 不足一页说明已到末尾；同时做节流，降低被限流概率
                 if len(lsjz_list) < page_size:
+                    complete = True
                     break
                 time.sleep(0.2)
             except Exception as e:
                 logger.error(f"补拉基金{fund_code}历史数据失败(第{page_index}页): {e}")
                 break
 
-        return results
+        # 循环走完却没置 complete ⇒ 翻页触顶、区间没问完，同样按"没问到"处理
+        return results if complete else None
 
     def verify_fund_fetchable(self, fund_code: str, input_name: Optional[str] = None,
                              probe_stock: bool = False, fill_name: bool = True) -> Dict:
@@ -838,6 +852,12 @@ class FundDataManager:
                 return 0
 
             history = self.api.get_fund_history_range(fund_code, start_date, end_date)
+            if history is None:
+                # 这次**没问到**（超时、限流页、翻页触顶截断）：什么都不记。
+                # 记了就等于把一次网络抖动写成"源端确实没有这段历史"的凭据，
+                # 之后 7 天都凭它跳过请求，真数据就永远拿不回来了（第 10 轮 BLOCKER-1）。
+                logger.warning(f"基金 {fund_code} 区间 {start_date}~{end_date} 未问成功，不记凭据")
+                return 0
             if not history:
                 # 真的问过数据源、它对这个区间一条都没给 —— 这是"结构性不可验"的合法证据
                 # （没问过就下这个结论是瞎猜，见 S7-2 工单）。

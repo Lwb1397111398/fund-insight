@@ -95,15 +95,16 @@ def main():
                              if row.prediction_date <= d <= row.target_date]) if (
                 row.prediction_date and row.target_date) else 0
             kind = classify(row, start_day, end_day, in_window)
-            # 判据口径直接问验证服务（只读、skip_wait=True），免得脚本自己另立一套分类
+            # 分类口径以验证服务为准（避免脚本另立一套）；脚本自己算的那套只在
+            # 服务无结论可用时兜底，两者优先级写死在这里。
             svc_reason = None
             if code and row.prediction_date and row.target_date:
                 svc_reason = svc._check_fund_data_availability(
                     fund_code=code, nav_start_date=row.prediction_date,
                     window_end=row.target_date, target_date=row.target_date,
                     skip_wait=True).get('reason')
-            kind = '%s/%s' % (kind, svc_reason) if svc_reason else kind
-            counts[kind] = counts.get(kind, 0) + 1
+            label = svc_reason or ('no_fund_code' if not code else kind)
+            counts[label] = counts.get(label, 0) + 1
             report.append({'id': row.id, 'fund_code': code, 'fund_name': row.fund_name,
                            'prediction_date': str(row.prediction_date),
                            'target_date': str(row.target_date),
@@ -113,11 +114,11 @@ def main():
                            'local_last': str(dates[-1]) if dates else None,
                            'start_nav_date': str(start_day) if start_day else None,
                            'end_nav_date': str(end_day) if end_day else None,
-                           'judge_reason': svc_reason,
-                           'class': kind})
+                           'local_class': kind,
+                           'class': label})
 
         print('\n%-6s %-8s %-10s %-10s %-5s %-10s %-10s %s'
-              % ('id', 'code', '起日', '目标', '点数', '起点净值', '终点净值', '分类/判据'))
+              % ('id', 'code', '起日', '目标', '点数', '起点净值', '终点净值', '判据分类'))
         print('-' * 92)
         for r in report:
             print('%-6s %-8s %-10s %-10s %-5s %-10s %-10s %s'
@@ -126,10 +127,12 @@ def main():
                      r['start_nav_date'] or '无', r['end_nav_date'] or '无', r['class']))
         print('-' * 92)
         total = sum(counts.values())
-        for kind, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-            print('  %-20s %d' % (kind, n))
-        print('  合计 %d / 队列 %d %s' % (total, len(due),
-                                          'OK' if total == len(due) else '!! 对不上，分诊漏分支'))
+        for label, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print('  %-24s %d' % (label, n))
+        # 分母必须是"本轮真的分类了多少条"，否则 --limit 下永远报"对不上"（评审 MINOR-6）
+        scope = min(len(due), args.limit) if args.limit else len(due)
+        print('  合计 %d / 本次分类 %d %s' % (total, scope,
+                                              'OK' if total == scope else '!! 对不上，分诊漏分支'))
 
         degenerate = db.query(Prediction).filter(
             Prediction.is_deleted == False,

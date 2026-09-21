@@ -226,7 +226,18 @@ def test_rollback_invalid_execution_records_prediction_change(monkeypatch, test_
         "data_points": 1,
     })
 
-    result = service.rollback_invalid_verifications(min_data_points=2, dry_run=False)
+    # 第 10 轮 M-5：不限定 id 的**真写**必须显式声明，否则一行都不许动
+    # （这个口径下会抹掉上千条历史结论，多数只是本地镜像缺那段历史）。
+    refused = service.rollback_invalid_verifications(min_data_points=2, dry_run=False)
+    assert refused["success"] is False and refused["data"]["rolled_back"] == 0
+    assert "allow_full_sweep" in refused["message"]
+    assert test_db.query(PredictionChangeLog).count() == 0, "被拒的调用不该留下任何改动"
+
+    preview = service.rollback_invalid_verifications(min_data_points=2, dry_run=True)
+    assert preview["data"]["would_rollback"] == 1, "dry-run 不受 allow_full_sweep 约束"
+
+    result = service.rollback_invalid_verifications(
+        min_data_points=2, dry_run=False, allow_full_sweep=True)
 
     assert result["data"]["rolled_back"] == 1
     log = test_db.query(PredictionChangeLog).one()
@@ -234,6 +245,24 @@ def test_rollback_invalid_execution_records_prediction_change(monkeypatch, test_
     assert log.source == "maintenance"
     assert log.before_state["status"] == "success"
     assert log.after_state["status"] == "pending"
+
+
+def test_rollback_with_only_ids_reports_filtered_rows_separately(monkeypatch, test_db):
+    """定向模式下"保留 N 个"只能数**真的评估过**的行（第 10 轮 MINOR-7）。"""
+    blogger, post = _blogger_post(test_db, "定向回溯博主")
+    keep = _prediction(test_db, blogger, post, verified=True)
+    other = _prediction(test_db, blogger, post, verified=True, fund_code="OTHER9")
+    test_db.commit()
+    service = PredictionVerifyService(test_db)
+    monkeypatch.setattr(service, "match_fund_for_prediction",
+                        lambda value: ("DUP01", "重复测试基金"))
+    monkeypatch.setattr(service, "_check_fund_data_availability", lambda **kwargs: {
+        "available": False, "message": "净值数据不足", "data_points": 1})
+
+    dry = service.rollback_invalid_verifications(dry_run=True, only_ids=[keep.id])
+    assert dry["data"]["total_checked"] == 1
+    assert dry["data"]["skipped_by_filter"] == 1
+    assert dry["data"]["would_rollback"] == 1
 
 
 def test_sync_retags_with_an_agent_approved_proxy_mapping(test_db):

@@ -1,26 +1,32 @@
 # -*- coding: utf-8 -*-
-"""回滚**退化终点**的验证结论：起点与终点是同一条净值 ⇒ 涨跌幅恒为 0，那不是结论。
+"""找并回滚**退化终点**的验证结论：起点与终点是同一条净值 ⇒ 涨跌幅恒为 0，那不是结论。
 
-为什么要单独一个脚本，而不是直接用 `rollback_invalid_verifications()`：
-那个方法默认把所有判不过门槛的已验证结论一并回溯，实测影响面是上千条，其中绝大多数
-是"**当年用真实净值判出、本地镜像现在丢了那段历史**"（1208 +4.07%、1669 +1.55% 就是这种），
-撤掉它们等于毁掉真结论。所以这里只用它筛出的 `same_nav_endpoint` 子集，再加两条
-硬判据确认"这条结论本身没有信息量"才撤：
-1. `actual_change == 0` 且 `start_nav == end_nav`；
-2. 存的 `end_nav_date` 反查到的**实际**净值日 == `start_nav_date`（即终点用的就是起点那条）。
+判据只看**落库证据**，不看今天的门（第 10 轮评审 M-2 指出前一版两个漏判）：
+1. `actual_change == 0` 且 `start_nav == end_nav`（同一条净值的两个字段）；
+2. 两端的**实际净值日**（`_real_nav_date` 归一，兼容老数据里 `end_nav_date` 存的是
+   "请求的目标日"这个假象）确实是同一天。
+以前先从"今天的验证服务怎么判"里取候选，就漏掉了"窗口内一条净值都没有、
+起终点都回退到窗口之前同一条"的行 —— 那种行今天的门给的是 `insufficient_points`，
+根本进不了候选集，而它的结论同样是 0% 假判错。
 
-每条被撤的预测都会写 `prediction_change_logs`（action=verification_rollback，含改前快照），
+为什么不直接用 `rollback_invalid_verifications()`：它默认把所有判不过门槛的已验证结论
+一并回溯（实测影响面上千条），其中绝大多数是"当年用真实净值判出、本地镜像现在丢了那段历史"
+的行（1208 +4.07%、1669 +1.55%），撤掉等于毁真数据；所以定向传 `only_ids`。
+
+每条被撤的预测都会写 `prediction_change_logs`（含改前快照），
 博主统计走 `recalculate_blogger_stats` 重算，不手改计数器。
 
 用法：
-    python scripts/revert_degenerate_verdicts.py                # 只报告（含新门槛总影响面）
-    python scripts/revert_degenerate_verdicts.py --apply        # 真撤（先落改前快照 JSON）
+    python scripts/revert_degenerate_verdicts.py                 # 只报告
+    python scripts/revert_degenerate_verdicts.py --apply         # 真撤（先落改前快照 JSON）
+    python scripts/revert_degenerate_verdicts.py --also-report-gate   # 顺带报告新门槛的全量影响面
 """
 import argparse
 import io
 import json
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,75 +34,67 @@ from _db_guard import pin_local_sqlite  # noqa: E402  必须先于任何 ORM 导
 
 pin_local_sqlite()
 
-from datetime import datetime  # noqa: E402
-
 from src.models.database import Prediction  # noqa: E402
 from src.services.prediction_verify_service import PredictionVerifyService  # noqa: E402
 
 SNAPSHOT_FIELDS = ('fund_code', 'prediction_date', 'target_date', 'status', 'is_correct',
                    'verify_score', 'actual_change', 'start_nav', 'start_nav_date',
                    'end_nav', 'end_nav_date', 'verified_at', 'verify_count')
+EPS = 1e-9
 
 
-def _is_informative(p) -> bool:
-    """结论本身有没有信息量：涨跌幅非 0、或终点用的确实是另一天的净值。"""
-    if p.start_nav is None or p.end_nav is None:
-        return True                     # 取不到两端就不下判断，保守保留
-    if abs(p.end_nav - p.start_nav) > 1e-9 or (p.actual_change or 0) != 0:
-        return True
-    return False
-
-
-def _damage_set(db, service, details):
-    """把 `same_nav_endpoint` 的候选分成"该撤"与"只是本地缺历史、不能撤"。"""
-    damaged, kept = [], []
-    for d in details:
-        if (d.get('data_status') or {}).get('reason') != 'same_nav_endpoint':
+def find_degenerate(db, service):
+    """从落库证据里找退化结论，分成"能确证"与"看着像但证不了"两堆。"""
+    rows = db.query(Prediction).filter(
+        Prediction.is_deleted == False,
+        Prediction.is_correct.isnot(None),
+        Prediction.start_nav.isnot(None),
+        Prediction.end_nav.isnot(None)).all()
+    damaged, unsure = [], []
+    for p in rows:
+        flat_value = abs(p.end_nav - p.start_nav) <= EPS and abs(p.actual_change or 0) <= EPS
+        if not flat_value:
             continue
-        p = db.query(Prediction).filter(Prediction.id == d['prediction_id']).first()
-        if p is None or _is_informative(p):
-            kept.append((d['prediction_id'], p))
-            continue
-        real_end = service._real_nav_date(p.fund_code, p.end_nav_date or p.target_date)
-        if real_end is None or real_end != p.start_nav_date:
-            kept.append((d['prediction_id'], p))     # 终点用的不是起点那条，撤了没道理
-            continue
-        damaged.append(p)
-    return damaged, kept
+        start_real = service._real_nav_date(p.fund_code, p.start_nav_date or p.prediction_date)
+        end_real = service._real_nav_date(p.fund_code, p.end_nav_date or p.target_date)
+        if start_real is not None and end_real is not None and start_real == end_real:
+            damaged.append(p)
+        else:
+            # 真·平盘（比如 000801 那天净值就是没动）或本地缺数据无法归一 —— 一律不动
+            unsure.append(p)
+    return damaged, unsure
 
 
 def main():
     ap = argparse.ArgumentParser(description='定向回滚退化终点的验证结论')
     ap.add_argument('--apply', action='store_true', help='真正写库（默认只报告）')
+    ap.add_argument('--also-report-gate', action='store_true',
+                    help='另外报告：新门槛会把多少条历史结论判为"现在不可验"（只读）')
     args = ap.parse_args()
 
     from src.models.database import SessionLocal
     db = SessionLocal()
     try:
         service = PredictionVerifyService(db)
-        audit = service.rollback_invalid_verifications(dry_run=True)
-        details = audit['data'].get('rollback_details') or []
-        by_reason = {}
-        for d in details:
-            reason = (d.get('data_status') or {}).get('reason') or 'unknown'
-            by_reason[reason] = by_reason.get(reason, 0) + 1
-        print('[新门槛影响面] 已验证 %d 条中，按今天的判据有 %d 条会判"现在不可验"：%s'
-              % (audit['data'].get('total_checked'), audit['data'].get('would_rollback'),
-                 by_reason))
-        print('   （除退化终点外一律不动：它们当时确有净值可判）')
-
-        damaged, kept = _damage_set(db, service, details)
-        print('\n[退化终点] 候选 %d 条：该撤 %d 条、不能撤 %d 条'
-              % (len(kept) + len(damaged), len(damaged), len(kept)))
+        damaged, unsure = find_degenerate(db, service)
+        print('[证据扫描] 涨跌幅恒为 0 的已验证结论：%d 条，其中起点终点确证同一条 %d 条、'
+              '证不了（多为真平盘）%d 条' % (len(damaged) + len(unsure), len(damaged), len(unsure)))
         for p in damaged:
-            print('   该撤 id=%-5s %s 起=%s@%s end=%s@%s change=%.4f correct=%s'
-                  % (p.id, p.fund_code, p.start_nav, p.start_nav_date,
-                     p.end_nav, p.end_nav_date, p.actual_change or 0, p.is_correct))
-        for pid, p in kept:
-            if p is None:
-                continue
-            print('   保留 id=%-5s %s 涨跌幅=%.4f（本地丢了那段历史，结论本身有依据）'
-                  % (pid, p.fund_code, p.actual_change or 0))
+            print('   该撤 id=%-5s %s %s→%s 起=%s@%s end=@%s 判为%s'
+                  % (p.id, p.prediction_date, p.target_date, p.start_nav, p.start_nav_date,
+                     p.end_nav_date, '错' if p.is_correct is False else '对'))
+        for p in unsure[:10]:
+            print('   不动 id=%-5s %s 涨跌幅 0 但两端日期证不了（start@%s end@%s）'
+                  % (p.id, p.fund_code, p.start_nav_date, p.end_nav_date))
+
+        if args.also_report_gate:
+            audit = service.rollback_invalid_verifications(dry_run=True)
+            by_reason = {}
+            for d in audit['data'].get('rollback_details') or []:
+                reason = (d.get('data_status') or {}).get('reason') or 'unknown'
+                by_reason[reason] = by_reason.get(reason, 0) + 1
+            print('\n[只读全量审计] 新门槛判"现在不可验"的历史结论 %d 条：%s（本脚本不撤这些）'
+                  % (audit['data'].get('would_rollback'), by_reason))
 
         if not damaged:
             print('\n没有需要撤的结论。')
@@ -112,7 +110,7 @@ def main():
                                  % datetime.now().strftime('%H%M%S'))
         with io.open(snap_path, 'w', encoding='utf-8') as f:
             json.dump({'created_at': datetime.now().isoformat(timespec='seconds'),
-                       'reason': 'same_nav_endpoint',
+                       'judged_by': 'actual_change==0 且起点终点为同一条净值',
                        'rows': [{'id': p.id,
                                  'fields': {k: str(getattr(p, k)) for k in SNAPSHOT_FIELDS
                                             if getattr(p, k) is not None}} for p in damaged]},

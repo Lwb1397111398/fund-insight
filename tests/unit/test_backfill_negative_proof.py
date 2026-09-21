@@ -40,7 +40,7 @@ def manager():
     class _Api:
         def get_fund_history_range(self, code, start, end):
             calls.append((code, start, end))
-            return list(box['rows'])
+            return None if box['rows'] is None else list(box['rows'])
 
     m.api = _Api()
     return m, calls, box
@@ -99,7 +99,8 @@ def test_proof_expires_and_source_is_asked_again(manager):
         SystemConfig.config_key == backfill_proofs.proof_key('512680')).first()
     stale = datetime.now() - timedelta(days=backfill_proofs.TTL_DAYS + 3)
     payload = json.loads(row.config_value)
-    payload['checked_at'] = stale.isoformat(timespec='seconds')
+    for probe in payload.get('probes') or []:
+        probe['checked_at'] = stale.isoformat(timespec='seconds')
     row.config_value = json.dumps(payload, ensure_ascii=False)
     db.commit()
     m.backfill_history_range('512680', start, end, db=db)
@@ -134,6 +135,56 @@ def test_partial_answer_is_also_remembered(manager):
     box['rows'] = []
     m.backfill_history_range('158038', date(2026, 9, 2), date(2026, 9, 6), db=db)
     assert len(calls) == 1, '源端给过的部分结果没被记住，又打了一次接口'
+
+
+def test_a_failed_request_records_nothing(manager):
+    """第 10 轮 BLOCKER-1：一次抖动不能被写成"源端确实没有"，否则真数据永远回不来。
+
+    数据源调用现在用 `None` 表达"这次没问到"（超时/限流页/翻页触顶），
+    与"问过且答案是 0 条"（空列表）严格分开。
+    """
+    m, calls, box = manager
+    db = _session()
+    _seed(db, '003033', [date(2020, 12, 8)])
+    box['rows'] = None                       # 模拟请求失败
+    assert m.backfill_history_range('003033', date(2026, 9, 3), date(2026, 9, 10), db=db) == 0
+    assert backfill_proofs.read_probes(db, '003033') == [], '请求失败却记了凭据'
+    assert backfill_proofs.fresh(db, '003033', date(2026, 9, 3), date(2026, 9, 10)) is None
+
+
+def test_disjoint_probes_do_not_cover_the_gap(manager):
+    """第 10 轮 BLOCKER-2：两次互不相交的探测不许并成一个包络，把中间空洞谎称问过。"""
+    m, calls, box = manager
+    db = _session()
+    _seed(db, '515440', [date(2026, 9, 2)])
+    box['rows'] = []
+    m.backfill_history_range('515440', date(2026, 7, 1), date(2026, 7, 3), db=db)
+    db.commit()
+    m.backfill_history_range('515440', date(2026, 9, 15), date(2026, 9, 17), db=db)
+    db.commit()
+    assert len(calls) == 2
+    probes = backfill_proofs.read_probes(db, '515440')
+    assert len(probes) == 2, '不相交的区间被并成了一段'
+    # 中间那段从没问过 ⇒ 必须再问，不能拿包络当证据
+    assert backfill_proofs.fresh(db, '515440', date(2026, 8, 10), date(2026, 8, 14)) is None
+    m.backfill_history_range('515440', date(2026, 8, 10), date(2026, 8, 14), db=db)
+    assert len(calls) == 3
+
+
+def test_adjacent_probes_merge_but_overlapping_counts_stay_separate(manager):
+    """相接且答复同为"0 条"的两次探测该并成一段（省请求），不同答复的不并。"""
+    m, calls, box = manager
+    db = _session()
+    _seed(db, '158038', [date(2026, 10, 1)])
+    box['rows'] = []
+    m.backfill_history_range('158038', date(2026, 7, 1), date(2026, 7, 10), db=db)
+    db.commit()
+    m.backfill_history_range('158038', date(2026, 7, 11), date(2026, 7, 20), db=db)
+    db.commit()
+    probes = backfill_proofs.read_probes(db, '158038')
+    assert len(probes) == 1 and probes[0]['start'] == date(2026, 7, 1) \
+        and probes[0]['end'] == date(2026, 7, 20), '首尾相接的空答复没合并'
+    assert backfill_proofs.fresh(db, '158038', date(2026, 7, 5), date(2026, 7, 15)) is not None
 
 
 def test_availability_only_claims_unverifiable_when_proven(test_db):

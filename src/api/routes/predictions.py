@@ -138,7 +138,13 @@ def rollback_invalid_verifications(
     dry_run: bool = Query(True),
     db: Session = Depends(get_db),
 ):
-    """预览或回溯数据不足的已验证预测。"""
+    """预览或回溯数据不足的已验证预测。
+
+    真写走的是 service 的定向口径：不带 `only_ids` 的真写在 service 层被拒
+    （必须显式 `allow_full_sweep=True`，而这个入口故意不传）——
+    不限定 id 的全库回溯会抹掉上千条历史结论，其中多数只是本地镜像缺那段历史
+    （第 10 轮 M-5）。要真做全量回溯请用脚本，别用这个按钮。
+    """
     if not dry_run and request.headers.get("X-Danger-Confirm") != "rollback-predictions":
         raise HTTPException(
             status_code=403,

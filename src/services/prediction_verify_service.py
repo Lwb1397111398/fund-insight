@@ -364,6 +364,11 @@ class PredictionVerifyService:
                 if nav_start_date <= self._as_date(r.nav_date) <= window_end
             ]
             records.sort(key=lambda r: self._as_date(r.nav_date))
+            # `_warm_cache` 只装 [今天-120d, 今天+14d]，而 `filter_due_for_verify` 没有时限
+            # ⇒ 一条 120 天以外的到期预测在**批量**路径上会被缓存算成 0 点、
+            # 单条路径却有数据（第 10 轮评审列为既有隐患）。空结果一律回落 DB 再问一次。
+            if not records:
+                records = None
 
         if records is None:
             records = self.db.query(FundHistory).filter(
@@ -386,30 +391,33 @@ class PredictionVerifyService:
             payload.update(extra)
             return payload
 
-        # S7-2 退化终点门：起点与终点落到**同一条**净值 ⇒ 涨跌幅恒为 0，没有信息量。
-        # 必须先于点数门判断 —— 1 天期、目标日落在休市日的预测（实测 1709：起 07-10 周五、
-        # 目标 07-11 周六）一旦被点数门放行，就会走 weekend_previous 判成
-        # "预测方向错误，最终涨跌+0.00%" 并计入准确率，那是**假结论**而不是"验过了"。
-        # `data_points >= 1` 把这道门限定在"窗口内本来就有净值、只是全挤在起点那天"；
-        # 窗口空着（0 条）属缺历史/净值太旧，交给下面的分支说清是哪种。
-        start_real, end_real = self._endpoint_dates(fund_code, nav_start_date, window_end)
-        if (data_points >= 1 and start_real is not None and end_real is not None
-                and end_real <= start_real):
-            return _fail(
-                f"目标日及之前只有起点那一条净值（起点 {start_real}，终点也是 {end_real}），"
-                f"涨跌幅必然为 0 ⇒ 无法判定方向。等下一交易日净值后仍不可验"
-                f"（本系统按防未来函数策略，不取目标日之后的行情）；"
-                f"如需判定，要把目标日调整到下一个交易日",
-                reason='same_nav_endpoint',
-                start_nav_date=start_real,
-                end_nav_date=end_real,
-            )
-
         if data_points < min_data_points:
-            # 点数不足。到这里起点/终点已不是同一条，缺的是**窗口内**的历史净值。
-            # 先分清"问过数据源、它确实给不出"与"还没问过"：只有前者才配叫结构性不可验。
+            # 点数不足。缺的可能是三种东西，按"最具体"的顺序判：退化终点 → 问过且源端没有 → 单纯不够。
             from src.fund import backfill_proofs
 
+            # (1) 退化终点：窗口里只有起点那一天 ⇒ 起点与终点是同一条净值、涨跌幅恒为 0，
+            # 那不是"验过了"而是"没有信息"（1709 实测：起 07-10 周五、目标 07-11 周六）。
+            # 必须同时满足"目标日之后已有净值"才这么判 —— 那才证明目标日真的是休市日；
+            # 否则只是"目标日净值还没发布"（每个工作日 1 天期预测的常态），明天自愈，
+            # 不能写成永久不可验、更不能建议把目标日往后挪（那是取目标日之后的行情，违反防未来函数）。
+            start_real, end_real = self._endpoint_dates(fund_code, nav_start_date, window_end)
+            nav_after_target = self.db.query(FundHistory.nav_date).filter(
+                FundHistory.fund_code == fund_code,
+                FundHistory.nav_date > window_end).first()
+            if (data_points >= 1 and nav_after_target is not None
+                    and start_real is not None and end_real is not None
+                    and end_real <= start_real):
+                return _fail(
+                    f"目标日 {window_end} 不是交易日（该基金在 {window_end} 之后已有净值，"
+                    f"而窗口内只有 {start_real} 这一条），起点与终点是同一条净值 ⇒ 涨跌幅必然为 0，"
+                    f"无法判定方向。本系统按防未来函数策略不取目标日之后的行情，"
+                    f"这条预测要判就得在录入时把目标日落到交易日（历史目标日不自动改）",
+                    reason='same_nav_endpoint',
+                    start_nav_date=start_real,
+                    end_nav_date=end_real,
+                )
+
+            # (2) 问过数据源且它给不出这段 ⇒ 结构性不可验，提示语里带凭据原文。
             proven_empty = backfill_proofs.fresh(self.db, fund_code, nav_start_date, window_end)
             if proven_empty:
                 return _fail(
@@ -420,6 +428,8 @@ class PredictionVerifyService:
                     reason='no_source_history',
                     source_proof=proven_empty,
                 )
+
+            # (3) 条数不够：分清"数据太旧该更新"与"缺目标日附近那段历史"。
             latest_record = None
             if fund_code in history_cache:
                 cached = history_cache[fund_code]
@@ -434,9 +444,9 @@ class PredictionVerifyService:
                 latest_date = self._as_date(latest_record.nav_date)
                 days_behind = (window_end - latest_date).days if latest_date else None
                 if days_behind is not None and days_behind < 0:
-                    # 最新净值**晚于**窗口终点（实测 515440/158038：本地只有 9 月以后的净值，
-                    # 预测窗口在 7~8 月）：缺的是目标日附近那段历史，不是"数据没更新"。
-                    # 这时候提示"请更新基金数据"会把人带去跑同步，而同步只补最近端，永远补不到。
+                    # 本地最新净值**晚于**窗口终点（实测 515440/158038）：缺的是目标日附近那段
+                    # 历史，不是"数据没更新"。这时候说"请更新基金数据"会把人带去跑同步，
+                    # 而同步只补最近端，永远补不到这个窗口。
                     return _fail(
                         f"目标日附近缺历史净值：窗口 [{nav_start_date} ~ {window_end}] 内只有 "
                         f"{data_points} 条（需 {min_data_points} 条），"
@@ -853,15 +863,17 @@ class PredictionVerifyService:
             )
             if backfilled:
                 self._invalidate_fund_cache(fund_code)
-            # 补拉到的净值与"源端这段确实没有"的负凭据都是数据源事实，独立提交保存；
-            # 否则本次验证一失败回滚，下次又要重拉一遍、又重问一遍数据源
-            # （凭据写入自己只 flush 不 commit —— 库代码不该替调用方提交事务）。
-            # 这里没有别的东西在事务里：起点/终点净值都在本行之后才取。
-            try:
-                self.db.commit()
-            except Exception as commit_error:
-                logger.warning(f"[Verify] 基金 {fund_code} 补拉数据提交失败: {commit_error}")
-                self.db.rollback()
+            # 补拉到的净值与"源端这段给到几条"的凭据都是数据源事实，落定要提交；
+            # 但**只在真有 pending 写操作时提交** —— 无条件的 commit() 会把 identity map
+            # 里所有对象过期（`SessionLocal` 没设 expire_on_commit=False），
+            # 于是 `_warm_cache` 预热的 FundHistory 实例在第 1 条预测上就全部作废，
+            # 之后每行属性访问各发一条 SELECT，批量验证退化成 N+1（第 10 轮 M-3）。
+            if backfilled or self.db.new or self.db.dirty:
+                try:
+                    self.db.commit()
+                except Exception as commit_error:
+                    logger.warning(f"[Verify] 基金 {fund_code} 补拉数据提交失败: {commit_error}")
+                    self.db.rollback()
         except Exception as backfill_error:
             logger.warning(
                 f"[Verify] 基金 {fund_code} 历史净值补拉异常，按现有数据检查: {backfill_error}"
@@ -920,6 +932,7 @@ class PredictionVerifyService:
                 start_nav = prediction.start_nav
 
         end_nav_real_date = self._real_nav_date(fund_code, window_end)
+        start_nav_real_date = self._real_nav_date(fund_code, nav_start_date)
         end_nav = self.get_nav_by_date(
             fund_code, window_end, strict_as_of=True
         )
@@ -1039,7 +1052,9 @@ class PredictionVerifyService:
 
         if not prediction.start_nav:
             prediction.start_nav = start_nav
-            prediction.start_nav_date = nav_start_date
+            # 与 `end_nav_date` 同口径：存**实际用到**的净值日，不存请求的窗口起点
+            # （起点落在周末/停更日时两者不是一天，混着用会让两端日期没法对比 —— 第 10 轮 M-4）
+            prediction.start_nav_date = start_nav_real_date or nav_start_date
 
         # 确保 score 始终在 [0, 100] 范围内
         score = max(0, min(100, score))
@@ -1338,7 +1353,7 @@ class PredictionVerifyService:
             return 0
     
     def rollback_invalid_verifications(self, min_data_points: int = 2, dry_run: bool = True,
-                                       only_ids: tuple = None) -> Dict:
+                                       only_ids=None, allow_full_sweep: bool = False) -> Dict:
         """
         回溯已验证但数据不足的预测
         
@@ -1347,9 +1362,13 @@ class PredictionVerifyService:
         
         Args:
             min_data_points: 最少需要的数据点数
-            only_ids: 只在这些预测 id 里回溯。默认 None = 判不过门槛的全撤 ——
-                那是上千条的量级，且会把"当年用真实两条净值判出、如今本地镜像已丢失那段
-                历史"的结论一起抹掉（实测 1208/1669 就是这种），所以定向修复必须显式传。
+            only_ids: 只在这些预测 id 里回溯（谓词在取数之前过滤，既省查询也缩范围）。
+                默认 None = 判不过门槛的全撤 —— 那是上千条的量级，且会把"当年用真实
+                两条净值判出、如今本地镜像已丢失那段历史"的结论一起抹掉
+                （实测 1208/1669 就是这种），所以定向修复必须显式传。
+            allow_full_sweep: 真写且 `only_ids=None` 时的必备开关，默认 False。
+                把这个毁灭口径从"忘了传参数"变成"必须显式声明"：
+                前端"回溯无效验证"按钮因此只能定向撤，整库回溯只能由脚本/CLI 明确发起。
             
         Returns:
             {
@@ -1364,14 +1383,31 @@ class PredictionVerifyService:
                 }
             }
         """
+        if not dry_run and only_ids is None and not allow_full_sweep:
+            return {
+                'success': False,
+                'message': '真写且未指定 only_ids 时必须显式传 allow_full_sweep=True：'
+                           '不限定 id 会把上千条历史结论一起抹掉，其中多数只是本地镜像缺那段历史',
+                'data': {'total_checked': 0, 'would_rollback': 0, 'rolled_back': 0,
+                         'kept': 0, 'skipped_by_filter': 0, 'errors': 0,
+                         'rollback_details': []},
+            }
+        wanted = set(only_ids) if only_ids is not None else None
         today = date.today()
-        
+
         predictions = self.db.query(Prediction).filter(
             Prediction.status.in_(['success', 'failed']),
             Prediction.verify_count > 0,
             Prediction.is_deleted == False,
             Prediction.prediction_type != 'flat'
         ).all()
+        # 定向模式先筛掉不相干的行：既省下上千次取数与判据计算，
+        # 也让"保留 N 个"这个数字只统计**真的评估过**的行（第 10 轮 MINOR-7）
+        skipped_by_filter = 0
+        if wanted is not None:
+            selected = [p for p in predictions if p.id in wanted]
+            skipped_by_filter = len(predictions) - len(selected)
+            predictions = selected
         
         total_checked = len(predictions)
         rolled_back = 0
@@ -1410,8 +1446,7 @@ class PredictionVerifyService:
                     skip_wait=True,  # rollback 不等待，直接判断是否可验证
                 )
                 
-                if not data_check['available'] and (
-                        only_ids is None or prediction.id in only_ids):
+                if not data_check['available']:
                     would_rollback += 1
                     old_status = prediction.status
                     old_verify_score = prediction.verify_score
@@ -1483,6 +1518,7 @@ class PredictionVerifyService:
                 'would_rollback': would_rollback,
                 'rolled_back': rolled_back,
                 'kept': kept,
+                'skipped_by_filter': skipped_by_filter,
                 'errors': errors,
                 'rollback_details': rollback_details
             }

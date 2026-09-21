@@ -80,7 +80,7 @@ def test_refusing_a_degenerate_endpoint_writes_no_conclusion(test_db, monkeypatc
             return date(2026, 9, 21)
 
     monkeypatch.setattr(pvs, 'date', FixedDate)
-    _rows(test_db, '512680', [PREV, START])
+    _rows(test_db, '512680', [PREV, START, NEXT_MON])
     p = _seed(test_db, '512680', START, TARGET_SAT)
     result = PredictionVerifyService(test_db).verify_prediction(p.id)
     test_db.refresh(p)
@@ -88,6 +88,22 @@ def test_refusing_a_degenerate_endpoint_writes_no_conclusion(test_db, monkeypatc
     assert p.is_correct is None, '退化终点不该写结论'
     assert p.status == 'pending', p.status
     assert not p.end_nav_date, p.end_nav_date
+
+
+def test_target_today_is_not_called_permanently_unverifiable(test_db):
+    """第 10 轮 M-1：目标日就是今天、净值还没发布，是**明天自愈**的日常情形。
+
+    退化终点门必须靠"目标日之后已有净值"来证明目标日真是休市日；
+    否则每个工作日 10:30 的 Cron 都会把当天的 1 天期预测误标成"永久不可验"，
+    还会建议把目标日往后挪 —— 那正好是仓库明令禁止的未来函数。
+    """
+    today_tue = date(2026, 7, 21)          # 周二：预测起点
+    tomorrow_wed = date(2026, 7, 22)       # 周三：目标日，当天净值尚未发布
+    _rows(test_db, '159915', [today_tue])  # 之后没有任何净值 ⇒ 证不了"目标日是休市日"
+    r = _check(test_db, '159915', today_tue, tomorrow_wed, today=tomorrow_wed)
+    assert r['available'] is False, r
+    assert r['reason'] != 'same_nav_endpoint', r
+    assert '无法判定方向' not in r['message'] and '调整' not in r['message'], r
 
 
 def test_weekend_target_with_a_real_second_point_still_verifies(test_db):
