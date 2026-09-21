@@ -80,6 +80,20 @@ def test_dense_window_skips_the_network(manager):
     assert calls == []
 
 
+def test_short_window_does_not_demand_impossible_density(manager):
+    """第 9 轮 MAJOR-2：跨周末的 1 天窗口最多只有 1 条净值，门槛不能是 2。
+
+    旧密度公式会让这类窗口**每次验证都发一轮拉取且永远拉不满**（实测预测 1709：
+    512680，2026-07-10→07-11 周六）。起点已覆盖 + 窗口 <14 天就不该再打接口。
+    """
+    m, calls = manager
+    db = _session()
+    code, start, end = '512680', date(2026, 7, 10), date(2026, 7, 11)
+    _seed(db, code, [date(2026, 7, 10), date(2026, 7, 9)])
+    assert m.backfill_history_range(code, start, end, db=db) == 0
+    assert calls == []
+
+
 def test_missing_start_still_backfills(manager):
     """整段起点就没有数据的老行为不能退化。"""
     m, calls = manager

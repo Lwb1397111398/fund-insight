@@ -5,7 +5,14 @@
 它拒收的行、以及被改掉的旧值，服务端不会替我们留底。第 8 轮评审因此判 MAJOR-5：
 **没有生产前像 = 回写不可逆**（本地有 `--restore-from` 清单，生产什么都没有）。
 这个脚本把 GET /api/config/sector-mappings 的原样结果带时间戳落到
-`docs/迭代计划/run-2026-09-20/`，回写前先跑一次，事后要退就照它逐行 PUT 回去。
+`docs/迭代计划/run-2026-09-20/`。
+
+**它只是一份"看得懂的回执"，不是完整前像**（第 9 轮 MAJOR-3）：那个 GET 目前不返回
+`owner_locked / reviewed_by / confidence / evidence / match_source / verified_at`，
+所以拿它"逐行 PUT 回去"既补不回免疫状态，`update_mapping` 还会把碰到的每一行
+盖成 `reviewed + owner_locked + reviewed_by='owner'`，等于用恢复动作伪造老板意志。
+真要回滚生产映射，用 `--apply` 前服务端本库的备份（Render 侧快照）或
+`audit-import` 明确写回审计字段，别把这个文件当退路。
 
 只读，不写任何东西。口令只从环境变量 `ACCESS_PASSWORD` 读。
 
@@ -65,6 +72,12 @@ def main():
                   f, ensure_ascii=False, indent=1)
     locked = sum(1 for r in rows if r.get('owner_locked') or r.get('reviewed_by') == 'owner')
     unreviewed = sum(1 for r in rows if not r.get('reviewed'))
+    if not any('owner_locked' in r for r in rows):
+        # GET 不带这一列时 `locked` 恒为 0：报出来会被当成"生产没人锁定"的假证据
+        print('[前像] %d 行已存 %s（待审查 %d 行）；'
+              '注意：接口不返回 owner_locked/reviewed_by/evidence，'
+              '这份文件不足以逐行回滚' % (len(rows), path, unreviewed))
+        return 0
     print('[前像] %d 行已存 %s（老板锁定 %d 行、待审查 %d 行）'
           % (len(rows), path, locked, unreviewed))
     print('[提示] 回写请跑：python scripts/export_repaired_mappings.py 后 '

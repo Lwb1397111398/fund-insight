@@ -282,6 +282,14 @@ class SectorFundService:
                     row.owner_locked = True
                     row.match_source = row.match_source or 'manual'
                     row.updated_at = _dt.now()
+                else:
+                    # 取消审查必须连"老板锁定"一起撤：`mark_reviewed_by_id` 一直是这么做的。
+                    # 以前这里没有 else，批量取消审查会留下"未审查 + reviewed_by='owner'
+                    # + owner_locked=True"的僵尸行 —— 它既躲开体检（owner 例外），
+                    # 又能驱动预测改标，还把"机器已纠正待复核"的旗标藏起来（第 9 轮 MAJOR-1）。
+                    row.reviewed_by = None
+                    row.owner_locked = False
+                    row.updated_at = _dt.now()
                 flipped += 1
             db.commit()
             if skipped:

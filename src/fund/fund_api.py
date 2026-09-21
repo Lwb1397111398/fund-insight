@@ -813,8 +813,13 @@ class FundDataManager:
                     FundHistory.nav_date <= end_date,
                 ).count()
                 span_days = max(0, (end_date - start_date).days)
-                min_inside = max(2, int(span_days * 5 / 7 * 0.6))
-                if oldest_date <= start_date and inside >= min_inside:
+                # 门槛不能超过窗口**物理上可能有的净值天数**：短窗口（跨周末的
+                # start+4→end 只有 1 个交易日）会永远达不到 min_inside=2，
+                # 于是每次验证都发一轮拉取、永远拉不满（第 9 轮 MAJOR-2 实测
+                # 预测 1709：512680，2026-07-10→07-11 周六，inside=1、门槛=2）。
+                # 14 天以内的窗口干脆只看起点覆盖不看密度：密度样本太少，判它"缺"没意义。
+                min_inside = min(max(2, int(span_days * 5 / 7 * 0.6)), max(1, span_days))
+                if oldest_date <= start_date and (span_days < 14 or inside >= min_inside):
                     return 0
 
             history = self.api.get_fund_history_range(fund_code, start_date, end_date)

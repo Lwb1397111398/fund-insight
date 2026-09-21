@@ -1359,6 +1359,15 @@ def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Op
         values.pop('owner_locked', None)
     if str(values.get('reviewed_by') or '').strip().lower() == 'owner':
         values.pop('reviewed_by', None)
+    if 'fund_name' in values and not (values.get('fund_name') or '').strip():
+        # 只挡"把这行名字**抹空**"的写法：名字一空，体检从此判 unknown=不指控，
+        # 这行就永久免疫。第 9 轮实测 `{fund_code:'600519', fund_name:null, reviewed:true}`
+        # 打在一只本来有名字的基金上映射上，名字被洗成 NULL 且没跑身份证明。
+        # "没给 fund_name 这一列"是合法的局部更新（保留现值），不该一起挡掉。
+        return 'fund_name_wiped'
+    if row is not None and 'fund_name' not in values and not (row.fund_name or '').strip():
+        # 库里本来就没名字：先补名字再谈回写，否则这行同样永远过不了体检。
+        return 'row_has_no_fund_name'
     # 探测是网络活：一次一码，行数由脚本的 --limit 控制；只在真要写时打
     accusation, _identity = _manual_identity_verdict(
         values.get('fund_code'), values.get('fund_name'), sector)
@@ -1664,6 +1673,29 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
         # 不要在此函数内局部 import，否则会把整个函数内的同名变量变成局部变量，
         # 上面 db.query(SectorFundMapping) 会抛 UnboundLocalError
         from src.services.sector_fund_service import _manual_identity_verdict
+        if not (mapping.fund_name or '').strip():
+            # 名字为空的行**永远通不过体检**（`arbitrate_mapping` 直接判 unknown = 不指控），
+            # 于是"可服务 + 已审查"照旧落地：第 9 轮实测 `POST {"sector_name":"测试白酒",
+            # "fund_code":"600519"}` 就得到一只能驱动预测改标的股票映射。
+            # 这里先拿基金域的品种名补上；补不到就说明这个码在基金域根本不存在 → 拒绝创建。
+            from src.fund.fund_api import FundAPI
+            try:
+                info = FundAPI().get_fund_domain_name(mapping.fund_code, use_roster=False)
+            except Exception:
+                info = None
+            official = ''
+            if isinstance(info, dict):
+                official = (info.get('name') or '').strip() if info.get('status') == 'ok' else ''
+            elif info:
+                official = str(info).strip()
+            if not official:
+                return {
+                    "success": False,
+                    "message": "基金域查不到这个代码（多半是股票），且没填基金名，拒绝创建：%s"
+                               % mapping.fund_code,
+                    "data": None
+                }
+            mapping.fund_name = official
         accusation, _identity = _manual_identity_verdict(
             mapping.fund_code, mapping.fund_name, mapping.sector_name)
         new_mapping = SectorFundMapping(

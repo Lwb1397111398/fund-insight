@@ -62,6 +62,7 @@ def seeded():
     pred = Prediction(blogger_id=blogger.id, post_id=post.id, sector='德明利',
                       fund_code='002354', fund_name='天娱数科',
                       prediction_type='看涨', prediction_content='德明利要涨',
+                      prediction_date=date(2026, 8, 30),
                       target_date=date(2026, 9, 30), is_deleted=False)
     db.add_all(infos + hist + [pred])
     db.commit()
@@ -117,15 +118,19 @@ def test_a_row_with_live_predictions_is_never_renamed(seeded, monkeypatch):
     assert _names(seeded)['002354'] == '天娱数科'
 
 
-def test_report_lists_the_stock_named_rows(seeded, monkeypatch):
-    before = set(glob.glob(os.path.join(OUT_DIR, 'fund-info-identity-2*.csv')))
+def test_report_lists_the_stock_named_rows(seeded, monkeypatch, capsys):
+    """体检清单要真能落地并说清"哪几行是股票名"。
+
+    文件名只到秒：同一秒内跑两次会**覆盖**同一个文件，所以不能靠"目录里多了个文件"
+    来找产物，直接读脚本自己打出来的路径。
+    """
     _run(monkeypatch, seeded, '--rename-to-official')
-    fresh = sorted(set(glob.glob(os.path.join(OUT_DIR, 'fund-info-identity-2*.csv'))) - before)
-    assert len(fresh) == 1, '脚本只应该产出一份体检清单'
-    try:
-        with io.open(fresh[0], encoding='utf-8-sig') as f:
-            rows = list(csv.DictReader(f))
-        assert {'001309', '002354'} <= {r['fund_code'] for r in rows
-                                        if r['verdict'] == 'not_a_fund'}
-    finally:
-        os.remove(fresh[0])          # 用例产物不留在仓库里
+    printed = [ln for ln in capsys.readouterr().out.splitlines() if '清单' in ln]
+    assert printed, '脚本没打出清单路径'
+    path = printed[-1].split('清单')[-1].strip()
+    assert os.path.exists(path), path
+    with io.open(path, encoding='utf-8-sig') as f:
+        rows = list(csv.DictReader(f))
+    assert {'001309', '002354'} <= {r['fund_code'] for r in rows
+                                    if r['verdict'] == 'not_a_fund'}
+    os.remove(path)                  # 用例产物不留在仓库里
