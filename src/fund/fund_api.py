@@ -773,10 +773,11 @@ class FundDataManager:
         end_date: date,
         db: Session = None,
     ) -> int:
-        """按需补拉数据库缺失的早期历史净值。
+        """按需补拉数据库缺失的历史净值。
 
-        只有当库内最早一条净值仍晚于 start_date（即区间起点缺数据）时才发起
-        网络补拉；否则直接返回 0，避免对每笔验证都打数据源接口。
+        只有当**区间起点缺数据**、或**窗口内已有条数不够密**时才发起网络补拉，
+        否则直接返回 0，避免对每笔验证都打数据源接口。
+        （以前只看"最早一天"，中间断档永远补不上 —— 见下方注释。）
 
         Args:
             fund_code: 基金代码
@@ -801,8 +802,19 @@ class FundDataManager:
                 oldest_date = oldest[0]
                 if isinstance(oldest_date, datetime):
                     oldest_date = oldest_date.date()
-                if oldest_date <= start_date:
-                    # 库内数据已覆盖区间起点，无需补拉
+                # 「起点已有数据」不等于「窗口够用」：只看最早一天会让**中间断档**
+                # 永远补不上 —— 第 8 轮实测 69 条到期预测卡在"窗口内净值记录不足"，
+                # 生产同样中招（Cron 无限重试，生命周期还报"结构性不可验 0"）。
+                # 因此再要求窗口内的实际条数达到按自然日折算的最低密度，
+                # 够密才免打接口（保留本方法原有的"别为每笔验证都请求数据源"意图）。
+                inside = db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code,
+                    FundHistory.nav_date >= start_date,
+                    FundHistory.nav_date <= end_date,
+                ).count()
+                span_days = max(0, (end_date - start_date).days)
+                min_inside = max(2, int(span_days * 5 / 7 * 0.6))
+                if oldest_date <= start_date and inside >= min_inside:
                     return 0
 
             history = self.api.get_fund_history_range(fund_code, start_date, end_date)
