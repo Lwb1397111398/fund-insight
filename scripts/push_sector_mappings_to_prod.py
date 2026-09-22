@@ -113,6 +113,8 @@ def main():
     ap.add_argument('--base', default=os.getenv('APP_BASE_URL', DEFAULT_BASE))
     ap.add_argument('--confirm', default='', help='必须等于 %s 才真写' % CONFIRM)
     ap.add_argument('--limit', type=int, default=None, help='只处理前 N 行（先小批验证）')
+    ap.add_argument('--allow-unservable', action='store_true',
+                    help='连"生产压根没有这只基金档案/净值"的行也一起发（默认剔除，见检查单 §7）')
     args = ap.parse_args()
 
     password = os.getenv('ACCESS_PASSWORD', '')
@@ -128,6 +130,34 @@ def main():
     print('[计划] 目标=%s 清单 %d 行（指纹 %s，生成于 %s）→ %s'
           % (args.base, len(rows), data.get('sha256'), data.get('generated_at'),
              '真写' if apply_write else 'dry-run'))
+
+    # 真写之前先问服务端"这些标的在你这儿定得了价吗"。
+    # 为什么不能信清单：`is_fetchable` 是**在镜像上**算的，而第 27 轮生产实测有 31 行
+    # 连 `fund_info` 档案都没有（压着 249 条活预测）—— 拿清单当闸门会把这 31 行全放成"可服务"。
+    if apply_write:
+        pre_status, pre_body = request(args.base, ENDPOINT, password,
+                                       {'mappings': rows, 'dry_run': True}, method='POST')
+        if pre_status != 200 or not isinstance(pre_body, dict) or 'data' not in pre_body:
+            print('[abort] 预检没走通（HTTP %s），一行都不发：%s'
+                  % (pre_status, str(pre_body)[:200]))
+            return 3
+        bad = [(i.get('sector_name'), i.get('fund_code'), i.get('nav_priced_here_note'))
+               for i in (pre_body['data'].get('items') or [])
+               if i.get('nav_priced_here') is False]
+        if bad:
+            print('[预检] 生产定不了价的 %d 行（发过去就是造出无法定价的映射）：' % len(bad))
+            for sector, code, note in bad[:40]:
+                print('   %-14s %-8s %s' % (sector, code, note))
+            if len(bad) > 40:
+                print('   ...其余 %d 行省略' % (len(bad) - 40))
+            if not args.allow_unservable:
+                drop = {s for s, _c, _n in bad}
+                rows = [r for r in rows if r.get('sector_name') not in drop]
+                print('[预检] 已剔除 %d 行，剩 %d 行待发；确实要把不可服务的行也发上去，'
+                      '加 --allow-unservable' % (len(drop), len(rows)))
+                if not rows:
+                    print('[abort] 剔除后没有可发的行了')
+                    return 5
 
     status, body = request(args.base, ENDPOINT, password,
                            {'mappings': rows, 'dry_run': not apply_write,

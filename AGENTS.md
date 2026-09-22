@@ -195,12 +195,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 02:25（北京），第 28 轮修复批次，最后一次改用例之后重跑）：
+最近一次核对（2026-09-23 02:45（北京），第 28 轮回写闸门那一批，最后一次改用例之后重跑两个口径）：
 
-- `pytest tests/unit -q` → **851 passed / 16 skipped / 0 failed**（128 秒）。
-- `pytest tests/ -q`（含 integration/services）本轮**没有重跑**，所以不引用它的数
-  （第 28 轮 F 实测过当时口径是 854 = 845 + 9，超集 > 子集，无"765<776"那类错）；
-  报数时要写清是哪个口径，两个数都对但常被人当成回归。
+- `pytest tests/unit -q` → **858 passed / 16 skipped / 0 failed**（131 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **867 passed / 16 skipped / 0 failed**（148 秒）。
+  报数时要写清是哪个口径（867 = 858 + 9，超集必然大于子集；写过"765 &lt; 776"那种反数就是没跑）。
   （上一基线 835/844 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
   （再早 808/817 → 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例却没复测。
@@ -256,6 +255,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   现在 `tests/unit/test_backfill_negative_proof.py::test_fixed_today_reads_never_stamp_proofs_with_the_wall_clock`
   用 AST 扫 `tests/unit/*.py`，同函数内"固定 `today=` 的读 + 不带 `now=` 的 `record_probe`"并存即红。
   同类教训第 17 轮就写过（`record_probe` 的 `now=` 就是那时加的参数）——**加了参数不等于加了护栏**。
+- **回写清单的"能不能定价"必须由目标库回答，不能在镜像上算**（第 27 轮两份复评共同抓到，第 28 轮修）：
+  `POST /api/config/sector-mappings/-/audit-import` 的回执现在逐行带 `items[].nav_priced_here`
+  （`src/api/routes/config.py:_servability_by_code`：本库有无 `fund_info` 档案 / 有无净值行 / 是否 <30 行）。
+  服务端**只报告不拒收**（拒收会改公共接口契约 ⇒ 老板的决定项，见检查单 §7 的 A/B）；
+  真正拦下来的是 `scripts/push_sector_mappings_to_prod.py`：`--confirm` 真写前先跑一次 dry-run 预检，
+  剔掉不可服务的行（硬发要显式 `--allow-unservable`），预检不通则一行都不发（退码 3）。
+  为什么必须这样：清单里那两列（`is_fetchable` / `fund_info_needed`）是**在镜像上**算的，
+  而镜像的档案我已补齐 ⇒ 清单说"缺 3 行"，生产实测缺 **31 行**（压着 249 条活预测）。
+  用例：`tests/unit/test_push_writeback_gate.py`（4 条）+ `test_sector_mapping_audit_import.py`（3 条）。
+  生产侧全量预检可重跑：`python scripts/prod_writeback_preflight_readonly.py`（只读，退码 5=有不可服务行）。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
   拿到的是 **`FundAPI` 实例**（`src/fund/__init__.py` 把包属性重绑成了实例），在它身上

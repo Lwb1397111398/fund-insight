@@ -1453,6 +1453,42 @@ def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Op
         return 'write_failed:%s' % str(exc)[:160]
 
 
+def _servability_by_code(db, codes):
+    """逐码回答"这只基金在**本库**定不定得了价"：有没有档案、有没有净值行。
+
+    为什么必须在服务端算：第 27 轮两份复评共同指出，回写清单里那个 `is_fetchable`
+    是在**本地镜像**上判的 —— 而我已经把镜像的档案补齐了，所以拿它当闸门会把
+    "生产压根没有这只基金"的 31 行全放成"可服务"（生产实测：这 31 行压着 249 条活预测）。
+
+    这里只**报告**不改拒收语义：`sector-mappings/-/audit-import` 是公共接口，
+    "要不要直接拒收不可服务的行"是老板的决定项（见检查单 §7 的 A/B 两条路）；
+    调用方（`scripts/push_sector_mappings_to_prod.py`）自己按这份报告决定发不发。
+    """
+    from sqlalchemy import func
+
+    from src.models.database import FundHistory, FundInfo
+
+    wanted = {c for c in (codes or []) if c}
+    if not wanted:
+        return {}
+    have_info = {r[0] for r in db.query(FundInfo.fund_code).filter(
+        FundInfo.fund_code.in_(wanted)).all()}
+    nav_rows = dict(db.query(FundHistory.fund_code, func.count(FundHistory.id)).filter(
+        FundHistory.fund_code.in_(wanted)).group_by(FundHistory.fund_code).all())
+    out = {}
+    for code in wanted:
+        n = int(nav_rows.get(code) or 0)
+        if code not in have_info:
+            out[code] = (False, '本库没有这只基金的 fund_info 档案')
+        elif n == 0:
+            out[code] = (False, '本库一行净值都没有')
+        elif n < 30:
+            out[code] = (True, '净值只有 %d 行（<30），长窗口预测可能验不了' % n)
+        else:
+            out[code] = (True, '')
+    return out
+
+
 @router.post("/sector-mappings/-/audit-import")
 def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
                                 db: Session = Depends(get_db)):
@@ -1488,7 +1524,9 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
     dry_run = bool(payload.dry_run) or not confirm_given
 
     service = get_sector_fund_service(db)
+    servmap = _servability_by_code(db, [(i.fund_code or '').strip() for i in rows])
     counts = {'updated': 0, 'created': 0, 'unchanged': 0, 'refused': 0}
+    unservable = 0
     items = []
     written = 0
 
@@ -1514,6 +1552,14 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
             entry['reason'] = err
             items.append(entry)
             continue
+
+        # "这只标的在**本库**定不定得了价"——只报告，不替调用方决定发不发（见 helper 文档）
+        servable_ok, servable_note = servmap.get(entry['fund_code'], (True, ''))
+        entry['nav_priced_here'] = servable_ok
+        if servable_note:
+            entry['nav_priced_here_note'] = servable_note
+        if not servable_ok:
+            unservable += 1
 
         row, matched_by = _find_mapping_by_sector(db, sector)
         entry['mapping_id'] = row.id if row is not None else None
@@ -1571,6 +1617,9 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
     if blocked_without_confirm:
         message += '；本次未写入：真写必须带 confirm=%s（或 %s 头）' % (
             AUDIT_IMPORT_CONFIRM, AUDIT_IMPORT_CONFIRM_HEADER)
+    if unservable:
+        message += '；⚠ 其中 %d 行的标的在**本库**定不了价（无档案或无净值），' \
+                   '逐行见 items[].nav_priced_here' % unservable
     return {
         'success': True,
         'dry_run': dry_run,
@@ -1581,6 +1630,7 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
             'total': len(rows),
             'counts': counts,
             'refused_reasons': reasons,
+            'no_nav_priced_in_this_db': unservable,
             'items': items,
             'audit_fields': list(AUDIT_FIELDS),
         }

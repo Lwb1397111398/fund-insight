@@ -699,3 +699,72 @@ def test_ai_match_preview_then_apply_with_token_writes(monkeypatch, tmp_path):
         assert stale.status_code == 410, "token 与板块不符必须拒绝，而不是重跑"
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+def _seed_nav(session_factory, code, rows):
+    """给"这只标的在本库定不定得了价"准备证据：档案 + N 行净值。"""
+    from datetime import date, timedelta
+
+    from src.models.database import FundHistory, FundInfo
+    db = session_factory()
+    try:
+        db.add(FundInfo(fund_code=code, fund_name='测试基金'))
+        for i in range(rows):
+            db.add(FundHistory(fund_code=code,
+                               nav_date=date(2026, 1, 1) + timedelta(days=i),
+                               nav=1.0 + i / 100.0))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_audit_import_reports_rows_this_db_cannot_price(monkeypatch, tmp_path):
+    """清单上的 `is_fetchable` 是在**镜像**算的 —— 服务端必须自己说这句话。
+
+    第 27 轮两份复评共同抓到：回写清单 145 行里有 31 行在生产连 `fund_info` 档案都没有
+    （压着 249 条活预测），而清单里的 `is_fetchable` 全写着 True。
+    这一条只**报告**不拒收（改公共接口的拒收规则是老板的决定项，见检查单 §7 的 A/B）。
+    """
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    try:
+        res = _import(client, [AUDIT_ROW])
+        body = res.json()
+        item = body["data"]["items"][0]
+        assert item["nav_priced_here"] is False, item
+        assert "fund_info" in item["nav_priced_here_note"], item
+        assert body["data"]["no_nav_priced_in_this_db"] == 1, body["data"]
+        assert "定不了价" in body["message"], body["message"]
+        # 契约不变：仍然只出计划、仍然算 created（要拒收得显式改规则）
+        assert item["outcome"] == "created" and body["written"] == 0
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_audit_import_says_priced_when_this_db_has_the_nav_history(monkeypatch, tmp_path):
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    _seed_nav(session_factory, AUDIT_ROW["fund_code"], 31)
+    try:
+        body = _import(client, [AUDIT_ROW]).json()
+        item = body["data"]["items"][0]
+        assert item["nav_priced_here"] is True, item
+        assert "nav_priced_here_note" not in item, item
+        assert body["data"]["no_nav_priced_in_this_db"] == 0, body["data"]
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_thin_nav_is_reported_as_a_note_not_a_refusal(monkeypatch, tmp_path):
+    """档案有、净值只有几行：算"能定价"，但要把薄厚说出来（长窗口预测会验不了）。"""
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    _seed_nav(session_factory, AUDIT_ROW["fund_code"], 5)
+    try:
+        body = _import(client, [AUDIT_ROW]).json()
+        item = body["data"]["items"][0]
+        assert item["nav_priced_here"] is True, item
+        assert "5 行" in item["nav_priced_here_note"], item
+        assert body["data"]["no_nav_priced_in_this_db"] == 0, body["data"]
+    finally:
+        app.dependency_overrides.pop(get_db, None)
