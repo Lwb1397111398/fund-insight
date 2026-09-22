@@ -67,7 +67,8 @@ def audit(db):
                        'stored_end_nav': p.end_nav,
                        'is_correct': p.is_correct, 'verify_score': p.verify_score,
                        'last_verify_date': str(p.last_verify_date)})
-    return sum(1 for p in rows if has_verdict(p)), buckets, samples, detail
+    # 上面的 SQL 已经按 `has_verdict` 的三个条件筛过，再数一遍是恒真（第 20 轮 MINOR-6）
+    return len(rows), buckets, samples, detail
 
 
 def accuracy_span(db, stale_ids):
@@ -107,11 +108,15 @@ def unmapped_codes(db):
     from src.models.database import Prediction, SectorFundMapping
 
     known = {r[0] for r in db.query(SectorFundMapping.fund_code).distinct().all()}
+    from src.services.verdict_evidence import has_verdict
     rows = db.query(Prediction).filter(
         Prediction.is_deleted == False,                      # noqa: E712
         Prediction.is_correct != None,
         Prediction.fund_code.isnot(None),
     ).all()
+    # 与 `audit()` / `accuracy_span` 同一把尺子（第 20 轮 MINOR-6：三处各写一套判据，
+    # 今天凑巧都是 1110，"恰好相等"不是"可以各写一份"的理由）
+    rows = [r for r in rows if has_verdict(r)]
     blind = [r for r in rows if (r.fund_code or '').strip() not in known]
     return len(rows), len(blind), sorted({(r.fund_code or '').strip() for r in blind})[:10]
 

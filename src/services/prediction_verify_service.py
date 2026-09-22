@@ -63,9 +63,10 @@ def clear_verification_fields(prediction) -> None:
 
     `scripts/resync_verdict_scalars.py` 与还原清单都以本函数为准（少一个字段就会
     在还原之后留下"结论与台账打脸"的半成品）。
-    三个调用方共用：`rollback_invalid_verifications`（数据不再支撑结论）、
-    `scripts/revert_degenerate_verdicts.py`（结论本身是退化/未来函数判出来的）、
-    `PredictionMaintenanceService._reset_verification`（改标/改周期后重验）。
+    两个调用方共用同一份清单：`rollback_invalid_verifications`（数据不再支撑结论）、
+    `scripts/revert_degenerate_verdicts.py`（结论本身是退化/未来函数判出来的）。
+    第 20 轮 MINOR-9：原来这里还虚指第三个 —— 维护服务的 `_reset_verification`
+    早已退化成纯转发、没有任何生产调用点，已连同它的"两条路径等价"用例一起删掉。
     以前脚本靠调 service 的批量方法顺带清零，结果只能撤"今天已不可验"的行 ——
     用未来数据判出来、但今天仍可验的那批根本撤不掉（第 13 轮实测 94 条只撤了 1 条）。
     """
@@ -896,7 +897,14 @@ class PredictionVerifyService:
                 FundInfo.fund_name == prediction.fund_name
             ).first()
             if fund:
-                return fund.fund_code, fund.fund_name
+                # 第 20 轮 MAJOR-1：这一步以前**不过体检**。名字是老板/LLM 从帖子里抄来的，
+                # 而 `fund_info` 里"名字→代码"通常正好指回自带的那只不可服务基金 ⇒
+                # 第 1 步刚说"改按板块重新解析标的"，这里立刻把同一个代码原样返回：
+                # 不改标、不清结论、不打 ⚠，新加的改标门 86% 的行都到不了（镜像实测）。
+                if self.fund_code_is_servable(fund.fund_code):
+                    return fund.fund_code, fund.fund_name
+                logger.warning('[Verify] 预测 %s 按名字解析回不可服务的 %s，继续按板块解析',
+                               prediction.id, fund.fund_code)
 
         sector = prediction.sector or prediction.sector_type
         if sector:
@@ -930,8 +938,12 @@ class PredictionVerifyService:
             ).all()
             for f in all_funds:
                 fund_name = f.fund_name or ''
-                if not any(kw in fund_name for kw in excluded_keywords):
-                    return f.fund_code, f.fund_name
+                if any(kw in fund_name for kw in excluded_keywords):
+                    continue
+                if not self.fund_code_is_servable(f.fund_code):
+                    # 同一条规矩：`sector_type` 是自由文本，这里挑中的代码也可能被判不可服务
+                    continue
+                return f.fund_code, f.fund_name
 
             # 6) removed: fuzzy FundInfo match. sector_type is free text, so a
             #    fuzzy hit silently verifies a prediction against an unrelated fund.
@@ -939,6 +951,39 @@ class PredictionVerifyService:
 
         return None, None
     
+    def retag_if_drifted(self, prediction: Prediction, fund_code: str, fund_name: str,
+                         dry_run: bool = False) -> bool:
+        """"行上挂 A、解析出 B"的唯一处置：经 `retag_prediction` 改标 + 清结论 + 重算统计。
+
+        两个入口共用（`verify_prediction` 与 `rollback_invalid_verifications`），因为
+        只写在一处时另一处就会把同类行"跳过然后没人管"（第 20 轮 MAJOR-2：回溯审计只扫
+        已判行，而到期队列只要 `is_correct IS NULL` ⇒ 被跳过的行永远回不到改标那条腿）。
+
+        返回是否真的动了（dry_run 时返回"会动"）。
+        """
+        from src.fund.fund_sync_manager import FundSyncManager
+
+        if not prediction.fund_code or fund_code == prediction.fund_code:
+            return False
+        if dry_run:
+            return True
+        old_code = prediction.fund_code
+        cleared = FundSyncManager.retag_prediction(
+            self.db, prediction, fund_code, fund_name or prediction.fund_name,
+            source='verify_unservable_code')
+        # 改标是一次真实的决定，不取决于本轮验证能不能判完（可能因为"净值没出"提前返回）
+        self.db.commit()
+        if cleared and prediction.blogger_id:
+            # 清掉一条结论 = 统计的分子分母都变了，而这里不走增量回退：
+            # `blogger_stats` 按 `verify_count>0` 现算，少了这次重算，后面判完只会
+            # `verified_delta=+1` ⇒ 同一行计两次（第 19 轮 MAJOR-1，实测 87 vs 真值 86）。
+            from src.utils.blogger_stats import recalculate_blogger_stats
+            recalculate_blogger_stats(self.db, prediction.blogger_id)
+        logger.warning('[Verify] 预测 %s 标的由 %s 改为体检可服务的 %s %s，%s后按新标的判定',
+                       prediction.id, old_code, fund_code, fund_name or '',
+                       '旧结论已清除' if cleared else '本来没有结论')
+        return True
+
     def verify_prediction(self, prediction_id: int, force: bool = False) -> Dict:
         """
         验证单个预测（支持过程验证）
@@ -978,25 +1023,7 @@ class PredictionVerifyService:
             # 上一版直接拿 B 算结论、一个字都不回写 ⇒ 判完就是新一族"结论按别的基金判、
             # 行上挂另一只"（`verdict_under_other_fund` 的成因，第 18 轮 MAJOR-5），
             # 而且因为回写从不发生，那个徽章在新数据上永远测不到 = 假装有闸门。
-            # 现在先经唯一写入口改标：留痕 + 清掉旧标的的结论，再按新标的重判。
-            from src.fund.fund_sync_manager import FundSyncManager
-            old_code = prediction.fund_code
-            cleared = FundSyncManager.retag_prediction(
-                self.db, prediction, fund_code, fund_name or prediction.fund_name,
-                source='verify_unservable_code')
-            # 改标是一次真实的决定，不取决于本轮验证能不能判完（可能因为"净值没出"提前返回）
-            self.db.commit()
-            if cleared and prediction.blogger_id:
-                # 清掉一条结论 = 博主统计的分子分母都变了，而这里**不**走增量回退：
-                # `blogger_stats` 是按 `verify_count>0` 现算的，少了这次重算，
-                # 后面真正判完时只会 `verified_delta=+1` ⇒ 同一行被计两次
-                # （第 19 轮 MAJOR-1，实测镜像上 total 87 vs 真值 86）。
-                from src.utils.blogger_stats import recalculate_blogger_stats
-                recalculate_blogger_stats(self.db, prediction.blogger_id)
-            logger.warning(
-                '[Verify] 预测 %s 标的由 %s 改为体检可服务的 %s %s，%s后按新标的判定',
-                prediction.id, old_code, fund_code, fund_name or '',
-                '旧结论已清除' if cleared else '本来没有结论')
+            self.retag_if_drifted(prediction, fund_code, fund_name)
         
         logger.info(f"[Verify] 匹配到基金: {fund_code} - {fund_name}")
         
@@ -1624,16 +1651,21 @@ class PredictionVerifyService:
                 if not fund_code:
                     kept += 1
                     continue
-                if prediction.fund_code and fund_code != prediction.fund_code:
-                    # 标的已经漂到另一只基金上（自带代码被体检否掉）。这时"这段净值缺不缺"
-                    # 说的是**别的那只**，拿它去撤 A 的结论 = 用一个无关的理由撤掉一条记录
-                    # （第 19 轮 MAJOR-3）。这类行交给验证路径正规改标（`verify_prediction`
-                    # 会先 retag 再判），本函数只数不撤。
+                row_code_before = prediction.fund_code
+                if self.retag_if_drifted(prediction, fund_code, fund_name,
+                                         dry_run=dry_run):
+                    # 标的已经漂到另一只基金上（自带代码被体检否掉）。"这段净值缺不缺"说的
+                    # 是**别的那只**，拿它去撤 A 的结论 = 用一个无关的理由撤掉一条记录
+                    # （第 19 轮 MAJOR-3）。但上一版的"只数不撤"也不成立：本函数只扫已判行、
+                    # 到期队列又只要 `is_correct IS NULL` ⇒ 被跳过的行再也回不到改标那条腿，
+                    # 语义只是从"错误撤销"变成"没人管"（第 20 轮 MAJOR-2）。
+                    # 现在与 `verify_prediction` 共用一个入口：dry-run 报"会改标"，
+                    # 真跑就正规改标（留痕 + 清旧结论 + 重算博主统计）。
                     code_diverged += 1
                     rollback_details.append({
                         'prediction_id': prediction.id,
-                        'action': 'skipped_code_diverged',
-                        'row_code': prediction.fund_code, 'resolved_code': fund_code,
+                        'action': 'would_retag' if dry_run else 'retagged',
+                        'row_code': row_code_before, 'resolved_code': fund_code,
                     })
                     continue
                 
@@ -1719,7 +1751,9 @@ class PredictionVerifyService:
             'success': True,
             'message': f"{'预览' if dry_run else '回溯'}完成：检查 {total_checked} 个预测，"
                        f"{'将回溯' if dry_run else '已回溯'} {would_rollback if dry_run else rolled_back} 个，"
-                       f"保留 {kept} 个，错误 {errors} 个"
+                       f"保留 {kept} 个，错误 {errors} 个，"
+                       f"标的已漂移 {code_diverged} 个"
+                       f"（{'按可服务标的改标' if dry_run else '已改标并清掉旧结论'}）"
                        + ('' if dry_run or not run_id
                           else f'（run_id={run_id}，要整批撤销用 '
                                f'python scripts/restore_prediction_batch.py --run-id {run_id}）'),

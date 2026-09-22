@@ -3,7 +3,10 @@
 提供统一的博主准确率和评级计算逻辑
 
 累计算法说明：
-- total_verify_score: 累计验证分数（即使预测被删除也保留）
+- total_verify_score: 累计验证分数（只在**物理清除**时保留：归档进 archived_*）
+  注意：**软删（is_deleted=1）不保留** —— 下面的现算查询按 is_deleted=False 过滤，
+  归档那一行既不进现算、又没进 archived_*，两头都不算（第 20 轮 MINOR-8，镜像 135 行）。
+  累加口径留给物理清理（`retention_three_buckets` 清除时才 bump archived_*）。
 - total_predictions: 已验证预测数（用于计算准确率分母）
 - 准确率 = total_verify_score / (total_predictions * 100) * 100
 

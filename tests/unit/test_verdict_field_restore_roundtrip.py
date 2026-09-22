@@ -140,22 +140,16 @@ def test_restore_list_is_a_subset_of_the_snapshot():
     assert not extra, '这些字段还原时会去取快照、但快照根本不存，等于永远还原不了：%s' % extra
 
 
-def test_both_reset_paths_clear_the_same_fields():
-    """撤结论的两条路径必须动同一批字段（第 15 轮 m-2）。
+def test_the_single_reset_path_clears_the_ai_judgment_too():
+    """撤结论只有一条清单（`clear_verification_fields`），它必须包含 `ai_judgment`。
 
-    维护服务以前自己抄了 16 行赋值、判据函数只有 15 行，差别就在 `ai_judgment`：
-    走 `rollback_invalid_verifications` 撤掉的预测，状态回到 pending 却仍挂着上一轮
-    的 AI 判词（"预测下跌实际微涨，方向判断正确"这种话）。
+    第 15 轮 m-2 的原件是"两条路径等价"，而维护服务那条已经退化成纯转发并被删
+    （第 20 轮 MINOR-9：留着就是文档里的第三个调用方虚指）。所以这里只钉住唯一清单本身。
     """
-    from src.services.prediction_maintenance_service import PredictionMaintenanceService
-
-    service_side, maintenance_side = _FieldSpy(), _FieldSpy()
-    clear_verification_fields(service_side)
-    PredictionMaintenanceService._reset_verification(maintenance_side)
-    assert 'ai_judgment' in service_side.touched, '撤结论不撤 AI 判词，pending 行会留着旧判词'
-    assert service_side.touched == maintenance_side.touched, (
-        '两条"退回未验证"的字段清单又分叉了：%s'
-        % (service_side.touched ^ maintenance_side.touched))
+    spy = _FieldSpy()
+    clear_verification_fields(spy)
+    assert 'ai_judgment' in spy.touched, \
+        '撤结论不撤 AI 判词 ⇒ status 回到 pending 却仍挂着"方向判断正确"这种话'
 
 
 def test_restore_field_list_covers_every_verdict_field():

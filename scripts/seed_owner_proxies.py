@@ -23,7 +23,18 @@ import _db_guard  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true')
+    # 第 20 轮 MAJOR-1：这个脚本直写 `reviewed_by='owner' + owner_locked=True`，
+    # 而那是全仓唯一一条**不经 owner_confirm** 的豁免来源（豁免清单是代码字面量
+    # `sector_fund_agent.DELIBERATE_PROXIES`）。AGENTS.md 写"只能由显式确认换来"，
+    # 少这一句就还是假话。真写必须带 --owner-confirm。
+    ap.add_argument('--owner-confirm', metavar='TOKEN',
+                    help='真写必须等于 SEED-PROXY：这次操作会给行加上老板署名与体检豁免')
     args = ap.parse_args()
+    if not args.dry_run and args.owner_confirm != 'SEED-PROXY':
+        print('[abort] 这个脚本会给行盖"老板已确认 + 体检豁免"，真写必须 '
+              '--owner-confirm SEED-PROXY（第 20 轮 MAJOR-1：豁免只能由显式确认换来，'
+              '脚本也不例外）。只看计划请加 --dry-run。')
+        return 4
 
     _db_guard.pin_local_sqlite()
     from src.models.database import FundInfo, SectorFundMapping, SessionLocal

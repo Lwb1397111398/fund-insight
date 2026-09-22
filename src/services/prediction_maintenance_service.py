@@ -326,15 +326,6 @@ class PredictionMaintenanceService:
             return None
         return None
 
-    @staticmethod
-    def _reset_verification(prediction: Prediction) -> None:
-        # 清单只有 `clear_verification_fields` 一处。这里以前自己抄了一份 16 行赋值，
-        # 结果两份各自漂移：撤结论时 `ai_judgment` 该不该清，只有其中一份知道
-        # （第 15 轮 m-2）。
-        from src.services.prediction_verify_service import clear_verification_fields
-
-        clear_verification_fields(prediction)
-
     def _refresh_fund_counts(self, fund_codes) -> None:
         for fund_code in fund_codes:
             fund = self.db.query(FundInfo).filter(FundInfo.fund_code == fund_code).first()

@@ -155,6 +155,17 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 部署和定时任务
 
+### 生产库结构现状（2026-09-22 实测）
+- 生产 Supabase 的库**不是 alembic 建的**（原来没有 `alembic_version` 表），
+  `sector_fund_mapping` 缺 0007+0008 的 10 个列。老板已授权，已用
+  `python scripts/sync_db_columns.py --apply --confirm SYNC-COLUMNS --stamp-head` 补齐
+  （12 列 + 5 索引，只加列/建索引、不动任何数据），并把 `alembic_version` 记成 head
+  `add_sector_mapping_keywords` ⇒ 后续 0010+ 可以正常 `alembic upgrade head`。
+  复核：`sector_fund_mapping` 19 列、映射 118 行、未删预测 1616 行、fund_info 162 行（与补列前一致）。
+- **为什么不用 `scripts/run_migrations.py`**：它从 base 跑，会去重复建已存在的表；
+  直接 stamp 又是在没核对前置对象的前提下撒谎。`sync_db_columns.py` 的唯一真值是
+  `src/models/database.py` 的元数据（库里缺整表会被**说出来**并且拒绝 stamp）。
+
 - Render Web Service：`uvicorn src.api.main:app --host 0.0.0.0 --port $PORT`。
 - Render Cron：每天 10:30 运行 `python scripts/run_scheduled_tasks.py daily`。
 - Supabase/PostgreSQL：通过 `DATABASE_URL` 连接；连接池参数见 `render.yaml` 和 `src/models/database.py`。
@@ -180,8 +191,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 最近一次核对（2026-09-22，第 18 轮修复之后）：
 
-- `pytest tests/unit -q` → **741 passed / 16 skipped / 0 failed**（约 109 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **750 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **743 passed / 16 skipped / 0 failed**（约 112 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **752 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`

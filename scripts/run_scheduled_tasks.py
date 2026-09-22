@@ -56,19 +56,43 @@ def run_daily_tasks() -> dict:
         # 那是不成立的）。要卡住合入请手动跑 `scripts/audit_verdict_evidence.py`
         # （默认阈值 0 ⇒ 有失效就退码 3）。
         def _verdict_evidence_audit():
+            from datetime import datetime, timedelta
+
             from src.models.database import SessionLocal
             from src.services.verdict_evidence import stale_counts
 
             db = SessionLocal()
             try:
                 counts = stale_counts(db)
+                # "改标门"只在体检判过不可服务之后才会触发。日任务不跑体检 ⇒ 结论
+                # 可能早就过期，而页面看起来一切正常（第 20 轮 MAJOR-2）。这里至少把
+                # 结论的新鲜度报出来：多老的算过期，看 `SWEEP_STALE_DAYS`。
+                from src.models.database import SectorFundMapping
+                stamps = [r[0] for r in db.query(SectorFundMapping.verified_at).filter(
+                    SectorFundMapping.is_active == True).all()      # noqa: E712
+                    if r[0]]
+                never_audited = db.query(SectorFundMapping).filter(
+                    SectorFundMapping.is_active == True,             # noqa: E712
+                    SectorFundMapping.verified_at.is_(None)).count()
             finally:
                 db.close()
             total = sum(counts.values())
             if total:
                 logger.warning("结论证据失效 %s 条：%s（前端已标 ⚠，处置见 "
                                "docs/模块总览/预测验证与准确率统计.md）", total, counts)
-            return {"success": True, "stale_total": total, "stale_by_kind": counts}
+            age_days = None
+            stale_limit = int(os.environ.get("SWEEP_STALE_DAYS", "14"))
+            if stamps:
+                age_days = (datetime.now() - max(stamps)).days
+                if age_days > stale_limit:
+                    logger.warning(
+                        "板块映射的身份体检结论已 %d 天没刷新（阈值 %d 天），另有 %d 行从未体检："
+                        "改标门依赖这个结论，结论过期就意味着映射身份没被复核过"
+                        "（要刷新请跑 scripts/sweep_sector_mappings.py）",
+                        age_days, stale_limit, never_audited)
+            return {"success": True, "stale_total": total, "stale_by_kind": counts,
+                    "identity_audit_age_days": age_days,
+                    "mapping_rows_never_audited": never_audited}
 
         run_step("verdict_evidence_audit", _verdict_evidence_audit)
         # 观点每日汇总：默认关闭，生产确认 Supabase 备份后设 ENABLE_VIEWPOINT_SUMMARY=true

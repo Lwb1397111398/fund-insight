@@ -80,6 +80,7 @@ class DataPortabilityService:
         self.db = db
         # 本次导入剔掉了多少行的"老板署名/体检豁免"（见 `_clean_row`）
         self.immunity_rows_stripped = 0
+        self.last_row_stripped_immunity = False
 
     def export_data(self) -> Dict[str, Any]:
         exported: Dict[str, Any] = {
@@ -146,6 +147,7 @@ class DataPortabilityService:
         created_dependencies = {"fund_info": 0}
         warnings: List[str] = []
         self.immunity_rows_stripped = 0
+        self.last_row_stripped_immunity = False
 
         try:
             if not isinstance(data, dict):
@@ -224,6 +226,8 @@ class DataPortabilityService:
                             skipped_count += 1
                             continue
 
+                        if self.last_row_stripped_immunity:
+                            self.immunity_rows_stripped += 1
                         self.db.add(spec.model(**cleaned))
                         imported_count += 1
 
@@ -249,8 +253,9 @@ class DataPortabilityService:
             if self.immunity_rows_stripped:
                 warnings.append(
                     "已剔掉 %d 行板块映射的老板署名/体检豁免（reviewed_by=owner / "
-                    "owner_locked）：这两样只能由老板在页面上逐行确认换来，"
-                    "清单里带的我们不认。" % self.immunity_rows_stripped)
+                    "owner_locked）：这两样只能由老板在页面上确认换来（逐行确认，或批量"
+                    "审查时明确勾选确认），JSON 清单里自带的不算。"
+                    % self.immunity_rows_stripped)
             self._reset_sequences()
             self.db.commit()
             return self._success_response(
@@ -503,12 +508,15 @@ class DataPortabilityService:
             # `/api/config/import` 合并模式既没有总开关也没有确认头，一份自己盖了
             # `owner_locked=True` 的 JSON 就能给整表买到"身份体检不再管"，
             # 而 `AGENTS.md` 写的是"只能由显式 owner_confirm 换来"。
-            # 与审计回写侧（`config.py` 的 `_clean_audit_row`）同一口径：剔掉这两列，
-            # 要恢复免疫请在页面上逐行确认。
+            # 审计回写侧（`config.py` 的 `_audit_apply_row`，剔列在 1358-1361）也剔这两列，
+            # 但它是**静默**剔、不报条数 —— 剔的东西一致、回执粒度不一致，别说成"两边同口径"
+            # （第 20 轮 MINOR-5）。要恢复免疫请老板在页面上确认。
             cleaned.pop("owner_locked", None)
             if str(cleaned.get("reviewed_by") or "").strip().lower() == "owner":
                 cleaned.pop("reviewed_by", None)
-            self.immunity_rows_stripped += 1
+            # 计数不在这里加：合并模式下这行很可能"已存在→skip"，
+            # 回执说"已剔掉 N 行"就会含根本没写入的行（第 20 轮 MINOR-4）。
+            self.last_row_stripped_immunity = True
 
         return cleaned
 

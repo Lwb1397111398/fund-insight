@@ -293,3 +293,72 @@ def test_rollback_audit_does_not_judge_a_row_by_another_fund(test_db):
         '按另一只基金缺数据就把这条结论判成"当年判错了" ⇒ 无关理由抹记录'
     test_db.refresh(prediction)
     assert prediction.is_correct is True
+
+
+def test_name_lookup_cannot_resolve_back_to_an_unservable_code(test_db):
+    """第 20 轮 MAJOR-1：第 2 步"按名字查 FundInfo"以前不过体检。
+
+    `fund_info` 里"名字→代码"通常正好指回自带那只不可服务的基金 ⇒ 上一轮新加的改标门
+    根本走不到（镜像 86% 的行死在这一步），而日志已经写了"改按板块重新解析标的"。
+    """
+    from src.models.database import FundInfo
+
+    _mapping(test_db, sector_name='R20名字', fund_code='BAD006',
+             fund_name='烂基金', is_fetchable=False)
+    _mapping(test_db, sector_name='R20名字', fund_code='GOOD06',
+             fund_name='机器人ETF', reviewed=True)
+    # 名字与自带代码绑在一只"股票名挂在基金码"的档案上：这是镜像里 1392/1616 行的形状
+    test_db.add(FundInfo(fund_code='BAD006', fund_name='烂基金'))
+    test_db.commit()
+    prediction = _prediction_with_code(test_db, 'BAD006', 'R20名字')
+    prediction.fund_name = '烂基金'
+    test_db.commit()
+
+    service = PredictionVerifyService(test_db)
+    code, _name = service.match_fund_for_prediction(prediction)
+    assert code == 'GOOD06', \
+        '按名字又解析回不可服务的 %s ⇒ 改标门不可达，日志在说谎' % code
+
+
+def test_rollback_retags_drifted_rows_instead_of_abandoning_them(test_db):
+    """第 20 轮 MAJOR-2：回溯审计扫到的漂移行，真跑时要就地改标。
+
+    上一版只 `continue`（"交给 verify_prediction"），但本函数只扫已判行、
+    到期队列只要 `is_correct IS NULL` ⇒ 那些行永远回不到改标那条腿。
+    """
+    from datetime import date
+
+    _mapping(test_db, sector_name='R20接手', fund_code='BAD007',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name='R20接手', fund_code='GOOD07',
+             fund_name='机器人ETF', reviewed=True)
+    prediction = _prediction_with_code(test_db, 'BAD007', 'R20接手')
+    prediction.is_correct = True
+    prediction.actual_change = 1.23
+    prediction.verify_count = 1
+    prediction.verify_score = 100
+    prediction.status = 'success'
+    prediction.prediction_date = date(2026, 6, 1)
+    prediction.target_date = date(2026, 6, 8)
+    test_db.commit()
+    from src.utils.blogger_stats import recalculate_blogger_stats
+    recalculate_blogger_stats(test_db, prediction.blogger_id)
+
+    service = PredictionVerifyService(test_db)
+    dry = service.rollback_invalid_verifications(dry_run=True, only_ids=[prediction.id])
+    assert dry['data']['code_diverged'] == 1
+    assert '漂移' in dry['message'], dry['message']
+    test_db.refresh(prediction)
+    assert prediction.fund_code == 'BAD007', 'dry-run 不许动数据'
+
+    wet = service.rollback_invalid_verifications(dry_run=False, only_ids=[prediction.id])
+    assert wet['data']['code_diverged'] == 1, wet
+    test_db.refresh(prediction)
+    assert prediction.fund_code == 'GOOD07', '真跑完仍挂着不可服务的标的 = 没人管'
+    assert prediction.is_correct is None and (prediction.verify_count or 0) == 0, \
+        '旧标的判出来的结论必须一起清掉'
+    from src.models.database import Blogger
+    blogger = test_db.query(Blogger).filter_by(id=prediction.blogger_id).one()
+    assert blogger.total_predictions == 0, \
+        '清结论没重算统计列（第 19 轮 MAJOR-1 在第二个入口上重演）'
+    assert [d['action'] for d in wet['data']['rollback_details']] == ['retagged']
