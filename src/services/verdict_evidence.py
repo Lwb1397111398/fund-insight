@@ -14,7 +14,7 @@
 三种状态（None＝证据仍然成立）：
   - `verdict_under_other_fund` 写下结论时行上挂的是**另一个**代码，且那个代码当天的净值
     正好等于存的端点值 ⇒ 真·挂错标的（改标后没重算）。
-  - `nav_row_missing`            当前标的在端点那一天没有净值行（镜像缺行 / 基金停更）。
+  - `nav_row_missing`            端点那一天该标的没有净值行：周末目标日的老数据、镜像缺行、基金停更都在这一桶。
   - `nav_rewritten`              同一天有行，数值不同 ⇒ 净值被就地改写或覆盖过。
 """
 from datetime import date, datetime
@@ -109,8 +109,11 @@ def evidence_statuses(db, predictions: Iterable) -> Dict[int, Optional[str]]:
     codes |= {c for c in verified.values() if c}
 
     nav_rows = db.query(FundHistory.fund_code, FundHistory.nav_date, FundHistory.nav).filter(
-        FundHistory.nav_date.in_(dates)
-    ).all() if codes else []
+        FundHistory.nav_date.in_(dates),
+        # 必须按代码过滤：只按日期筛的话，一页 70 个日期就会把**全表**拉回来
+        # （实测 8724/10600 行 = 82%），在 Supabase 上等于每翻一页回传一次净值全表。
+        FundHistory.fund_code.in_(list(codes)),
+    ).all() if codes and dates else []
     nav_by_key = {(c, _as_date(d)): nav for c, d, nav in nav_rows if c in codes}
     return {p.id: evidence_status(p, nav_by_key, verified.get(p.id)) for p in rows}
 
@@ -133,7 +136,7 @@ def stale_counts(db) -> Dict[str, int]:
 
 EVIDENCE_LABELS = {
     'verdict_under_other_fund': '结论是按改标前的标的判的，至今没重算',
-    'nav_row_missing': '当前标的在端点那天没有净值行（本地缺行或基金停更）',
+    'nav_row_missing': '端点那天该标的没有净值行（周末老数据 / 本地缺行 / 基金停更），需按区间回补后重验',
     'nav_rewritten': '端点那天的净值后来被修正过，结论用的数已复现不出来',
 }
 

@@ -201,6 +201,31 @@ def test_current_nav_date_uses_the_nav_actually_used(test_db, monkeypatch):
     assert p.current_nav == p.end_nav
 
 
+def test_local_hole_is_not_mistaken_for_a_market_holiday(test_db):
+    """第 18 轮 MAJOR-1：这只基金后来有净值 ≠ 中间那几天休市。
+
+    证据②单独用会放过"本地缺行"：镜像 218 只基金里 169 只在自身序列中间有空洞
+    （合计 2984 个缺失工作日）。活体形状是 158038 只有 09-07 与 09-11，而 09-08/09-09
+    分别有 175/176 只**别的基金**有净值 ⇒ 市场开门，是我们没同步到。
+    """
+    _rows(test_db, '158038', [date(2026, 9, 1), date(2026, 9, 7), date(2026, 9, 11)])
+    _rows(test_db, '159995', [date(2026, 9, 8), date(2026, 9, 9)])
+    r = _check(test_db, '158038', date(2026, 9, 1), date(2026, 9, 9),
+               today=date(2026, 9, 22))
+    assert r['available'] is False, r
+    assert r['reason'] == 'endpoint_lag_unproven', r
+    assert '市场开门' in r['message'], r['message']
+
+
+def test_market_wide_gap_is_a_real_holiday_and_still_verifiable(test_db):
+    """反向：缺口那几天**全市场都没有行**，才配得上"法定节假日"这个解释。"""
+    _rows(test_db, '158039', [date(2026, 9, 1), date(2026, 9, 7), date(2026, 9, 11)])
+    r = _check(test_db, '158039', date(2026, 9, 1), date(2026, 9, 9),
+               today=date(2026, 9, 22))
+    assert r['available'] is True, r
+    assert r['reason'] == 'waited_previous', r
+
+
 def test_injected_today_reaches_the_proof_ttl(test_db, monkeypatch):
     """第 15 轮 m-3：注入的 `today` 要一路传到凭据判定。
 

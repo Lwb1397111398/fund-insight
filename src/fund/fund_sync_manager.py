@@ -36,7 +36,8 @@ class FundSyncManager:
 
     @staticmethod
     def retag_prediction(db: Session, pred, new_code: str, new_name: str, *,
-                         source: str = 'fund_sync', run_id: str = None) -> bool:
+                         source: str = 'fund_sync', run_id: str = None,
+                         touched_bloggers: set = None) -> bool:
         """把预测换到另一个标的上：已有结论的必须同时清掉结论并留痕。
 
         第 18 轮的实测教训：全库有 53 条结论是按改标**之前**那只基金判出来的
@@ -49,17 +50,28 @@ class FundSyncManager:
         """
         from src.services.prediction_change_log_service import (
             add_prediction_change_log, snapshot_prediction)
-        from src.services.prediction_verify_service import clear_verification_fields
+        from src.services.prediction_verify_service import (
+            clear_verification_fields, has_verdict_trace)
 
         if pred.fund_code == new_code and pred.fund_name == new_name:
             return False
         before = snapshot_prediction(pred)
-        had_verdict = pred.is_correct is not None
+        # 判据只有一份（`has_verdict_trace`）：以前这里只看 is_correct，
+        # 维护服务那边看 verify_count/status/is_expired ⇒ "改标必清结论"有漏网的一条
+        had_verdict = has_verdict_trace(pred)
         pred.fund_code = new_code
         pred.fund_name = new_name
         if had_verdict:
             # 结论退回未验证：由下一次验证按**新标的**重判，而不是留着旧标的的数
             clear_verification_fields(pred)
+            # 清结论等于改数据 ⇒ 必须留下能整批还原的句柄。
+            # `restore_prediction_batch` 只认带 run_id 的日志，而实测 4883 条日志里
+            # 3503 条 run_id 为空 —— 调用方不给就自动生成一个，别让"可还原"落空。
+            if not run_id:
+                run_id = 'retag-%s-%s' % (source[:18],
+                                          datetime.now().strftime('%Y%m%d-%H%M%S'))
+            if touched_bloggers is not None and pred.blogger_id:
+                touched_bloggers.add(pred.blogger_id)
         add_prediction_change_log(db, pred, action='maintenance_sync', source=source,
                                   before_state=before, run_id=run_id)
         return had_verdict
@@ -87,6 +99,8 @@ class FundSyncManager:
         
         matched = 0
         unmatched = 0
+        # 被 retag 清掉结论的博主：统计列是存下来的增量值，改完必须重算
+        touched_bloggers = set()
         unmatched_list = []
         missing_sectors = set()
         missing_funds = set()
@@ -105,7 +119,8 @@ class FundSyncManager:
                     fund = fund_sectors[pred.sector_type]
                     # 走统一入口：改标要留痕、有结论要清（见 retag_prediction）
                     self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
-                                          source='fund_sync_link')
+                                          source='fund_sync_link',
+                                          touched_bloggers=touched_bloggers)
             # 3. 检查sector是否已有基金
             elif pred.sector and pred.sector in fund_sectors:
                 has_match = True
@@ -113,7 +128,8 @@ class FundSyncManager:
                 if not pred.fund_code:
                     fund = fund_sectors[pred.sector]
                     self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
-                                          source='fund_sync_link')
+                                          source='fund_sync_link',
+                                          touched_bloggers=touched_bloggers)
             
             if has_match:
                 matched += 1
@@ -136,6 +152,11 @@ class FundSyncManager:
                 if pred.fund_code:
                     missing_funds.add(pred.fund_code)
         
+        # 统计列是存下来的增量值：清了结论必须重算，否则页面继续显示一个
+        # 表里已不存在的基数（第 18 轮 BLOCKER 的另一半）
+        from src.utils.blogger_stats import recalculate_blogger_stats
+        for blogger_id in touched_bloggers:
+            recalculate_blogger_stats(db, blogger_id, commit=False)
         db.commit()
         
         return {
@@ -173,6 +194,8 @@ class FundSyncManager:
         # 获取所有预测
         predictions = db.query(Prediction).filter(Prediction.is_deleted == False).all()
         
+        # 被 retag 清掉结论的博主：统计列是存下来的增量值，改完必须重算
+        touched_bloggers = set()
         # 获取现有基金
         existing_funds = db.query(FundInfo).all()
         existing_sectors = {f.sector_type: f for f in existing_funds if f.sector_type}
@@ -193,11 +216,18 @@ class FundSyncManager:
             
             # 1. 检查该板块是否已有基金（同类型去重）
             if sector in existing_sectors:
-                # 已有同类型基金，直接关联
+                # 已有同类型基金，直接关联 —— 但**只允许填空**，不覆盖已有标的。
+                # `existing_sectors` 是 `{f.sector_type: f}`：同一板块登记过两只基金时
+                # "最后一条赢"（镜像 38 个 sector_type 背后有 >1 只基金）。第 18 轮实测：
+                # 页面按钮 `POST /api/funds/update-all` 会因此把 1110 条已判结论里的
+                # 515 条改标、并因 S9 的"改标必清结论"把结论一起清空 —— 而这里既不
+                # 重算博主统计也不带 run_id，撤不回来。改标是**人工决定**，只属于
+                # 带 run_id + 重算统计的 PredictionMaintenanceService.sync_sector_mappings。
                 fund = existing_sectors[sector]
-                if pred.fund_code != fund.fund_code:
+                if not pred.fund_code:
                     self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
-                                          source='fund_sync_link')
+                                          source='fund_sync_link',
+                                          touched_bloggers=touched_bloggers)
                     result["linked"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
@@ -298,7 +328,8 @@ class FundSyncManager:
 
                     # 关联预测（同样走统一入口，别绕过留痕与清结论）
                     self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
-                                          source='fund_sync_new_fund')
+                                          source='fund_sync_new_fund',
+                                          touched_bloggers=touched_bloggers)
 
                     result["added"] += 1
                     result["linked"] += 1
@@ -327,6 +358,9 @@ class FundSyncManager:
                 })
 
         # 循环结束后统一提交
+        from src.utils.blogger_stats import recalculate_blogger_stats
+        for blogger_id in touched_bloggers:
+            recalculate_blogger_stats(db, blogger_id, commit=False)
         db.commit()
         return result
     
@@ -465,6 +499,8 @@ class FundSyncManager:
         """
         from src.services.sector_fund_service import get_sector_fund_service
 
+        # 被 retag 清掉结论的博主：统计列是存下来的增量值，改完必须重算
+        touched_bloggers = set()
         result = {
             "total_mappings": 0,
             "predictions_updated": 0,
@@ -533,8 +569,9 @@ class FundSyncManager:
             old_name = pred.fund_name
 
             # 更新预测的基金关联：走统一入口（留痕 + 清掉旧标的判出的结论）
-            self.retag_prediction(db, pred, mapping['code'], mapping['name'],
-                                  source='fund_sync_sector_map')
+            cleared_verdict = self.retag_prediction(
+                db, pred, mapping['code'], mapping['name'],
+                source='fund_sync_sector_map', touched_bloggers=touched_bloggers)
             result["predictions_updated"] += 1
 
             detail = {
@@ -544,14 +581,11 @@ class FundSyncManager:
                 "new_fund": f"{mapping['name']}({mapping['code']})"
             }
 
-            # 5. 重置已验证预测的状态（基金变了，验证结果可能无效）
-            if pred.status in ('correct', 'wrong', 'expired') and pred.verify_count and pred.verify_count > 0:
-                pred.status = 'pending'
-                pred.is_correct = None
-                pred.actual_change = None
-                pred.verify_count = 0
-                pred.verify_score = 0
-                pred.verified_at = None
+            # 5.（原"重置已验证预测"分支已删）结论的清退由上面 `retag_prediction` 一处完成。
+            #    这里原来还有一份手抄字段清单，而且状态词表用的是 'correct'/'wrong'/'expired'
+            #    —— 全仓实际写的是 'success'/'failed'，所以那段条件永不成立（死码），
+            #    而它把 verify_score 清成 0 而不是 None，正是第 15 轮"分数与结论打脸"的形状。
+            if cleared_verdict:
                 result["verified_reset"] += 1
                 detail["reset_verified"] = True
 
@@ -619,6 +653,11 @@ class FundSyncManager:
                         "error": str(e)
                     })
 
+        # 统计列是存下来的增量值：清了结论必须重算，否则页面继续显示一个
+        # 表里已不存在的基数（第 18 轮 BLOCKER 的另一半）
+        from src.utils.blogger_stats import recalculate_blogger_stats
+        for blogger_id in touched_bloggers:
+            recalculate_blogger_stats(db, blogger_id, commit=False)
         db.commit()
         return result
 

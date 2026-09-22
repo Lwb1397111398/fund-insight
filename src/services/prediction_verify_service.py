@@ -42,6 +42,22 @@ def weekdays_between_exclusive(after_date, through_date) -> int:
     return count
 
 
+def has_verdict_trace(prediction) -> bool:
+    """这行上**是否还挂着一条结论** —— 唯一判据，改标/撤结论的地方都问它。
+
+    取的是保守的并集：结论文本、计数、状态、到期旗标任一项像"判过"就算。
+    以前这个判断有两份（维护服务用 `verify_count>0 or status in (...) or is_expired`，
+    retag 用 `is_correct is not None`），同一行在两处得到不同答案 ⇒
+    "改标必清结论"就有漏网的一条（第 18 轮 M-2）。
+    注意与 `verdict_evidence.has_verdict` 区分：那个问的是"有没有端点证据可核对"，
+    这个问的是"要不要撤下来"。
+    """
+    return (getattr(prediction, 'is_correct', None) is not None
+            or (getattr(prediction, 'verify_count', 0) or 0) > 0
+            or getattr(prediction, 'status', None) in ('success', 'failed', 'verified')
+            or bool(getattr(prediction, 'is_expired', False)))
+
+
 def clear_verification_fields(prediction) -> None:
     """把一条预测退回"未验证"，字段清单只有这一处定义。
 
@@ -565,12 +581,31 @@ class PredictionVerifyService:
                 FundHistory.nav_date.asc()).first()
             endpoint_proof = backfill_proofs.fresh(self.db, fund_code, nav_start_date,
                                                    window_end, today=today)
-            lag_evidence_missing = after_target_row is None and endpoint_proof is None
+            # 证据②单用会放过"本地缺行"（第 18 轮 MAJOR-1）：这只基金在目标日之后
+            # 有行，只说明它**后来**有净值，不证明中间那几天休市。实测镜像 218 只基金
+            # 里 169 只在自身序列中间有空洞（合计 2984 个缺失工作日）；活体两例是
+            # 158038 只有 09-07 与 09-11，而 09-08/09-09 分别有 175/176 只**别的基金**
+            # 有净值 ⇒ 市场开门，是我们本地缺行。所以要加一条跨基金核验：
+            # 缺口里只要有任何一天"全市场有行、我们没行"，②就不成立。
+            holiday_confirmed = after_target_row is not None
+            if holiday_confirmed:
+                open_days = {self._as_date(r[0]) for r in self.db.query(
+                    FundHistory.nav_date).filter(
+                    FundHistory.nav_date > latest_date,
+                    FundHistory.nav_date <= target_date).distinct().all()}
+                probe = latest_date
+                while probe < target_date:
+                    probe += timedelta(days=1)
+                    if probe.weekday() < 5 and probe in open_days:
+                        holiday_confirmed = False
+                        break
+            lag_evidence_missing = not (holiday_confirmed or endpoint_proof is not None)
 
         def _refuse_lag() -> Dict:
             return _fail(
                 f"端点 {latest_date} 早于目标日 {target_date}，中间还有 {gap_weekdays} 个"
-                f"工作日没有净值行，而库里既没有目标日之后的净值（那才能证明这几天休市）、"
+                f"工作日没有净值行；那几天既没有\u300c全市场都没有净值\u300d的证据"
+                f"（别的基金当天有净值 ⇒ 市场开门，是我们本地缺行），"
                 f"也没有「已按区间问过数据源」的凭据 ⇒ 无法区分「市场没有」与"
                 f"「本地缺行」，不能拿这条前值下终局结论。"
                 f"先按区间回补该基金历史或更新基金数据，到位后会自动重验",
@@ -849,7 +884,7 @@ class PredictionVerifyService:
             # 自带代码不是免检通道（第 17 轮 MAJOR-2）：本函数下面三条分支都过身份体检，
             # 只有这一条直接 return。板块映射行被填成另一只真基金、后来被体检判不可服务时，
             # 新预测不再命中它，但**已入库的预测仍按这个代码验证** ⇒ 结论挂到错标的上
-            # （`scripts/audit_verdict_evidence.py` 里 `old_fund_verdict` 那一族的成因之一）。
+            # （`scripts/audit_verdict_evidence.py` 里 `verdict_under_other_fund` 那一族的成因之一）。
             if self.fund_code_is_servable(prediction.fund_code):
                 return prediction.fund_code, prediction.fund_name
             logger.warning(

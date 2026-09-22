@@ -50,9 +50,11 @@ def run_daily_tasks() -> dict:
     try:
         run_step("fund_update", scheduler._run_fund_update)
         run_step("prediction_verify", scheduler._run_prediction_verify)
-        # 结论证据体检（只读、不改数据）：把"端点净值在当前标的的净值表里复现不出来"
-        # 的条数每天记一次。第 16~18 轮查出的 250 条里 53 条是"改标后没重算"，
-        # 剩下的是净值被就地改写/缺行 —— 以前没有任何流水线会发现它还在涨。
+        # 结论证据体检（只读、不改数据）：每天报一次"端点净值在当前标的的净值表里
+        # 复现不出来"的条数。**这一步是报告，不是闸门**：`run_step` 只看 success，
+        # 所以它永远不会让日任务失败（第 18 轮 M-3 指出我把它写成了"构成阻塞"，
+        # 那是不成立的）。要卡住合入请手动跑 `scripts/audit_verdict_evidence.py`
+        # （默认阈值 0 ⇒ 有失效就退码 3）。
         def _verdict_evidence_audit():
             from src.models.database import SessionLocal
             from src.services.verdict_evidence import stale_counts

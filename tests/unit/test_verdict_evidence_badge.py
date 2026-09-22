@@ -111,6 +111,63 @@ def test_retag_without_change_is_a_no_op(test_db):
     assert prediction.is_correct is True, '无事也要清结论就是数据破坏'
 
 
+def test_no_new_direct_fund_code_writes_appear():
+    """改标的写动作只允许出现在已审的地方（第 18 轮 M-2："唯一入口"必须有测试挡）。
+
+    用 AST 扫 `src/` 里所有 `X.fund_code = ...` 赋值。新增站点会让这里变红，
+    必须要么改成走 `FundSyncManager.retag_prediction()`（留痕 + 清结论 + 登记博主），
+    要么在这里登记并写明为什么它是例外。
+    """
+    import ast
+    import io as _io
+    import os
+
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), 'src')
+    allowed = {
+        # 唯一入口本体
+        ('fund/fund_sync_manager.py', 'retag_prediction'),
+        # 人工编辑预测：同一函数里对"已生效结论"先 raise 再改（prediction_service.py:409），
+        # 所以它不会静默把结论留在改过的标的上
+        ('services/prediction_service.py', 'update_prediction_fields'),
+        # 下面两处写的是 SectorFundMapping.fund_code（映射表自己的字段），不是预测
+        ('services/sector_fund_agent.py', 'apply_decision'),
+        ('services/sector_fund_service.py', 'update_mapping'),
+    }
+    found = set()
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith('.py'):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root).replace(os.sep, '/')
+
+            class _Collector(ast.NodeVisitor):
+                def __init__(self):
+                    self.stack = []
+
+                def visit_FunctionDef(self, node):
+                    self.stack.append(node.name)
+                    self.generic_visit(node)
+                    self.stack.pop()
+
+                def visit_Assign(self, node):
+                    for target in node.targets:
+                        if isinstance(target, ast.Attribute) and target.attr == 'fund_code':
+                            found.add((rel, self.stack[-1] if self.stack else '<module>'))
+                    self.generic_visit(node)
+
+            _Collector().visit(ast.parse(_io.open(path, encoding='utf-8').read()))
+
+    extra = found - allowed
+    assert not extra, (
+        '出现了新的 fund_code 直写点 %s：请改走 FundSyncManager.retag_prediction()'
+        '（否则改标不留痕、不清结论 ⇒ 又是一批 verdict_under_other_fund）' % sorted(extra))
+    assert found == allowed, (
+        '已登记的写点少了 %s —— 入口被删掉的话也要同步这里的说明'
+        % sorted(allowed - found))
+
+
 def test_list_endpoint_exposes_the_derived_badge(test_db):
     """前端 ⚠ 标记读的是接口字段；字段名一旦漂移，页面会安静地永远不亮。"""
     prediction = _seed_verified_prediction(test_db)

@@ -178,10 +178,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22，S9 结论证据处置之后）：
+最近一次核对（2026-09-22，第 18 轮修复之后）：
 
-- `pytest tests/unit -q` → **726 passed / 16 skipped / 0 failed**（约 112 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **735 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **729 passed / 16 skipped / 0 failed**（约 117 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **738 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛异常。为什么必须这样：`from src.fund import fund_api`
@@ -200,6 +200,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   **准确率现在只能当区间报（≈49%~54%）**：另有 197 条（17.7%）端点净值今天复现不出来
   （净值被就地改写 108 / 当天缺行 89），列表里带 ⚠ 证据已失效标记，补齐后自行消解。
   拿历史截图/旧导出的准确率数字做对比前先确认是哪一批。
+- **改标的只允许一个入口**：`FundSyncManager.retag_prediction()`。它留痕（无 run_id 会自动生成，
+  保证能被 `restore_prediction_batch` 整批还原）、必要时清结论、并登记受影响博主以便重算统计列。
+  `tests/unit/test_verdict_evidence_badge.py::test_no_new_direct_fund_code_writes_appear`
+  用 AST 扫 `src/` 里所有 `X.fund_code = ...` 赋值，新增站点会让它变红。
+  为什么这么严：第 18 轮实测，`POST /api/funds/update-all`（页面上一个按钮）会按
+  "与本板块最后登记的那只基金不一致就改过去"的旧规则清掉 **515/1110** 条已判结论。
+- 准确率报表另有派生标记 `evidence_status`（不加列、不落库）：`python scripts/audit_verdict_evidence.py`
+  可核对；每日跑批 `verdict_evidence_audit` 只报告不阻塞，要卡合入请手动跑该脚本（默认阈值 0 ⇒ 退码 3）。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

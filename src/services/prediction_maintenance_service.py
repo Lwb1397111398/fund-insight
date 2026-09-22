@@ -16,6 +16,7 @@ from src.services.prediction_change_log_service import (
 from src.utils.blogger_stats import recalculate_blogger_stats
 
 
+from src.services.prediction_verify_service import has_verdict_trace
 class PredictionMaintenanceService:
     def __init__(self, db: Session):
         self.db = db
@@ -189,11 +190,9 @@ class PredictionMaintenanceService:
             if prediction.fund_code == mapping.fund_code:
                 unchanged += 1
                 continue
-            was_verified = bool(
-                (prediction.verify_count or 0) > 0
-                or prediction.status in ("success", "failed", "verified")
-                or prediction.is_expired
-            )
+            # "这行还挂着结论吗"只有一个判据源（`has_verdict_trace`）：这里以前自己抄了一份，
+            # 与 retag 用的 `is_correct is not None` 是同一件事的两套定义（第 18 轮 M-2）。
+            was_verified = has_verdict_trace(prediction)
             candidates.append({
                 "prediction": prediction,
                 "prediction_id": prediction.id,
@@ -230,27 +229,22 @@ class PredictionMaintenanceService:
         affected_bloggers = set()
         affected_funds = set()
         try:
+            from src.fund.fund_sync_manager import FundSyncManager
+
             for candidate in candidates:
                 prediction = candidate["prediction"]
-                before_state = snapshot_prediction(prediction)
-                affected_bloggers.add(prediction.blogger_id)
                 affected_funds.update(filter(None, [
                     candidate["old_fund_code"],
                     candidate["new_fund_code"],
                 ]))
-                prediction.fund_code = candidate["new_fund_code"]
-                prediction.fund_name = candidate["new_fund_name"]
-                if candidate["reset_verified"]:
-                    self._reset_verification(prediction)
+                # 改标的动作整体交给唯一入口：留痕、必要时清结论、把受影响博主登记进来
+                # （原来这里自己写 `prediction.fund_code = ...` + 自己调 reset + 自己写日志，
+                #  于是"唯一入口"这句承诺有第二个例外，第 18 轮 M-2）。
+                if FundSyncManager.retag_prediction(
+                        self.db, prediction, candidate["new_fund_code"],
+                        candidate["new_fund_name"], source="sector_mapping", run_id=run_id,
+                        touched_bloggers=affected_bloggers):
                     result["verified_reset"] += 1
-                add_prediction_change_log(
-                    self.db,
-                    prediction,
-                    action="maintenance_sync",
-                    source="sector_mapping",
-                    before_state=before_state,
-                    run_id=run_id,
-                )
                 result["predictions_updated"] += 1
 
             self.db.flush()

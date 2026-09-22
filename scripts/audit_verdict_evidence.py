@@ -99,8 +99,10 @@ def main():
                            'rows': detail}, handle, ensure_ascii=False, indent=1)
             print('[ok] 逐行明细：%s' % args.json)
         if bad > args.max_stale:
-            print('[gate] 失效证据 %d 条 > 阈值 %d ⇒ 退码 3'
-                  '（这条流水线不该在被忽略的状态下合入）' % (bad, args.max_stale))
+            print('[gate] 失效证据 %d 条 > 阈值 %d ⇒ 退码 3。'
+                  '注意：只有**显式调用本脚本**的流程会被卡住；'
+                  '每日跑批里的 verdict_evidence_audit 是只报告、不阻塞。'
+                  % (bad, args.max_stale))
             return 3
         return 0
     finally:

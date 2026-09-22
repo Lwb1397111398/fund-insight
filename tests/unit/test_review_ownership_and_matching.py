@@ -7,7 +7,7 @@
    裸 POST 一次就买到批量被拒绝的免疫（MAJOR-1）。撤销入口同理必须存在（MAJOR-2）。
 2. `match_fund_for_prediction` 的第一优先级"直接用预测自带的 fund_code"以前**不过身份体检**，
    而同一函数后面三条分支都过 ⇒ 已被判不可服务的代码仍会驱动验证，结论挂到错标的上
-   （MAJOR-2 / 与 `scripts/audit_verdict_evidence.py` 的 `old_fund_verdict` 同族）。
+   （MAJOR-2 / 与 `scripts/audit_verdict_evidence.py` 的 `verdict_under_other_fund` 同族）。
 """
 import pytest
 
