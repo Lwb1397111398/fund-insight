@@ -198,7 +198,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 最近一次核对（2026-09-22，第 18 轮修复之后）：
 
 - `pytest tests/unit -q` → **751 passed / 16 skipped / 0 failed**（约 187 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **760 passed / 16 skipped / 0 failed**。
+- `pytest tests/ -q`（含 integration/services）→ **765 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
@@ -267,6 +267,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   所以清单在镜像演练通过不等于生产能过。撤这条约束属结构变更，要老板点头。
   姊妹入口 `rollback_invalid_verifications` 反过来：**标的已漂移的行只数不撤**
   （`data['code_diverged']`，第 19 轮 MAJOR-3：不许用"另一只基金缺净值"这种无关理由撤掉 A 的结论）。
+- **准确率的"可信度"有接口也有页面**：`GET /api/stats/evidence` 返回 `span_report()`
+  的现算结果（含 `database` 与 `as_of`），博主榜上方那行灰字读的就是它。
+  别再往 `title` 里塞关键信息 —— 手机没有 hover，四条评审都因此判我"等于没报"。
 - 准确率报表另有派生标记 `evidence_status`（不加列、不落库）：`python scripts/audit_verdict_evidence.py`
   可核对；每日跑批 `verdict_evidence_audit` 只报告不阻塞，要卡合入请手动跑该脚本（默认阈值 0 ⇒ 退码 3）。
   **那条"自带代码也过身份体检"的门有盲区**：判据是"映射表里带这个代码的行全被判不可服务"，

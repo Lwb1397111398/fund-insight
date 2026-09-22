@@ -69,6 +69,14 @@
                     <div class="section-title">管理博主</div>
                     <div class="sub-actions"><button class="action-btn warning small" @click="showTopBloggers"><i class="ri-trophy-line"></i>
                             TOP博主排行</button></div>
+                    <!-- 准确率旁边必须写着它有多可信。只放在 hover 的 title 里等于没写：
+                         手机没有 hover，而老板看的恰恰是这个数。 -->
+                    <div v-if="evidenceReport" class="text-xs" style="color:#8c8c8c; margin: 2px 0 8px 0;">
+                        已判 {{ evidenceReport.judged }} 条，其中 <span style="color:#d46b08;">⚠ {{ evidenceReport.stale_evidence }} 条（{{ evidenceReport.stale_pct }}%）端点净值今天已复现不出来</span>
+                        ⇒ 准确率只能按区间看：<strong>{{ spanText() }}</strong>
+                        · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}
+                    </div>
+                    <div v-else class="text-xs" style="color:#bfbfbf; margin: 2px 0 8px 0;">结论证据体检数据加载中…</div>
                     <div class="data-table" v-if="bloggers.length > 0">
                         <table>
                             <thead>
@@ -1569,6 +1577,13 @@
                         <span class="text-sm text-muted">共 {{ sectorMappings.total }} 条</span>
                         <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}</span>
                         <span style="font-size: 13px; color: #faad14;">待审查 {{ sectorMappings.unreviewed_count }}</span>
+                        <!-- 第三态：`reviewed` 只等于"看过"。真正免疫体检与 AI 覆盖的是老板确认过的行，
+                             两态卡片会把 122 条看过说成 122 条锁住（第 20~23 轮连点四轮）。 -->
+                        <span v-if="sectorMappings.owner_confirmed_count !== undefined"
+                              style="font-size: 13px; color: #13c2c2;"
+                              :title="'其中老板逐行确认过 ' + sectorMappings.owner_confirmed_count + ' 条（只有这些免疫体检与 AI 覆盖）；另外 ' + sectorMappings.reviewed_unconfirmed_count + ' 条只是看过'">老板已确认 {{ sectorMappings.owner_confirmed_count }}</span>
+                        <span v-if="sectorMappings.reviewed_unconfirmed_count"
+                              style="font-size: 13px; color: #8c8c8c;">（看过未确认 {{ sectorMappings.reviewed_unconfirmed_count }} 条：体检与 AI 覆盖照常生效）</span>
                         <button v-if="identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
                         <button v-if="identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
                         <button v-if="identityStats.realigned" class="action-btn small" @click="identityFilter = identityFilter === 'realigned' ? 'all' : 'realigned'" :style="{ background: identityFilter === 'realigned' ? '#13c2c2' : '#e6fffb', color: identityFilter === 'realigned' ? '#fff' : '#13c2c2', border: '1px solid #87e8de' }">机器已纠正待复核 {{ identityStats.realigned }}</button>
@@ -1965,6 +1980,9 @@
                     localStorage.setItem('theme', theme.value);
                 };
                 const loading = ref(true), currentView = ref('bloggers'), stats = ref({}), bloggers = ref([]), predictions = ref([]), viewpoints = ref([]), funds = ref([]);
+                // 结论证据体检报告（/api/stats/evidence）。为什么必须摆在页面上：准确率里有一部分
+                // 结论的端点净值今天已经复现不出来，只报一个小数点就是假装精度（第 20~23 轮连点四轮）
+                const evidenceReport = ref(null);
                 // 密码认证相关
                 const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false), passwordError = ref(''), authReady = ref(false);
                 const checkAuth = async () => {
@@ -2188,7 +2206,9 @@ const fetchWeChatBatch = async () => {
                     restorePredictionVerifyTask, previewPredictionMaintenance, executePredictionMaintenance,
                 } = predictionManager;
                 const deletePrediction = archivePrediction;
-                const fetchStats = async () => { try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
+                const fetchStats = async () => { fetchEvidence(); try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
+                const fetchEvidence = async () => { try { const res = await axios.get('/api/stats/evidence'); if (res.data.success) evidenceReport.value = res.data.data; } catch (e) { console.error(e); } };
+                const spanText = () => evidenceReport.value ? (evidenceReport.value.span_low_pct + '%~' + evidenceReport.value.span_high_pct + '%') : '-';
                 const fetchBloggers = async () => {
                     const res = await axios.get('/api/bloggers');
                     if (res.data.success) {
@@ -2864,7 +2884,8 @@ const fetchWeChatBatch = async () => {
                 };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
                 return {
-                    theme, toggleTheme, loading, currentView, stats, bloggers,
+                    theme, toggleTheme, loading, currentView, stats, evidenceReport, spanText, fetchEvidence,
+                    bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
                     verifyTask, showPredictionMaintenance, maintenancePreview,

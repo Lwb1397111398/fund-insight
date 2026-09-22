@@ -143,3 +143,63 @@ EVIDENCE_LABELS = {
 
 def evidence_label(status: Optional[str]) -> Optional[str]:
     return EVIDENCE_LABELS.get(status) if status else None
+
+
+def judged_rows(db) -> List:
+    """未删除、已按下结论的预测（唯一取法，脚本与接口共用）。"""
+    from src.models.database import Prediction
+    rows = db.query(Prediction).filter(
+        Prediction.is_deleted == False,                      # noqa: E712
+        Prediction.is_correct != None,
+    ).all()
+    return [r for r in rows if has_verdict(r)]
+
+
+def span_report(db) -> Dict:
+    """把"多少结论证据已失效"折算成一份可展示的体检报告（**唯一出处**）。
+
+    为什么放在服务层而不是脚本里：脚本 `audit_verdict_evidence.py` 与页面都要报这几个数，
+    两把尺子迟早打架（第 23 轮：我给老板报了十几轮**镜像库**的数，生产其实是另一组）。
+    所以这里连 `database` 与 `as_of` 一起给出去 —— 数字必须带库名和截止日。
+    """
+    from datetime import date
+
+    rows = judged_rows(db)
+    judged = len(rows)
+    correct = sum(1 for r in rows if r.is_correct)
+    statuses = evidence_statuses(db, rows)
+    stale_rows = [r for r in rows if statuses.get(r.id)]
+    stale_correct = sum(1 for r in stale_rows if r.is_correct)
+    by_kind: Dict[str, int] = {}
+    for r in stale_rows:
+        kind = statuses.get(r.id)
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    pct = lambda n: round(100.0 * n / judged, 2) if judged else 0.0
+    return {
+        'judged': judged,
+        'correct': correct,
+        'accuracy_pct': pct(correct),
+        'stale_evidence': len(stale_rows),
+        'stale_pct': pct(len(stale_rows)),
+        # 两端假设：失效的这批"全判错" / "全判对"。真值在区间内，今天定不到小数点。
+        'span_low_pct': pct(correct - stale_correct),
+        'span_high_pct': pct(correct - stale_correct + len(stale_rows)),
+        'by_kind': by_kind,
+        'as_of': date.today().isoformat(),
+        'database': database_label(db),
+    }
+
+
+def database_label(db) -> str:
+    """给老板看的库名：本地镜像 / 线上生产，别说"数据库"这种没信息量的词。"""
+    try:
+        url = str(db.get_bind().url)
+    except Exception:
+        return '未知库'
+    if url.startswith('sqlite'):
+        return '本地镜像库'
+    if url.startswith(('postgres', 'postgresql')):
+        return '线上生产库'
+    if url.startswith('mysql'):
+        return 'MySQL 库'
+    return url.split('://')[0] + ' 库'
