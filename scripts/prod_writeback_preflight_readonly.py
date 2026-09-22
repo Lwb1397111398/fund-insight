@@ -10,6 +10,7 @@
 + `_pg_read_only_probe()` **真试一次写临时表**，只有数据库自己拒绝才算只读成立。
 不打印连接串（只印 host 段）。
 """
+import argparse
 import importlib.util
 import io
 import json
@@ -79,7 +80,61 @@ def relevance_breakdown(rows):
     return buckets
 
 
+def identity_audit(conn):
+    """生产侧身份体检回执（只读）：已有多少行带着身份结论、分布如何、多少行压根没证据。
+
+    为什么单独一个模式（任务 #29）：`sweep_sector_mappings.py` 钉死本地镜像，
+    服务端也没有"跑一次体检"的路由 ⇒ S6 第 3 步"生产身份体检跑一次并看回执"以前**没有工具**。
+    注意这里不重算判据（重算要扫 2.7 万名册并把结论写进 `evidence`，那是写操作），
+    只把生产**已有**的结论解析出来 —— 如果证据列是空的，结论就是"体检在生产上没有输入"。
+    """
+    import sqlalchemy as sa
+
+    from src.services.sector_identity_audit import identity_view
+
+    rows = conn.execute(sa.text(
+        'select id, sector_name, fund_code, fund_name, evidence, is_fetchable, '
+        '       reviewed, reviewed_by, owner_locked, match_source, verify_message '
+        '  from sector_fund_mapping order by sector_name')).fetchall()
+    verdicts, no_evidence, unservable, relevance_low = {}, [], [], []
+    for r in rows:
+        row = type('R', (), dict(zip(
+            ('id', 'sector_name', 'fund_code', 'fund_name', 'evidence', 'is_fetchable',
+             'reviewed', 'reviewed_by', 'owner_locked', 'match_source', 'verify_message'),
+            r)))()
+        view = identity_view(row)
+        if not row.evidence:
+            no_evidence.append(row.sector_name)
+        v = view['identity_verdict'] or '（无身份结论）'
+        verdicts[v] = verdicts.get(v, 0) + 1
+        if not view['servable']:
+            unservable.append((row.sector_name, row.fund_code, v))
+        if view.get('relevance_low'):
+            relevance_low.append(row.sector_name)
+    print('\n===== 生产身份体检回执（只读解析，不重算判据）=====')
+    print('[行] 生产映射 %d 行；evidence 为空 %d 行；被判不可服务 %d 行；相关性旗标 %d 行'
+          % (len(rows), len(no_evidence), len(unservable), len(relevance_low)))
+    print('[结论分布] %s' % '、'.join('%s %d' % kv for kv in sorted(verdicts.items())))
+    for sector, code, v in unservable[:20]:
+        print('   [不可服务] %-14s %-8s verdict=%s' % (sector, code, v))
+    if no_evidence:
+        print('[读法] evidence 全空的那些行 = **生产上没跑过身份体检**：'
+              '体检结论存在 evidence JSON 里（零新列），所以回写之前这一步在生产没有输入。')
+    return 0
+
+
 def main():
+    ap = argparse.ArgumentParser(description='S6 生产侧只读预检')
+    ap.add_argument('--identity-audit', action='store_true',
+                    help='只解析生产已有的身份结论（不读回写清单、不发请求）')
+    args = ap.parse_args()
+    if args.identity_audit:
+        conn = prod_conn()
+        try:
+            return identity_audit(conn)
+        finally:
+            conn.close()
+
     sa = __import__('sqlalchemy')
     man = json.load(io.open(MANIFEST, encoding='utf-8'))
     rows = man['mappings']
