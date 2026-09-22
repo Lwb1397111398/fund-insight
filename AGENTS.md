@@ -195,10 +195,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 01:44（北京），第 28 轮（第 27 轮两份复评的修复批次）最后一次改用例之后立刻重跑）：
+最近一次核对（2026-09-23 02:25（北京），第 28 轮修复批次，最后一次改用例之后重跑）：
 
-- `pytest tests/unit -q` → **845 passed / 16 skipped / 0 failed**（139 秒）。
-- `pytest tests/ -q`（含 integration/services）本轮**没有重跑**，所以不引用它的数；
+- `pytest tests/unit -q` → **851 passed / 16 skipped / 0 failed**（128 秒）。
+- `pytest tests/ -q`（含 integration/services）本轮**没有重跑**，所以不引用它的数
+  （第 28 轮 F 实测过当时口径是 854 = 845 + 9，超集 > 子集，无"765<776"那类错）；
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
   （上一基线 835/844 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
@@ -232,6 +233,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   现量（2026-09-23 镜像：**活预测 1616 条，只被静态表覆盖 911 条 / 50 个板块**；
   `--impact-against data/_old_map.py` 量影响面：**31 个板块（改码 18 / 删键 13）= 78 条 = 4.8%**）。
   以前文档里写过的"916 条""124 条 / 7.7%"都是手抄没绑口径，已撤回（同一个数被复现成 925/911）。
+- **能写数据的脚本必须说清"连的是哪个库"**（第 28 轮 F-MINOR-6 起有用例钉）：
+  `tests/unit/test_script_db_guards.py` 扫 `scripts/*.py`，凡**带写开关**
+  （`--apply` / `--execute` / `--confirm …`）**且直连 ORM** 的脚本，必须出现
+  `pin_local_sqlite` / 自设 `DATABASE_URL` / 显式 `--against-production` / `database_label` 之一。
+  起因：`scripts/run_three_bucket_retention.py` 以前直接 `from src.models.database import SessionLocal`
+  且不设守卫 —— `.env` 的 `DATABASE_URL` 指向生产 ⇒ 它是那批无守卫脚本里**唯一带硬删**的，
+  跑起来默认就在生产上算删除候选、还能 `--execute`。现在默认钉镜像、要动生产得显式说，
+  并且第一行印库名。`scripts/run_scheduled_tasks.py`（Render Cron 入口，设计上就跑在生产）
+  也补了"[库] …"这行日志 —— 净值停在 09-13 那 9 天之所以查不清，部分就是因为日志不说连哪儿。
+- **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：
+  `tests/unit/test_blogger_hit_rate_map.py` 三条钉 `src/api/routes/bloggers.py:_hit_rate_map`。
+  此前全仓对它零覆盖：把判据 `Prediction.is_deleted == False` 反向改成 `== True`
+  （＝只算回收站），`pytest tests/ -q` **854 条全绿** —— 而这一列正是老板判断"谁可信"的依据。
+  其中一条用例同时钉住**两个口径本就该不同**：同一批数据，命中率 3/4=75%，
+  加权评分（排除 flat 与 `verify_count=0`）是 2/2=100% ⇒ 页面必须分开说明（不许只写进 `title`，
+  手机没有 hover；这条还没做，见任务 #30）。
 - **写侧凭据的 `now=` 必须与读侧的 `today=` 同一天**（第 27 轮 C-B1，实测踩过）：
   `backfill_proofs.record_probe(...)` 不打 `now=` 就取墙上时钟，而 `_fresh` 把"来自未来的
   时间戳"判为不可信（`age < -1`）⇒ 用例若同时注入固定 `today=date(2026,9,21)`，

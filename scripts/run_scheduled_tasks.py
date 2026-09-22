@@ -270,6 +270,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 这条跑在 Render Cron 上，默认连的就是 `.env` 里那个库（生产）。
+    # 第 28 轮 F-MINOR-6 的教训：能写数据的入口必须把"写到哪个库"印在回执第一行，
+    # 否则事后翻日志只能靠猜（净值停在 09-13 那 9 天就是这么糊过去的）。
+    from src.models.database import SessionLocal
+    from src.services.verdict_evidence import database_label
+    _probe_db = SessionLocal()
+    try:
+        logger.info("[库] 本次定时任务连的是：%s", database_label(_probe_db))
+    finally:
+        _probe_db.close()
+
     if args.job == "daily":
         result = run_daily_tasks()
         logger.info("定时任务结果: %s", result)

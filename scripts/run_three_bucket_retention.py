@@ -3,6 +3,12 @@
 默认 dry-run，写出 docs/RETENTION_THREE_BUCKETS_DRY_RUN.json。
 真删示例（需明确确认）：
   PYTHONPATH=. python scripts/run_three_bucket_retention.py --execute --confirm three-buckets-hard-delete
+
+**连的是哪个库，这个脚本以前不说**（第 28 轮 F-MINOR-6）：它直接
+`from src.models.database import SessionLocal`，而 `.env` 的 `DATABASE_URL` 指向生产
+⇒ 它是那批"无守卫脚本"里唯一的**硬删**工具：跑起来默认就在生产上算候选，还能 `--execute`。
+现在默认钉本地镜像（与 AGENTS.md 那条规矩一致），要动生产必须显式 `--against-production`，
+并且每次第一行都印出真实的库名。
 """
 from __future__ import annotations
 
@@ -14,8 +20,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(ROOT / 'scripts') not in sys.path:
+    sys.path.insert(0, str(ROOT / 'scripts'))
 
-from src.models.database import SessionLocal
+from _db_guard import pin_local_sqlite          # noqa: E402  必须先于任何 ORM 导入决定连哪个库
+
+# 守卫要发生在 import `src.models.database` 之前：那个模块在 import 时就建好引擎了，
+# 晚一步 pin 只是改了环境变量、改不了已经建好的连接串。所以这里直接看 argv，不走 argparse。
+if '--against-production' in sys.argv:
+    print('[env] --against-production：本脚本连的是 .env 里指定的库（生产），候选与删除都会落在那里')
+else:
+    pin_local_sqlite(use_mirror_default=True)
+
+from src.models.database import SessionLocal   # noqa: E402
 from src.services.retention_three_buckets import (
     CONFIRM_TOKEN,
     ThreeBucketRetentionService,
@@ -39,10 +56,17 @@ def main() -> int:
         default="",
         help=f"真删确认口令，必须等于 {CONFIRM_TOKEN}",
     )
+    parser.add_argument(
+        "--against-production",
+        action="store_true",
+        help="显式连 .env 指定的库（通常是生产）；不加这个开关就钉本地镜像库",
+    )
     args = parser.parse_args()
 
+    from src.services.verdict_evidence import database_label
     session = SessionLocal()
     try:
+        print('[库] %s' % database_label(session))
         service = ThreeBucketRetentionService(session)
         plan = service.build_plan()
         report_path = service.write_dry_run_report(Path(args.report), plan)
