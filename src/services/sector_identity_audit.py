@@ -252,6 +252,25 @@ def machine_swap_of(row) -> Optional[Dict]:
     return None
 
 
+def row_relevance_low(row) -> bool:
+    """体检算好的"标的与板块字面无关、且名册里确实有更对口的那只"旗标。
+
+    判据本身要扫全量名册（2.7 万条），所以只在体检时算一次、写进 `evidence.identity`，
+    读路径只看结论（第 22 轮 B 就是把我把整行 ORM 塞进热读路径，慢了一个数量级）。
+    没有体检过的行返回 False —— 这条旗标的用途是"降级路径多一道保守"，
+    不是"没体检过就不许服务"。
+    """
+    import json
+    try:
+        payload = json.loads(getattr(row, 'evidence', None) or '{}')
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    identity = payload.get('identity')
+    return bool(isinstance(identity, dict) and identity.get('relevance_low'))
+
+
 def cjk_core(text) -> str:
     return ''.join(_CJK.findall(text or ''))
 

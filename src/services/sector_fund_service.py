@@ -108,15 +108,23 @@ class SectorFundService:
 
         db = self._get_db()
 
-        def _first_servable(query):
+        def _first_servable(query, strict_relevance=False):
             # `servable_predicate()` 只看 `is_fetchable` 列，而"不可服务"还有第二个事实源
             # （`evidence.identity.verdict`）⇒ 粗筛之后必须再过一次唯一判据，否则
             # "列 NULL + verdict 否定"的幽灵行会在这里被当成可服务标的返回，
             # **并且写进进程内缓存**，污染这一进程后续所有帖子分析
             # （第 23 轮 MAJOR-1：同一形态第三次复现）。
+            # `strict_relevance` 只给"未审查降级"那条路用：体检说过
+            # "这只标的与板块字面无关、而名册里另有字面对口的那只"时，未审查的行
+            # 不该被拿去服务新帖子（第 25 轮实测：核聚变→红利低波ETF、区块链→云计算ETF
+            # 都因为降级不过这道门而继续指错）。已审查的行不受影响 —— 老板点过就算认。
+            from src.services.sector_identity_audit import row_relevance_low
             for row in query.limit(20).all():
-                if not self._unservable(row):
-                    return row
+                if self._unservable(row):
+                    continue
+                if strict_relevance and row_relevance_low(row):
+                    continue
+                return row
             return None
 
         try:
@@ -132,11 +140,14 @@ class SectorFundService:
                 # 降级查 reviewed=False。降级分支同样要过滤：体检判"不可服务"的行
                 # 如果在这里被捞回来，"取消 reviewed"就等于什么都没做（000725 京东方Ａ
                 # 实测正是这样继续服务帖子分析的）。
+                # 另外还要过相关性这道门（`strict_relevance=True`）：未审查 + 体检说
+                # "这只与板块无关、名册里另有字面对口的"＝机器自己都不信自己，
+                # 拿它去贴新帖子就是老板抱怨的那个症状（第 26 轮修，任务 #23）。
                 mapping = _first_servable(db.query(SectorFundMapping).filter(
                     SectorFundMapping.sector_name == sector_name,
-                    SectorFundMapping.is_active == True,
+                    SectorFundMapping.is_active == True,          # noqa: E712
                     servable_predicate(),
-                ))
+                ), strict_relevance=True)
 
             if mapping:
                 result = {
