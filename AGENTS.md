@@ -195,13 +195,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 03:37（北京），第 28 轮 C 批（评审 H/I 驱动：名单逃逸 + 守卫自身可绕）：
+最近一次核对（2026-09-23 04:28（北京），第 29 轮（页面出口：冷启动 / 第三态 / 口径正文）修复之后，
+最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **866 passed / 16 skipped / 0 failed**（140 秒）。
-- `pytest tests/ -q`（含 integration/services）本批**没重跑**；上一批（864 条用例时）是
-  **873 passed / 16 skipped / 0 failed**，即 873 = 864 + 9 ⇒ 本批按 +2 推算约 875，
-  **但推算不是实测**，要用这个口径就再跑一次。报数时必须写清是哪个口径。
-  （上一基线 835/844 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
+- `pytest tests/unit -q` → **873 passed / 16 skipped / 0 failed**（146 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **882 passed / 16 skipped / 0 failed**（148 秒）。
+  报数时要写清是哪个口径，两个数都对但常被人当成回归。
+  （上一基线 866/未跑：本批 +7 条用例（`test_frontend_cold_start.py` 6 条 +
+  `test_sector_identity_audit_v74.py` 1 条），并把 `identity_view` 的 `realigned` 形状
+  从 5 键改成 6 键 —— 那条精确相等断言的用例同步改了，不是把断言放松。）
+  （再上一批 866 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
   （再早 808/817 → 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例却没复测。
   规矩改成：最后一次改用例之后先跑数、再写文档，数字与用例改动必须在同一个提交里。）
@@ -375,6 +378,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   所以**映射表根本没提过的代码一律放行**（保守设计：没有映射行 ≠ 这只基金有问题）。
   实测镜像 1110 条已判结论里 **430 条（38.7%）**属于这一类，它们既不会被打 ⚠ 也不会触发改标；
   审计脚本每次把这个数打出来，别把门说成覆盖了全部。
+- **页面改动必须用真实浏览器看过才能说"好了"**（第 29 轮立规矩，起因是连续几轮把"接口有字段"
+  当成"老板看得见"）。本地起服务的固定姿势：
+  `DATABASE_URL="sqlite:///data/fund_insight.db" ACCESS_PASSWORD=<一次性口令> python -m uvicorn src.api.main:app --port 8098`
+  —— **显式设 `DATABASE_URL` 指向镜像**（`.env` 里它是生产），跑完按端口找 PID 关掉。
+  三条硬规矩：① 首屏五个取数点（stats / bloggers / stats/evidence / funds / sector-mappings）
+  一律过 `withWakeRetry()`，新增首屏取数要走同一条，否则实例唤醒时页面直接空；
+  ② **"取不到数据"与"库里没有"必须是两种文案**（博主榜曾把唤醒失败显示成"暂无博主数据"，
+  而镜像里有 27 个博主）；③ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
+  对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）。
+  判据：`tests/unit/test_frontend_cold_start.py`（6 条判据、7 处变异逐条打红）。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

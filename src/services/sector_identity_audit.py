@@ -690,6 +690,9 @@ def identity_view(row) -> Dict:
     view['realigned'] = ({
         'from_code': swap.get('from_code'), 'from_name': swap.get('from_name'),
         'core': swap.get('core'), 'reason': swap.get('reason'), 'kind': swap.get('kind'),
+        # 存量 ETF 升级行只有 `replaced` 这一句人话（写记录时还没有 from_code 字段），
+        # 不透传给前端就说不出"原来是什么"，只能退成"原标的已查不到"（任务 #26）。
+        'replaced': swap.get('replaced'),
     } if swap else None)
     return view
 

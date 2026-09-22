@@ -763,9 +763,9 @@ def pick_etf_upgrade(db, row, verdict_row, taken=None, proxy_codes=None):
             # 前端"机器已纠正"横幅要说得出**原来是什么**：只留 `replaced` 一句人话，
             # `identity_view.realigned.from_code` 对升级行就永远是 null（第 7 轮实测
             # id 131/145 就是这样），realign 那侧一直是带 from_code/from_name 的。
-            'from_code': row.fund_code, 'from_name': row.fund_name,
-            'local_history_rows': best_score,
             'from_code': row.fund_code,      # 落笔前复判用（realign 同一机制）
+            'from_name': row.fund_name,
+            'local_history_rows': best_score,
             # 理由里写老板在册的那只（`row.fund_name`），不是站点解析出的 official_name：
             # 两者不一致时（如 162412 vs 医疗ETF华宝）报告会说"替换"一只不存在的持仓
             'reason': '板块「%s」有场内 ETF 可用，按"ETF 最纯粹"替换 %s'

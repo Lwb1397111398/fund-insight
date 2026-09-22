@@ -1151,11 +1151,14 @@ def test_identity_view_exposes_the_realign_provenance(test_db):
         u'identity': {u'verdict': u'ok'},
         u'identity_realign': {u'code': u'512170', u'from_code': u'516810',
                              u'from_name': u'农业ETF华夏',
-                             u'core': u'信创', u'reason': u'x'}}))
+                             u'core': u'信创', u'reason': u'x',
+                             u'replaced': u'516810 农业ETF华夏'}}))
     view = audit.identity_view(row)
     assert view[u'realigned'] == {u'from_code': u'516810', u'from_name': u'农业ETF华夏',
                                  u'core': u'信创', u'reason': u'x',
-                                 u'kind': u'identity_realign'}
+                                 u'kind': u'identity_realign',
+                                 # 存量 ETF 升级行只有这一句人话，缺了它前端只能说"查不到"
+                                 u'replaced': u'516810 农业ETF华夏'}
     row.fund_code = u'600000'          # 老板自己又换了标的 = 已确认
     assert audit.identity_view(row)[u'realigned'] is None
 

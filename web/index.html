@@ -82,16 +82,29 @@
                         这个库还没有已判结论，准确率暂无意义 · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}
                         </template>
                     </div>
-                    <div v-else class="text-xs" style="color:#bfbfbf; margin: 2px 0 8px 0;">结论证据体检数据加载中…</div>
+                    <div v-else class="text-xs" style="color:#bfbfbf; margin: 2px 0 8px 0;">
+                        <template v-if="serviceWaking">服务正在唤醒（约 30~60 秒），好了会自动刷新…</template>
+                        <template v-else-if="evidenceError">
+                            结论证据体检拉取失败：{{ evidenceError }} ⇒ <strong>下面的准确率没有区间可看，先别当结论用</strong>
+                            <button class="action-btn small" @click="fetchEvidence">重试</button>
+                        </template>
+                        <template v-else>结论证据体检数据加载中…</template>
+                    </div>
                     <div class="data-table" v-if="bloggers.length > 0">
+                        <!-- 两个口径必须写在正文里（手机没有 hover，title 等于没写）：
+                             左边是"现算命中率"，右边是"含归档的加权评分"，两者不必相等也不算打脸。 -->
+                        <div class="text-xs" style="color:#8c8c8c; margin: 0 0 6px 0;">
+                            两列口径不同：<strong>准确率</strong> = 判对 / 已验证结论（只数没删的，现算）；
+                            <strong>加权评分</strong> = 按 verify_score 加权、含已删除归档的累计（等级 grade 按它定）。
+                        </div>
                         <table>
                             <thead>
                                 <tr>
                                     <th>排名</th>
                                     <th>名称</th>
                                     <th>等级</th>
-                                    <th title="存活命中率 = 判对 / 已验证结论（未删）。注意：其中一部分结论的端点净值今天已复现不出来（行上带 ⚠），这部分只能按区间看 —— 现算命令 python scripts/audit_verdict_evidence.py">准确率</th>
-                                    <th title="verify_score 加权评分，非命中率">加权评分</th>
+                                    <th>准确率（现算命中率）</th>
+                                    <th>加权评分（含归档，非命中率）</th>
                                     <th>已验证</th>
                                     <th>判对</th>
                                     <th>未过期帖子</th>
@@ -117,7 +130,14 @@
                             </tbody>
                         </table>
                     </div>
-                    <div v-else class="empty-state">暂无博主数据</div>
+                    <div v-else class="empty-state">
+                        <!-- 空表有两种成因：库里真没有博主，和"根本没取到数据"。以前两者都写成"暂无博主数据"，
+                             服务唤醒失败时老板看到的是"我一个博主都没有"，这是假事实。 -->
+                        <template v-if="bloggersError">{{ bloggersError }}
+                            <button class="action-btn small" @click="fetchBloggers">重试</button></template>
+                        <template v-else-if="loading">加载中…</template>
+                        <template v-else>暂无博主数据</template>
+                    </div>
                 </div>
                 <!-- 帖子视图 -->
                 <div v-if="currentView === 'posts'">
@@ -945,6 +965,26 @@
             </div>
         </div>
 
+        <!-- 冷启动/断网：这条与"密码失效"必须是两个界面。以前唤醒失败会走密码失效那条路，
+             结果是老板被要求重输一个根本没错的密码。 -->
+        <div v-if="serviceUnreachable" class="modal-overlay" style="z-index: 10000;">
+            <div class="modal" style="max-width: 400px;">
+                <div class="modal-header">连不上服务</div>
+                <div class="py-16">
+                    <p style="color: #666; margin-bottom: 12px;">
+                        已经等过一轮（约 90 秒）仍连不上。<strong>密码没有清掉</strong>，
+                        免费实例冷启动通常 30~60 秒，也可能这次更久，重试就能继续用。
+                    </p>
+                    <p v-if="serviceWaking" style="color: #1677ff; font-size: 13px;">正在等待服务唤醒…</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn primary" @click="retryConnect" :disabled="serviceWaking">
+                        {{ serviceWaking ? '唤醒中…' : '重试连接' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- 弹窗们 -->
         <div v-if="showAddBlogger" class="modal-overlay" @click.self="showAddBlogger = false">
             <div class="modal">
@@ -1457,6 +1497,18 @@
             <div class="modal">
                 <div class="modal-header"><i class="ri-trophy-line"></i> TOP博主排行<button class="modal-close"
                         @click="showTopBloggersModal = false">×</button></div>
+                <!-- 这个弹窗以前一句口径都没有：同一份数据在博主页有灰字说明，在这里却两列并排裸奔 -->
+                <div class="text-xs" style="color:#8c8c8c; margin: 0 16px 6px 16px;">
+                    <template v-if="evidenceReport && evidenceReport.judged">
+                        已判 {{ evidenceReport.judged }} 条，其中 <span style="color:#d46b08;">⚠ {{ evidenceReport.stale_evidence }} 条（{{ evidenceReport.stale_pct }}%）</span>
+                        端点净值今天复现不出来 ⇒ 准确率按区间看 <strong>{{ spanText() }}</strong>
+                        · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}<br>
+                    </template>
+                    <template v-else-if="evidenceError">结论证据体检拉取失败（{{ evidenceError }}），下面的数没有区间可看。<button class="action-btn small" @click="fetchEvidence">重试</button><br></template>
+                    <template v-else-if="!evidenceReport">结论证据体检数据尚未取到；准确率按区间看才诚实。<br></template>
+                    排名按<strong>命中率</strong>（判对 / 已验证，只数没删的）；<strong>加权评分</strong>是含归档、按 verify_score
+                    加权的另一个数（等级按它定），两者不必相等。
+                </div>
                 <div class="data-table" v-if="topBloggers.length > 0" style="box-shadow: none;">
                     <table>
                         <thead>
@@ -1464,7 +1516,7 @@
                                 <th>排名</th>
                                 <th>名称</th>
                                 <th>等级</th>
-                                <th>准确率</th>
+                                <th>命中率</th>
                                 <th>加权评分</th>
                                 <th>已验证</th>
                             </tr>
@@ -1592,6 +1644,7 @@
                               style="font-size: 13px; color: #8c8c8c;">（看过未确认 {{ sectorMappings.reviewed_unconfirmed_count }} 条：体检与 AI 覆盖照常生效）</span>
                         <button v-if="identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
                         <button v-if="identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
+                        <button v-if="identityStats.no_literal" class="action-btn small" @click="identityFilter = identityFilter === 'no_literal' ? 'all' : 'no_literal'" :style="{ background: identityFilter === 'no_literal' ? '#8c8c8c' : '#fafafa', color: identityFilter === 'no_literal' ? '#fff' : '#8c8c8c', border: '1px solid #d9d9d9' }" title="名册里查不到字面对口的标的：这些行是代理关系，换标的得人工定">名册无对口 {{ identityStats.no_literal }}</button>
                         <button v-if="identityStats.realigned" class="action-btn small" @click="identityFilter = identityFilter === 'realigned' ? 'all' : 'realigned'" :style="{ background: identityFilter === 'realigned' ? '#13c2c2' : '#e6fffb', color: identityFilter === 'realigned' ? '#fff' : '#13c2c2', border: '1px solid #87e8de' }">机器已纠正待复核 {{ identityStats.realigned }}</button>
                         <span class="flex-1"></span>
                         <input v-model="mappingSearchKeyword" placeholder="搜索板块名、基金名称或基金代码" style="width: 220px; padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px;">
@@ -1655,14 +1708,26 @@
                                     <td class="table-cell">
                                         <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_name" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
                                         <span v-else>{{ m.fund_name }}</span>
+                                        <!-- 一句话里三个插槽，但 `etf_upgrade` 那两类没有 core：
+                                             以前无条件打「{{ core }}」⇒ 页面上出现"按板块核心词「」"，
+                                             空格子看着像坏了，老板无法判断这行到底被什么规则改过（任务 #26）。 -->
                                         <div v-if="m.realigned && !m.reviewed" style="font-size: 11px; color: #13c2c2; margin-top: 2px;">
-                                            机器已按板块核心词「{{ m.realigned.core }}」换成字面对口标的（原 {{ m.realigned.from_code }} {{ m.realigned.from_name }}），请复核
+                                            <template v-if="m.realigned.core">机器已按板块核心词「{{ m.realigned.core }}」换成字面对口标的</template>
+                                            <template v-else-if="m.realigned.kind === 'etf_upgrade'">机器已按「能配场内 ETF 就用 ETF」换成场内标的</template>
+                                            <template v-else>机器已换过一次标的</template>
+                                            <template v-if="m.realigned.from_code">（原 {{ m.realigned.from_code }}<template v-if="m.realigned.from_name"> {{ m.realigned.from_name }}</template>）</template>
+                                            <!-- 存量的 ETF 升级记录只有 `replaced` 一句人话（那时还没写 from_code） -->
+                                            <template v-else-if="m.realigned.replaced">（原 {{ m.realigned.replaced }}）</template>
+                                            <template v-else>（原标的已查不到，见该行体检理由）</template>，请复核
                                         </div>
                                         <div v-if="m.identity_verdict && m.identity_verdict !== 'ok'" style="font-size: 11px; color: #ff4d4f; margin-top: 2px;">
                                             {{ m.identity_reason }}
                                             <span v-if="m.identity_suggestion" style="color: #1890ff;">（可换成 {{ m.identity_suggestion.code }} {{ m.identity_suggestion.name }}）</span>
                                         </div>
-                                        <div v-else-if="m.relevance_low" style="font-size: 11px; color: #d46b08; margin-top: 2px;">标的与板块字面无关，待 AI 重匹配</div>
+                                        <div v-else-if="m.relevance_low || m.relevance_state === 'alternative_exists'" style="font-size: 11px; color: #d46b08; margin-top: 2px;">标的与板块字面无关，名册里有更对口的那只，待 AI 重匹配</div>
+                                        <!-- 第三态：不是"这行挂错了、换一只就好"，而是"整个名册里没有字面对口的标的"。
+                                             两者要做的动作不同，所以话不能说成一句（任务 #32）。 -->
+                                        <div v-else-if="m.relevance_state === 'no_literal_fund'" style="font-size: 11px; color:#8c8c8c; margin-top: 2px;">名册里没有字面对口的标的：这一行是代理关系，AI 重匹配找不到更对的，要改得人工定</div>
                                     </td>
                                     <td class="table-cell">
                                         <input v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)" v-model="editingMapping.fund_code" style="width: 100%; padding: 2px 4px; border: 1px solid #1890ff; border-radius: 3px; font-size: 12px;">
@@ -1989,22 +2054,33 @@
                 // 结论证据体检报告（/api/stats/evidence）。为什么必须摆在页面上：准确率里有一部分
                 // 结论的端点净值今天已经复现不出来，只报一个小数点就是假装精度（第 20~23 轮连点四轮）
                 const evidenceReport = ref(null);
+                const evidenceError = ref('');
                 // 密码认证相关
                 const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false), passwordError = ref(''), authReady = ref(false);
+                // "连不上" ≠ "密码错了"：前者不清密码、给一个重试入口；后者才弹输入框
+                const serviceUnreachable = ref(false);
                 const checkAuth = async () => {
                     const savedPassword = localStorage.getItem('access_password');
                     if (savedPassword) {
                         // 已有密码，先验证是否有效
                         axios.defaults.headers.common['X-Access-Password'] = savedPassword;
                         try {
-                            await axios.get('/api/stats');
+                            await withWakeRetry(() => axios.get('/api/stats'));
+                            serviceUnreachable.value = false;
                             authReady.value = true;
                             // 密码有效，加载数据
                             fetchStats(); fetchBloggers();
                             window.setTimeout(() => restorePredictionVerifyTask(), 0);
                             return;
                         } catch (e) {
-                            // 密码失效，清除并弹出输入框
+                            if (!e.response) {
+                                // 服务器根本没答话（唤醒超时 / SSL EOF / 断网）。以前这里和"密码错了"
+                                // 共用一个分支 ⇒ 把老板存的密码清掉、弹窗逼他重输一遍，
+                                // 而真实原因只是实例还在睡。
+                                serviceUnreachable.value = true;
+                                return;
+                            }
+                            // 服务器答了话且不是 2xx ⇒ 密码确实失效，清除并弹出输入框
                             localStorage.removeItem('access_password');
                             delete axios.defaults.headers.common['X-Access-Password'];
                         }
@@ -2012,12 +2088,16 @@
                     // 没有密码或密码失效，弹出输入框（不加载数据）
                     showPasswordModal.value = true;
                 };
+                const retryConnect = async () => {
+                    serviceUnreachable.value = false;
+                    await checkAuth();
+                };
                 const submitPassword = async () => {
                     if (!passwordInput.value.trim()) { passwordError.value = '请输入访问密码'; return; }
                     passwordVerifying.value = true; passwordError.value = '';
                     try {
                         axios.defaults.headers.common['X-Access-Password'] = passwordInput.value;
-                        const res = await axios.get('/api/stats');
+                        const res = await withWakeRetry(() => axios.get('/api/stats'));
                         if (res.data && res.data.success !== false) {
                             localStorage.setItem('access_password', passwordInput.value);
                             showPasswordModal.value = false; passwordInput.value = '';
@@ -2038,7 +2118,7 @@
                             const detail = e.response.data?.error || e.response.data?.detail || '';
                             passwordError.value = `服务器错误 (${e.response.status})${detail ? ': ' + detail : '，请稍后重试'}`;
                         } else if (e.request) {
-                            passwordError.value = '网络错误，无法连接服务器（可能是 CORS 配置问题）';
+                            passwordError.value = '连不上服务（免费实例唤醒要约 30~60 秒）。密码没有丢，等一会儿再点一次确认即可。';
                         } else {
                             passwordError.value = '请求异常: ' + e.message;
                         }
@@ -2055,7 +2135,7 @@
                     checkAuth();
                     window.setTimeout(() => restoreAnalysisJob(), 0);
                     window.setTimeout(() => restoreViewpointTask(), 0);
-                    window.addEventListener('auth-required', () => { showPasswordModal.value = true; passwordError.value = '密码已失效，请重新输入'; authReady.value = false; });
+                    window.addEventListener('auth-required', () => { showPasswordModal.value = true; passwordError.value = '密码已失效，请重新输入'; authReady.value = false; serviceUnreachable.value = false; });
                 });
                 const fundFilter = ref('has_prediction');
                 const fundLoading = ref(false), fundError = ref(''), fundPage = ref(1);
@@ -2212,14 +2292,56 @@ const fetchWeChatBatch = async () => {
                     restorePredictionVerifyTask, previewPredictionMaintenance, executePredictionMaintenance,
                 } = predictionManager;
                 const deletePrediction = archivePrediction;
-                const fetchStats = async () => { fetchEvidence(); try { const res = await axios.get('/api/stats'); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
-                const fetchEvidence = async () => { try { const res = await axios.get('/api/stats/evidence'); if (res.data.success) evidenceReport.value = res.data.data; } catch (e) { console.error(e); } };
+                const fetchStats = async () => { fetchEvidence(); try { const res = await withWakeRetry(() => axios.get('/api/stats')); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
+                // 冷启动别把页面卡死：Render 实例睡着时第一笔请求会超时/SSL EOF，
+                // 而 `/api/health` 免鉴权且真做 `SELECT 1` ⇒ 拿它当"醒了吗"的探针，醒了自动重跑。
+                const serviceWaking = ref(false);
+                const waitUntilAwake = async (maxSeconds = 90) => {
+                    serviceWaking.value = true;
+                    const deadline = Date.now() + maxSeconds * 1000;
+                    let ok = false;
+                    try {
+                        while (Date.now() < deadline) {
+                            try { await axios.get('/api/health', { timeout: 8000 }); ok = true; break; }
+                            catch (e) { await new Promise(r => setTimeout(r, 3000)); }
+                        }
+                    } finally { serviceWaking.value = false; }
+                    return ok;
+                };
+                const withWakeRetry = async (fn) => {
+                    try { return await fn(); }
+                    catch (e) {
+                        const networkish = !e.response || e.code === 'ECONNABORTED' || e.code === 'ERR_NETWORK';
+                        if (!networkish || !(await waitUntilAwake())) throw e;
+                        return await fn();
+                    }
+                };
+                const fetchEvidence = async () => {
+                    evidenceError.value = '';
+                    try {
+                        const res = await withWakeRetry(() => axios.get('/api/stats/evidence'));
+                        if (res.data.success) { evidenceReport.value = res.data.data; evidenceError.value = ''; }
+                        else { evidenceError.value = res.data.message || '证据体检返回失败'; }
+                    } catch (e) {
+                        // 以前这里只 console.error ⇒ 页面永远停在"加载中"，准确率就光着报出去
+                        evidenceError.value = (e && (e.code === 'ECONNABORTED' || !e.response))
+                            ? '服务连不上（可能在唤醒）' : '证据体检接口报错';
+                    }
+                };
                 const spanText = () => evidenceReport.value ? (evidenceReport.value.span_low_pct + '%~' + evidenceReport.value.span_high_pct + '%') : '-';
+                const bloggersError = ref('');
                 const fetchBloggers = async () => {
-                    const res = await axios.get('/api/bloggers');
-                    if (res.data.success) {
-                        // 后端已按 hit_rate 排序；兼容旧字段
-                        bloggers.value = res.data.data;
+                    try {
+                        bloggersError.value = '';
+                        const res = await withWakeRetry(() => axios.get('/api/bloggers'));
+                        if (res.data.success) {
+                            // 后端已按 hit_rate 排序；兼容旧字段
+                            bloggers.value = res.data.data;
+                        }
+                    } catch (e) {
+                        // 以前没有 catch ⇒ 唤醒失败时是一条未处理的 rejection，
+                        // 页面上榜单纯空白且一句原因都没有
+                        bloggersError.value = '博主榜拉取失败：' + (e.response ? '接口报错' : '服务连不上（可能在唤醒）');
                     }
                 };
                 const fetchFunds = async () => {
@@ -2227,7 +2349,7 @@ const fetchWeChatBatch = async () => {
                     fundError.value = '';
                     try {
                         const skip = (fundPage.value - 1) * fundMeta.value.page_size;
-                        const res = await axios.get(`/api/funds?group_by_sector=false&skip=${skip}&limit=${fundMeta.value.page_size}`);
+                        const res = await withWakeRetry(() => axios.get(`/api/funds?group_by_sector=false&skip=${skip}&limit=${fundMeta.value.page_size}`));
                         if (res.data.success) {
                             funds.value = res.data.data.sort((a, b) => (b.day_growth || 0) - (a.day_growth || 0));
                             fundMeta.value = res.data.meta || { total: funds.value.length, page: 1, page_size: 100, pages: funds.value.length ? 1 : 0 };
@@ -2588,13 +2710,14 @@ const fetchWeChatBatch = async () => {
                 const aiBatch = ref({ running: false, status: 'idle', total: 0, done: 0, counts: {}, current: '', results: [] });
                 const verifyAllVerifying = ref(false);
                 const verifyAllResult = ref(null);
-                // 身份体检结论：'all' | 'unservable' | 'relevance' | 'realigned'
+                // 身份体检结论：'all' | 'unservable' | 'relevance' | 'no_literal' | 'realigned'
                 const identityFilter = ref('all');
                 const identityStats = computed(() => {
                     const list = sectorMappings.value.mappings || [];
                     return {
                         unservable: list.filter(m => m.servable === false).length,
                         relevance: list.filter(m => m.relevance_low).length,
+                        no_literal: list.filter(m => m.relevance_state === 'no_literal_fund').length,
                         realigned: list.filter(m => m.realigned && !m.reviewed).length
                     };
                 });
@@ -2602,6 +2725,7 @@ const fetchWeChatBatch = async () => {
                     let list = sectorMappings.value.mappings || [];
                     if (identityFilter.value === 'unservable') list = list.filter(m => m.servable === false);
                     else if (identityFilter.value === 'relevance') list = list.filter(m => m.relevance_low);
+                    else if (identityFilter.value === 'no_literal') list = list.filter(m => m.relevance_state === 'no_literal_fund');
                     else if (identityFilter.value === 'realigned') list = list.filter(m => m.realigned && !m.reviewed);
                     const keyword = mappingSearchKeyword.value.trim().toLowerCase();
                     if (!keyword) return list;
@@ -2612,7 +2736,7 @@ const fetchWeChatBatch = async () => {
                         (m.identity_official_name || '').toLowerCase().includes(keyword)
                     );
                 });
-                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await axios.get(url); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
+                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await withWakeRetry(() => axios.get(url)); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
                 const aiMatchMapping = async (m) => {
                     if (aiMatchBusy.value) return;
                     aiMatchBusy.value = m.sector_name;
@@ -2890,7 +3014,8 @@ const fetchWeChatBatch = async () => {
                 };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
                 return {
-                    theme, toggleTheme, loading, currentView, stats, evidenceReport, spanText, fetchEvidence,
+                    theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
+                    serviceWaking, serviceUnreachable, retryConnect, bloggersError, spanText, fetchEvidence,
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
@@ -2913,7 +3038,7 @@ const fetchWeChatBatch = async () => {
                     retentionTableLabel, reclaimSpace, reclaiming, spaceReclaimResult, formatBytes,
                     expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting,
                     testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError,
-                    authReady, submitPassword, loadView, addBlogger, addPost, addFund,
+                    authReady, submitPassword, fetchBloggers, loadView, addBlogger, addPost, addFund,
                     newFundVerifying, newFundVerifyResult, verifyNewFund,
                     deleteBlogger, deletePost, deletePrediction, deleteViewpoint,
                     viewPostDetail, viewViewpointDetail, viewFundDetail, deleteFund,

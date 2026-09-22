@@ -143,6 +143,21 @@ def test_identity_view_flags_etf_upgrade_until_owner_acts():
     assert audit.machine_swap_of(locked) is None
 
 
+def test_legacy_upgrade_records_still_name_the_old_fund():
+    """任务 #26：存量的 ETF 升级记录只写了 `replaced` 一句人话（那时还没有 from_code）。
+
+    不透传这个键，前端在真实数据上就只能退成"原标的已查不到"——本地镜像实测 2 行
+    （2026-09-23 浏览器复现），而那句人话一直就躺在 evidence 里。
+    """
+    legacy = {'code': '159877', 'replaced': '162412 华宝医疗ETF联接A',
+              'reason': '板块「医疗」有场内 ETF 可用'}
+    row = _row('T-六版存量升级', '159877', '医疗ETF',
+               evidence=json.dumps({'etf_upgrade': legacy}))
+    swap = audit.identity_view(row)['realigned']
+    assert swap['from_code'] is None, '存量行确实没有 from_code，这条判据才有意义'
+    assert swap['replaced'] == '162412 华宝医疗ETF联接A'
+
+
 def test_apply_results_resets_an_unacknowledged_machine_swap(test_db):
     """M3 的存量返修：机器换过标的却挂着"已审查"→ 体检一轮就复位待复核。"""
     row = _row('T-六版复位', '159805', '传媒ETF', reviewed=True,
