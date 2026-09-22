@@ -50,6 +50,25 @@ def run_daily_tasks() -> dict:
     try:
         run_step("fund_update", scheduler._run_fund_update)
         run_step("prediction_verify", scheduler._run_prediction_verify)
+        # 结论证据体检（只读、不改数据）：把"端点净值在当前标的的净值表里复现不出来"
+        # 的条数每天记一次。第 16~18 轮查出的 250 条里 53 条是"改标后没重算"，
+        # 剩下的是净值被就地改写/缺行 —— 以前没有任何流水线会发现它还在涨。
+        def _verdict_evidence_audit():
+            from src.models.database import SessionLocal
+            from src.services.verdict_evidence import stale_counts
+
+            db = SessionLocal()
+            try:
+                counts = stale_counts(db)
+            finally:
+                db.close()
+            total = sum(counts.values())
+            if total:
+                logger.warning("结论证据失效 %s 条：%s（前端已标 ⚠，处置见 "
+                               "docs/模块总览/预测验证与准确率统计.md）", total, counts)
+            return {"success": True, "stale_total": total, "stale_by_kind": counts}
+
+        run_step("verdict_evidence_audit", _verdict_evidence_audit)
         # 观点每日汇总：默认关闭，生产确认 Supabase 备份后设 ENABLE_VIEWPOINT_SUMMARY=true
         if os.environ.get("ENABLE_VIEWPOINT_SUMMARY", "false").lower() == "true":
             from src.services.viewpoint_workflow_service import ViewpointWorkflowService

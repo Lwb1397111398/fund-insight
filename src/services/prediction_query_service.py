@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from src.models.database import Blogger, Post, Prediction
 from src.services.prediction_lifecycle import classify, current_as_of
+from src.services.verdict_evidence import evidence_label as _evidence_label
 
 
 class PredictionQueryService:
@@ -67,8 +68,11 @@ class PredictionQueryService:
             .limit(page_size)
             .all()
         )
+        # 证据是否还复现得出来：按页批量算（共两条查询），不给列表页加 N+1
+        from src.services.verdict_evidence import evidence_statuses
+        statuses = evidence_statuses(self.db, rows)
         return {
-            "data": [self._serialize(row) for row in rows],
+            "data": [self._serialize(row, statuses.get(row.id)) for row in rows],
             "meta": {
                 "page": page,
                 "page_size": page_size,
@@ -88,7 +92,9 @@ class PredictionQueryService:
         )
         if prediction is None:
             return None
-        detail = self._serialize(prediction)
+        from src.services.verdict_evidence import evidence_statuses
+        detail = self._serialize(prediction,
+                                 evidence_statuses(self.db, [prediction]).get(prediction.id))
         detail.update({
             # 前端"本次验证详情"整块读的是 `verify_history[0]`（19 处绑定），
             # 而后端是按时间**正序**追加的 ⇒ 有过多轮验证的预测（本地镜像 1168 条里
@@ -263,7 +269,7 @@ class PredictionQueryService:
         }
 
     @staticmethod
-    def _serialize(prediction: Prediction) -> Dict[str, Any]:
+    def _serialize(prediction: Prediction, evidence: Optional[str] = None) -> Dict[str, Any]:
         blogger = prediction.blogger
         post = prediction.post
         lifecycle_status = (
@@ -283,6 +289,11 @@ class PredictionQueryService:
         )
         return {
             "id": prediction.id,
+            # "证据已失效"是**派生值**，不落库、不加列（加列＝一次生产迁移，还得有人
+            # 去清）。净值补回来它自己消失，也不会出现"列说有效、表里没那一行"的第二份真值。
+            # 第 16/17 轮查出 250 条结论的端点净值在当前标的的净值表里复现不出来，靠它暴露。
+            "evidence_status": evidence,
+            "evidence_note": _evidence_label(evidence),
             "blogger_id": prediction.blogger_id,
             "blogger_name": blogger.name if blogger else "未知",
             "post_id": prediction.post_id,

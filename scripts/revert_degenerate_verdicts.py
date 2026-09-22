@@ -110,6 +110,25 @@ def find_look_ahead(db):
             if _as_date(p.end_nav_date) > _as_date(p.target_date)]
 
 
+def find_mis_homed(db):
+    """结论是按**改标之前**那只基金判出来的行（第 18 轮，老板批准的处置：撤掉重验）。
+
+    判据只有一份，住在 `src/services/verdict_evidence.py`（前端 ⚠ 标记、审计脚本、
+    漂移闸门共用）。这里只取 `verdict_under_other_fund` 这一族 —— 它能确定"当时挂的是
+    另一个代码、且存的端点净值正是那个代码当天的值"；另外两族（净值被就地改写、
+    当天没有行）留着当派生标记，不撤：它们的结论并没有"判错了标的"，只是今天复现不出来。
+    """
+    from src.services.verdict_evidence import evidence_statuses
+
+    rows = db.query(Prediction).filter(
+        Prediction.is_deleted == False,                       # noqa: E712
+        Prediction.is_correct.isnot(None),
+        Prediction.end_nav.isnot(None),
+        Prediction.end_nav_date.isnot(None)).all()
+    statuses = evidence_statuses(db, rows)
+    return [p for p in rows if statuses.get(p.id) == 'verdict_under_other_fund']
+
+
 def _as_date(value):
     from datetime import datetime
     if isinstance(value, datetime):
@@ -122,6 +141,9 @@ def main():
     ap.add_argument('--apply', action='store_true', help='真正写库（默认只报告）')
     ap.add_argument('--also-report-gate', action='store_true',
                     help='另外报告：新门槛会把多少条历史结论判为"现在不可验"（只读）')
+    ap.add_argument('--include-mis-homed', action='store_true',
+                    help='一并撤掉"按改标前的标的判出来"的结论（第 18 轮老板批准：'
+                         '不删除预测，只退回未验证，由下一次验证按当前标的重判）')
     args = ap.parse_args()
 
     from src.models.database import SessionLocal
@@ -136,10 +158,22 @@ def main():
             print('   id=%-5s %s 目标%s 终点%s 涨跌幅=%.2f%% 判%s'
                   % (p.id, p.fund_code, p.target_date, p.end_nav_date,
                      p.actual_change or 0, '对' if p.is_correct else '错'))
-        damaged_ids = {p.id for p in damaged}
-        combined = [p for p in damaged] + [p for p in look_ahead if p.id not in damaged_ids]
-        print('\n[该撤] 退化终点 %d 条 + 未来函数 %d 条 = %d 条（去重后）'
-              % (len(damaged), len(look_ahead), len(combined)))
+        mis_homed = find_mis_homed(db) if args.include_mis_homed else []
+        if args.include_mis_homed:
+            print('[挂错标的] 结论是按改标之前那只基金判出来的：%d 条'
+                  '（--include-mis-homed 已选，一并退回未验证）' % len(mis_homed))
+            for p in mis_homed[:12]:
+                print('   id=%-5s %s 端点%s=%s 目标%s 判%s'
+                      % (p.id, p.fund_code, p.end_nav_date, p.end_nav, p.target_date,
+                         '对' if p.is_correct else '错'))
+        # 三个来源可能重叠（同一条既退化又挂错标的）⇒ 按 id 去重、保持先退化后挂错的顺序
+        combined, picked = [], set()
+        for p in list(damaged) + list(look_ahead) + list(mis_homed):
+            if p.id not in picked:
+                picked.add(p.id)
+                combined.append(p)
+        print('\n[该撤] 退化终点 %d 条 + 未来函数 %d 条 + 挂错标的 %d 条 = %d 条（去重后）'
+              % (len(damaged), len(look_ahead), len(mis_homed), len(combined)))
         print('[证据扫描] 涨跌幅恒为 0 的已验证结论：%d 条，其中起点终点确证同一条 %d 条、'
               '证不了（多为真平盘）%d 条' % (len(damaged) + len(unsure), len(damaged), len(unsure)))
         for p in combined:

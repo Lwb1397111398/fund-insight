@@ -178,10 +178,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22，第 17 轮修复之后）：
+最近一次核对（2026-09-22，S9 结论证据处置之后）：
 
-- `pytest tests/unit -q` → **720 passed / 16 skipped / 0 failed**（约 136 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **729 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **726 passed / 16 skipped / 0 failed**（约 112 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **735 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛异常。为什么必须这样：`from src.fund import fund_api`
@@ -195,7 +195,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   ② 第 15 轮按台账同步 11 行的标量 `verify_score`（还原脚本漏字段造成"结论与分数打脸"，
   只动分数、不动判对/判错条数）；③ 第 16 轮撤掉 4 条"端点早于目标日、又证不了那几天休市"
   的终局结论（`run_id=revert-lag-endpoint-20260922`），判对 598→597、判错 569→566。
-  拿历史截图/旧导出的准确率数字做对比前先确认是不是这一批。
+  ④ 第 18 轮（S9）把 53 条"按改标前那只基金判出来"的结论退回未验证重判
+  （`run_id=revert-bad-verdicts-20260922-120657`），判对 597→573、判错 566→537。
+  **准确率现在只能当区间报（≈49%~54%）**：另有 197 条（17.7%）端点净值今天复现不出来
+  （净值被就地改写 108 / 当天缺行 89），列表里带 ⚠ 证据已失效标记，补齐后自行消解。
+  拿历史截图/旧导出的准确率数字做对比前先确认是哪一批。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

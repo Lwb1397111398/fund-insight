@@ -268,7 +268,14 @@
                             <tbody>
                                 <tr v-for="p in filteredPredictions" :key="p.id">
                                     <td><span class="sector-tag">{{ p.sector || '-' }}</span></td>
-                                    <td>{{ p.fund_name || p.fund_code || '-' }}</td>
+                                    <td>{{ p.fund_name || p.fund_code || '-' }}
+                                        <!-- 派生自净值表的"证据已失效"标记（第 16/17 轮：全库 250 条结论的
+                                             端点净值在当前标的的净值表里复现不出来）。不隐藏、不删除，
+                                             只如实标注 —— 准确率是推导值，藏起来就等于假装它可信。 -->
+                                        <span v-if="p.evidence_status" class="status-badge warning"
+                                              :title="p.evidence_note"
+                                              style="margin-left:4px;font-size:10px;">⚠ 证据已失效</span>
+                                    </td>
                                     <td>{{ p.blogger_name }}</td>
                                     <td>{{ p.prediction_type === 'up' ? '看涨' : p.prediction_type === 'down' ? '看跌' :
                                         '观望' }}</td>

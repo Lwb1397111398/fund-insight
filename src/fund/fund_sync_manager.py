@@ -34,6 +34,36 @@ class FundSyncManager:
         except (ValueError, TypeError):
             return None
 
+    @staticmethod
+    def retag_prediction(db: Session, pred, new_code: str, new_name: str, *,
+                         source: str = 'fund_sync', run_id: str = None) -> bool:
+        """把预测换到另一个标的上：已有结论的必须同时清掉结论并留痕。
+
+        第 18 轮的实测教训：全库有 53 条结论是按改标**之前**那只基金判出来的
+        （存的端点净值只等于旧码当天的值，例：id=1903 现挂 512170、结论却是 512010
+        在 07-16 的 0.3788）。原因就在这里 —— 这几条改标路径以前既写变更日志都不做，
+        也不清结论，于是"改标（B 功能）"静默把"准确率（A 功能）"的依据换掉了。
+        `scripts/audit_verdict_evidence.py` 报的 `verdict_under_other_fund` 就是这个族。
+
+        返回是否清掉过结论（调用方可以用来计数）。
+        """
+        from src.services.prediction_change_log_service import (
+            add_prediction_change_log, snapshot_prediction)
+        from src.services.prediction_verify_service import clear_verification_fields
+
+        if pred.fund_code == new_code and pred.fund_name == new_name:
+            return False
+        before = snapshot_prediction(pred)
+        had_verdict = pred.is_correct is not None
+        pred.fund_code = new_code
+        pred.fund_name = new_name
+        if had_verdict:
+            # 结论退回未验证：由下一次验证按**新标的**重判，而不是留着旧标的的数
+            clear_verification_fields(pred)
+        add_prediction_change_log(db, pred, action='maintenance_sync', source=source,
+                                  before_state=before, run_id=run_id)
+        return had_verdict
+
     def check_prediction_fund_match(self, db: Session) -> Dict:
         """
         检查预测与基金的匹配情况
@@ -73,16 +103,17 @@ class FundSyncManager:
                 # 自动关联已有基金
                 if not pred.fund_code:
                     fund = fund_sectors[pred.sector_type]
-                    pred.fund_code = fund.fund_code
-                    pred.fund_name = fund.fund_name
+                    # 走统一入口：改标要留痕、有结论要清（见 retag_prediction）
+                    self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
+                                          source='fund_sync_link')
             # 3. 检查sector是否已有基金
             elif pred.sector and pred.sector in fund_sectors:
                 has_match = True
                 # 自动关联已有基金
                 if not pred.fund_code:
                     fund = fund_sectors[pred.sector]
-                    pred.fund_code = fund.fund_code
-                    pred.fund_name = fund.fund_name
+                    self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
+                                          source='fund_sync_link')
             
             if has_match:
                 matched += 1
@@ -165,8 +196,8 @@ class FundSyncManager:
                 # 已有同类型基金，直接关联
                 fund = existing_sectors[sector]
                 if pred.fund_code != fund.fund_code:
-                    pred.fund_code = fund.fund_code
-                    pred.fund_name = fund.fund_name
+                    self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
+                                          source='fund_sync_link')
                     result["linked"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
@@ -265,9 +296,9 @@ class FundSyncManager:
                     existing_sectors[sector] = fund
                     existing_fund_codes[fund.fund_code] = fund
 
-                    # 关联预测
-                    pred.fund_code = fund.fund_code
-                    pred.fund_name = fund.fund_name
+                    # 关联预测（同样走统一入口，别绕过留痕与清结论）
+                    self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
+                                          source='fund_sync_new_fund')
 
                     result["added"] += 1
                     result["linked"] += 1
@@ -501,9 +532,9 @@ class FundSyncManager:
             old_code = pred.fund_code
             old_name = pred.fund_name
 
-            # 更新预测的基金关联
-            pred.fund_code = mapping['code']
-            pred.fund_name = mapping['name']
+            # 更新预测的基金关联：走统一入口（留痕 + 清掉旧标的判出的结论）
+            self.retag_prediction(db, pred, mapping['code'], mapping['name'],
+                                  source='fund_sync_sector_map')
             result["predictions_updated"] += 1
 
             detail = {

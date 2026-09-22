@@ -294,20 +294,14 @@ def main():
     rows, deferred = _sample(probe, Prediction, args.limit, wanted, offline=args.offline)
     if args.offline:
         # 端点证据已经与"当前标的的净值表"对不上的行，重放必然判得不同 —— 那是数据问题
-        # （见 scripts/audit_verdict_evidence.py），不是判据回归。继续放进比对只会把
-        # 真信号埋掉，所以同样**让出并如实报数**（第 17 轮 MAJOR：闸门不得吞方向翻转，
-        # 但也不该拿失效证据当漂移）。
-        from audit_verdict_evidence import verdict_evidence_is_stale
-        from src.models.database import FundHistory as _FH
+        # （判据住在 `src/services/verdict_evidence.py`，与前端标记、每日跑批共用一份），
+        # 不是判据回归。继续放进比对只会把真信号埋掉（第 17 轮 MAJOR：上一轮
+        # "未解释 1"里藏着 9 条方向翻转），所以**让出并如实报数**：既不解释也不计分母。
+        from src.services.verdict_evidence import evidence_statuses
 
-        stale = []
-        keep = []
-        for p in rows:
-            end_row = probe.query(_FH).filter(
-                _FH.fund_code == p.fund_code,
-                _FH.nav_date == p.end_nav_date).first() if p.end_nav_date else None
-            (stale if verdict_evidence_is_stale(p, end_row) else keep).append(p)
-        rows = keep
+        statuses = evidence_statuses(probe, rows)
+        stale = [p for p in rows if statuses.get(p.id)]
+        rows = [p for p in rows if not statuses.get(p.id)]
         if stale:
             print('[离线] 让出 %d 条"端点证据已与当前标的对不上"的预测（数据侧缺陷，'
                   '重放判不同属正常）：%s' % (len(stale), [p.id for p in stale][:20]))
