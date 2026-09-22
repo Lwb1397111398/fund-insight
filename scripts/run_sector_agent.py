@@ -49,7 +49,7 @@ def main():
     ap.add_argument('--out', default=os.path.join(ROOT, 'data', 'agent_probe.json'))
     args = ap.parse_args()
 
-    _db_guard.pin_local_sqlite()
+    _db_guard.pin_local_sqlite(use_mirror_default=True)
     from src.services.sector_fund_agent import resolve_sector_fund
 
     sectors = collect_sectors(args) or []

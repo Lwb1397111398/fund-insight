@@ -447,3 +447,29 @@ def test_rollback_retag_is_recoverable_with_the_advertised_run_id(test_db):
     test_db.refresh(rows[0])
     assert rows[0].fund_code == 'GOOD11'
     assert rows[0].fund_name in ('机器人ETF', ''), rows[0].fund_name
+
+
+def test_retag_destination_is_not_an_unservable_row(test_db):
+    """第 22 轮 MAJOR-2：SQL 粗筛只看列，"改标的去处"还得过一次唯一判据。
+
+    `servable_predicate()` 把 `is_fetchable IS NULL` 一律当可服务，而"不可服务"还有
+    第二个事实源（`evidence.identity.verdict`）⇒ 不过一遍的话，被 verdict 否掉的行
+    会被当成"可服务的替代标的"交出去，正好把上一轮修的洞从另一头再打开。
+    """
+    import json
+
+    ghost = _mapping(test_db, sector_name='R22去处', fund_code='GHOST9',
+                     fund_name='名字像基金其实不是', reviewed=True, is_fetchable=None,
+                     evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}))
+    good = _mapping(test_db, sector_name='R22去处', fund_code='GOOD22',
+                    fund_name='机器人ETF', reviewed=False)
+    from src.services.sector_identity_audit import row_unservable, servable_predicate
+    assert row_unservable(ghost) is True
+    assert servable_predicate() is not None, '前置：SQL 侧那道粗筛确实放行它'
+
+    _mapping(test_db, sector_name='R22去处', fund_code='BAD022',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    prediction = _prediction_with_code(test_db, 'BAD022', 'R22去处')
+    code, _name = PredictionVerifyService(test_db).match_fund_for_prediction(prediction)
+    assert code == 'GOOD22', \
+        '第 3 步把被 verdict 否掉的 GHOST9 当成了可服务的替代标的（SQL 粗筛说了算）'

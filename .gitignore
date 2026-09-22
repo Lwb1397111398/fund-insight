@@ -83,3 +83,8 @@ scripts/_tmp_*.py
 
 # 临时实验产物
 /lab4.json
+
+# 评审/探针跑出来的逐行体检 CSV：每次跑都换时间戳，入库只会淹没真实变更
+# （第 18 轮 2202119 清理过一次，第 22 轮 `git add -A` 又扫进来 5 份）
+docs/迭代计划/run-*/fund-info-identity-*.csv
+docs/迭代计划/run-*/*probe*.csv

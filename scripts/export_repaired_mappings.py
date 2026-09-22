@@ -78,7 +78,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--check', action='store_true', help='只校验既有清单，不重写')
     args = ap.parse_args()
-    url = _db_guard.pin_local_sqlite()
+    url = _db_guard.pin_local_sqlite(use_mirror_default=True)
     assert url.startswith('sqlite'), url
     from src.models.database import SessionLocal
     db = SessionLocal()

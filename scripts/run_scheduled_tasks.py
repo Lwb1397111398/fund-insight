@@ -86,7 +86,9 @@ def run_daily_tasks() -> dict:
                 age_days = (datetime.now() - max(stamps)).days
             # 第 21 轮 MINOR：以前 `if stamps:` 之外一律不响 —— 全表从未体检时 age=None，
             # 恰恰是最该告警的那种"从来没查过"，被静默掉了；`never_audited` 自己也不触发。
-            if age_days is None or age_days > stale_limit or never_audited:
+            active_total = len(stamps) + never_audited
+            if active_total and (age_days is None or age_days > stale_limit
+                                 or never_audited):
                 logger.warning(
                     "板块映射的身份体检结论不新鲜：最新一条 verified_at 距今 %s，"
                     "另有 %d/%d 行从未体检（阈值 %d 天）。"

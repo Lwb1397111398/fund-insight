@@ -471,7 +471,7 @@ def main():
     ap.add_argument('--max-upgrade', type=int, default=8, help='允许场内 ETF 升级的条数上限')
     args = ap.parse_args()
 
-    db_url = _db_guard.pin_local_sqlite()
+    db_url = _db_guard.pin_local_sqlite(use_mirror_default=True)
     db_path = db_url.split('sqlite:///')[-1].replace('\\', '/')
     from src.models.database import SessionLocal, SectorFundMapping
     from src.services.sector_identity_audit import (

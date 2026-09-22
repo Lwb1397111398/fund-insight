@@ -450,3 +450,61 @@ def test_manifest_write_failure_still_reports_created_codes():
     main_src = inspect.getsource(sweep.main)
     # D5：中途失败必须让进程非 0 退出，否则 CI/老板看到"跑完了"就当成功
     assert 'exit_code = 6' in main_src
+
+
+def _guard_case(tmp_path, code, env):
+    """把 `_db_guard.ROOT` 指到一个只放 `.env` 的临时根目录上。
+
+    必须这样造：仓库根的 `.env` 是**真生产串**，测试不能依赖它的内容，也不能把它改掉。
+    """
+    (tmp_path / '.env').write_text('DATABASE_URL=%s\n' % FAKE_PROD_URL, encoding='utf-8')
+    return _run('import sys; sys.path.insert(0, "scripts"); import _db_guard;'
+                '_db_guard.ROOT = r"%s"; %s' % (str(tmp_path), code), env)
+
+
+def test_db_guard_notices_a_remote_url_that_only_lives_in_dotenv(tmp_path):
+    """第 22 轮 MAJOR-3：`.env` 里的远程 URL 在这一步还没进进程环境。
+
+    评审的探针就是这样：**设了** LOCAL_DB_URL 也被静默忽略，"只操作本地镜像库"的脚本
+    把写操作落进了 data/fund_insight.db。守卫跑在 `src.core.config` 之前，所以它自己
+    得会读 `.env`。
+    """
+    out = _guard_case(tmp_path, 'print(_db_guard.pin_local_sqlite())',
+                      {'DATABASE_URL': '', 'LOCAL_DB_URL': ''})
+    assert out.returncode == 4, out.stdout + out.stderr
+    assert '指向非 SQLite' in out.stdout, out.stdout
+
+
+def test_db_guard_honors_local_override_even_when_only_dotenv_is_remote(tmp_path):
+    """同一处事故的另一半：`LOCAL_DB_URL` 必须无条件赢过 `.env` 里的远程库。"""
+    target = str(tmp_path / 'mirror.db')
+    out = _guard_case(tmp_path, 'print(_db_guard.pin_local_sqlite())',
+                      {'DATABASE_URL': '', 'LOCAL_DB_URL': target})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert 'mirror.db' in out.stdout, out.stdout
+    assert out.stdout.startswith('[env] DATABASE_URL = sqlite:///'), out.stdout
+
+
+def test_column_only_sql_predicate_cannot_be_the_only_guard(tmp_path):
+    """`servable_predicate()` 只看列 ⇒ "库里有、模型没声明"的东西必须被**报出来**。
+
+    第 22 轮：生产那条 `sector_fund_mapping_sector_name_key UNIQUE(sector_name)`
+    被上一版的"`*_key` / `unique` 一刀切"过滤器藏掉了，两份评审因此互相矛盾、
+    我得直连 `pg_constraint` 才查清。一个会藏事实的闸门比没有闸门更糟。
+    """
+    import importlib
+
+    sync = importlib.import_module('sync_db_columns')
+    import sqlalchemy as sa
+    from src.models.database import Base
+
+    url = 'sqlite:///' + (tmp_path / 'drill.db').as_posix()
+    engine = sa.create_engine(url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        # 造一条模型里没有声明的唯一索引（= 生产那条约束在 SQLite 里的等价形状）
+        conn.execute(sa.text('CREATE UNIQUE INDEX sector_fund_mapping_sector_name_key '
+                             'ON sector_fund_mapping (sector_name)'))
+    found = dict(sync.extra_objects(engine))
+    assert found.get('index') == 'sector_fund_mapping.sector_fund_mapping_sector_name_key', \
+        '未声明的唯一索引被静默 ⇒ stamp 闸门以为一切正常：%s' % (sorted(found.items()),)

@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 from _db_guard import pin_local_sqlite  # noqa: E402
 
 # 注意：本模块** import 时不碰数据库、不 import ORM** —— 单测要直接 import
-# `find_desynced` 这条纯判据，而 `pin_local_sqlite()` 一旦放在模块顶层就会在
+# `find_desynced` 这条纯判据，而 `pin_local_sqlite(use_mirror_default=True)` 一旦放在模块顶层就会在
 # 测试进程里改 DATABASE_URL。连接动作留在 main() 里，顺序仍是"先钉库再 import ORM"。
 
 
@@ -124,7 +124,7 @@ def main():
     ap.add_argument('--run-id', help='change log 批次号，默认 verify-score-resync-<今天>')
     args = ap.parse_args()
 
-    pin_local_sqlite()
+    pin_local_sqlite(use_mirror_default=True)
     from src.models.database import Prediction
 
     wanted = None

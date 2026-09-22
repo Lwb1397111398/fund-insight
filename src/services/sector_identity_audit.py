@@ -668,7 +668,7 @@ _deny_state = {'at': 0.0, 'map': {}, 'loaded': False}
 _deny_lock = threading.Lock()
 
 
-def denied_code_map(refresh: bool = False, db=None) -> Dict[str, set]:
+def denied_code_map(refresh: bool = False, db=None, sectors=None) -> Dict[str, set]:
     """`{板块名: {体检判不可服务的代码}}`——静态表 `SECTOR_FUND_MAP` 没有 is_fetchable 列，
     映射行被降级后板块会悄悄回落到它，所以拒绝集必须也能挡住静态表。
 
@@ -683,10 +683,15 @@ def denied_code_map(refresh: bool = False, db=None) -> Dict[str, set]:
         # 于是"列没写、但 evidence 里的 verdict 已是否定"的行在静态表这一步又能溜过去
         # —— 同一个"不可服务"库里存在第四把尺子（第 21 轮 MAJOR-2）。
         # 镜像今天背离 0 行，所以这是个潜伏口，不是今天的故障。
-        rows = db.query(SectorFundMapping).filter(
-            SectorFundMapping.is_active == True).all()               # noqa: E712
+        # `sectors` 是给热读路径的收窄：以前每次都要整表 ORM（145 行 + 搬 evidence），
+        # 实测 9.19ms/call vs 旧的 2 列 0.85ms，生产网络下 1151ms vs 315ms
+        # —— 修判据不该把读路径变成新瓶颈（第 22 轮 MAJOR-2）。
+        query = db.query(SectorFundMapping).filter(
+            SectorFundMapping.is_active == True)                      # noqa: E712
+        if sectors:
+            query = query.filter(SectorFundMapping.sector_name.in_(list(sectors)))
         mapping: Dict[str, set] = {}
-        for row in rows:
+        for row in query.all():
             if row.sector_name and row.fund_code and row_unservable(row):
                 mapping.setdefault(row.sector_name, set()).add(row.fund_code)
         return mapping
@@ -731,16 +736,22 @@ def rejected_codes(sector: str, db=None) -> set:
     159819 对"应用"是错的、对"AI"是对的）。"""
     if not sector:
         return set()
-    out = set(denied_code_map(db=db).get(sector) or ())
+    out = set()
     try:
         from src.constants.sector_fund_map import normalize_sector_name
         norm = normalize_sector_name(sector)
     except Exception:
         norm = sector
-    if norm and norm != sector:
-        # 归一后的键必须查**同一个库**：漏传 db 会让这一支去查进程级缓存指向的
-        # 另一个数据库（测试/临时库里直接失效）
-        out |= set(denied_code_map(db=db).get(norm) or ())
+    keys = [sector] + ([norm] if norm and norm != sector else [])
+    # 归一后的键必须查**同一个库**：漏传 db 会让这一支去查进程级缓存指向的
+    # 另一个数据库（测试/临时库里直接失效）
+    if db is not None:
+        cached = denied_code_map(db=db, sectors=keys)
+        for key in keys:
+            out |= set(cached.get(key) or ())
+        return out
+    for key in keys:
+        out |= set(denied_code_map(db=db).get(key) or ())
     return out
 
 

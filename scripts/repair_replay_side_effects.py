@@ -2,7 +2,7 @@
 """修掉一次**我自己造成的**污染：重放脚本误写进了本地镜像库。
 
 事故经过（必须写在这里，别只留在聊天记录里）：
-`scripts/replay_verifications_on_copy.py` 首版在 `pin_local_sqlite()` 之后就
+`scripts/replay_verifications_on_copy.py` 首版在 `pin_local_sqlite(use_mirror_default=True)` 之后就
 `from src.models.database import ...` —— engine 在 import 那一刻已经绑定到
 `data/fund_insight.db`，之后再把 `os.environ['DATABASE_URL']` 改指副本**是无效的**。
 于是那两次号称"在副本上重放"的运行，实际把镜像库里 88 条已验证预测的
@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
 from _db_guard import pin_local_sqlite  # noqa: E402
 
-pin_local_sqlite()
+pin_local_sqlite(use_mirror_default=True)
 
 from src.models.database import Prediction  # noqa: E402
 from src.services.prediction_change_log_service import (  # noqa: E402

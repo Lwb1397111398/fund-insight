@@ -105,7 +105,7 @@ def main():
         ROOT, 'docs', '迭代计划', 'run-2026-09-20', 'calibration.md'))
     args = ap.parse_args()
 
-    _db_guard.pin_local_sqlite()
+    _db_guard.pin_local_sqlite(use_mirror_default=True)
     gold = load_gold()
     if args.limit:
         gold = gold[:args.limit]

@@ -11,7 +11,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import _db_guard  # noqa: E402
 
-_db_guard.pin_local_sqlite()   # 生产 Supabase 连接串在本进程一律作废（只读探针，不写库）
+_db_guard.pin_local_sqlite(use_mirror_default=True)   # 生产 Supabase 连接串在本进程一律作废（只读探针，不写库）
 
 from src.models.database import SessionLocal, SectorFundMapping  # noqa: E402
 from src.services.sector_identity_audit import (  # noqa: E402

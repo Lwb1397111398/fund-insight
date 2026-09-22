@@ -87,18 +87,29 @@ def extra_objects(engine):
             if col['name'] not in model_cols:
                 extras.append(('column', '%s.%s' % (table.name, col['name'])))
         model_idx = {i.name for i in table.indexes}
-        declared = {c.get('name') for c in insp.get_unique_constraints(table.name)}
+        # 按**列集合**比，不按名字：`unique=True` 与 UniqueConstraint 在库里的索引名是
+        # 数据库自己生成的（`fund_info_fund_code_key` 这种），按名字比必然全军覆没。
+        # 第 22 轮的教训是反过来的那一半：上一版按 `*_key`/`unique` 一刀切跳过，
+        # 把生产那条**模型真没声明**的 `sector_fund_mapping_sector_name_key UNIQUE(sector_name)`
+        # 也藏掉了 —— 两份评审因此互相矛盾，我最后直连 `pg_constraint` 才查清。
+        declared = {frozenset(c.name for c in getattr(con, 'columns', []) or [])
+                    for con in table.constraints}
+        declared |= {frozenset([col.name]) for col in table.columns if col.unique}
+        declared |= {frozenset(c.name for c in idx.columns) for idx in table.indexes
+                     if idx.unique}
+        declared.discard(frozenset())
         for idx in insp.get_indexes(table.name):
-            name = idx['name']
-            if name in model_idx or name in declared:
+            if idx['name'] in model_idx or idx['name'].endswith('_pkey'):
                 continue
-            # 主键与唯一约束在主库里的**实现形态就是索引**（`<表>_pkey` / `*_key`），
-            # 模型侧用 primary_key=True / UniqueConstraint 声明，不进 `table.indexes`。
-            # 不过滤的话这里每次都报出一堆"可疑对象"、`--stamp-head` 的闸门永远拒绝
-            # —— 一个从不放行的闸门和没有闸门一样没用（第 21 轮 MAJOR-3 的自查）。
-            if idx.get('unique') or name.endswith(('_key', '_pkey', '_constraint')):
+            cols = frozenset(idx.get('column_names') or [])
+            if idx.get('unique') and cols in declared:
                 continue
-            extras.append(('index', '%s.%s' % (table.name, name)))
+            extras.append(('index', '%s.%s' % (table.name, idx['name'])))
+        for con in insp.get_unique_constraints(table.name):
+            cols = frozenset(con.get('column_names') or [])
+            if cols and cols not in declared:
+                extras.append(('unique 约束', '%s.%s(%s)'
+                               % (table.name, con.get('name'), ','.join(sorted(cols)))))
     return extras
 
 

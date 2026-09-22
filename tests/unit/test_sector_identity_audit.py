@@ -532,7 +532,7 @@ def test_rejected_codes_never_falls_back_to_the_process_cache(test_db, monkeypat
     归一化分支以前漏传 db，两处查的是两个库——这条测试用 strict 包装把这类
     "忘记带 session"的改动直接变成红灯。
     """
-    def strict(refresh=False, db=None):
+    def strict(refresh=False, db=None, sectors=None):
         if db is None:
             raise AssertionError('拒绝集查询没带 session：会读到另一个数据库')
         return real(refresh=refresh, db=db)

@@ -38,7 +38,7 @@ def main():
     ap.add_argument('--tag', default='sync')
     args = ap.parse_args()
 
-    _db_guard.pin_local_sqlite()
+    _db_guard.pin_local_sqlite(use_mirror_default=True)
     from src.models.database import SessionLocal
     from src.services.prediction_maintenance_service import PredictionMaintenanceService
 

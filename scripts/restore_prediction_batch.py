@@ -87,7 +87,7 @@ def main():
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
 
-    _db_guard.pin_local_sqlite()
+    _db_guard.pin_local_sqlite(use_mirror_default=True)
     from datetime import datetime
 
     from src.models.database import Prediction, PredictionChangeLog, SessionLocal

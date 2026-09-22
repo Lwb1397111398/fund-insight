@@ -129,7 +129,7 @@ def main():
                     help='允许多少条"证据已失效"的结论；超过就退码 3（默认 0）')
     args = ap.parse_args()
 
-    pin_local_sqlite()                       # 必须在任何 ORM import 之前
+    pin_local_sqlite(use_mirror_default=True)                       # 必须在任何 ORM import 之前
     from datetime import date
     from src.models.database import SessionLocal
 

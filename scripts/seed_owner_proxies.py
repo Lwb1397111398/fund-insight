@@ -36,7 +36,7 @@ def main():
               '脚本也不例外）。只看计划请加 --dry-run。')
         return 4
 
-    _db_guard.pin_local_sqlite()
+    _db_guard.pin_local_sqlite(use_mirror_default=True)
     from src.models.database import FundInfo, SectorFundMapping, SessionLocal
     from src.services.sector_fund_agent import DELIBERATE_PROXIES
 

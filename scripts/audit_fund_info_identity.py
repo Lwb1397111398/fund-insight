@@ -47,7 +47,7 @@ def main():
     ap.add_argument('--limit', type=int, default=None, help='只处理前 N 行（先在云上小批试）')
     args = ap.parse_args()
 
-    _db_guard.pin_local_sqlite()
+    _db_guard.pin_local_sqlite(use_mirror_default=True)
     from src.models.database import SessionLocal, FundInfo
     from src.services.sector_identity_audit import arbitrate_mapping
 

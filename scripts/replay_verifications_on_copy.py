@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 from _db_guard import pin_local_sqlite  # noqa: E402
 
 # 钉库动作放在 main() 里：本模块的 `_explain` 要被单测直接 import，
-# 顶层调用 `pin_local_sqlite()` 会在测试进程里改 DATABASE_URL。
+# 顶层调用 `pin_local_sqlite(use_mirror_default=True)` 会在测试进程里改 DATABASE_URL。
 
 # 首版在这里 `from src.models.database import ...` —— **那是事故根源**：
 # SQLAlchemy 的 engine 在 import 那一刻就按当时的 DATABASE_URL 建好并绑死，
@@ -218,7 +218,7 @@ def main():
     ap.add_argument('--json', help='把逐条对照写成 JSON')
     args = ap.parse_args()
 
-    src = _sqlite_path(pin_local_sqlite())     # 必须在 import ORM 之前
+    src = _sqlite_path(pin_local_sqlite(use_mirror_default=True))     # 必须在 import ORM 之前
     if not os.path.exists(src):
         print('[abort] 找不到源库：%s' % src)
         return 4

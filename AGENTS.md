@@ -176,6 +176,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 - 不要回滚用户已有改动；当前工作树可能已有未提交文件。
 - 不要手改 `.codegraph/codegraph.db`；需要时运行 `codegraph sync .`。
 - 数据库结构变更、删除/迁移大量文件、改部署配置、改公共接口、移除依赖等高风险操作必须先确认。
+- **本地镜像类脚本必须显式写 `pin_local_sqlite(use_mirror_default=True)`**：`.env` 指向生产，
+  守卫现在会读 `.env`，不设这个显式参数就会 abort（第 22 轮评审的探针就是靠"看不见 .env"
+  把写操作落进了 `data/fund_insight.db`）。一次性探针不设该参数 ⇒ 会被拦下，这是有意的。
 - `src/analyzer/llm_analyzer.py`、`src/models/database.py`、`src/services/prediction_verify_service.py`、`src/api/main.py`、`web/index.html` 是高风险区域，先读测试和调用方再动。
 - 文档类改动也要跑最小验证或至少格式/链接/命令检查。
 
@@ -191,8 +194,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 最近一次核对（2026-09-22，第 18 轮修复之后）：
 
-- `pytest tests/unit -q` → **747 passed / 16 skipped / 0 failed**（约 120 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **756 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **751 passed / 16 skipped / 0 failed**（约 187 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **760 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
@@ -245,10 +248,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （第 19 轮 MAJOR-1：`blogger_stats` 按 `verify_count>0` 现算，本轮判完只给 `verified_delta=+1`
   ⇒ 同一行在"已验证数"里计两次）。配套用例读的是**表里的列**而不是会话对象——后者会被
   `recalculate_blogger_stats(commit=False)` 顺手改掉，比较起来永远为真（我这个写法被两份复评共同指出）。
-  **这条改标腿能触发的前提是"同板块还有另一只可服务的代码"**：镜像与生产都是每个板块只登记一行
-  （生产另有模型未声明的 `sector_fund_mapping_sector_name_key UNIQUE(sector_name)` 挡着第二行），
-  所以真正常见的结果是**解析不出别的标的 ⇒ 直接拒绝验证**（也不再按不可服务的代码判），
-  而不是改标。两种都安全，但报数别说成"改标已生效"：镜像今天 0 行被判不可服务 ⇒ 两条腿今天都是 0 命中。
+  **这条改标腿能触发的前提是"同板块还有另一只可服务的代码"**。今天两边都只有 1 行/板块
+  （镜像 145 行 = 145 板块、生产 118 = 118），而**生产多一条模型没声明的**
+  `sector_fund_mapping_sector_name_key UNIQUE(sector_name)`（镜像没有，2026-09-22 直连
+  `pg_constraint` 实测；`scripts/sync_db_columns.py` 现在会把这种"库里有、模型没声明"的对象报出来）。
+  ⇒ 后果一：真正常见的结局是**解析不出别的标的 ⇒ 直接拒绝验证**（同样不再按不可服务的代码判），
+  不是改标；两种都安全，但报数别说成"改标已生效"（今天 0 行被判不可服务 ⇒ 两条腿都是 0 命中）。
+  ⇒ 后果二（S6 回写要记住）：任何"给同一板块再加一行"的写入在**生产会撞唯一约束**、在镜像却静默成功，
+  所以清单在镜像演练通过不等于生产能过。撤这条约束属结构变更，要老板点头。
   姊妹入口 `rollback_invalid_verifications` 反过来：**标的已漂移的行只数不撤**
   （`data['code_diverged']`，第 19 轮 MAJOR-3：不许用"另一只基金缺净值"这种无关理由撤掉 A 的结论）。
 - 准确率报表另有派生标记 `evidence_status`（不加列、不落库）：`python scripts/audit_verdict_evidence.py`

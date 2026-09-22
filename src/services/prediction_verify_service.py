@@ -916,13 +916,19 @@ class PredictionVerifyService:
             from src.constants.sector_fund_map import normalize_sector_name
             from src.services.sector_identity_audit import servable_predicate as _servable_predicate
             standard_sector = normalize_sector_name(sector)
-            mapping = self.db.query(SectorFundMapping).filter(
+            candidates = self.db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == standard_sector,
                 SectorFundMapping.is_active == True,          # noqa: E712
-                _servable_predicate(),                        # 身份体检不通过的行不再当标的
+                _servable_predicate(),                        # SQL 粗筛（便宜，只看列）
             ).order_by(SectorFundMapping.reviewed.desc().nulls_last(),   # 已审查优先
-                       SectorFundMapping.id.asc()).first()
-            if mapping and mapping.fund_code:
+                       SectorFundMapping.id.asc()).all()
+            # 粗筛之后必须再过一次**唯一判据**：`servable_predicate()` 把 `is_fetchable IS
+            # NULL` 一律当可服务，而"不可服务"还有第二个事实源（`evidence.identity.verdict`）
+            # ⇒ 不过一遍的话，"改标的去处"可能正是那只被 verdict 否掉的代码（第 22 轮 MAJOR-2）。
+            from src.services.sector_identity_audit import row_unservable as _row_unservable
+            for mapping in candidates:
+                if not mapping.fund_code or _row_unservable(mapping):
+                    continue
                 fund_name = mapping.fund_name or ''
                 if not any(kw in fund_name for kw in excluded_keywords):
                     return mapping.fund_code, fund_name
@@ -987,7 +993,9 @@ class PredictionVerifyService:
             self.db, prediction, fund_code, fund_name,
             source=source, run_id=run_id, touched_bloggers=touched_bloggers)
         if not commit:
-            return cleared
+            # 返回的是"这次动不动了"，不是"有没有清结论"：调用方拿它计数，
+            # 口径必须和 dry-run / commit=True 两条一致（第 22 轮 MINOR-4）
+            return True
         # 单条验证：改标是一次真实的决定，不取决于本轮验证能不能判完
         # （可能因为"净值没出"提前返回），所以这里必须自己提交。
         self.db.commit()

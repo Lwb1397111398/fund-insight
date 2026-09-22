@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _db_guard import pin_local_sqlite  # noqa: E402  必须先于任何 ORM 导入
 
-pin_local_sqlite()
+pin_local_sqlite(use_mirror_default=True)
 
 from src.models.database import Prediction  # noqa: E402
 from src.services.prediction_verify_service import PredictionVerifyService  # noqa: E402

@@ -30,7 +30,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true')
     args = ap.parse_args()
-    url = _db_guard.pin_local_sqlite()
+    url = _db_guard.pin_local_sqlite(use_mirror_default=True)
     assert url.startswith('sqlite'), url
     if not os.path.exists(BACKUP):
         print('[abort] 备份不在：%s —— 停止，不猜理由' % BACKUP)

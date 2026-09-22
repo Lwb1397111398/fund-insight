@@ -237,20 +237,22 @@
                 // 预览是全库扫出来的，不设界就等于把"allow_full_sweep"藏进按钮里：
                 // 这里只提交后端允许的一次上限，剩下的明确告诉用户要去脚本处理。
                 const cap = 200;
-                // 预览里现在混着两类动作：撤结论（would_rollback）与**改标并清掉旧结论**
+                // 预览里现在混着两类动作：撤结论（无 action 键）与改标并清掉旧结论
                 // （would_retag，第 20 轮把"漂移行没人管"补上的）。按钮以前只说"修改资料"，
                 // 老板不知道点下去会换标的（第 21 轮 MAJOR-5）。
-                const wouldRetag = rows.filter(r => r.action === 'would_retag').length;
-                const willRollback = rows.length - wouldRetag;
+                // 先按 cap 截断再计数：以前第一句按整份预览报数、却只提交前 200 条，
+                // 老板看到的数字和真正发生的动作不是一回事（第 22 轮 MINOR-7）。
+                if (rows.length > cap &&
+                    !confirm(`预览有 ${rows.length} 条，一次只处理前 ${cap} 条，` +
+                             `剩下的请走脚本（scripts/revert_degenerate_verdicts.py）。继续吗？`)) return;
+                const batch = rows.slice(0, cap);
+                const wouldRetag = batch.filter(r => r.action === 'would_retag').length;
+                const willRollback = batch.length - wouldRetag;
                 const actionText = wouldRetag
-                    ? `其中 ${willRollback} 条撤掉验证结论、${wouldRetag} 条会**换成体检可服务的基金标的并清掉按旧标的判出的结论**`
+                    ? `其中 ${willRollback} 条撤掉验证结论，${wouldRetag} 条会换成体检可服务的基金标的、并清掉按旧标的判出的结论`
                     : `将撤掉 ${willRollback} 条预测的验证结论`;
                 if (!confirm(`即将执行"无效验证回溯"（只处理刚预览过的这些行）：\n\n${actionText}。\n\n确认继续？`)) return;
-                if (rows.length > cap) {
-                    if (!confirm(`预览有 ${rows.length} 条，一次只处理前 ${cap} 条，` +
-                                 `剩下的请走脚本（scripts/revert_degenerate_verdicts.py）。继续吗？`)) return;
-                }
-                ids = rows.slice(0, cap).map(r => r.prediction_id).filter(Boolean).join(',');
+                ids = batch.map(r => r.prediction_id).filter(Boolean).join(',');
                 if (!ids) {
                     alert('预览数据里没有可用的预测 id，请重新点"预览"。');
                     return;
