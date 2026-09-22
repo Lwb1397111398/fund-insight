@@ -121,7 +121,7 @@ def classify(entries, by_code, sector_keys, proxy_allowed=None, d1_words=None):
     """
     proxy_allowed = proxy_allowed or {}
     d1_words = d1_words or {}
-    buckets = {'A_查无此码': [], 'R_字面命中': [], 'D1_另有更对口': [],
+    buckets = {'A_查无此码': [], 'R_字面命中': [], 'R1_弱命中有同名': [], 'D1_另有更对口': [],
                'D2_主题冲突嫌疑': [], 'D3_可能是合法代理': [], 'E_已登记代理': []}
     for sector, entry in entries.items():
         code = (entry or {}).get('code')
@@ -131,8 +131,13 @@ def classify(entries, by_code, sector_keys, proxy_allowed=None, d1_words=None):
             buckets['A_查无此码'].append((sector, code, label, '', '名册里没有这个代码'))
             continue
         variants = sector_variants(sector)
-        relevant = is_relevant(sector, official)
-        if not relevant:
+        kind = relevance_kind(sector, official)
+        relevant = kind is not None
+        # 第 28 轮 I-MAJOR：原来写 `if not relevant:`，于是"只共用一个汉字"的弱命中
+        # 也算 relevant、从来不去查"名册里另有含整词的同名基金" ⇒ 13 条弱命中里 11 条
+        # 就此隐身（`建材→基建ETF` 而名册里有 `159745 建材ETF国泰`）。
+        # 核心词命中的才真的不用再找：现挂这只本身就含该词。
+        if kind != 'core':
             better = {d1_words[v] for v in variants if v in d1_words}
             # 名册里**别的**含该词的基金（`by_code` 线上是全量 2.79 万，离线是夹具那几十只）。
             # 这里不能写 `'%s:%s' % (code, official)` —— 那是把自己当成"更对口的候选"，
@@ -141,6 +146,8 @@ def classify(entries, by_code, sector_keys, proxy_allowed=None, d1_words=None):
                        if c != code
                        and any(v in ((n or {}).get('name') or '') for v in variants)}
             better = sorted(b for b in better if b.split(':')[0] != code)
+        else:
+            better = []
         # 官方名自己就是"另一个板块"的字面代表 ⇒ 不可能是"没有更好选择"的代理
         other = [s for s in sector_keys
                  if s != sector and is_relevant(s, official)]
@@ -154,11 +161,16 @@ def classify(entries, by_code, sector_keys, proxy_allowed=None, d1_words=None):
                                          '登记了代理，但官方名其实字面命中'))
             continue
         if relevant:
-            weak = relevance_kind(sector, official) == 'char'
-            buckets['R_字面命中'].append((
-                sector, code, label, official,
-                '只与板块共用一个汉字（弱命中，不等于"已核对"）' if weak
-                else '官方名含板块核心词'))
+            if kind == 'char' and better:
+                # 只共一个汉字、而名册里另有含整词的同名基金 ⇒ 单独一桶，别混进"已核对"
+                buckets['R1_弱命中有同名'].append((
+                    sector, code, label, official,
+                    '只共用一个汉字，名册里有含整词的同名标的：%s' % '、'.join(better[:3])))
+            else:
+                buckets['R_字面命中'].append((
+                    sector, code, label, official,
+                    '只与板块共用一个汉字（弱命中，不等于"已核对"）' if kind == 'char'
+                    else '官方名含板块核心词'))
         elif better:
             buckets['D1_另有更对口'].append((sector, code, label, official,
                                             '名册里有含该词的基金：%s' % '、'.join(better[:3])))
@@ -382,9 +394,15 @@ def main():
             tot = sum(live.get(s) or 0 for s, *_ in rows)
             print('   —— 本桶合计牵动 %d 条活预测' % tot)
     print('\n== 标签与官方名不符：%d 条' % len(bad_labels))
-    weak_rows = [r for r in buckets['R_字面命中'] if r[4].startswith('只与板块共用')]
-    print('\n== R 桶里只靠"共用一个汉字"过关：%d 条 ⇒ 这些不等于"已核对"'
+    r1_rows = buckets['R1_弱命中有同名']
+    weak_rows = ([r for r in buckets['R_字面命中'] if r[4].startswith('只与板块共用')]
+                 + r1_rows)
+    print('\n== 只靠"共用一个汉字"过关：%d 条 ⇒ 这些不等于"已核对"'
           % len(weak_rows))
+    if r1_rows:
+        print('   其中 %d 条名册里另有**含整词的同名标的**（R1 桶，换不换由人判）：' % len(r1_rows))
+        for sector, _code, _label, official, evidence in r1_rows:
+            print('     %-8s 现挂 %-22s %s' % (sector, official, evidence))
     if weak_rows:
         print('   ' + '、'.join('%s→%s' % (r[0], r[3]) for r in weak_rows))
     for sector, code, label, official, evidence in bad_labels:
@@ -429,8 +447,9 @@ def main():
               '改完跑 --emit-fixture 刷新守护夹具')
         return 5
     print('\n[干净] 静态表 %d 条：无 A/D1/D2/D3，标签全部与官方名一致'
-          '（R 桶 %d 条里有 %d 条只靠共字过关 ⇒ 那部分没被核对过）'
-          % (len(SECTOR_FUND_MAP), len(buckets['R_字面命中']), len(weak_rows)))
+          '（字面过关 %d 条里有 %d 条只靠共字 ⇒ 没被核对过，其中 %d 条名册里另有同名标的已单列 R1）'
+          % (len(SECTOR_FUND_MAP), len(buckets['R_字面命中']) + len(r1_rows),
+             len(weak_rows), len(r1_rows)))
     return 0
 
 

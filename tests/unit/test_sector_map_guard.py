@@ -184,12 +184,23 @@ def test_weak_literal_hits_are_labeled_as_weak(roster):
     assert audit.relevance_kind('半导体', '半导体ETF国联安') == 'core'
     assert audit.relevance_kind('区块链', '疫苗ETF富国') is None
     buckets = _judge(SECTOR_FUND_MAP, roster)
-    weak = [r for r in buckets['R_字面命中'] if r[4].startswith('只与板块共用')]
+    r1 = buckets['R1_弱命中有同名']
+    weak = ([r for r in buckets['R_字面命中'] if r[4].startswith('只与板块共用')] + r1)
     assert all(audit.relevance_kind(r[0], r[3]) == 'char' for r in weak), weak
     assert len(weak) == 13, (
         '只靠共字过关的行数变了（现 %d）⇒ 同步改 AGENTS.md 与模块总览里引用这个数的句子'
         % len(weak))
     assert '建材' in {r[0] for r in weak}
+    # 第 28 轮 I-MAJOR：弱命中里"名册另有含整词的同名标的"必须单独成桶，不能被 `relevant` 短路掉
+    assert len(r1) == 11, (
+        'R1 桶（弱命中但名册有同名）条数变了（现 %d）⇒ 任务 #38 那份清单要跟着改' % len(r1))
+    named = {r[0]: r[4] for r in r1}
+    assert '建材' in named and '159745' in named['建材'], named['建材']
+    for row in r1:
+        assert '只共用一个汉字' in row[4], row
+        assert row[1] not in row[4].split('：', 1)[1], '同名候选里混进了现挂那只：%s' % (row,)
+    assert not [r for r in buckets['R_字面命中'] if r[4].startswith('只共用一个汉字')], \
+        '有同名标的的行不许再留在 R 桶（那里头只该剩"名册也说不出话"的）'
 
 
 def test_blocklist_is_not_released_by_an_unrelated_longer_key():
