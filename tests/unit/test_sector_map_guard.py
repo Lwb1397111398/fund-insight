@@ -192,6 +192,26 @@ def test_weak_literal_hits_are_labeled_as_weak(roster):
     assert '建材' in {r[0] for r in weak}
 
 
+def test_blocklist_is_not_released_by_an_unrelated_longer_key():
+    """第 28 轮 I-MAJOR：上一版把"名单词长度 vs **整串里任意**更长的表键"作比较，
+    于是拼一个不相干的长键就能整体放行：`核电与半导体` → 512480、`风电和人工智能` → 515070。
+    两个不相干的事拼成一个板块名，不许让其中一件替另一件背书。
+    """
+    from src.constants import sector_fund_map as m
+    mixed = ['核电与半导体', '风电和人工智能', '水电与核电', '区块链加鸿蒙', '燃气或机场']
+    offenders = []
+    for name in mixed:
+        if not m._literal_block_hit(name):
+            offenders.append('%s 未被屏蔽' % name)
+        if m.get_fund_for_sector(name) is not None or m.normalize_sector_name(name) != name:
+            offenders.append('%s 仍解析出标的 %s / 归一成 %s'
+                             % (name, m.get_fund_for_sector(name), m.normalize_sector_name(name)))
+    assert not offenders, '屏蔽名单被不相干的长键放行：%s' % '；'.join(offenders)
+    # 反方向不能被这条规则顺手砍掉：没混名单词的板块照常解析
+    assert m.get_fund_for_sector('半导体设备') == m.SECTOR_FUND_MAP['半导体']
+    assert m.normalize_sector_name('半导体设备') == '半导体'
+
+
 # ---------- 代理登记表不能变成免检通道 ----------
 
 def test_proxy_registry_only_contains_real_proxies(roster):

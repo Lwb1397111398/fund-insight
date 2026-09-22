@@ -433,14 +433,20 @@ def _literal_block_hit(sector: str) -> bool:
     再被 `get_fund_for_sector` 第 5 步的子串匹配吸到表里更短的键 `互联网` 上，
     拿回的正是本轮声称要挡住的那只 517200 互联网ETF嘉实。
 
-    判据取"最具体的一方说了算"：名单词的命中长度 >= 表里命中的键长度时按屏蔽处理；
-    只有表里的键更长、更具体（如名单里有 '水电' 而输入命中 '水利水电'）才让键赢。
+    比较只能在"**同一个词的内部**"做（第 28 轮 I-MAJOR 实测我上一版写错了方向）：
+    只有当表里存在一个**包含该名单词的更长键**时才让键赢（假想例：名单有 '水电'
+    而表里出现 '水利水电' —— 今天表里没有这种键，这条纯属防以后）。
+    我上一版比的是"整串里任意更长的表键"，于是 `核电与半导体`、`风电和人工智能`
+    这种"名单词 + 一个不相干的长键"整体逃逸屏蔽，照旧返回 512480 / 515070
+    —— 把两件不相干的事拼成一个板块名，不该让其中一件替另一件放行。
     """
-    blocked = max((len(b) for b in SECTOR_NO_STATIC_FUND if b in sector), default=0)
-    if not blocked:
-        return False
-    matched = max((len(k) for k in SECTOR_FUND_MAP if len(k) >= 3 and k in sector), default=0)
-    return blocked >= matched
+    for blocked in sorted((w for w in SECTOR_NO_STATIC_FUND if w in sector),
+                          key=len, reverse=True):
+        longer_key = max((len(k) for k in SECTOR_FUND_MAP
+                          if len(k) >= 3 and k != blocked and blocked in k), default=0)
+        if longer_key <= len(blocked):
+            return True
+    return False
 
 
 def get_fund_for_sector(sector: str) -> Optional[Dict]:

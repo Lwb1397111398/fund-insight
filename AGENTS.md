@@ -195,11 +195,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 03:04（北京），第 28 轮 B 批（回写闸门 + 字面第三态），最后一次改用例之后两个口径都重跑）：
+最近一次核对（2026-09-23 03:37（北京），第 28 轮 C 批（评审 H/I 驱动：名单逃逸 + 守卫自身可绕）：
 
-- `pytest tests/unit -q` → **864 passed / 16 skipped / 0 failed**（131 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **873 passed / 16 skipped / 0 failed**（127 秒）。
-  873 = 864 + 9，超集必然大于子集；报数时必须写清是哪个口径。
+- `pytest tests/unit -q` → **866 passed / 16 skipped / 0 failed**（140 秒）。
+- `pytest tests/ -q`（含 integration/services）本批**没重跑**；上一批（864 条用例时）是
+  **873 passed / 16 skipped / 0 failed**，即 873 = 864 + 9 ⇒ 本批按 +2 推算约 875，
+  **但推算不是实测**，要用这个口径就再跑一次。报数时必须写清是哪个口径。
   （上一基线 835/844 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
   （再早 808/817 → 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例却没复测。
@@ -261,7 +262,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `市场→上证50`、`大盘→沪深300` 这类故意宽基代理），后果是 `区块链→云计算ETF`、
   `核聚变→红利低波ETF` 这批行**永不旗标、无人复核却仍在给新帖挑标的**（镜像实测未审查 17 行）。
   现在体检把第三态写进 `evidence.identity.relevance_state`，`build_worklist` 单独报数
-  （`no_literal_fund` / `alternative_exists`），`identity_view` 透传给接口/前端。
+  （`no_literal_fund` / `alternative_exists`），`identity_view` 把它带进 `/api/config/sector-mappings` 的 JSON。
+  **但页面还没读这一列**（`web/` 里 `relevance_state` 0 处命中 —— 第 28 轮 H-MAJOR-3 指出我上一版
+  "透传给接口/前端"说过头了）：剩下的活是页面加筛选档/统计，见任务 #32。
   ⇒ **读 `sector_relevance()==True` 时不许再说成"已核对为相关"**；老行只有布尔位时
   `row_relevance_state()` 保守返回 `relevant`（不许凭空造旗标），等下次体检补全。
   **服务判据本轮没改**（那 17 行里既有该拦的 `核聚变→红利低波`，也有正确的 `北美→纳指`，

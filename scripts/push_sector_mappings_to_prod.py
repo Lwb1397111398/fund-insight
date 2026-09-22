@@ -126,6 +126,7 @@ def main():
         return 2
     data = json.load(io.open(MANIFEST, encoding='utf-8'))
     rows = build_rows(data, args.limit)
+    dropped = 0          # 预检剔掉的行数；回执里必须说出来，不然"已落在被审计的状态"是假话
     apply_write = args.confirm == CONFIRM
     print('[计划] 目标=%s 清单 %d 行（指纹 %s，生成于 %s）→ %s'
           % (args.base, len(rows), data.get('sha256'), data.get('generated_at'),
@@ -152,6 +153,7 @@ def main():
                 print('   ...其余 %d 行省略' % (len(bad) - 40))
             if not args.allow_unservable:
                 drop = {s for s, _c, _n in bad}
+                dropped = len(drop)
                 rows = [r for r in rows if r.get('sector_name') not in drop]
                 print('[预检] 已剔除 %d 行，剩 %d 行待发；确实要把不可服务的行也发上去，'
                       '加 --allow-unservable' % (len(drop), len(rows)))
@@ -207,8 +209,10 @@ def main():
             print('   %-12s %s → %s：%s' % (i['sector_name'], i.get('mapping_id'),
                                              i.get('fund_code'), i.get('reason')))
         return 4
-    print('[完成] 生产已落在被审计的状态：更新 %d、新建 %d、本就一致 %d'
-          % (counts.get('updated', 0), counts.get('created', 0), counts.get('unchanged', 0)))
+    print('[完成] 生产已落在被审计的状态：更新 %d、新建 %d、本就一致 %d%s'
+          % (counts.get('updated', 0), counts.get('created', 0), counts.get('unchanged', 0),
+             '；另有 %d 行**没发**（生产定不了价，剔除原因见上面预检清单）' % dropped
+             if dropped else ''))
     return 0
 
 

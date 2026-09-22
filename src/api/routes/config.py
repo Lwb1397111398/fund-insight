@@ -1554,12 +1554,11 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
             continue
 
         # "这只标的在**本库**定不定得了价"——只报告，不替调用方决定发不发（见 helper 文档）
+        # 计数留到判完 outcome 之后：老板锁定的行既算 refused 又算"定不了价"会把同一行数两遍
         servable_ok, servable_note = servmap.get(entry['fund_code'], (True, ''))
         entry['nav_priced_here'] = servable_ok
         if servable_note:
             entry['nav_priced_here_note'] = servable_note
-        if not servable_ok:
-            unservable += 1
 
         row, matched_by = _find_mapping_by_sector(db, sector)
         entry['mapping_id'] = row.id if row is not None else None
@@ -1576,6 +1575,8 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
         changed = sorted(f for f, v in values.items()
                          if row is None or getattr(row, f, None) != v)
         outcome = 'created' if row is None else ('unchanged' if not changed else 'updated')
+        if outcome != 'refused' and not servable_ok:
+            unservable += 1
         if not dry_run and outcome != 'unchanged':
             apply_err = _audit_apply_row(db, service, row, sector, values)
             if apply_err:
@@ -1618,8 +1619,11 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
         message += '；本次未写入：真写必须带 confirm=%s（或 %s 头）' % (
             AUDIT_IMPORT_CONFIRM, AUDIT_IMPORT_CONFIRM_HEADER)
     if unservable:
-        message += '；⚠ 其中 %d 行的标的在**本库**定不了价（无档案或无净值），' \
-                   '逐行见 items[].nav_priced_here' % unservable
+        message += ('；⚠ 其中 %d 行的标的在**本库**定不了价（无档案或无净值），逐行见 '
+                    'items[].nav_priced_here；本接口只报告不拒收%s'
+                    % (unservable,
+                       '，**本次已照样写入**（要拦请用 scripts/push_sector_mappings_to_prod.py）'
+                       if not dry_run else '（计划阶段，未写入）'))
     return {
         'success': True,
         'dry_run': dry_run,
