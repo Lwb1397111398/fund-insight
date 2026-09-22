@@ -222,9 +222,10 @@ def test_find_desynced_syncs_the_duplicated_endpoint_date():
 
 
 def test_find_desynced_refuses_a_ledger_entry_from_another_observation():
-    """人工确认只改标量、不追加台账（`prediction_service.verify`）⇒ 末条属于另一次观察。
+    """历史上的人工确认只改标量、不追加台账 ⇒ 这类行的末条属于另一次观察。
 
-    不锚定这一点，`--apply` 会把无关窗口的分数写进这条预测并重算博主均分（第 16 轮 m-3）。
+    那个入口（`PredictionService.verify`）已在第 24 轮删除（自 `2c227c9` 起无调用方），
+    但被它写坏过的历史行还在库里，所以这里的锚定判断必须留着。
     """
     ledger = [{'date': '2026-06-08', 'score': 100, 'is_correct': True, 'change': 1.0}]
     manual_row = _row(id=3, is_correct=True, verify_score=60, verify_history=ledger,

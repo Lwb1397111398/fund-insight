@@ -4,7 +4,6 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from typing import Annotated, Optional, List
 from datetime import date, datetime, timedelta
 import logging

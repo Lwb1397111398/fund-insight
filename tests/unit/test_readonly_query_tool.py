@@ -29,6 +29,9 @@ spec.loader.exec_module(q)
     "select replace(fund_name,'A','B') n from fund_info limit 1",
     "select fund_name from posts where content like '%delete from%' limit 1",
     "select fund_name from fund_info where fund_name = 'a;b' limit 1",
+    # 第 25 轮 B 实测：先剥注释再剥字面量会把 `like '%--%'` 拦腰截断（执行串≠输入串）
+    "select fund_name from fund_info where fund_name like '%--%' limit 1",
+    "select 'it''s a test' as x",
 ])
 def test_read_only_statements_pass(sql):
     assert q._assert_read_only(sql)
@@ -51,6 +54,12 @@ def test_read_only_statements_pass(sql):
     ("select setval('x', 1)", '同上'),
     ('explain analyze copy predictions to \'/tmp/x.csv\'', 'COPY 是写'),
     ('select pg_sleep(1); drop table bloggers', '多语句'),
+    # 第 25 轮 A 举出五条穿过上一版关键词表、在 PG 上有真实副作用的函数调用
+    ('select pg_advisory_lock(1)', '会拿到跨会话锁'),
+    ("select set_config('search_path','public', false)", '改会话参数'),
+    ('select pg_switch_wal()', '强制切 WAL'),
+    ('select pg_reload_conf()', '让服务端重读配置'),
+    ("select pg_read_file('/etc/passwd')", '读服务器文件'),
 ])
 def test_write_or_multi_statement_is_refused(sql, why):
     with pytest.raises(ValueError):
@@ -97,12 +106,53 @@ def test_sqlite_side_is_read_only_at_engine_level(tmp_path):
         conn.close()
 
 
+class _FakeConn:
+    """假连接：让"只读探针"三种结局都能在家里跑到（本机没有 PG 服务）。"""
+
+    def __init__(self, write_error=None, write_succeeds=False):
+        self.write_error = write_error
+        self.write_succeeds = write_succeeds
+        self.calls = []
+
+    def exec_driver_sql(self, sql):
+        self.calls.append(sql.strip().split()[0].upper())
+        if 'CREATE TEMP' in sql.upper():
+            if self.write_succeeds:
+                return None
+            raise RuntimeError(self.write_error)
+        return None
+
+
+def test_pg_read_only_probe_is_not_self_confirming():
+    """探针必须**会因为写成功而报警**——这是它比 `SET + SHOW` 强的地方。
+
+    第 25 轮两份复评共同判旧写法为恒真守护（MAJOR）：`SHOW` 读回的是刚设进去的会话值，
+    答不出"它什么情况下会红"。现在三条结局各有断言：写被只读挡下=通过、
+    写居然成功=中止、写报别的错=中止。
+    """
+    ok = _FakeConn(write_error='cannot execute CREATE TABLE in a read-only transaction')
+    assert q._pg_read_only_probe(ok) is None
+
+    not_ro = _FakeConn(write_succeeds=True)
+    why = q._pg_read_only_probe(not_ro)
+    assert why and '只读' in why, '探针写成功了却不报警 ⇒ 恒真守护又回来了'
+
+    other = _FakeConn(write_error='permission denied for database')
+    why2 = q._pg_read_only_probe(other)
+    assert why2, '非只读类错误也要中止，不能当"已通过"'
+
+
 def test_the_tool_pins_the_mirror_not_the_env_default():
     """工具默认必须走本地镜像：这条测试就是在防我上次那个"只设变量不调守卫"的错。"""
     src = open(os.path.join(ROOT, 'scripts', 'q.py'), encoding='utf-8').read()
     assert 'pin_local_sqlite(use_mirror_default=True)' in src
     assert '--production' in src, '要查生产必须显式说出来，不能靠环境变量碰运气'
-    # 生产侧的只读必须"设完再读回来核对"，不能只发一条 SET 就算数
-    assert 'SHOW default_transaction_read_only' in src
+    # PG 侧只读必须由"建连接时的隔离级别 + 真写探针"两件事保证
+    assert "isolation_level='READ ONLY'" in src
+    assert '_pg_read_only_probe(conn)' in src
     assert 'mode=ro' in src
+    # 旧那套"SET 完自己 SHOW 一遍"不能回来：核对的是自己刚设的会话值，恒真。
+    # （注释里允许提到它——那是在说明为什么不能用——所以只挡真正的调用形状。）
+    assert "exec_driver_sql('SET default_transaction_read_only" not in src
+    assert "exec_driver_sql('SHOW default_transaction_read_only" not in src
 

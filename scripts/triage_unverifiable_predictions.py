@@ -48,6 +48,12 @@ from src.models.database import FundHistory, Prediction  # noqa: E402
 from src.services.prediction_lifecycle import filter_due_for_verify  # noqa: E402
 
 
+def _as_of():
+    """落盘 JSON 的"截止日"走统一入口（北京时间），理由同 `audit_verdict_evidence._as_of`。"""
+    from src.services.prediction_lifecycle import current_as_of
+    return current_as_of()
+
+
 def _nav_dates(db, fund_code):
     return sorted({r[0] for r in db.query(FundHistory.nav_date).filter(
         FundHistory.fund_code == fund_code).all() if r[0] is not None})
@@ -179,7 +185,7 @@ def main():
 
         if args.json:
             with io.open(args.json, 'w', encoding='utf-8') as f:
-                json.dump({'as_of': str(date.today()), 'queue': len(due), 'counts': counts,
+                json.dump({'as_of': str(_as_of()), 'queue': len(due), 'counts': counts,
                            'rows': report,
                            'contradictions': [(d['id'], d['local_class'], d['class'])
                                               for d in disagree]},

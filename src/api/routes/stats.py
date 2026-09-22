@@ -57,12 +57,17 @@ def get_evidence_report(db: Session = Depends(get_db)):
 
     from src.services.verdict_evidence import span_report
 
-    key = str(db.get_bind().url)
+    # 键里带上 bind 的**对象身份**：`sqlite:///:memory:` 这类 URL 字符串完全相同，
+    # 只按 url 分键的话两个内存库会互相串数（第 25 轮 A 的 MINOR-9）。
+    bind = db.get_bind()
+    key = '%s#%d' % (bind.url, id(bind))
     now = time.monotonic()
-    if (_evidence_cache.get('key') != key
-            or _evidence_cache.get('report') is None
-            or now - _evidence_cache.get('at', 0.0) > _EVIDENCE_TTL):
-        _evidence_cache['key'] = key
-        _evidence_cache['report'] = span_report(db)
-        _evidence_cache['at'] = now
-    return {"success": True, "data": _evidence_cache['report']}
+    cached = _evidence_cache
+    if (cached.get('key') == key and cached.get('report') is not None
+            and now - cached['at'] <= _EVIDENCE_TTL):
+        return {"success": True, "data": cached['report']}
+    report = span_report(db)            # 先算成功再改缓存：异常时不留"键=B、报告=A"
+    cached['key'] = key
+    cached['report'] = report
+    cached['at'] = now
+    return {"success": True, "data": report}

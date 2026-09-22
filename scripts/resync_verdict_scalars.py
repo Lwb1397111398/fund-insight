@@ -47,9 +47,10 @@ def find_desynced(rows):
 
     同步方向只有一个：**台账（`verify_history` 末条）是当次验证的原场记录**。
     但"末条"必须先被证明**就是产生这些标量的那一次观察** ——
-    `PredictionService.verify()`（人工确认）只改 `is_correct/actual_change/ai_judgment`、
-    既不追加台账也不动 `verify_score`（`prediction_service.py:151-157`），
-    那种行的末条属于另一个观察窗口，照它覆盖等于把无关窗口的分数写进来（第 16 轮 m-3）。
+    历史上有个 `PredictionService.verify()`（人工确认）只改 `is_correct/actual_change/ai_judgment`、
+    既不追加台账也不动 `verify_score`，那种行的末条属于另一个观察窗口，照它覆盖等于把无关
+    窗口的分数写进来（第 16 轮 m-3）。**该方法已于第 24 轮整体删除**（自 `2c227c9` 起无调用方），
+    但被它写坏过的历史行还在库里，所以这里的锚定判断不能撤。
     """
     fixable, manual = [], []
     for p in rows:

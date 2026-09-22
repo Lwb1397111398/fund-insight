@@ -36,6 +36,7 @@ for _st in (sys.stdout, sys.stderr):
 
 JUNK_CODES = ('603758', '600189', '152788', 'HYNX', 'SBSP76', 'ign')
 CONFIRM_TOKEN = 'PURGE-JUNK'
+RESTORE_CONFIRM_TOKEN = 'RESTORE-JUNK'
 
 
 def inspect(db, codes=JUNK_CODES):
@@ -118,18 +119,113 @@ def plan(rows, allow_dead_predictions=False, allow_owner_rows=False):
 
 
 def _dump_rows(db, codes):
-    """把将被删的每一行原样抄一份（列名→值），供 `--restore-from` 逐列写回。"""
-    from src.models.database import FundHistory, FundInfo, FundSyncRetry, SectorFundMapping
+    """把**将要被删的每一行**原样抄一份（列名→值），供 `--restore-from` 逐列写回。
+
+    不含 `fund_history`：净值行 > 0 是阻断条件，这个工具永远不会删净值，
+    抄它只会把备份撑大（第 25 轮 A 的 MINOR：按 codes 抄会连"根本没进动作清单"的行也抄走）。
+    """
+    from src.models.database import FundInfo, FundSyncRetry, SectorFundMapping
 
     out = []
     for c in codes:
         for model, tag in ((FundInfo, 'fund_info'), (SectorFundMapping, 'sector_fund_mapping'),
-                           (FundSyncRetry, 'fund_sync_retry'), (FundHistory, 'fund_history')):
+                           (FundSyncRetry, 'fund_sync_retry')):
             for row in db.query(model).filter(model.fund_code == c).all():
                 out.append({'table': tag,
                             'row': {col.name: getattr(row, col.name)
                                     for col in model.__table__.columns}})
     return out
+
+
+# 业务身份列：判断"这行是不是已经在库里"要用它，不能用代理主键 id。
+# 第 25 轮 B 复现出两种失灵：① id 被别的行复用 ⇒ 静默跳过 ⇒ 该还原的一行没还原，
+# 工具还报告"1 行本就在库里，跳过"；② id 空着而同码档案已被重新抓回 ⇒ 撞 `fund_code`
+# 唯一约束，而末尾只有一次 commit ⇒ 整批回滚，还原在最需要它的场景下失灵。
+BUSINESS_KEYS = {'fund_info': ('fund_code',),
+                 'sector_fund_mapping': ('sector_name', 'fund_code'),
+                 'fund_sync_retry': ('fund_code', 'retry_type')}
+
+
+def restore(db, payload_path, apply=False, restore_owner_immunity=False):
+    """按备份 JSON 逐列写回。默认 dry-run；真写要 `--apply --confirm RESTORE-JUNK`。
+
+    两条安全阀（都是第 25 轮评审点出来的）：
+    * 载荷里带 `owner_locked=True` / `reviewed_by='owner'` 的行**默认不还原** ——
+      否则"一份 JSON 就能把老板免疫写回库里"，与 `audit-import`、`/api/config/import`
+      那两处剔掉同两列的规则自相矛盾。要还原必须显式 `--restore-owner-immunity`。
+    * 逐行 SAVEPOINT：一行失败不影响其它行，且回执说清哪几行没进去、为什么。
+    """
+    from src.models.database import FundInfo, FundSyncRetry, SectorFundMapping
+
+    models = {'fund_info': FundInfo, 'sector_fund_mapping': SectorFundMapping,
+              'fund_sync_retry': FundSyncRetry}
+    rows = json.load(io.open(payload_path, encoding='utf-8'))
+    planned, skipped, refused, failed = [], 0, 0, 0
+    for entry in rows:
+        model = models.get(entry['table'])
+        if model is None:
+            print('[skip] 备份里有不认识或不该还原的表 %s' % entry['table'])
+            skipped += 1
+            continue
+        payload = _coerce_row(model, entry['row'])
+        if (payload.get('owner_locked') or payload.get('reviewed_by') == 'owner') \
+                and not restore_owner_immunity:
+            print('[拒还] %s %s：带老板署名/锁定，免疫只能由老板在页面上重新盖'
+                  '（要连它一起还原请加 --restore-owner-immunity）'
+                  % (entry['table'], payload.get('sector_name') or payload.get('fund_code')))
+            refused += 1
+            continue
+        exists = None
+        for col in BUSINESS_KEYS.get(entry['table'], ()):
+            attr = getattr(model, col, None)
+            if attr is None or payload.get(col) is None:
+                continue
+            found = db.query(model).filter(attr == payload[col]).first()
+            if found is not None:
+                exists = (col, payload[col])
+                break
+        if exists:
+            skipped += 1
+            continue
+        # 代理主键被别的行占用了（删掉之后 PG/SQLite 都可能把 id 发给新行）：
+        # 丢掉 id 让它自增，而不是"跳过"或撞主键把整批带走。
+        pk = list(model.__table__.primary_key.columns)[0]
+        if payload.get(pk.name) is not None:
+            holder = db.query(model).filter(getattr(model, pk.name) == payload[pk.name]).first()
+            if holder is not None:
+                print('[改 id] %s #%s 已被 %s 占用 ⇒ 本行改为自增主键还原'
+                      % (entry['table'], payload[pk.name],
+                         getattr(holder, 'fund_code', '?')))
+                payload.pop(pk.name)
+        planned.append((entry['table'], model, payload))
+
+    print('[还原计划] %s：%d 行（跳过已存在 %d、拒还老板列 %d）'
+          % ('真写' if apply else 'dry-run', len(planned), skipped, refused))
+    for table, _m, payload in planned[:20]:
+        key = payload.get('sector_name') or payload.get('fund_code')
+        print('   + %-20s %s' % (table, key))
+    if len(planned) > 20:
+        print('   ...其余 %d 行省略' % (len(planned) - 20))
+    if not apply:
+        print('\ndry-run：未写库。真还原：--restore-from %s --apply --confirm RESTORE-JUNK'
+              % payload_path)
+        return 0
+    for table, model, payload in planned:
+        try:
+            with db.begin_nested():          # 一行一个 savepoint，别把整批拖下水
+                db.add(model(**payload))
+            restored = payload.get('fund_code')
+            failed_note = None
+        except Exception as exc:
+            failed += 1
+            failed_note = str(exc)[:160]
+            print('[失败] %s %s：%s' % (table, payload.get('fund_code'), failed_note))
+            continue
+        print('[ok] 还原 %s %s' % (table, restored))
+    db.commit()
+    print('[完成] 还原 %d 行、跳过 %d 行、拒还 %d 行、失败 %d 行'
+          % (len(planned) - failed, skipped, refused, failed))
+    return len(planned) - failed
 
 
 def _coerce_row(model, row):
@@ -158,33 +254,6 @@ def _coerce_row(model, row):
     return out
 
 
-def restore(db, payload_path):
-    """按备份 JSON 逐列写回。备份里有什么就还原什么（含 id，映射行按原 id 回插）。"""
-    from src.models.database import FundHistory, FundInfo, FundSyncRetry, SectorFundMapping
-
-    models = {'fund_info': FundInfo, 'sector_fund_mapping': SectorFundMapping,
-              'fund_sync_retry': FundSyncRetry, 'fund_history': FundHistory}
-    rows = json.load(io.open(payload_path, encoding='utf-8'))
-    restored, skipped = 0, 0
-    for entry in rows:
-        model = models.get(entry['table'])
-        if model is None:
-            print('[skip] 备份里有不认识的表 %s' % entry['table'])
-            skipped += 1
-            continue
-        pk = list(model.__table__.primary_key.columns)[0]
-        payload = _coerce_row(model, entry['row'])
-        key = payload.get(pk.name)
-        if key is not None and db.query(model).filter(getattr(model, pk.name) == key).first():
-            skipped += 1                        # 已经在了就不重复插（幂等：还原跑两次不会翻倍）
-            continue
-        db.add(model(**payload))
-        restored += 1
-    db.commit()
-    print('[ok] 按 %s 还原 %d 行（%d 行本就在库里，跳过）' % (payload_path, restored, skipped))
-    return restored
-
-
 def main():
     ap = argparse.ArgumentParser(description='删除 6 个垃圾 fund_info 码（默认只出计划）')
     ap.add_argument('--apply', action='store_true')
@@ -195,7 +264,9 @@ def main():
                     help='明知该码还挂着软删预测仍然删（默认拒绝）')
     ap.add_argument('--allow-owner-rows', action='store_true',
                     help='明知映射行是老板署名/锁定的仍然删（默认拒绝）')
-    ap.add_argument('--restore-from', help='按备份 JSON 还原（删错了用它）')
+    ap.add_argument('--restore-from', help='按备份 JSON 还原（默认 dry-run）')
+    ap.add_argument('--restore-owner-immunity', action='store_true',
+                    help='连老板署名/锁定一起还原（默认拒绝：免疫应由老板在页面上盖）')
     args = ap.parse_args()
 
     codes = tuple(c.strip() for c in (args.codes or '').split(',') if c.strip()) or JUNK_CODES
@@ -221,7 +292,14 @@ def main():
             if not os.path.exists(args.restore_from):
                 print('[abort] 备份文件不存在：%s' % args.restore_from)
                 return 4
-            return 0 if restore(db, args.restore_from) is not None else 1
+            # 还原也是写库。第 25 轮 A 抓到：这条分支原先在 `--apply/--confirm` 门**之前**
+            # 就 return，等于全脚本唯一一条"没有 dry-run、没有确认词"的写路径，
+            # 而且会把备份里的老板免疫原样盖回去。
+            if args.apply and args.confirm != RESTORE_CONFIRM_TOKEN:
+                print('[abort] --apply 还原需要 --confirm %s' % RESTORE_CONFIRM_TOKEN)
+                return 4
+            return 0 if restore(db, args.restore_from, apply=args.apply,
+                                restore_owner_immunity=args.restore_owner_immunity) >= 0 else 1
 
         rows = inspect(db, codes)
         for r in rows:

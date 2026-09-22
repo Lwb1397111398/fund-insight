@@ -10,6 +10,7 @@ verified_* 只由 is_correct 推导，绝不由 status 推导
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional, Sequence
 
@@ -44,7 +45,12 @@ def current_as_of() -> date:
         from zoneinfo import ZoneInfo
 
         return datetime.now(ZoneInfo("Asia/Shanghai")).date()
-    except Exception:
+    except Exception as exc:                      # 容器里没装 tzdata 就会走到这里
+        # 第 25 轮 B：这条回退**静默**把"截至日"退回系统时钟 ⇒ 本函数想修的东西又坏了，
+        # 而没人知道。至少留一行日志，让"生产上这条修复到底生效没有"可查。
+        logging.getLogger(__name__).warning(
+            '[as_of] 取不到 Asia/Shanghai（%s），退回系统时钟 date.today()：'
+            '容器缺 tzdata 时页面日期可能差一天', exc)
         return date.today()
 
 

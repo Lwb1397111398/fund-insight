@@ -176,6 +176,12 @@ def test_is_correct_is_only_written_by_the_verify_service():
     不写 `verify_score`、不追加 `verify_history`、不重算 `blogger_stats`，
     两份复评各自复现出"结论 False / 分数 100 / 台账 True / 博主准确率 100% /
     区间 0%"这种五处互相打脸的行。方法已删，这条用例保证它不会被"顺手加回来"。
+
+    措辞边界（第 25 轮 B 指出，别说过头）：还有一条**运维通道**能整表带入 `is_correct`
+    —— `/api/config/import`（`data_portability_service.TABLE_SPECS` 的 predictions 规格）。
+    它是"导出→还原"的正常路径，受 `ENABLE_DATABASE_IMPORT=false` + 确认头双重限制。
+    所以这条断言的范围是"**代码里**对 `is_correct` 的属性/批量写只有验证服务一处"，
+    不是"全系统只有这一条路"。
     """
     import ast
     import io as _io
@@ -184,6 +190,46 @@ def test_is_correct_is_only_written_by_the_verify_service():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))), 'src')
     writers = set()
+
+    def _mentions(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and sub.value == 'is_correct':
+                return True
+            if isinstance(sub, ast.keyword) and sub.arg == 'is_correct':
+                return True
+        return False
+
+    class _C(ast.NodeVisitor):
+        """四种写法都要认（第 25 轮 A 的 MINOR-6：只认 `x.is_correct = ...` 太窄）。
+
+        字典批量写（`.update({...})`、query `.values(...)`）与 `setattr` 都能绕过属性赋值，
+        而那正是"绕过唯一入口"最常见的两种形态。
+        """
+
+        def __init__(self, rel):
+            self.rel = rel
+
+        def visit_Assign(self, node):
+            for target in node.targets:
+                if isinstance(target, ast.Attribute) and target.attr == 'is_correct':
+                    writers.add(self.rel)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node):
+            if isinstance(node.target, ast.Attribute) and node.target.attr == 'is_correct':
+                writers.add(self.rel)
+            self.generic_visit(node)
+
+        def visit_Call(self, node):
+            fname = getattr(node.func, 'attr', None) or getattr(node.func, 'id', None)
+            hit = (fname == 'setattr' and len(node.args) >= 2
+                   and isinstance(node.args[1], ast.Constant)
+                   and node.args[1].value == 'is_correct') \
+                or (fname in ('update', 'values') and _mentions(node))
+            if hit:
+                writers.add(self.rel)
+            self.generic_visit(node)
+
     for dirpath, dirs, files in os.walk(root):
         if '__pycache__' in dirpath:
             continue
@@ -192,15 +238,7 @@ def test_is_correct_is_only_written_by_the_verify_service():
                 continue
             path = os.path.join(dirpath, name)
             rel = os.path.relpath(path, root).replace(os.sep, '/')
-
-            class _C(ast.NodeVisitor):
-                def visit_Assign(self, node):
-                    for target in node.targets:
-                        if isinstance(target, ast.Attribute) and target.attr == 'is_correct':
-                            writers.add(rel)
-                    self.generic_visit(node)
-
-            _C().visit(ast.parse(_io.open(path, encoding='utf-8').read()))
+            _C(rel).visit(ast.parse(_io.open(path, encoding='utf-8').read()))
 
     assert writers == {'services/prediction_verify_service.py'}, (
         '出现了新的 `is_correct` 写点 %s：下结论必须走 PredictionVerifyService.verify_prediction'

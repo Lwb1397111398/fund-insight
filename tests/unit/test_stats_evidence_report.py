@@ -202,19 +202,86 @@ def _text_nodes(html: str) -> str:
     return re.sub(r'<[^>]*>', '\n', html)
 
 
+def _strip_inert_regions(html: str) -> str:
+    """先去掉 `<script>/<style>/注释`，再用"最近的 > 还是 <"判断插值落在哪。
+
+    第 25 轮 A 用三种畸形输入把上一版判据打穿：插值写进 JS 字符串、写进含 `>` 的注释、
+    写进属性里，全都被认成正文。那三种位置人都看不见，所以先从文本里摘掉。
+    """
+    s = re.sub(r'<script\b.*?</script>', ' ', html, flags=re.S | re.I)
+    s = re.sub(r'<style\b.*?</style>', ' ', s, flags=re.S | re.I)
+    return re.sub(r'<!--.*?-->', ' ', s, flags=re.S)
+
+
 def _text_interpolations(html: str):
     """返回所有**落在正文里**的 `{{ ... }}` 插值内容（标签属性里的不算）。
 
-    判定方法很朴素：看插值前面最近的是 `>` 还是 `<` —— 刚闭合标签就是在正文里，
-    还没闭合就是在属性里。`v-if="evidenceReport.judged"` 那种条件表达式是合法的
-    属性用法，所以不能简单要求字段名压根不出现在标签里（我第一版就是这么写错的）。
+    不能用"插值前最近的是 `>` 还是 `<`"这一条：第 25 轮 A 举出属性里含 `>` 的写法
+    （`:title="'x' + (1 > 0) + '{{ … }}'"`）会被它误判成正文。这里改成小词法扫描：
+    进标签后按引号配对走，只有闭合 `>`（不在引号里的那个）才算标签结束。
     """
-    out = []
-    for m in re.finditer(r'\{\{(.*?)\}\}', html, flags=re.S):
-        before = html[:m.start()]
-        if before.rfind('>') > before.rfind('<'):
-            out.append(m.group(1))
-    return out
+    s = _strip_inert_regions(html)
+    texts, i, in_tag, quote = [], 0, False, ''
+    while i < len(s):
+        ch = s[i]
+        if in_tag:
+            if quote:
+                if ch == quote:
+                    quote = ''
+            elif ch in ('"', "'"):
+                quote = ch
+            elif ch == '>':
+                in_tag = False
+            i += 1
+            continue
+        if ch == '<':
+            in_tag = True
+            i += 1
+            continue
+        j = s.find('<', i)
+        if j < 0:
+            j = len(s)
+        texts.append(s[i:j])
+        i = j
+    body = '\n'.join(texts)
+    return [m.group(1) for m in re.finditer(r'\{\{(.*?)\}\}', body, flags=re.S)]
+
+
+def test_text_interpolation_rule_itself_is_not_foolable():
+    """这条测的是**测试的判据**：三种畸形位置必须都不算正文（第 25 轮 A 的三条反例）。"""
+    inside_script = '<script>var t = "{{ evidenceReport.judged }}";</script>'
+    inside_comment = '<!-- {{ evidenceReport.judged }} -->'
+    inside_attr = '<div :title="\'x\' + (1 > 0) + \'{{ evidenceReport.judged }}\'"></div>'
+    for bad in (inside_script, inside_comment, inside_attr):
+        assert not any('evidenceReport.judged' in x for x in _text_interpolations(bad)), \
+            '畸形位置被判成正文 ⇒ 这条守护又是恒真的：%s' % bad[:48]
+    good = '<div class="x">{{ evidenceReport.judged }}</div>'
+    assert any('evidenceReport.judged' in x for x in _text_interpolations(good))
+
+
+def test_current_as_of_fallback_leaves_a_trail(monkeypatch, caplog):
+    """容器缺 tzdata 时 `current_as_of()` 会回退，但**必须留一行 WARNING**。
+
+    第 25 轮 B：回退本身可以接受，静默不行 —— 这条修复针对的就是"生产上日期差一天"，
+    如果它在生产永远走回退而没人知道，那修了等于没修。
+    """
+    import logging
+    import sys
+    import types
+
+    from src.services.prediction_lifecycle import current_as_of
+
+    fake = types.ModuleType('zoneinfo')
+
+    def boom(*_a, **_k):
+        raise RuntimeError('No time zone found with key Asia/Shanghai')
+    fake.ZoneInfo = boom
+    monkeypatch.setitem(sys.modules, 'zoneinfo', fake)
+    with caplog.at_level(logging.WARNING):
+        got = current_as_of()
+    assert got                            # 确实回退了
+    assert any('tzdata' in r.getMessage() for r in caplog.records), \
+        '回退没留任何痕迹 ⇒ 生产上这条修复静默失效也不会被发现'
 
 
 def test_the_page_shows_the_numbers_as_text_not_only_a_title():

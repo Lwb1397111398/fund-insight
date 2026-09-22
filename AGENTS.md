@@ -195,11 +195,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22 20:37，第 24 轮修复之后）：
+最近一次核对（2026-09-22 21:29，第 25 轮修复之后）：
 
-- `pytest tests/unit -q` → **793 passed / 16 skipped / 0 failed**（约 100 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **802 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **808 passed / 16 skipped / 0 failed**（约 119 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **817 passed / 16 skipped / 0 failed**（约 136 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
+  （上一基线 793 / 805；第 25 轮 A 抓到：我把 `tests/ 802` 写进本文件之后又加了 3 条用例
+  却没复测 —— **改完测试必须回来重跑这一行**，数不是写完就不动的。）
   （上一基线 776 / 785；本批 +19 条新用例、删掉 2 条打在已删死路上的用例。
   第 24 轮评审抓到的是我自己：`AGENTS.md` 里写着 `tests/ 765` 却小于实测的 `tests/unit 776`
   —— 超集不可能比子集小，说明有一行是填数时没跑。）

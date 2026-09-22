@@ -143,12 +143,16 @@ def test_retry_rows_are_planned_before_the_archive(test_db):
         '顺序必须先把引用表清干净，再删档案'
 
 
-def test_backup_then_restore_puts_everything_back(test_db, tmp_path):
-    """"可回滚"不是一个形容词：备份 JSON 写出来、删干净、再按它逐列还原回来。
+def _backup_of(test_db, tmp_path, code):
+    import json
+    dump = tmp_path / 'purge-backup.json'
+    dump.write_text(json.dumps(purge._dump_rows(test_db, (code,)),
+                               ensure_ascii=False, default=str), encoding='utf-8')
+    return str(dump)
 
-    第 24 轮 A 的 MINOR-8 第一条：上一版只写着"按备份 JSON 重新 insert"，
-    仓库里根本没有那段代码 ⇒ 承诺不成立。现在它是 `purge.restore()`。
-    """
+
+def test_backup_then_restore_puts_everything_back(test_db, tmp_path):
+    """"可回滚"不是一个形容词：备份 → 删干净 → 按它逐列还原回来（真写要显式 apply）。"""
     from src.models.database import SectorFundMapping
     _add_fund(test_db, 'ZZZ007', '可回滚测试')
     mapping = SectorFundMapping(sector_name='ZZZ回滚板块', fund_code='ZZZ007',
@@ -157,21 +161,71 @@ def test_backup_then_restore_puts_everything_back(test_db, tmp_path):
     test_db.commit()
     mapping_id = mapping.id
 
-    dump = tmp_path / 'purge-backup.json'
-    dump.write_text(__import__('json').dumps(
-        purge._dump_rows(test_db, ('ZZZ007',)), ensure_ascii=False, default=str), encoding='utf-8')
+    dump = _backup_of(test_db, tmp_path, 'ZZZ007')
+    assert 'fund_history' not in dump, '净值永不会被删，不该被抄进备份（会把备份撑大）'
+
+    # dry-run 默认不写：这是第 25 轮 A 抓到的"全脚本唯一没有确认词的写路径"
+    assert purge.restore(test_db, dump) == 0
     test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ007').delete()
     test_db.query(FundInfo).filter_by(fund_code='ZZZ007').delete()
     test_db.commit()
     assert test_db.query(FundInfo).filter_by(fund_code='ZZZ007').first() is None
+    assert purge.restore(test_db, dump) == 0          # 仍然只是计划
+    assert test_db.query(FundInfo).filter_by(fund_code='ZZZ007').first() is None
 
-    purge.restore(test_db, str(dump))
+    purge.restore(test_db, dump, apply=True)
     back = test_db.query(FundInfo).filter_by(fund_code='ZZZ007').first()
     assert back is not None and back.fund_name == '可回滚测试'
     m = test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ007').first()
     assert m is not None and m.id == mapping_id and abs(m.confidence - 0.77) < 1e-6, \
         '还原没按原 id/逐列回来：备份等于没备'
 
-    # 幂等：同一个备份再跑一次不该翻倍
-    purge.restore(test_db, str(dump))
+    assert purge.restore(test_db, dump, apply=True) == 0    # 幂等：跑两次不翻倍
     assert test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ007').count() == 1
+
+
+def test_restore_dedupe_uses_business_key_not_the_recyclable_id(test_db, tmp_path):
+    """代理主键会被复用：备份里的 id 已属于**别的行**时，该还原的那行必须真的回来。
+
+    第 25 轮 B 复现：旧实现拿 `id` 判重 ⇒ "1 行本就在库里，跳过"，垃圾码那行根本没还原。
+    """
+    from src.models.database import FundInfo as FI
+    _add_fund(test_db, 'ZZZ008', 'id会复用的码')
+    original = test_db.query(FI).filter_by(fund_code='ZZZ008').first()
+    fid = original.id
+    dump = _backup_of(test_db, tmp_path, 'ZZZ008')
+
+    # 模拟"id 被回收"：删掉原行后另插一行，让它拿到同一个主键
+    test_db.query(FI).filter_by(fund_code='ZZZ008').delete()
+    test_db.commit()
+    test_db.add(FI(id=fid, fund_code='999999', fund_name='占了原 id 的新基金'))
+    test_db.commit()
+
+    assert purge.restore(test_db, dump, apply=True) >= 1, \
+        '备份里的 id 被别人占了就跳过 ⇒ 该还原的没还原，还报告"本就在库里"'
+    back = test_db.query(FI).filter_by(fund_code='ZZZ008').first()
+    assert back is not None and back.fund_name == 'id会复用的码'
+    assert back.id != fid, 'id 被占时应当自增，而不是撞主键或盖掉占位行'
+    assert test_db.query(FI).filter_by(fund_code='999999').first() is not None, \
+        '还原不能动到占用者的行'
+
+
+def test_restore_refuses_to_regrant_owner_immunity(test_db, tmp_path):
+    """老板免疫不能由一份 JSON 盖回来 —— 与 `audit-import`、`/api/config/import` 同一口径。"""
+    from src.models.database import SectorFundMapping
+    _add_fund(test_db, 'ZZZ009', '老板锁定行')
+    test_db.add(SectorFundMapping(sector_name='ZZZ老板板块', fund_code='ZZZ009',
+                                  fund_name='有意代理', is_active=True, reviewed=True,
+                                  reviewed_by='owner', owner_locked=True))
+    test_db.commit()
+    dump = _backup_of(test_db, tmp_path, 'ZZZ009')
+    test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ009').delete()
+    test_db.commit()
+
+    assert purge.restore(test_db, dump, apply=True) == 0, '未经显式开关就还原了老板免疫'
+    assert test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ009').first() is None
+
+    purge.restore(test_db, dump, apply=True, restore_owner_immunity=True)
+    row = test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ009').first()
+    assert row is not None and row.owner_locked and row.reviewed_by == 'owner', \
+        '显式开关必须是有效的，否则它就是个假闸门'

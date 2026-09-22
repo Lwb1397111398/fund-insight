@@ -55,16 +55,16 @@ def fetch_via_db(production=False):
     if production:
         import sqlalchemy as sa
         from dotenv import load_dotenv
+        from q import _pg_read_only_probe        # 同一个只读机制，别抄第二份
         load_dotenv(os.path.join(ROOT, '.env'))
         url = os.environ.get('DATABASE_URL', '')
         if not url.lower().startswith(('postgres', 'postgresql')):
             raise RuntimeError('--via-db --production 要求 .env 的 DATABASE_URL 指向 PostgreSQL')
-        engine = sa.create_engine(url)
+        engine = sa.create_engine(url, isolation_level='READ ONLY')
         with engine.connect() as conn:
-            conn.exec_driver_sql('SET default_transaction_read_only = on')
-            got = conn.exec_driver_sql('SHOW default_transaction_read_only').scalar()
-            if str(got).strip().lower() not in ('on', 'true', '1'):
-                raise RuntimeError('会话没能进入只读模式（SHOW 回 %r）' % got)
+            why = _pg_read_only_probe(conn)      # 真试一次写，被拒才算只读成立
+            if why:
+                raise RuntimeError(why)
             res = conn.execute(sa.text('select * from %s order by sector_name' % TABLE))
             keys = list(res.keys())
             rows = [dict(zip(keys, r)) for r in res]

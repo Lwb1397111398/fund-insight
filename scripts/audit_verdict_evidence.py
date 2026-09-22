@@ -37,6 +37,16 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 from _db_guard import pin_local_sqlite  # noqa: E402
 
 
+def _as_of():
+    """截止日统一走 `current_as_of()`（北京时间自然日）。
+
+    第 25 轮 B 抓到：Render 不设 TZ 时 `date.today()` 每天会有 8 小时说"截至昨天"，
+    而这份 JSON 的 `as_of` 正是别人拿两次报告互相比对的锚点，错一天整份都对不上。
+    """
+    from src.services.prediction_lifecycle import current_as_of
+    return current_as_of()
+
+
 def audit(db):
     """扫全库已判结论，返回 (条数, 分桶计数, 每桶样例 id, 逐行明细)。"""
     from src.models.database import Prediction
@@ -71,7 +81,7 @@ def audit(db):
     return len(rows), buckets, samples, detail
 
 
-def accuracy_span(db, stale_ids):
+def accuracy_span(db):
     """把"证据已失效"折算成准确率区间（第 18 轮 MAJOR-3：报数不能靠手算）。
 
     区间的两端是两个极端假设：**这批结论全部判错** vs **全部判对**。
@@ -130,8 +140,7 @@ def main():
               % (judged, bad, 100.0 * bad / max(1, judged)))
         for kind, n in sorted(buckets.items(), key=lambda kv: -kv[1]):
             print('   %-24s %4d  例如 %s' % (kind, n, samples[kind]))
-        judged_n, correct_n, now_pct, low, high, stale_n = accuracy_span(
-            db, {d['id'] for d in detail})
+        judged_n, correct_n, now_pct, low, high, stale_n = accuracy_span(db)
         print('\n[准确率只能当区间报] 已判 %d 条、现在落库判对 %d 条 = %.2f%%；'
               '其中 %d 条端点证据今天复现不出来 ⇒ 把这批按"全判错/全判对"两个极端算，'
               '区间 %.2f%% ~ %.2f%%（宽度 %.2f 个百分点）。'
@@ -147,7 +156,7 @@ def main():
               '每日跑批会报新增条数，见 docs/模块总览/预测验证与准确率统计.md。')
         if args.json:
             with io.open(args.json, 'w', encoding='utf-8') as handle:
-                json.dump({'as_of': date.today().isoformat(), 'judged': judged,
+                json.dump({'as_of': _as_of().isoformat(), 'judged': judged,
                            'stale_evidence': bad, 'counts': dict(buckets),
                            'rows': detail}, handle, ensure_ascii=False, indent=1)
             print('[ok] 逐行明细：%s' % args.json)
