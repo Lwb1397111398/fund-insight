@@ -195,16 +195,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 04:28（北京），第 29 轮（页面出口：冷启动 / 第三态 / 口径正文）修复之后，
+最近一次核对（2026-09-23 05:26（北京），第 29 轮（页面出口 + 两份复评 72/86 的返修）之后，
 最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **873 passed / 16 skipped / 0 failed**（146 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **882 passed / 16 skipped / 0 failed**（148 秒）。
+- `pytest tests/unit -q` → **878 passed / 16 skipped / 0 failed**（150 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **887 passed / 16 skipped / 0 failed**（138 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 866/未跑：本批 +7 条用例（`test_frontend_cold_start.py` 6 条 +
-  `test_sector_identity_audit_v74.py` 1 条），并把 `identity_view` 的 `realigned` 形状
-  从 5 键改成 6 键 —— 那条精确相等断言的用例同步改了，不是把断言放松。）
-  （再上一批 866 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
+  （上一基线 873/882：本批 +5 条用例（`test_frontend_cold_start.py` 从 6 条长成 10 条、
+  `test_sector_identity_audit_v74.py` 加 1 条"内置行必须与 `identity_view` 同形"）。）
+  （再上一批 866 —— 那一批把 `tests/` 口径欠了一次实测，本批两个口径都实测过。
+  再往前 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
   （再早 808/817 → 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例却没复测。
   规矩改成：最后一次改用例之后先跑数、再写文档，数字与用例改动必须在同一个提交里。）
@@ -382,12 +382,24 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   当成"老板看得见"）。本地起服务的固定姿势：
   `DATABASE_URL="sqlite:///data/fund_insight.db" ACCESS_PASSWORD=<一次性口令> python -m uvicorn src.api.main:app --port 8098`
   —— **显式设 `DATABASE_URL` 指向镜像**（`.env` 里它是生产），跑完按端口找 PID 关掉。
-  三条硬规矩：① 首屏五个取数点（stats / bloggers / stats/evidence / funds / sector-mappings）
-  一律过 `withWakeRetry()`，新增首屏取数要走同一条，否则实例唤醒时页面直接空；
-  ② **"取不到数据"与"库里没有"必须是两种文案**（博主榜曾把唤醒失败显示成"暂无博主数据"，
-  而镜像里有 27 个博主）；③ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
+  四条硬规矩：① 首屏**六个**取数点（stats / bloggers / stats+evidence / funds /
+  sector-mappings / predictions+verify-all+status）一律过 `withWakeRetry()`，
+  子模块靠 `createPredictionManager({ withWakeRetry })` 注入拿它；新增首屏取数要走同一条，
+  否则实例唤醒时页面直接空；
+  ② **状态码分档**：没答话与 502/503/504 算"服务不可用"（排队等醒，多个失败共用一次等待），
+  401/403 才是"口令不对"（只有这一档能清 `localStorage` 里的口令），500 原样抛出
+  （既不空等 90 秒也不删口令）—— 本仓库没配 `ACCESS_PASSWORD` 时回的就是 503；
+  ③ **"取不到"不能渲染成 0 或"库里没有"**：统计卡走 `statVal()`（取不到是 `—`），
+  空状态按 `serviceWaking → loading → 失败原因 → 真的空` 排序（镜像实测 27 个博主，
+  唤醒失败时报"暂无博主数据"或"0 个博主"都是假事实）；
+  ④ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
   对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）。
-  判据：`tests/unit/test_frontend_cold_start.py`（6 条判据、7 处变异逐条打红）。
+  判据：`tests/unit/test_frontend_cold_start.py`（10 条，其中一条用 node **执行页面里那份源码**，
+  喂 401/502/500/断网四种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`
+  （21 处变异逐条打红，跑完逐文件回读比对还原）。
+  第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
+  两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
+  **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

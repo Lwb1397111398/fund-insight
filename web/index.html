@@ -30,25 +30,30 @@
                 <div>加载中...</div>
             </div>
             <div v-else>
+                <!-- 首屏统计卡：取数失败时数字必须是"—"，不能是 0。0 是一个断言（"库里没有博主"），
+                     而那一刻我们唯一知道的是"没取到"。镜像实测 27 个博主，唤醒失败时报 0 就是假事实。 -->
+                <div v-if="statsError" class="text-xs" style="color:#ff4d4f; margin: 0 0 6px 0;">
+                    {{ statsError }} ⇒ 下面的数取不到，先别当事实<button class="action-btn small" @click="fetchStats">重试</button>
+                </div>
                 <div class="stats-mini-grid">
                     <div class="stat-mini" @click="loadView('bloggers')">
-                        <div class="value">{{ stats.overall?.total_bloggers || 0 }}</div>
+                        <div class="value">{{ statVal(stats.overall?.total_bloggers) }}</div>
                         <div class="label">博主</div>
                     </div>
                     <div class="stat-mini" @click="loadView('posts')">
-                        <div class="value">{{ stats.overall?.total_posts || 0 }}</div>
+                        <div class="value">{{ statVal(stats.overall?.total_posts) }}</div>
                         <div class="label">帖子</div>
                     </div>
                     <div class="stat-mini" @click="loadView('predictions')">
-                        <div class="value">{{ stats.overall?.total_predictions || 0 }}</div>
-                        <div class="label">预测 <span class="stat-extra">({{ stats.overall?.pending_predictions || 0 }}待验)</span></div>
+                        <div class="value">{{ statVal(stats.overall?.total_predictions) }}</div>
+                        <div class="label">预测 <span class="stat-extra">({{ statVal(stats.overall?.pending_predictions) }}待验)</span></div>
                     </div>
                     <div class="stat-mini" @click="loadView('viewpoints')">
-                        <div class="value">{{ stats.overall?.total_viewpoints || 0 }}</div>
+                        <div class="value">{{ statVal(stats.overall?.total_viewpoints) }}</div>
                         <div class="label">观点</div>
                     </div>
                     <div class="stat-mini" @click="loadView('funds')">
-                        <div class="value">{{ stats.overall?.total_funds || 0 }}</div>
+                        <div class="value">{{ statVal(stats.overall?.total_funds) }}</div>
                         <div class="label">基金</div>
                     </div>
                     <div class="stat-mini" @click="loadView('cleanup')">
@@ -131,11 +136,12 @@
                         </table>
                     </div>
                     <div v-else class="empty-state">
-                        <!-- 空表有两种成因：库里真没有博主，和"根本没取到数据"。以前两者都写成"暂无博主数据"，
-                             服务唤醒失败时老板看到的是"我一个博主都没有"，这是假事实。 -->
-                        <template v-if="bloggersError">{{ bloggersError }}
-                            <button class="action-btn small" @click="fetchBloggers">重试</button></template>
+                        <!-- 空表有三种成因，必须先排掉"还在取"和"没取到"，最后才允许说"库里没有"。
+                             顺序错了就会在等待唤醒的那几十秒里报出"暂无博主数据"这种假事实。 -->
+                        <template v-if="serviceWaking">正在等待服务唤醒（约 30~60 秒）…</template>
                         <template v-else-if="loading">加载中…</template>
+                        <template v-else-if="bloggersError">{{ bloggersError }}
+                            <button class="action-btn small" @click="fetchBloggers">重试</button></template>
                         <template v-else>暂无博主数据</template>
                     </div>
                 </div>
@@ -972,8 +978,10 @@
                 <div class="modal-header">连不上服务</div>
                 <div class="py-16">
                     <p style="color: #666; margin-bottom: 12px;">
-                        已经等过一轮（约 90 秒）仍连不上。<strong>密码没有清掉</strong>，
-                        免费实例冷启动通常 30~60 秒，也可能这次更久，重试就能继续用。
+                        <strong>{{ serviceProblem || '连不上服务' }}</strong>。
+                        已经等过一轮唤醒（最长 90 秒）仍没连上；免费实例冷启动通常 30~60 秒，
+                        网关超时的那次请求还要再等 60 秒，所以最坏要三分多钟才走到这个弹窗。
+                        <strong>密码没有清掉</strong>，重试就能继续用。
                     </p>
                     <p v-if="serviceWaking" style="color: #1677ff; font-size: 13px;">正在等待服务唤醒…</p>
                 </div>
@@ -1656,6 +1664,14 @@
                         <button class="action-btn small" @click="aiBatchMatch('gap')" :disabled="aiBatch.running" style="background: #08979c; color: #fff;">AI 补齐缺失板块</button>
                         <button class="action-btn small" @click="verifyAllFunds" :disabled="verifyAllVerifying" style="background: #722ed1; color: #fff;">{{ verifyAllVerifying ? '验证中…' : '验证全部抓取' }}</button>
                     </div>
+                    <!-- 点开任一体检筛选后，"这一档到底是什么意思"必须写在正文里：
+                         手机没有 hover，解释只活在 `title` 等于没写（本轮刚给自己立的规矩）。 -->
+                    <div v-if="identityFilter !== 'all'" class="text-xs" style="color:#8c8c8c; margin: 2px 0 6px 0;">
+                        <template v-if="identityFilter === 'no_literal'">名册里查不到字面对口的标的 ⇒ 这些行挂的是代理关系；AI 重匹配找不到更好的，要换得人工定。</template>
+                        <template v-else-if="identityFilter === 'relevance'">标的与板块字面无关，而名册里另有字面对口的那只 ⇒ 可以交给 AI 重匹配。</template>
+                        <template v-else-if="identityFilter === 'unservable'">身份体检判这只标的定不了价、或根本不是基金 ⇒ 不再拿去服务新帖子，等人工处置。</template>
+                        <template v-else>机器换过标的、老板还没确认的行。</template>
+                    </div>
                     <div v-if="verifyAllResult" style="margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid #d3adf7; background: #f9f0ff;">
                         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
                             <strong style="color: #722ed1; font-size: 13px;">抓取验证结果</strong>
@@ -2059,6 +2075,50 @@
                 const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false), passwordError = ref(''), authReady = ref(false);
                 // "连不上" ≠ "密码错了"：前者不清密码、给一个重试入口；后者才弹输入框
                 const serviceUnreachable = ref(false);
+
+                // 冷启动别把页面卡死：Render 实例睡着时第一笔请求会超时/SSL EOF，
+                // 而 `/api/health` 免鉴权且真做 `SELECT 1` ⇒ 拿它当"醒了吗"的探针，醒了自动重跑。
+                const serviceWaking = ref(false);
+                // 多个取数点同时失败时只排一次队。以前每个调用各起一个 90 秒轮询：
+                // health 探针被放大十几倍，而且谁先退出就把共享的 serviceWaking 置 false，
+                // 别的还在等的调用顶着一句已经消失的提示继续转。
+                let wakeWait = null;
+                const waitUntilAwake = (maxSeconds = 90) => {
+                    if (wakeWait) return wakeWait;
+                    serviceWaking.value = true;
+                    wakeWait = (async () => {
+                        const deadline = Date.now() + maxSeconds * 1000;
+                        let ok = false;
+                        try {
+                            while (Date.now() < deadline) {
+                                try { await axios.get('/api/health', { timeout: 8000 }); ok = true; break; }
+                                catch (e) { await new Promise(r => setTimeout(r, 3000)); }
+                            }
+                        } finally { serviceWaking.value = false; wakeWait = null; }
+                        return ok;
+                    })();
+                    return wakeWait;
+                };
+                // "服务器答了话但不是 2xx"≠"密码错了"。本仓库自己就会发 503（没配
+                // ACCESS_PASSWORD），Render 唤醒期网关回 502/504，路由内异常回 500 ——
+                // 上一版把这些和 401 一起当成"密码失效"，于是**服务端的错要老板重输口令**。
+                // 只有 401/403 是认证层的答案，才配得上清掉 localStorage 里的口令。
+                const isAuthRejection = (e) => !!(e && e.response && (e.response.status === 401 || e.response.status === 403));
+                const isServiceDown = (e) => !!e && (!e.response || e.code === 'ECONNABORTED' || e.code === 'ERR_NETWORK'
+                    || e.response.status === 502 || e.response.status === 503 || e.response.status === 504);
+                const withWakeRetry = async (fn) => {
+                    try { return await fn(); }
+                    catch (e) {
+                        if (!isServiceDown(e)) throw e;
+                        if (!(await waitUntilAwake())) throw e;
+                        return await fn();
+                    }
+                };
+                const serviceProblem = ref('');
+                const statsError = ref('');
+                const bloggersError = ref('');
+                // "没取到"不能渲染成 0 —— 0 是一个事实，而它不是事实。
+                const statVal = (v) => statsError.value ? '—' : (v || 0);
                 const checkAuth = async () => {
                     const savedPassword = localStorage.getItem('access_password');
                     if (savedPassword) {
@@ -2073,14 +2133,14 @@
                             window.setTimeout(() => restorePredictionVerifyTask(), 0);
                             return;
                         } catch (e) {
-                            if (!e.response) {
-                                // 服务器根本没答话（唤醒超时 / SSL EOF / 断网）。以前这里和"密码错了"
-                                // 共用一个分支 ⇒ 把老板存的密码清掉、弹窗逼他重输一遍，
-                                // 而真实原因只是实例还在睡。
+                            if (!isAuthRejection(e)) {
+                                // 服务器没答话，或答了但不是"口令不对"（500/502/503/504）⇒ 这是
+                                // 服务端的错，不该让老板重输一个根本没错的口令。
+                                serviceProblem.value = e && e.response ? ('服务返回 ' + e.response.status) : '连不上服务';
                                 serviceUnreachable.value = true;
                                 return;
                             }
-                            // 服务器答了话且不是 2xx ⇒ 密码确实失效，清除并弹出输入框
+                            // 401/403 = 认证层明确说口令不对，清除并弹出输入框
                             localStorage.removeItem('access_password');
                             delete axios.defaults.headers.common['X-Access-Password'];
                         }
@@ -2281,6 +2341,9 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, computed, alert, confirm, analyzing,
                     predictions, predictionDetail, showPredictionDetail, showEditPrediction, editingPrediction,
                     onStatsChanged: () => fetchStats(),
+                    // 唤醒重试要交给子模块用：`restorePredictionVerifyTask()` 也是首屏取数
+                    // （onMounted 里就调），漏了它 = 第 6 个取数点在冷启动时静默失败
+                    withWakeRetry,
                 });
                 const {
                     predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
@@ -2292,56 +2355,44 @@ const fetchWeChatBatch = async () => {
                     restorePredictionVerifyTask, previewPredictionMaintenance, executePredictionMaintenance,
                 } = predictionManager;
                 const deletePrediction = archivePrediction;
-                const fetchStats = async () => { fetchEvidence(); try { const res = await withWakeRetry(() => axios.get('/api/stats')); if (res.data.success) stats.value = res.data.data; } catch (e) { console.error(e); } loading.value = false; };
-                // 冷启动别把页面卡死：Render 实例睡着时第一笔请求会超时/SSL EOF，
-                // 而 `/api/health` 免鉴权且真做 `SELECT 1` ⇒ 拿它当"醒了吗"的探针，醒了自动重跑。
-                const serviceWaking = ref(false);
-                const waitUntilAwake = async (maxSeconds = 90) => {
-                    serviceWaking.value = true;
-                    const deadline = Date.now() + maxSeconds * 1000;
-                    let ok = false;
+                const fetchStats = async () => {
+                    fetchEvidence();
                     try {
-                        while (Date.now() < deadline) {
-                            try { await axios.get('/api/health', { timeout: 8000 }); ok = true; break; }
-                            catch (e) { await new Promise(r => setTimeout(r, 3000)); }
-                        }
-                    } finally { serviceWaking.value = false; }
-                    return ok;
-                };
-                const withWakeRetry = async (fn) => {
-                    try { return await fn(); }
-                    catch (e) {
-                        const networkish = !e.response || e.code === 'ECONNABORTED' || e.code === 'ERR_NETWORK';
-                        if (!networkish || !(await waitUntilAwake())) throw e;
-                        return await fn();
+                        const res = await withWakeRetry(() => axios.get('/api/stats'));
+                        if (res.data.success) { stats.value = res.data.data; statsError.value = ''; }
+                        else statsError.value = res.data.message || '统计接口返回失败';
+                    } catch (e) {
+                        // 只在失败时写、成功时才清：反过来写会让"正在等唤醒"的那 90 秒
+                        // 把错误提示抹掉，而列表还是空的 ⇒ 页面报出"0 个博主"这种假事实
+                        statsError.value = isServiceDown(e) ? '连不上服务（可能在唤醒）' : '统计接口报错';
                     }
+                    loading.value = false;
                 };
                 const fetchEvidence = async () => {
-                    evidenceError.value = '';
                     try {
                         const res = await withWakeRetry(() => axios.get('/api/stats/evidence'));
                         if (res.data.success) { evidenceReport.value = res.data.data; evidenceError.value = ''; }
                         else { evidenceError.value = res.data.message || '证据体检返回失败'; }
                     } catch (e) {
                         // 以前这里只 console.error ⇒ 页面永远停在"加载中"，准确率就光着报出去
-                        evidenceError.value = (e && (e.code === 'ECONNABORTED' || !e.response))
-                            ? '服务连不上（可能在唤醒）' : '证据体检接口报错';
+                        evidenceError.value = isServiceDown(e) ? '服务连不上（可能在唤醒）' : '证据体检接口报错';
                     }
                 };
                 const spanText = () => evidenceReport.value ? (evidenceReport.value.span_low_pct + '%~' + evidenceReport.value.span_high_pct + '%') : '-';
-                const bloggersError = ref('');
                 const fetchBloggers = async () => {
                     try {
-                        bloggersError.value = '';
                         const res = await withWakeRetry(() => axios.get('/api/bloggers'));
                         if (res.data.success) {
                             // 后端已按 hit_rate 排序；兼容旧字段
                             bloggers.value = res.data.data;
+                            bloggersError.value = '';
+                        } else {
+                            bloggersError.value = '博主榜返回失败：' + (res.data.message || '接口未给出原因');
                         }
                     } catch (e) {
-                        // 以前没有 catch ⇒ 唤醒失败时是一条未处理的 rejection，
-                        // 页面上榜单纯空白且一句原因都没有
-                        bloggersError.value = '博主榜拉取失败：' + (e.response ? '接口报错' : '服务连不上（可能在唤醒）');
+                        // 以前没有 catch ⇒ 唤醒失败是一条未处理拒绝，页面空白且一句原因都没有。
+                        // 错误只在失败时写、成功时才清：否则等待唤醒的那几十秒会显示成"暂无博主数据"
+                        bloggersError.value = '博主榜拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错');
                     }
                 };
                 const fetchFunds = async () => {
@@ -3015,7 +3066,8 @@ const fetchWeChatBatch = async () => {
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
                 return {
                     theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
-                    serviceWaking, serviceUnreachable, retryConnect, bloggersError, spanText, fetchEvidence,
+                    serviceWaking, serviceUnreachable, serviceProblem, retryConnect,
+                    bloggersError, statsError, statVal, fetchStats, spanText, fetchEvidence,
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,

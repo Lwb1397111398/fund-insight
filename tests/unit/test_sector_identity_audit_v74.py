@@ -158,6 +158,29 @@ def test_legacy_upgrade_records_still_name_the_old_fund():
     assert swap['replaced'] == '162412 华宝医疗ETF联接A'
 
 
+def test_builtin_rows_carry_every_key_the_page_reads():
+    """第 29 轮 B-N2：内置行的字典必须与 `identity_view` 同形，否则前端只能靠 `undefined` 兜。
+
+    "没体检过"与"体检说名册里没有对口标的"是两件事：缺 `relevance_state` 这个键时，
+    第三态在 77/222 行上**结构上永远点不到**，而页面看起来一切正常。
+    判据不连数据库：直接 AST 读 `config.py` 里那段 `merged.append({...})` 的键集合。
+    """
+    import ast
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[2] / 'src' / 'api' / 'routes' / 'config.py'
+           ).read_text(encoding='utf-8')
+    keys = set()
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'append' and node.args
+                and isinstance(node.args[0], ast.Dict)):
+            keys |= {k.value for k in node.args[0].keys if isinstance(k, ast.Constant)}
+    assert keys, '没扫到任何 merged.append({...})，这条判据就是恒真的'
+    view_keys = set(audit.identity_view(_row('T-形状', '512170', '医疗ETF')))
+    missing = view_keys - keys
+    assert not missing, '内置行少了这些键：%s ⇒ 前端读到 undefined' % sorted(missing)
+
+
 def test_apply_results_resets_an_unacknowledged_machine_swap(test_db):
     """M3 的存量返修：机器换过标的却挂着"已审查"→ 体检一轮就复位待复核。"""
     row = _row('T-六版复位', '159805', '传媒ETF', reviewed=True,

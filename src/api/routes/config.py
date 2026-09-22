@@ -1230,7 +1230,12 @@ def get_sector_mappings(
                 'identity_reason': None,
                 'identity_official_name': None,
                 'identity_suggestion': None,
+                'identity_suggestions': [],
+                'is_fetchable': None,
                 'relevance_low': False,
+                # 形状必须与 `identity_view` 对齐：缺这个键时前端只能靠 `undefined` 兜，
+                # 而"没体检过"和"体检说名册里没有对口标的"是两件事（第 29 轮 B-N2）。
+                'relevance_state': None,
                 'realigned': None,
                 'audited': False,
             })

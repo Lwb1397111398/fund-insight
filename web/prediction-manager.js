@@ -202,8 +202,11 @@
             }
         };
         const restorePredictionVerifyTask = async () => {
+            // 首屏第 6 个取数点：实例唤醒期它会和其余几个一起失败，所以走同一个
+            // `withWakeRetry`（由 index.html 注入）。判据只在一处，别在这里再抄一遍等待逻辑。
+            const wake = options.withWakeRetry || (fn => fn());
             try {
-                const response = await axios.get('/api/predictions/verify-all/status');
+                const response = await wake(() => axios.get('/api/predictions/verify-all/status'));
                 verifyTask.value = response.data.data || null;
                 if (verifyTask.value?.in_progress) await pollVerifyTask();
                 // 非进行中也保留 verifyTask，用于展示上次验证的失败原因汇总
