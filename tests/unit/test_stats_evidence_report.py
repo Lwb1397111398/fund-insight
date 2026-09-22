@@ -4,6 +4,7 @@
 以前只有脚本 stdout 与日志里有这几个数，页面上永远是一个精确到小数点的准确率。
 """
 import os
+import re
 from datetime import date
 
 import pytest
@@ -59,7 +60,6 @@ def env(tmp_path, monkeypatch):
     （本仓库其它路由测试都是这个形状）。
     """
     from src.api.main import app
-    import src.api.routes.stats as stats_routes
 
     engine = create_engine(
         'sqlite:///' + (tmp_path / 'evidence.db').as_posix(),
@@ -69,8 +69,9 @@ def env(tmp_path, monkeypatch):
     _seed(session)
 
     monkeypatch.setenv('ACCESS_PASSWORD', AUTH)
-    # 进程内 60 秒缓存必须每次清空，否则上一条用例的报告会被这一条读到
-    stats_routes._evidence_cache.update({'at': 0.0, 'report': None})
+    # 这里**不再**手工清空进程内 60 秒缓存：每条用例的库都是不同的 tmp_path，
+    # 缓存键带上了 bind url 就自然分得开。上一版靠手工清缓存绕过，等于把
+    # "换库会不会串数"这件事排除在测试之外（第 24 轮两份复评同点）。
 
     def override():
         yield session
@@ -120,15 +121,124 @@ def test_mapping_list_counts_the_third_state(env):
     assert payload['owner_confirmed_count'] + payload['reviewed_unconfirmed_count']         <= payload['custom_count']
 
 
+def test_audit_script_consumes_the_single_source():
+    """脚本必须消费 `span_report()`，不许自己再算一遍区间。
+
+    第 24 轮两份复评同点：提交说明写着"审计脚本改成消费它（唯一出处）"，
+    而那次改动**没进提交** —— HEAD 里的 `audit_verdict_evidence.py` 仍自带
+    `low = 100.0 * (correct - stale_correct) / ...`。今天两边数值凑巧相等，
+    但"迟早打架"正是这句话的承诺对象，所以把它钉成断言而不是留在提交说明里。
+    """
+    import io
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', '..', 'scripts', 'audit_verdict_evidence.py')
+    src = io.open(path, encoding='utf-8').read()
+    assert 'span_report(' in src, '脚本没在用唯一出处'
+    assert 'from src.services.verdict_evidence import' in src
+    for forbidden in ('100.0 * (correct - stale_correct)', 'stale_correct + len(stale'):
+        assert forbidden not in src, '脚本里还留着自算区间的式子：%s' % forbidden
+
+
+def test_report_as_of_uses_the_shared_beijing_clock(env):
+    """`as_of` 必须走 `current_as_of()`：Render 没设 TZ，`date.today()` 会每天早 8 小时说"昨天"。"""
+    from src.services.prediction_lifecycle import current_as_of
+
+    rep = span_report(env[1])
+    assert rep['as_of'] == current_as_of().isoformat()
+
+
+def test_evidence_cache_is_per_database(tmp_path, monkeypatch):
+    """同一进程里换库，第二次请求必须给新库的数。
+
+    为什么单独一条：接口自己写着"带 60 秒缓存"，而缓存原先只按时间分键。
+    第 24 轮 A 用两个临时库复现：第一次 judged=1，换绑到 10 条的库后**仍是 1**，
+    而 `database` 字段照样印"本地镜像库" —— 与第 23 轮那条错同一形态。
+    """
+    from src.api.main import app
+
+    monkeypatch.setenv('ACCESS_PASSWORD', AUTH)
+    engines, sessions = [], []
+    for i, extra in enumerate((0, 9)):
+        eng = create_engine('sqlite:///' + (tmp_path / f'c{i}.db').as_posix(),
+                            connect_args={'check_same_thread': False}, poolclass=StaticPool)
+        Base.metadata.create_all(eng)
+        s = sessionmaker(bind=eng)()
+        _seed(s)
+        for k in range(extra):                        # 第二个库多 9 条已判结论
+            s.add(Prediction(
+                post_id=1, blogger_id=1, fund_code='512170', fund_name='x%d' % k,
+                sector='测试', prediction_type='up', prediction_date=date(2026, 6, 1),
+                prediction_period='1周', target_date=date(2026, 6, 8),
+                end_nav=1.05, end_nav_date=date(2026, 6, 8), actual_change=5.0,
+                verify_count=1, verify_score=100, status='success', is_correct=True))
+        s.commit()
+        engines.append(eng)
+        sessions.append(s)
+
+    def override_for(idx):
+        def dep():
+            yield sessions[idx]
+        return dep
+
+    client = TestClient(app)
+    try:
+        app.dependency_overrides[get_db] = override_for(0)
+        first = client.get('/api/stats/evidence', headers=HEADERS).json()['data']
+        app.dependency_overrides[get_db] = override_for(1)      # 不清缓存，故意踩 TTL
+        second = client.get('/api/stats/evidence', headers=HEADERS).json()['data']
+        assert first['judged'] == 2, first
+        assert second['judged'] == 11, ('缓存把上一个库的数给了新库' % second)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        for s in sessions:
+            s.close()
+        for e in engines:
+            e.dispose()
+
+
+def _text_nodes(html: str) -> str:
+    """只留标签之间的正文；属性（含 `:title`）里的内容一律不算"看得见"。"""
+    return re.sub(r'<[^>]*>', '\n', html)
+
+
+def _text_interpolations(html: str):
+    """返回所有**落在正文里**的 `{{ ... }}` 插值内容（标签属性里的不算）。
+
+    判定方法很朴素：看插值前面最近的是 `>` 还是 `<` —— 刚闭合标签就是在正文里，
+    还没闭合就是在属性里。`v-if="evidenceReport.judged"` 那种条件表达式是合法的
+    属性用法，所以不能简单要求字段名压根不出现在标签里（我第一版就是这么写错的）。
+    """
+    out = []
+    for m in re.finditer(r'\{\{(.*?)\}\}', html, flags=re.S):
+        before = html[:m.start()]
+        if before.rfind('>') > before.rfind('<'):
+            out.append(m.group(1))
+    return out
+
+
 def test_the_page_shows_the_numbers_as_text_not_only_a_title():
-    """窄屏没有 hover：这几个数必须是**正文**，不能只活在 `title` 里。"""
+    """窄屏没有 hover：这几个数必须是**正文插值**，不能只活在 `title` 里。
+
+    原先这条只是 `field in html` 的子串检查 —— 把全部数字塞进 `:title="..."` 它照样绿，
+    恰好挡不住它声称要挡的那次回归（第 24 轮两份复评共同点到，属于"恒真守护"）。
+    """
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              '..', '..', 'web', 'index.html'),
                 encoding='utf-8').read()
     assert '/api/stats/evidence' in html, '页面根本没去取体检报告'
+    text = '\n'.join(_text_interpolations(html))
     for field in ('evidenceReport.judged', 'evidenceReport.stale_evidence',
-                  'span_low_pct', 'span_high_pct', 'evidenceReport.database',
-                  'evidenceReport.as_of'):
-        assert field in html, '页面少了 %s：老板还是只能看到一个孤立的小数点' % field
-    assert 'sectorMappings.owner_confirmed_count' in html
-    assert 'sectorMappings.reviewed_unconfirmed_count' in html
+                  'evidenceReport.stale_pct', 'evidenceReport.database',
+                  'evidenceReport.as_of', 'spanText()'):
+        assert field in text, '%s 不在正文插值里：手机上就看不见' % field
+    # 区间那两个数经 `spanText()` 中转，所以钉它定义里读的字段
+    span_def = re.search(r'const spanText = \(\) =>(.*?);', html, flags=re.S)
+    assert span_def and 'span_low_pct' in span_def.group(1) \
+        and 'span_high_pct' in span_def.group(1), 'spanText 没在读区间两个数'
+    # 一条已判结论都没有时不能显示 "0.0%~0.0%"（会被读成"准确率为零"）
+    assert '还没有已判结论' in _text_nodes(html)
+    # 第三态的两个数也必须走正文（`:title` 里那句补充说明可以有，但数不能只在那儿）
+    assert 'sectorMappings.owner_confirmed_count' in text
+    assert 'sectorMappings.reviewed_unconfirmed_count' in text
+

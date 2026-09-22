@@ -1239,10 +1239,13 @@ def get_sector_mappings(
     reviewed_count = sum(1 for m in mappings if m['reviewed'])
     unreviewed_count = len(mappings) - reviewed_count
     # 第三态：`reviewed=True` 只等于"看过"，真正免疫体检与 AI 覆盖的是老板确认过的行。
-    # 卡片以前只有两态 ⇒ 镜像 122 条"已审查"里其实只有 4 条确认过，老板以为都锁住了
-    # （第 20~23 轮连续四轮被同一条点到）。
-    # 只数自定义行：内置行没有"老板确认"这个动作可做（它们走的是静态表 + 拒绝集），
-    # 算进来的话卡片会说"121 条看过未确认"，那是噪音不是信息。
+    # 卡片以前只有两态 ⇒ 老板以为"已审查"就是"锁住了"（第 20~23 轮连续四轮被同一条点到）。
+    # 实测口径要写清是哪张表：2026-09-22 本地镜像 `sector_fund_mapping` 145 行活映射里
+    # reviewed=123，其中 `reviewed_by='owner' + owner_locked` 只有 4 行。
+    # 第三态只数自定义行：内置行没有"老板确认"这个动作可做（它们走静态表 + 拒绝集），
+    # 把两种来源混在同一个数里，这个数就没法对应到任何一次点击。
+    # （上一版这里写着"算进来会是 121 条噪音"——第 24 轮评审按任何口径都复现不出 121，
+    #   那是我没核过来源就抄进来的数字。）
     custom = [m for m in mappings if m.get('source') != 'builtin']
     owner_confirmed_count = sum(1 for m in custom
                                 if m.get('reviewed') and m.get('owner_locked'))

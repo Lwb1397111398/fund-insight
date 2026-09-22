@@ -162,7 +162,7 @@ def span_report(db) -> Dict:
     两把尺子迟早打架（第 23 轮：我给老板报了十几轮**镜像库**的数，生产其实是另一组）。
     所以这里连 `database` 与 `as_of` 一起给出去 —— 数字必须带库名和截止日。
     """
-    from datetime import date
+    from src.services.prediction_lifecycle import current_as_of
 
     rows = judged_rows(db)
     judged = len(rows)
@@ -185,7 +185,10 @@ def span_report(db) -> Dict:
         'span_low_pct': pct(correct - stale_correct),
         'span_high_pct': pct(correct - stale_correct + len(stale_rows)),
         'by_kind': by_kind,
-        'as_of': date.today().isoformat(),
+        # 统一走 `current_as_of()`（北京时间自然日）：第 24 轮评审指出 Render 没设 TZ，
+        # `date.today()` 在 UTC 下每天会有 8 小时显示"截至昨天"，而这个字段存在的理由
+        # 恰恰是"数字必须带截止日"。
+        'as_of': current_as_of().isoformat(),
         'database': database_label(db),
     }
 

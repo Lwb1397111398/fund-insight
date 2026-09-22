@@ -26,10 +26,6 @@ MAX_ROLLBACK_IDS = 200
 logger = logging.getLogger(__name__)
 
 
-class PredictionVerify(BaseModel):
-    actual_change: float
-    is_correct: bool
-    ai_judgment: Optional[str] = None
 
 
 @router.get("")

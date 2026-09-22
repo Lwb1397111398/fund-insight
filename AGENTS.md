@@ -195,11 +195,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22，第 18 轮修复之后）：
+最近一次核对（2026-09-22 20:37，第 24 轮修复之后）：
 
-- `pytest tests/unit -q` → **751 passed / 16 skipped / 0 failed**（约 187 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **765 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **793 passed / 16 skipped / 0 failed**（约 100 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **802 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
+  （上一基线 776 / 785；本批 +19 条新用例、删掉 2 条打在已删死路上的用例。
+  第 24 轮评审抓到的是我自己：`AGENTS.md` 里写着 `tests/ 765` 却小于实测的 `tests/unit 776`
+  —— 超集不可能比子集小，说明有一行是填数时没跑。）
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
   拿到的是 **`FundAPI` 实例**（`src/fund/__init__.py` 把包属性重绑成了实例），在它身上
@@ -243,6 +246,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   同一条规则的另一半（第 18 轮 MAJOR-5）：`verify_prediction` 若发现自带代码被体检判不可服务、
   改按板块解析出**另一个代码**，现在先走 `retag_prediction` 落库再判——以前它拿 B 判结论、
   行上还挂 A，等于持续新增上面那一族脏数据，而且因为从不回写，⚠ 徽章在新数据上永远测不到。
+- **下结论（写 `Prediction.is_correct`）只有一个入口**：`PredictionVerifyService.verify_prediction`。
+  同一条 AST 用例还盯着第二个字段：`src/` 里给 `X.is_correct = ...` 赋值的地方必须只有
+  `services/prediction_verify_service.py`（实测 2 处：`verify_prediction` 与
+  `clear_verification_fields`）。为什么要这条：`PredictionService.verify()` 是一条
+  自 `2c227c9`（2026-07-26 删 `POST /{id}/verify`）起就没有调用方的死路，而它**只写
+  `is_correct`** —— 不写 `verify_score`、不追加 `verify_history`、不重算 `blogger_stats`，
+  第 24 轮两份复评各自复现出"结论 False / 分数 100 / 台账 True / 博主准确率 100% /
+  区间 0%"这种五处互相打脸的行。方法连同 `PredictionVerify` 请求模型已删；要恢复人工改判
+  必须挂在验证服务那一侧（数据充分性门、休市证据门、退化终点门都在那里），别新开一条旁路。
+  同类问题的通则：**"唯一入口"这句话必须有测试钉着**，否则下一轮就会多一个入口。
 - **`reviewed_by='owner'` + `owner_locked`（＝身份体检豁免）只能由显式 `owner_confirm=true` 换来**。
   三条写入路径同一口径：逐行审查、批量审查、以及第 18 轮 MAJOR-1 才补上的**编辑保存**
   （`update_mapping`／`PUT|POST /api/config/sector-mappings`）。以前一次普通保存就白送永久免疫。

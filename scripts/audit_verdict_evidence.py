@@ -82,20 +82,13 @@ def accuracy_span(db, stale_ids):
     两把尺子今天都为 1110，但"今天恰好相等"不等于可以各写一份）。
     """
     from src.models.database import Prediction
-    from src.services.verdict_evidence import has_verdict
+    # 判据不在本文件里：唯一出处是 `verdict_evidence.span_report()`，页面 /api/stats/evidence
+    # 读的也是它。以前脚本自己算一份、服务算一份，"报错了库"那种事故就是这么来的。
+    from src.services.verdict_evidence import span_report
 
-    rows = db.query(Prediction).filter(
-        Prediction.is_deleted == False,                      # noqa: E712
-        Prediction.is_correct != None,
-    ).all()
-    rows = [r for r in rows if has_verdict(r)]
-    judged = len(rows)
-    correct = sum(1 for r in rows if r.is_correct)
-    stale = [r for r in rows if r.id in stale_ids]
-    stale_correct = sum(1 for r in stale if r.is_correct)
-    low = 100.0 * (correct - stale_correct) / max(1, judged)
-    high = 100.0 * (correct - stale_correct + len(stale)) / max(1, judged)
-    return judged, correct, 100.0 * correct / max(1, judged), low, high, len(stale)
+    rep = span_report(db)
+    return (rep['judged'], rep['correct'], rep['accuracy_pct'],
+            rep['span_low_pct'], rep['span_high_pct'], rep['stale_evidence'])
 
 
 def unmapped_codes(db):
@@ -107,16 +100,10 @@ def unmapped_codes(db):
     """
     from src.models.database import Prediction, SectorFundMapping
 
+    from src.services.verdict_evidence import judged_rows
+
     known = {r[0] for r in db.query(SectorFundMapping.fund_code).distinct().all()}
-    from src.services.verdict_evidence import has_verdict
-    rows = db.query(Prediction).filter(
-        Prediction.is_deleted == False,                      # noqa: E712
-        Prediction.is_correct != None,
-        Prediction.fund_code.isnot(None),
-    ).all()
-    # 与 `audit()` / `accuracy_span` 同一把尺子（第 20 轮 MINOR-6：三处各写一套判据，
-    # 今天凑巧都是 1110，"恰好相等"不是"可以各写一份"的理由）
-    rows = [r for r in rows if has_verdict(r)]
+    rows = [r for r in judged_rows(db) if r.fund_code]
     blind = [r for r in rows if (r.fund_code or '').strip() not in known]
     return len(rows), len(blind), sorted({(r.fund_code or '').strip() for r in blind})[:10]
 
@@ -135,6 +122,8 @@ def main():
 
     db = SessionLocal()
     try:
+        from src.services.verdict_evidence import database_label
+        print('[库] %s' % database_label(db))
         judged, buckets, samples, detail = audit(db)
         bad = sum(buckets.values())
         print('[体检] 已判结论 %d 条；端点证据与**当前标的**对不上 %d 条（%.1f%%）'

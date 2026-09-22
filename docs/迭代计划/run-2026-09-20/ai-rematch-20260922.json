@@ -1,0 +1,848 @@
+{
+ "run_id": "ai-rematch-20260922",
+ "why_no_llm_detail": "驱动脚本轮询条件手抄错终态词（等 done，实际 completed/completed_with_retries）⇒ 死等未退出，进程内的 per-sector LLM 明细未落档。本文件由 19:41 改前备份与当前镜像逐列还原。",
+ "backup": "fund_insight_20260922T114139Z.sqlite3",
+ "as_of": "2026-09-22T19:59+08:00",
+ "database": "本地镜像 data/fund_insight.db",
+ "sectors": [
+  "AI",
+  "中报业绩",
+  "中科三环",
+  "传媒",
+  "低估值",
+  "低空经济",
+  "元宇宙",
+  "全球",
+  "制冷剂",
+  "北美",
+  "区块链",
+  "医疗",
+  "华为概念",
+  "哈三联",
+  "天娱数科",
+  "应用",
+  "德明利",
+  "拓维信息",
+  "数字货币",
+  "核聚变",
+  "海力士",
+  "液冷",
+  "紫紫"
+ ],
+ "changed": [
+  {
+   "sector": "AI",
+   "diff": {
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:42:50.882266"
+    ]
+   },
+   "new_fund_name": "人工智能ETF易方达",
+   "nav_rows": 62,
+   "live_predictions": 0
+  },
+  {
+   "sector": "中报业绩",
+   "diff": {
+    "confidence": [
+     0.7675,
+     0.7975
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:43:05.379698"
+    ]
+   },
+   "new_fund_name": "信澳业绩驱动混合A",
+   "nav_rows": 20,
+   "live_predictions": 0
+  },
+  {
+   "sector": "中科三环",
+   "diff": {
+    "fund_code": [
+     "562800",
+     "516780"
+    ],
+    "confidence": [
+     0.693,
+     0.7178
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:43:18.391404"
+    ]
+   },
+   "new_fund_name": "稀土ETF华泰柏瑞",
+   "nav_rows": 65,
+   "live_predictions": 0
+  },
+  {
+   "sector": "传媒",
+   "diff": {
+    "confidence": [
+     0.925,
+     0.9325
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:43:32.962391"
+    ]
+   },
+   "new_fund_name": "传媒ETF鹏华",
+   "nav_rows": 40,
+   "live_predictions": 18
+  },
+  {
+   "sector": "低估值",
+   "diff": {
+    "confidence": [
+     0.7425,
+     0.7825
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:43:44.524121"
+    ]
+   },
+   "new_fund_name": "红利低波ETF华泰柏瑞",
+   "nav_rows": 77,
+   "live_predictions": 45
+  },
+  {
+   "sector": "低空经济",
+   "diff": {
+    "fund_code": [
+     "159507",
+     "159530"
+    ],
+    "confidence": [
+     0.693,
+     0.7178
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:43:58.152682"
+    ]
+   },
+   "new_fund_name": "机器人ETF易方达",
+   "nav_rows": 4,
+   "live_predictions": 0
+  },
+  {
+   "sector": "元宇宙",
+   "diff": {
+    "confidence": [
+     0.7043,
+     0.7825
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:44:20.196058"
+    ]
+   },
+   "new_fund_name": "VRETF银华",
+   "nav_rows": 20,
+   "live_predictions": 0
+  },
+  {
+   "sector": "全球",
+   "diff": {
+    "confidence": [
+     0.6793,
+     0.7275
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:44:37.267909"
+    ]
+   },
+   "new_fund_name": "标普500ETF博时",
+   "nav_rows": 61,
+   "live_predictions": 0
+  },
+  {
+   "sector": "制冷剂",
+   "diff": {
+    "confidence": [
+     0.5878,
+     0.7173
+    ],
+    "reviewed": [
+     0,
+     1
+    ],
+    "reviewed_by": [
+     null,
+     "agent"
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:44:58.175818"
+    ]
+   },
+   "new_fund_name": "化工ETF鹏华",
+   "nav_rows": 76,
+   "live_predictions": 0
+  },
+  {
+   "sector": "北美",
+   "diff": {
+    "fund_code": [
+     "513500",
+     "513100"
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:45:12.025517"
+    ]
+   },
+   "new_fund_name": "纳指ETF国泰",
+   "nav_rows": 77,
+   "live_predictions": 7
+  },
+  {
+   "sector": "区块链",
+   "diff": {
+    "fund_code": [
+     "159898",
+     "159890"
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:45:36.295435"
+    ]
+   },
+   "new_fund_name": "云计算ETF招商",
+   "nav_rows": 0,
+   "live_predictions": 0
+  },
+  {
+   "sector": "医疗",
+   "diff": {
+    "confidence": [
+     0.975,
+     0.905
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:45:49.167460"
+    ]
+   },
+   "new_fund_name": "医疗ETF南方",
+   "nav_rows": 64,
+   "live_predictions": 40
+  },
+  {
+   "sector": "华为概念",
+   "diff": {
+    "fund_code": [
+     "159509",
+     "159732"
+    ],
+    "confidence": [
+     0.6683,
+     0.6793
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:46:03.330983"
+    ]
+   },
+   "new_fund_name": "消费电子ETF华夏",
+   "nav_rows": 67,
+   "live_predictions": 1
+  },
+  {
+   "sector": "哈三联",
+   "diff": {
+    "fund_code": [
+     "512010",
+     "512170"
+    ],
+    "confidence": [
+     0.6531,
+     0.7054
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:46:18.171175"
+    ]
+   },
+   "new_fund_name": "华宝中证医疗ETF",
+   "nav_rows": 72,
+   "live_predictions": 53
+  },
+  {
+   "sector": "天娱数科",
+   "diff": {
+    "confidence": [
+     0.7425,
+     0.7275
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:46:34.181221"
+    ]
+   },
+   "new_fund_name": "人工智能ETF华夏",
+   "nav_rows": 74,
+   "live_predictions": 54
+  },
+  {
+   "sector": "应用",
+   "diff": {
+    "fund_code": [
+     "021252",
+     "516160"
+    ],
+    "confidence": [
+     0.7975,
+     0.7178
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:46:48.952894"
+    ]
+   },
+   "new_fund_name": "新能源ETF南方",
+   "nav_rows": 82,
+   "live_predictions": 79
+  },
+  {
+   "sector": "德明利",
+   "diff": {
+    "fund_code": [
+     "012650",
+     "512760"
+    ],
+    "confidence": [
+     0.6056,
+     0.6207
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:47:01.761789"
+    ]
+   },
+   "new_fund_name": "芯片ETF国泰",
+   "nav_rows": 62,
+   "live_predictions": 0
+  },
+  {
+   "sector": "拓维信息",
+   "diff": {
+    "fund_code": [
+     "159995",
+     "159998"
+    ],
+    "confidence": [
+     0.7425,
+     0.77
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:47:13.180098"
+    ]
+   },
+   "new_fund_name": "计算机ETF天弘",
+   "nav_rows": 20,
+   "live_predictions": 0
+  },
+  {
+   "sector": "数字货币",
+   "diff": {
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:47:26.308871"
+    ]
+   },
+   "new_fund_name": "汇添富数字未来混合A",
+   "nav_rows": 29,
+   "live_predictions": 0
+  },
+  {
+   "sector": "核聚变",
+   "diff": {
+    "fund_code": [
+     "562350",
+     "159525"
+    ],
+    "confidence": [
+     0.6348,
+     0.693
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:47:40.023053"
+    ]
+   },
+   "new_fund_name": "红利低波ETF富国",
+   "nav_rows": 0,
+   "live_predictions": 0
+  },
+  {
+   "sector": "海力士",
+   "diff": {
+    "fund_code": [
+     "159801",
+     "512760"
+    ],
+    "confidence": [
+     0.6531,
+     0.6207
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:47:52.961960"
+    ]
+   },
+   "new_fund_name": "芯片ETF国泰",
+   "nav_rows": 62,
+   "live_predictions": 0
+  },
+  {
+   "sector": "紫紫",
+   "diff": {
+    "fund_code": [
+     "159998",
+     "159996"
+    ],
+    "confidence": [
+     0.6531,
+     0.77
+    ],
+    "verified_at": [
+     "2026-09-21 14:06:08.024416",
+     "2026-09-22 19:49:14.635829"
+    ]
+   },
+   "new_fund_name": "家电ETF国泰",
+   "nav_rows": 61,
+   "live_predictions": 0
+  }
+ ],
+ "unchanged": [
+  "液冷"
+ ],
+ "missing_rows": [],
+ "before": {
+  "AI": {
+   "fund_code": "159819",
+   "confidence": 0.7825,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "中报业绩": {
+   "fund_code": "016370",
+   "confidence": 0.7675,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "中科三环": {
+   "fund_code": "562800",
+   "confidence": 0.693,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "传媒": {
+   "fund_code": "159805",
+   "confidence": 0.925,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "低估值": {
+   "fund_code": "512890",
+   "confidence": 0.7425,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "低空经济": {
+   "fund_code": "159507",
+   "confidence": 0.693,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "元宇宙": {
+   "fund_code": "159786",
+   "confidence": 0.7043,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "全球": {
+   "fund_code": "513500",
+   "confidence": 0.6793,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "制冷剂": {
+   "fund_code": "159870",
+   "confidence": 0.5878,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "北美": {
+   "fund_code": "513500",
+   "confidence": 0.7975,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "区块链": {
+   "fund_code": "159898",
+   "confidence": 0.7178,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "医疗": {
+   "fund_code": "159877",
+   "confidence": 0.975,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "华为概念": {
+   "fund_code": "159509",
+   "confidence": 0.6683,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "哈三联": {
+   "fund_code": "512010",
+   "confidence": 0.6531,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "天娱数科": {
+   "fund_code": "515070",
+   "confidence": 0.7425,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "应用": {
+   "fund_code": "021252",
+   "confidence": 0.7975,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "德明利": {
+   "fund_code": "012650",
+   "confidence": 0.6056,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "拓维信息": {
+   "fund_code": "159995",
+   "confidence": 0.7425,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "数字货币": {
+   "fund_code": "011399",
+   "confidence": 0.7425,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "核聚变": {
+   "fund_code": "562350",
+   "confidence": 0.6348,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "海力士": {
+   "fund_code": "159801",
+   "confidence": 0.6531,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "液冷": {
+   "fund_code": "159775",
+   "confidence": 0.5878,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "紫紫": {
+   "fund_code": "159998",
+   "confidence": 0.6531,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  }
+ },
+ "after": {
+  "AI": {
+   "fund_code": "159819",
+   "confidence": 0.7825,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:42:50.882266"
+  },
+  "中报业绩": {
+   "fund_code": "016370",
+   "confidence": 0.7975,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:43:05.379698"
+  },
+  "中科三环": {
+   "fund_code": "516780",
+   "confidence": 0.7178,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:43:18.391404"
+  },
+  "传媒": {
+   "fund_code": "159805",
+   "confidence": 0.9325,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:43:32.962391"
+  },
+  "低估值": {
+   "fund_code": "512890",
+   "confidence": 0.7825,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:43:44.524121"
+  },
+  "低空经济": {
+   "fund_code": "159530",
+   "confidence": 0.7178,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:43:58.152682"
+  },
+  "元宇宙": {
+   "fund_code": "159786",
+   "confidence": 0.7825,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:44:20.196058"
+  },
+  "全球": {
+   "fund_code": "513500",
+   "confidence": 0.7275,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:44:37.267909"
+  },
+  "制冷剂": {
+   "fund_code": "159870",
+   "confidence": 0.7173,
+   "reviewed": 1,
+   "reviewed_by": "agent",
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:44:58.175818"
+  },
+  "北美": {
+   "fund_code": "513100",
+   "confidence": 0.7975,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:45:12.025517"
+  },
+  "区块链": {
+   "fund_code": "159890",
+   "confidence": 0.7178,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:45:36.295435"
+  },
+  "医疗": {
+   "fund_code": "159877",
+   "confidence": 0.905,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:45:49.167460"
+  },
+  "华为概念": {
+   "fund_code": "159732",
+   "confidence": 0.6793,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:46:03.330983"
+  },
+  "哈三联": {
+   "fund_code": "512170",
+   "confidence": 0.7054,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:46:18.171175"
+  },
+  "天娱数科": {
+   "fund_code": "515070",
+   "confidence": 0.7275,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:46:34.181221"
+  },
+  "应用": {
+   "fund_code": "516160",
+   "confidence": 0.7178,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:46:48.952894"
+  },
+  "德明利": {
+   "fund_code": "512760",
+   "confidence": 0.6207,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:47:01.761789"
+  },
+  "拓维信息": {
+   "fund_code": "159998",
+   "confidence": 0.77,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:47:13.180098"
+  },
+  "数字货币": {
+   "fund_code": "011399",
+   "confidence": 0.7425,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:47:26.308871"
+  },
+  "核聚变": {
+   "fund_code": "159525",
+   "confidence": 0.693,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:47:40.023053"
+  },
+  "海力士": {
+   "fund_code": "512760",
+   "confidence": 0.6207,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-22 19:47:52.961960"
+  },
+  "液冷": {
+   "fund_code": "159775",
+   "confidence": 0.5878,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": null,
+   "verified_at": "2026-09-21 14:06:08.024416"
+  },
+  "紫紫": {
+   "fund_code": "159996",
+   "confidence": 0.77,
+   "reviewed": 0,
+   "reviewed_by": null,
+   "match_source": "agent",
+   "owner_locked": 0,
+   "verified_at": "2026-09-22 19:49:14.635829"
+  }
+ }
+}

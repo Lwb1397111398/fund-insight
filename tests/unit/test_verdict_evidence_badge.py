@@ -168,6 +168,49 @@ def test_no_new_direct_fund_code_writes_appear():
         % sorted(allowed - found))
 
 
+def test_is_correct_is_only_written_by_the_verify_service():
+    """下结论这件事只有一个入口（第 24 轮删掉的那条死路留下的永久护栏）。
+
+    背景：`PredictionService.verify()` 自 2026-07-26（`2c227c9` 删 `POST /{id}/verify`）
+    起就没有调用方，但它仍然"能"写 `is_correct` —— 而且只写这一个字段：
+    不写 `verify_score`、不追加 `verify_history`、不重算 `blogger_stats`，
+    两份复评各自复现出"结论 False / 分数 100 / 台账 True / 博主准确率 100% /
+    区间 0%"这种五处互相打脸的行。方法已删，这条用例保证它不会被"顺手加回来"。
+    """
+    import ast
+    import io as _io
+    import os
+
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), 'src')
+    writers = set()
+    for dirpath, dirs, files in os.walk(root):
+        if '__pycache__' in dirpath:
+            continue
+        for name in files:
+            if not name.endswith('.py'):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root).replace(os.sep, '/')
+
+            class _C(ast.NodeVisitor):
+                def visit_Assign(self, node):
+                    for target in node.targets:
+                        if isinstance(target, ast.Attribute) and target.attr == 'is_correct':
+                            writers.add(rel)
+                    self.generic_visit(node)
+
+            _C().visit(ast.parse(_io.open(path, encoding='utf-8').read()))
+
+    assert writers == {'services/prediction_verify_service.py'}, (
+        '出现了新的 `is_correct` 写点 %s：下结论必须走 PredictionVerifyService.verify_prediction'
+        '（那里才有数据充分性门、休市证据门、退化终点门，并同步分数/台账/博主统计）' % sorted(writers))
+
+    from src.services.prediction_service import PredictionService
+    assert not hasattr(PredictionService, 'verify'), (
+        'PredictionService.verify 又回来了：它是一条能写结论却不同步分数与统计的旁路')
+
+
 def test_list_endpoint_exposes_the_derived_badge(test_db):
     """前端 ⚠ 标记读的是接口字段；字段名一旦漂移，页面会安静地永远不亮。"""
     prediction = _seed_verified_prediction(test_db)

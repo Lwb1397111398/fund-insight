@@ -9,7 +9,7 @@ from .post import (
     PostBase, PostCreate, PostUpdate, PostResponse
 )
 from .prediction import (
-    PredictionBase, PredictionCreate, PredictionVerify, PredictionResponse
+    PredictionBase, PredictionCreate, PredictionResponse
 )
 from .fund import (
     FundBase, FundAdd, FundResponse
@@ -24,7 +24,7 @@ from .common import (
 __all__ = [
     'BloggerBase', 'BloggerCreate', 'BloggerUpdate', 'BloggerResponse',
     'PostBase', 'PostCreate', 'PostUpdate', 'PostResponse',
-    'PredictionBase', 'PredictionCreate', 'PredictionVerify', 'PredictionResponse',
+    'PredictionBase', 'PredictionCreate', 'PredictionResponse',
     'FundBase', 'FundAdd', 'FundResponse',
     'ViewpointBase', 'ViewpointCreate', 'ViewpointResponse',
     'SuccessResponse', 'ErrorResponse', 'PaginatedResponse',

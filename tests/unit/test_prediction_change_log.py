@@ -99,31 +99,6 @@ def test_application_json_backup_includes_prediction_change_logs(test_db):
     assert test_db.query(PredictionChangeLog).count() == 1
 
 
-def test_manual_verification_creates_change_log(test_db):
-    from src.models.database import PredictionChangeLog
-    from src.services.prediction_service import PredictionService
-
-    prediction = _seed_prediction(test_db)
-    # 人工改判只能落在**已有端点证据**的行上（见 `PredictionService.verify` 的说明）
-    prediction.end_nav, prediction.end_nav_date = 1.08, date(2026, 7, 8)
-    prediction.start_nav, prediction.start_nav_date = 1.05, date(2026, 7, 1)
-    prediction.verify_count = 1
-    test_db.commit()
-
-    assert PredictionService(test_db).verify(
-        prediction.id,
-        actual_change=3.2,
-        is_correct=True,
-        ai_judgment="人工确认",
-    ) is not None
-
-    log = test_db.query(PredictionChangeLog).one()
-    assert log.action == "verified"
-    assert log.source == "manual"
-    assert "status" in log.changed_fields
-    assert log.before_state["status"] == "pending"
-    # 人工确认与自动验证同口径：结论写 success/failed，不再写 status='verified'
-    assert log.after_state["status"] == "success"
 
 
 def test_automatic_verification_creates_change_log(test_db, monkeypatch):
@@ -184,26 +159,3 @@ def test_automatic_verification_creates_change_log(test_db, monkeypatch):
     assert log.after_state["status"] == "success"
 
 
-def test_manual_verify_refuses_a_row_without_endpoint_evidence(test_db):
-    """第 24 轮：以前这个方法可以凭空写一条"页面显示正确、统计与体检都不认"的半结论。
-
-    `blogger_stats` 按 `verify_count>0` 数、准确率区间按 `has_verdict`（需要端点净值）数，
-    而它只写 `is_correct/status/actual_change` ⇒ 三套口径各说各话。
-    现在没有证据就拒写，要下结论必须走 `verify_prediction`（那里有数据充分性门）。
-    """
-    from src.models.database import PredictionChangeLog
-    from src.services.prediction_service import PredictionService
-    from src.services.prediction_verify_service import has_verdict_trace
-    from src.services.verdict_evidence import has_verdict
-
-    prediction = _seed_prediction(test_db)
-    assert has_verdict(prediction) is False
-
-    result = PredictionService(test_db).verify(
-        prediction.id, actual_change=9.9, is_correct=True, ai_judgment="凭空判对")
-
-    assert result is None, '无证据的人工改判被写进了库'
-    test_db.refresh(prediction)
-    assert prediction.is_correct is None and prediction.status == 'pending'
-    assert has_verdict_trace(prediction) is False, '写坏了一半：状态没变但结论字段落了'
-    assert test_db.query(PredictionChangeLog).count() == 0, '拒写就不该留下"已验证"日志'

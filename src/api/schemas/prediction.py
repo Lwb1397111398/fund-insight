@@ -25,11 +25,6 @@ class PredictionCreate(PredictionBase):
     prediction_period: Optional[str] = Field(default="medium", description="预测周期")
 
 
-class PredictionVerify(BaseModel):
-    """验证预测请求"""
-    actual_change: float = Field(..., description="实际涨跌幅")
-    is_correct: bool = Field(..., description="是否正确")
-    ai_judgment: Optional[str] = Field(None, description="AI判断说明")
 
 
 class PredictionUpdate(BaseModel):

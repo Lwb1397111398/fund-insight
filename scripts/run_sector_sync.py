@@ -48,10 +48,11 @@ def main():
         service = PredictionMaintenanceService(db)
         preview = service.sync_sector_mappings(
             dry_run=True, min_confidence=args.min_confidence)
-        # 措辞修正：这里数的是"参与同步的已审查映射行"，不是"要被改写的映射条数"
-        # —— 本脚本根本不写 `sector_fund_mapping`，它只把预测挂到映射行的标的上。
-        # 我上一轮把 122 读成"会更新 122 条映射"并这样报了出去（第 24 轮自查）。
-        print('[dry-run] 参与同步的已审查映射 %d 条（低于置信度门槛跳过 %d 条）'
+        # 措辞修正（两次）：① 本脚本根本不写 `sector_fund_mapping`，它只把预测挂到映射行的
+        # 标的上 —— 我上一轮把 122 读成"会更新 122 条映射"并这样报了出去（第 24 轮自查）；
+        # ② `total_mappings = len(sector_map)` 数的是**按板块去重后的键数**，不是映射行数
+        # （第 24 轮 B）。今天每板块只有一行所以两者相等，加第二行后写"条"就又误导一次。
+        print('[dry-run] 参与同步的板块 %d 个（低于置信度门槛跳过 %d 个）'
               % (preview['total_mappings'], preview['mappings_skipped_low_confidence']))
         print('[dry-run] 预计改动预测 %d 条，其中需重置验证结论 %d 条；无映射 %d 条；已一致 %d 条'
               % (preview['would_update'],

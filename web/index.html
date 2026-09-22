@@ -72,9 +72,15 @@
                     <!-- 准确率旁边必须写着它有多可信。只放在 hover 的 title 里等于没写：
                          手机没有 hover，而老板看的恰恰是这个数。 -->
                     <div v-if="evidenceReport" class="text-xs" style="color:#8c8c8c; margin: 2px 0 8px 0;">
+                        <template v-if="evidenceReport.judged">
                         已判 {{ evidenceReport.judged }} 条，其中 <span style="color:#d46b08;">⚠ {{ evidenceReport.stale_evidence }} 条（{{ evidenceReport.stale_pct }}%）端点净值今天已复现不出来</span>
                         ⇒ 准确率只能按区间看：<strong>{{ spanText() }}</strong>
                         · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}
+                        </template>
+                        <!-- 一条已判结论都没有时，"0.0%~0.0%"会被读成"准确率为零"。 -->
+                        <template v-else>
+                        这个库还没有已判结论，准确率暂无意义 · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}
+                        </template>
                     </div>
                     <div v-else class="text-xs" style="color:#bfbfbf; margin: 2px 0 8px 0;">结论证据体检数据加载中…</div>
                     <div class="data-table" v-if="bloggers.length > 0">
