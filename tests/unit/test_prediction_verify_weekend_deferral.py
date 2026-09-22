@@ -8,7 +8,7 @@
 所以 S7-2 改成：起点与终点落在同一条净值时**拒判**（`same_nav_endpoint`），
 并且把"缺目标日附近历史"（补拉最新数据永远补不到）与"净值太旧"（该更新）分开说。
 """
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -152,7 +152,10 @@ def test_dead_fund_needs_evidence_before_being_called_unverifiable(test_db):
     r = _check(test_db, code, START, TARGET_SAT, today=date(2026, 9, 21))
     assert r['available'] is False and r['reason'] == 'insufficient_points', r
 
-    backfill_proofs.record_probe(test_db, code, START, TARGET_SAT, 0)
+    # 写侧 `now=` 要与读侧 `today=` 同一天：凭据打墙上时钟时，跨过北京零点 age 变负，
+    # `_fresh` 会按"未来时间戳不可信"拒收 ⇒ 用例与代码无关地自己变红
+    backfill_proofs.record_probe(test_db, code, START, TARGET_SAT, 0,
+                                 now=datetime(2026, 9, 21, 9, 30))
     test_db.commit()
     r2 = _check(test_db, code, START, TARGET_SAT, today=date(2026, 9, 21))
     assert r2['reason'] == 'same_nav_endpoint', r2
@@ -300,8 +303,6 @@ def test_a_fresh_proof_also_legitimises_the_previous_endpoint(test_db):
     凭据时间戳必须与注入的 `today` 同一时钟（第 17 轮 MINOR-1）：写入侧原来只能打墙上
     时钟，真实日期一走到 09-24 这条用例就会因 TTL 判不可信而**与代码无关地**变红。
     """
-    from datetime import datetime
-
     from src.fund import backfill_proofs
 
     _rows(test_db, '159501', [date(2026, 9, 10), date(2026, 9, 11)])

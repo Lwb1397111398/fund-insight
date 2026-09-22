@@ -11,8 +11,10 @@
 于是"本地净值停在 2020-12-08、预测窗口在 2026 年 9 月"这类行（实测 003033）
 **永远进不到补拉分支**，也就永远无法被证明 —— 现在要求窗口内至少 1 条才允许免打。
 """
+import ast
 import json
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -455,8 +457,10 @@ def test_availability_only_claims_unverifiable_when_proven(test_db):
                                           today=date(2026, 9, 21))
     assert r['available'] is False and r['reason'] == 'insufficient_points', r
 
+    # 写侧 `now=` 与读侧 `today=` 必须同一天，否则跨过北京零点就用例自己变红
     backfill_proofs.record_probe(test_db, code, start - timedelta(days=2),
-                                 end + timedelta(days=2), 0)
+                                 end + timedelta(days=2), 0,
+                                 now=datetime(2026, 9, 21, 9, 30))
     test_db.commit()
     r2 = svc._check_fund_data_availability(fund_code=code, nav_start_date=start,
                                            window_end=end, target_date=end,
@@ -488,7 +492,8 @@ def test_future_timestamped_proof_is_not_believed():
     """第 14 轮 MINOR-1：`checked_at` 来自未来的凭据不能永不过期。"""
     db = _session()
     future = (datetime.now() + timedelta(days=400)).isoformat()
-    backfill_proofs.record_probe(db, '510300', date(2026, 6, 1), date(2026, 6, 30), 0)
+    backfill_proofs.record_probe(db, '510300', date(2026, 6, 1), date(2026, 6, 30), 0,
+                                 now=datetime(2026, 9, 22, 9, 30))
     db.commit()
     row = db.query(SystemConfig).filter(
         SystemConfig.config_key == backfill_proofs.proof_key('510300')).first()
@@ -498,3 +503,59 @@ def test_future_timestamped_proof_is_not_believed():
     db.commit()
     assert backfill_proofs.fresh(db, '510300', date(2026, 6, 5), date(2026, 6, 20),
                                  today=date(2026, 9, 22)) is None, '未来时间戳 = 永久免检'
+
+
+def _is_fixed_date(node, fixed_names):
+    """字面 `date(2026, 9, 21)`，或被赋成这种字面值的变量名。"""
+    if isinstance(node, ast.Name):
+        return node.id in fixed_names
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == 'date'
+            and all(isinstance(a, ast.Constant) for a in node.args))
+
+
+def _clock_mismatch_lines(path):
+    """同一函数里"读侧钉死 today"与"写侧凭据打墙上时钟"并存的文件行号。"""
+    tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+    hits = []
+    for fn in (n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        fixed_names = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and _is_fixed_date(node.value, set()):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name):
+                        fixed_names.add(tgt.id)
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        reads_fixed = any(
+            kw.arg == 'today' and _is_fixed_date(kw.value, fixed_names)
+            for c in calls for kw in c.keywords
+        )
+        if not reads_fixed:
+            continue
+        for c in calls:
+            func = c.func
+            if getattr(func, 'attr', None) != 'record_probe':
+                continue
+            if not any(kw.arg == 'now' for kw in c.keywords):
+                hits.append((path.name, fn.name, c.lineno))
+    return hits
+
+
+def test_fixed_today_reads_never_stamp_proofs_with_the_wall_clock():
+    """凭据的 `checked_at` 默认取墙上时钟，而 `_fresh` 把"来自未来"的时间戳判为不可信
+    （age < -1）。所以只要读侧注入了固定 `today=`，写侧就必须同时注入 `now=`——
+    否则这条用例的**通过与否取决于哪天跑它**：第 27 轮 C 实测 09-22 23:39 全绿的
+    `tests/unit`，跨过北京零点后有 2 条与代码无关地变红
+    （`test_availability_only_claims_unverifiable_when_proven`、
+    `test_dead_fund_needs_evidence_before_being_called_unverifiable`）。
+    第 17 轮 MINOR-1 加 `now=` 参数时就为躲这个坑写过说明，同一个坑在它自己的用例上复发了。
+    """
+    unit_dir = Path(__file__).resolve().parent
+    offenders = []
+    for py in sorted(unit_dir.glob('*.py')):
+        offenders.extend(_clock_mismatch_lines(py))
+    assert not offenders, (
+        '这些 record_probe 打了墙上时钟，却与固定 today= 的读同一函数共存 ⇒ 跨过零点会自己变红，'
+        '请补 now=（与读侧同一天）：' + '; '.join(f'{f}:{fn}:{ln}' for f, fn, ln in offenders))
+

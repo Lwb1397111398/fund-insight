@@ -35,6 +35,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
+# 控制台默认 cp936 时，结果里带 `⇒` 这类字符会让查询**跑完之后**在 print 处崩掉，
+# 回执一个字都看不见（第 27 轮 D-MINOR-7 实测）。输出通道改成 UTF-8、不可编码的字符替换掉。
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 WRITE_WORDS = re.compile(
     r'\b(insert|update|delete|drop|alter|truncate|create|vacuum|attach|'
     r'pragma\s*=\s*|call|execute|grant|revoke|set|'

@@ -47,6 +47,23 @@ def find_t3(node):
     return out
 
 
+def pick_own_t3(records, code):
+    """取**属于这一行那只基金**的 T3 记录；找不到返回 None，绝不兜底给第一条。
+
+    T3 是逐个候选评估的（一行多条），`records[0]` 通常是别的候选的分数。
+    第 27 轮 D-MAJOR-2 实测：52 行里 29 行发布出去的分不属于本行基金
+    （例：`核聚变/159525` 自己那只是 90.0，却被写成第一条 `562350` 的 30.0）。
+    这跟 claim_sim 那次"47 条其实是 10 条"是同一个错：行级字段配了别行的子记录。
+    """
+    target = str(code or '').strip()
+    if not target:
+        return None                      # 空代码不许与"同样为空"的记录配对
+    for rec in records or []:
+        if str((rec or {}).get('code') or '').strip() == target:
+            return rec
+    return None
+
+
 def literal_related(sector, official_name):
     from src.services.sector_identity_audit import contains_core, cjk_core, sector_core
     core = sector_core(sector) or sector
@@ -77,7 +94,7 @@ def main():
     finally:
         db.close()
 
-    out, no_t3 = [], 0
+    out, no_t3, unpaired = [], 0, 0
     for r in rows:
         try:
             ev = json.loads(r.evidence or '{}')
@@ -87,7 +104,11 @@ def main():
         if not t3s:
             no_t3 += 1
             continue
-        t3 = t3s[0]
+        t3 = pick_own_t3(t3s, r.fund_code)
+        if t3 is None:
+            # 本行那只基金压根没被评过分：不能拿别的候选的分数顶，报出来让人看见
+            unpaired += 1
+            continue
         low = {str(k).lower(): v for k, v in t3.items()}
         score = low.get('score')
         if not isinstance(score, (int, float)):
@@ -117,8 +138,8 @@ def main():
             f.write(','.join('"%s"' % str(d[c]).replace('"', '""') for c in cols) + '\n')
 
     hi = [d for d in out if d['t3_score'] >= 70]
-    print('[种子] 待标 %d 行（另有 %d 行没有可用的 t3 分数）；≥70 分 %d 行'
-          % (len(out), no_t3, len(hi)))
+    print('[种子] 待标 %d 行（另有 %d 行没有 t3 记录、%d 行的 evidence 里没有本行那只基金的记录）；'
+          '≥70 分 %d 行' % (len(out), no_t3, unpaired, len(hi)))
     print('[口径] 名册=本地缓存 %s（%d 只）；库=本地镜像 data/fund_insight.db；本脚本不写库、不调 LLM'
           % (os.path.basename(args.roster), len(roster)))
     print('[提示] `human_label` 留空给你填：合适 / 勉强代理 / 不对。'

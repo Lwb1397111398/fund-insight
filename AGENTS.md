@@ -195,13 +195,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22 23:39，第 27 轮（静态板块表守护）修复之后，最后一次改用例后立刻重跑）：
+最近一次核对（2026-09-23 01:44（北京），第 28 轮（第 27 轮两份复评的修复批次）最后一次改用例之后立刻重跑）：
 
-- `pytest tests/unit -q` → **835 passed / 16 skipped / 0 failed**（约 200 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **844 passed / 16 skipped / 0 failed**（约 180 秒）。
+- `pytest tests/unit -q` → **845 passed / 16 skipped / 0 failed**（139 秒）。
+- `pytest tests/ -q`（含 integration/services）本轮**没有重跑**，所以不引用它的数；
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 808/817 → 819/828 → 本批 835/844。**同一个错我连犯两轮**：写完基线数字后又加用例
-  却没复测。规矩改成：最后一次改用例之后先跑数、再写文档，数字与用例改动必须在同一个提交里。）
+  （上一基线 835/844 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
+  跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
+  （再早 808/817 → 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例却没复测。
+  规矩改成：最后一次改用例之后先跑数、再写文档，数字与用例改动必须在同一个提交里。）
   （更早的基线 776 / 785；那一批 +19 条新用例、删掉 2 条打在已删死路上的用例。
   第 24 轮评审抓到的是我自己：`AGENTS.md` 里写着 `tests/ 765` 却小于实测的 `tests/unit 776`
   —— 超集不可能比子集小，说明有一行是填数时没跑。）
@@ -214,7 +216,29 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   命中的也算死条目，会红）；② "名册里没有对口基金、宁可交给 agent"的板块要写进
   `SECTOR_NO_STATIC_FUND`——**只把键从表里删掉不够**，第 5~7 步子串模糊匹配还会把它吸到
   别的板块的标的上（实测 `卫星互联网 → 517200 互联网ETF`），而 `normalize_sector_name` 同样会
-  因此改写 `sector_core`；③ 表里的 `name` 必须逐字等于名册官方名（`--fix-labels` 可代改）。
+  因此改写 `sector_core`；**第 28 轮又补一层：只写精确串也不够**，`卫星互联网产业` /
+  `A股互联网平台` 这种"长一点的说法"照样绕过名单、仍被吸到 517200。现在判据是
+  `_literal_block_hit()`（名单词命中长度 ≥ 表内命中键长度 ⇒ 按屏蔽，"最具体的一方说了算"），
+  用例两侧都钉：既测"长名字绕不过"，也测"109 个表键一个都不许被误挡"；
+  ③ 表里的 `name` 必须逐字等于名册官方名（`--fix-labels` 可代改；该脚本现在有跳过就退码 5，
+  不再"报着跳过却算成功"）。
+  两根轴上还有两处**别再说满话**的地方（第 27 轮两份复评各抓到一处）：
+  ④ "官方名与板块字面相关"里混着**只共用一个汉字**的弱命中（2026-09-23 实测 R 桶 99 条里
+  **13 条**，如 `建材→基建ETF`、`家居→家电ETF`；`relevance_kind()` 分 `core`/`char`，
+  报告与 CSV 单列，条数钉在 `test_weak_literal_hits_are_labeled_as_weak`）⇒ 别说成"全部已核对"；
+  ⑤ D1 有两条腿（夹具 `d1_words` 与 `by_code`），变异实验证明任一条断掉当时 16 条用例全绿 ⇒
+  两条腿各有用例，且 `main()` 里那次 `classify(...)` 必须显式带 `d1_words=`（AST 检查）。
+  这张表"管多少条预测 / 这一轮动了多少条"一律用 `python scripts/measure_static_table_reach.py`
+  现量（2026-09-23 镜像：**活预测 1616 条，只被静态表覆盖 911 条 / 50 个板块**；
+  `--impact-against data/_old_map.py` 量影响面：**31 个板块（改码 18 / 删键 13）= 78 条 = 4.8%**）。
+  以前文档里写过的"916 条""124 条 / 7.7%"都是手抄没绑口径，已撤回（同一个数被复现成 925/911）。
+- **写侧凭据的 `now=` 必须与读侧的 `today=` 同一天**（第 27 轮 C-B1，实测踩过）：
+  `backfill_proofs.record_probe(...)` 不打 `now=` 就取墙上时钟，而 `_fresh` 把"来自未来的
+  时间戳"判为不可信（`age < -1`）⇒ 用例若同时注入固定 `today=date(2026,9,21)`，
+  **它通过与否就取决于哪天跑**：09-22 23:39 全绿的 `tests/unit`，跨过北京零点红了 2 条。
+  现在 `tests/unit/test_backfill_negative_proof.py::test_fixed_today_reads_never_stamp_proofs_with_the_wall_clock`
+  用 AST 扫 `tests/unit/*.py`，同函数内"固定 `today=` 的读 + 不带 `now=` 的 `record_probe`"并存即红。
+  同类教训第 17 轮就写过（`record_probe` 的 `now=` 就是那时加的参数）——**加了参数不等于加了护栏**。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
   拿到的是 **`FundAPI` 实例**（`src/fund/__init__.py` 把包属性重绑成了实例），在它身上

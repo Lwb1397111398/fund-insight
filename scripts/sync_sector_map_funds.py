@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """给静态板块表引用的基金码补齐本地档案与净值历史（默认 dry-run）。
 
-为什么需要：`SECTOR_FUND_MAP` 第 27 轮体检换了 17 个代码，而本地库里
-**12 个既没有 `fund_info` 档案也没有一行净值**。板块换对了标的，标的却取不到净值
-⇒ 落在新代码上的预测永远进不了验证队列（`due` 也查不出端点）。
+为什么需要：第 27 轮体检改过码/删过键的板块有 **31 个**（改码 18 / 删键 13，
+可复现：`git show c7cbc25:src/constants/sector_fund_map.py > data/_old_map.py
+&& python scripts/measure_static_table_reach.py --impact-against data/_old_map.py`），
+而**补档案之前**本地库里有一批新代码"既没有 `fund_info` 档案也没有一行净值"
+（当时报的是 26 个；那批档案已经写进库了，所以这个历史数**不可复现**，别拿它当现状）。
+板块换对了标的，标的却取不到净值 ⇒ 落在新代码上的预测永远进不了验证队列
+（`due` 也查不出端点）。现状跑本脚本 dry-run 即可复核：今天量到的是
+缺档案 0 个、净值 <30 行 2 个（`158041` 新上市只 7 行、`508006` 是 REIT）。
 `scripts/audit_static_sector_map.py` 管"代码对不对"，这个脚本管"代码能不能用"。
 
 安全阀：

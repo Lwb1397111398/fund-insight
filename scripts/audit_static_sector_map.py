@@ -2,28 +2,33 @@
 """给**写死的静态板块表** `src/constants/sector_fund_map.py` 做一次身份体检（只读）。
 
 为什么单独一个脚本：映射表的体检（`sweep_sector_mappings.py`）只遍历
-`sector_fund_mapping` 的行，静态表从来不在它的覆盖面里。而 2026-09-22 实测：
-1616 条活预测里有 **916 条**所在板块只被静态表覆盖（映射表没有已审查行）
-⇒ 老板抱怨的"基金离板块差十万八千里"有一大块源头在这张表上，我前 26 轮都在修下游。
+`sector_fund_mapping` 的行，静态表从来不在它的覆盖面里。而 2026-09-23 实测（镜像）：
+1616 条活预测里有 **911 条**（50 个板块）**只被这张写死的表覆盖**——板块在 `SECTOR_FUND_MAP`
+的键里、且映射表没有该板块的已审查行 ⇒ 老板抱怨的"基金离板块差十万八千里"有一大块源头
+在这张表上，我前 26 轮都在修下游。复现：`python scripts/measure_static_table_reach.py`
+（此前文档里这个数写成 916/925，是没绑口径造成的，见该脚本 docstring）。
 
 分类判据（全部来自名册/官方名，不用行业直觉）。**两根轴各自独立判，不互相短路**：
 
 轴一 · 板块 ↔ 官方名（`relevance`）：
-  A  查无此码      —— 代码在名册里根本没有；
-  R  字面命中      —— 官方名含板块核心词，或与之共字；
-  D1 另有更对口    —— 官方名与板块无关，**但名册里有含该核心词的基金** ⇒ 明确错码；
-  D2 名册无更优    —— 官方名与板块无关且名册里查不到更对口的 ⇒ 需要人/agent 判。
-  额外一条"主题冲突"信号：官方名里含着**另一个板块的核心词**（区块链→疫苗ETF、
-  鸿蒙→房地产ETF）——这类即便落在 D2，也能确定性指认为错，因为那只基金本身就是
-  别的板块的代表标的，不可能是"没有更好选择"的合法代理。
-  E  已登记代理    —— 落在 D1/D2/D3 的任意一格，但在 `SECTOR_PROXY_ALLOWED` 里写了理由。
+  A_查无此码      —— 代码在名册里根本没有；
+  R_字面命中      —— 官方名含板块核心词（`relevance_kind` = core），
+                     或只与板块共用一个汉字（= char，**弱命中**：报告里单独报条数，
+                     第 27 轮实测 13 条，如 建材→基建ETF；弱不等于错，但那根轴说不出话）；
+  D1_另有更对口    —— 官方名与板块无关，**但名册里有含该核心词的基金** ⇒ 明确错码；
+  D2_主题冲突嫌疑  —— 官方名是**另一个板块**的字面标的（区块链→疫苗ETF）⇒ 不可能是"没有
+                     更好选择"的合法代理，即便名册里查不出更对口的也要人看；
+  D3_可能是合法代理 —— 与板块不相关、名册里也查不出更对口、又不是别的板块的字面标的；
+  E_已登记代理    —— 落在 D1/D2/D3 任意一格，但在 `SECTOR_PROXY_ALLOWED` 里写了理由。
 
 轴二 · 静态标签 ↔ 官方名（`label_problems`）：表里的 `name` 是**手写**的，
   只说明"作者想让它叫什么"，不说明"这只基金到底是什么"。第 27 轮实测：
-  旧版把"官方名以标签开头"（B_后缀差异）当成**免检通行证**，直接跳过轴一，
-  于是 110 条里有 82 条从来没被判过板块相关性 —— 把 白酒 换成 512480 半导体ETF
-  并把标签同步改成"半导体ETF"，旧版全绿。这就是"验证工具给自己背书"的同义反复
-  （同第 25 轮 `SET` + `SHOW` 那条）。现在标签只用来报"名字写歪了"，不再决定相关性。
+  旧版把"官方名以标签开头"（B_后缀差异）当成**免检通行证**，直接跳过轴一 ——
+  把旧判据跑在今天这份 109 条的表上，**109/109 全落 B**（标签已逐字等于官方名，
+  于是每一行都不被判相关性）；跑在改表前的 122 条版本上是 B 72 / C 23 / D1 11 / D2 10 / D3 5
+  （`git show c7cbc25:docs/迭代计划/run-2026-09-20/static-map-audit.csv`）。
+  这就是"验证工具给自己背书"的同义反复（同第 25 轮 `SET` + `SHOW` 那条）。
+  现在标签只用来报"名字写歪了"，不再决定相关性。
 
 用法：
     python scripts/audit_static_sector_map.py                    # 打网名册
@@ -46,6 +51,10 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 from _db_guard import pin_local_sqlite          # noqa: E402  必须先钉再碰 ORM
 
 OUT_DIR = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20')
+# 只读体检的默认落点。第 27 轮 D-MINOR-6：以前默认写进 OUT_DIR，而那里放着**已提交的证据**
+# （评审要拿"新产物与提交物逐字相同"当核对），跑一次只读体检就把上一份证据覆盖掉了。
+# 要刷新证据必须显式 `--out docs/迭代计划/run-2026-09-20/static-map-audit.csv`。
+DEFAULT_OUT_DIR = os.path.join(ROOT, 'data', 'static-map-audit')
 
 
 def load_roster(path=None):
@@ -63,14 +72,23 @@ def sector_variants(sector):
     return [v for v in core_variants(sector_core(sector)) if v]
 
 
-def is_relevant(sector, official):
-    """板块名与基金官方名是否字面相关（核心词命中，或共用汉字）。"""
+def relevance_kind(sector, official):
+    """字面相关的**种类**：`core` 核心词命中 / `char` 只是共用一个汉字 / None 不相关。
+
+    第 27 轮 D-MINOR-3：`建材 → 基建ETF`、`家居 → 家电ETF` 这类只靠"共一个汉字"过关，
+    与核心词命中不是一回事。把它们混在一个桶里再说"全部字面相关"就是口径上的谎。
+    """
     from src.services.sector_identity_audit import contains_core, cjk_core, sector_core
     if not official:
-        return False
+        return None
     if any(contains_core(official, v) for v in sector_variants(sector)):
-        return True
-    return bool(set(cjk_core(sector_core(sector))) & set(cjk_core(official)))
+        return 'core'
+    return 'char' if set(cjk_core(sector_core(sector))) & set(cjk_core(official)) else None
+
+
+def is_relevant(sector, official):
+    """板块名与基金官方名是否字面相关（核心词命中，或共用汉字）。"""
+    return relevance_kind(sector, official) is not None
 
 
 def label_problems(entries, by_code):
@@ -119,8 +137,9 @@ def classify(entries, by_code, sector_keys, proxy_allowed=None, d1_words=None):
             # 名册里**别的**含该词的基金（`by_code` 线上是全量 2.79 万，离线是夹具那几十只）。
             # 这里不能写 `'%s:%s' % (code, official)` —— 那是把自己当成"更对口的候选"，
             # 再被下面 `!= code` 剔掉，结果这条判据永远不会命中（D1 变哑）。
-            better |= {f'{c}:{n}' for c, n in by_code.items()
-                       if c != code and any(v in (n.get('name') or '') for v in variants)}
+            better |= {'%s:%s' % (c, (n or {}).get('name') or '') for c, n in by_code.items()
+                       if c != code
+                       and any(v in ((n or {}).get('name') or '') for v in variants)}
             better = sorted(b for b in better if b.split(':')[0] != code)
         # 官方名自己就是"另一个板块"的字面代表 ⇒ 不可能是"没有更好选择"的代理
         other = [s for s in sector_keys
@@ -135,7 +154,11 @@ def classify(entries, by_code, sector_keys, proxy_allowed=None, d1_words=None):
                                          '登记了代理，但官方名其实字面命中'))
             continue
         if relevant:
-            buckets['R_字面命中'].append((sector, code, label, official, '官方名与板块字面相关'))
+            weak = relevance_kind(sector, official) == 'char'
+            buckets['R_字面命中'].append((
+                sector, code, label, official,
+                '只与板块共用一个汉字（弱命中，不等于"已核对"）' if weak
+                else '官方名含板块核心词'))
         elif better:
             buckets['D1_另有更对口'].append((sector, code, label, official,
                                             '名册里有含该词的基金：%s' % '、'.join(better[:3])))
@@ -185,6 +208,9 @@ def emit_fixture(entries, by_code, path, extra_sectors=()):
     codes = sorted({(e or {}).get('code') for e in entries.values() if (e or {}).get('code')})
     payload = {'taken_at': datetime.now().isoformat(timespec='seconds'),
                'source': '东财 fundcode_search.js（2.79 万只全量名册里挑出来的两份证据）',
+               # 名册规模要落盘：守护用例判"这些板块名册里查无对口基金"时，
+               # 拿一份被截断/空的名册扫一遍也会得到"查无"⇒ 必须能看出证据是空的
+               'roster_size': len(by_code or {}),
                'checked_sectors': sorted(set(list(entries) + list(extra_sectors))),
                'by_code': {c: (by_code.get(c) or {}).get('name') or '' for c in codes},
                'd1_words': d1_words}
@@ -235,11 +261,12 @@ def fix_labels(by_code, apply=False, path=MAP_SOURCE):
         print('   [跳过] %s %s：%s' % (sector, code, why))
     if not apply:
         print('dry-run：未改文件。真改：--fix-labels --apply --confirm FIX-LABELS')
-        return len(planned)
+        return len(planned), len(skipped)
     for ln, _s, _c, _o, _n, new_line in planned:
         lines[ln - 1] = new_line
     io.open(path, 'w', encoding='utf-8').write('\n'.join(lines))
     print('[完成] 已改写 %d 行标签' % len(planned))
+    return len(planned), len(skipped)
     return len(planned)
 
 
@@ -314,7 +341,11 @@ def main():
         if args.apply and args.confirm != 'FIX-LABELS':
             print('[abort] 真改源码要带 --confirm FIX-LABELS（口令拼错就当没看见）')
             return 2
-        fix_labels(by_code, apply=args.apply)
+        _changed, skipped = fix_labels(by_code, apply=args.apply)
+        if skipped:
+            # 第 27 轮 D-MINOR-9：跳过了行还退 0，等于告诉跑批的人"标签这根轴干净了"
+            print('[退码 5] 有 %d 行没改成（名册查无此码 / 官方名带引号）⇒ 标签轴仍不干净' % skipped)
+            return 5
         return 0
 
     if args.emit_fixture:
@@ -334,9 +365,10 @@ def main():
         db.close()
 
     buckets = classify(SECTOR_FUND_MAP, by_code, set(SECTOR_FUND_MAP.keys()),
-                       SECTOR_PROXY_ALLOWED, d1_words)
+                       SECTOR_PROXY_ALLOWED, d1_words=d1_words)
     bad_labels = label_problems(SECTOR_FUND_MAP, by_code)
-    path = args.out or os.path.join(OUT_DIR, 'static-map-audit.csv')
+    os.makedirs(DEFAULT_OUT_DIR, exist_ok=True)
+    path = args.out or os.path.join(DEFAULT_OUT_DIR, 'static-map-audit.csv')
     lines = ['bucket,sector,code,static_name,official_name,evidence,live_predictions']
     for kind, rows in buckets.items():
         print('\n== %s：%d 条' % (kind, len(rows)))
@@ -350,6 +382,11 @@ def main():
             tot = sum(live.get(s) or 0 for s, *_ in rows)
             print('   —— 本桶合计牵动 %d 条活预测' % tot)
     print('\n== 标签与官方名不符：%d 条' % len(bad_labels))
+    weak_rows = [r for r in buckets['R_字面命中'] if r[4].startswith('只与板块共用')]
+    print('\n== R 桶里只靠"共用一个汉字"过关：%d 条 ⇒ 这些不等于"已核对"'
+          % len(weak_rows))
+    if weak_rows:
+        print('   ' + '、'.join('%s→%s' % (r[0], r[3]) for r in weak_rows))
     for sector, code, label, official, evidence in bad_labels:
         print('   %-10s %-8s 静态=%-22s 官方=%-26s %s' % (sector, code, label, official, evidence))
         lines.append('F_标签不符,%s,%s,"%s","%s","%s",%d' % (
@@ -378,7 +415,7 @@ def main():
                       % (word, c, nm, nav_counts.get(c, 0)))
             if not cands:
                 print('        名册里找不到字面对口的 ⇒ 只能删掉这条静态映射，交给 agent/映射表')
-        pp = os.path.join(OUT_DIR, 'static-map-repropose.txt')
+        pp = os.path.join(DEFAULT_OUT_DIR, 'static-map-repropose.txt')
         io.open(pp, 'w', encoding='utf-8').write('\n'.join(
             '%s\t%s\t%s\t%s' % (s, oc, on, '; '.join('%s:%s(%s,%d行)'
                                                       % (w, c, n, nav_counts.get(c, 0))
@@ -391,8 +428,9 @@ def main():
         print('[怎么修] 换成名册里字面对口的代码，或把理由写进 SECTOR_PROXY_ALLOWED；'
               '改完跑 --emit-fixture 刷新守护夹具')
         return 5
-    print('\n[干净] 静态表 %d 条：板块↔官方名全部相关或已登记代理，标签全部与官方名一致'
-          % len(SECTOR_FUND_MAP))
+    print('\n[干净] 静态表 %d 条：无 A/D1/D2/D3，标签全部与官方名一致'
+          '（R 桶 %d 条里有 %d 条只靠共字过关 ⇒ 那部分没被核对过）'
+          % (len(SECTOR_FUND_MAP), len(buckets['R_字面命中']), len(weak_rows)))
     return 0
 
 

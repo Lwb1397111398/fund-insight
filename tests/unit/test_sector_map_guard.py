@@ -15,6 +15,7 @@
     # 若新增了代码/板块，再刷新夹具（会打网）：
     python scripts/audit_static_sector_map.py --emit-fixture tests/fixtures/sector_map_roster_snapshot.json
 """
+import ast
 import copy
 import importlib.util
 import io
@@ -141,18 +142,54 @@ def test_fix_labels_repairs_exactly_the_rows_it_flags(roster, tmp_path):
         text = text.replace(old, old.replace(SECTOR_FUND_MAP[sector]['name'], '随便写个名字'))
     src.write_text(text, encoding='utf-8')
 
-    assert audit.fix_labels(by_code, apply=False, path=str(src)) == 3
+    assert audit.fix_labels(by_code, apply=False, path=str(src)) == (3, 0)
     assert io.open(str(src), encoding='utf-8').read() == text, 'dry-run 把文件写了'
-    assert audit.fix_labels(by_code, apply=True, path=str(src)) == 3
+    assert audit.fix_labels(by_code, apply=True, path=str(src)) == (3, 0)
     fixed = io.open(str(src), encoding='utf-8').read()
     assert '随便写个名字' not in fixed
     for sector in victims:
         assert SECTOR_FUND_MAP[sector]['name'] in fixed
-    assert audit.fix_labels(by_code, apply=False, path=str(src)) == 0
+    assert audit.fix_labels(by_code, apply=False, path=str(src)) == (0, 0)
     # 只改标签不该动到代码：逐行对比，差异行数必须正好是那 3 行
     diff = [(a, b) for a, b in zip(text.split('\n'), fixed.split('\n')) if a != b]
     assert len(diff) == 3 and all(len(a.split("'")) == len(b.split("'")) for a, b in diff)
 
+
+def test_fix_labels_counts_rows_it_refuses_to_touch(roster, tmp_path):
+    """跳过的行要单独报数，不能被算进"改好了"里（第 27 轮 D-MINOR-9：退码 0 说谎）。"""
+    by_code, _d1 = roster
+    src = tmp_path / 'sector_fund_map.py'
+    text = io.open(audit.MAP_SOURCE, encoding='utf-8').read()
+    old = "'白酒': {'code': '%s', 'name': '%s'}" % (
+        SECTOR_FUND_MAP['白酒']['code'], SECTOR_FUND_MAP['白酒']['name'])
+    assert text.count(old) == 1
+    src.write_text(text.replace(old, old.replace(SECTOR_FUND_MAP['白酒']['name'], '随便写个名字')),
+                   encoding='utf-8')
+    # 名册里查不到那只代码 ⇒ 不敢编名字，只能跳过：改 0 行、跳 1 行
+    without = {c: n for c, n in by_code.items() if c != SECTOR_FUND_MAP['白酒']['code']}
+    assert audit.fix_labels(without, apply=False, path=str(src)) == (0, 1)
+    assert audit.fix_labels(by_code, apply=False, path=str(src)) == (1, 0)
+
+
+
+def test_weak_literal_hits_are_labeled_as_weak(roster):
+    """只共用一个汉字的"相关"必须被**说出来**，不许混在 R 桶里冒充"已核对"。
+
+    第 27 轮 D-MINOR-3：`建材 → 基建ETF`、`家居 → 家电ETF` 是靠共一个字过关的，
+    而我此前把 R 桶说成"板块↔官方名全部相关"——说重了。弱命中不等于错码
+    （`恒科 → 恒生科技ETF` 就是别名，语义上对），但这一格必须是"字面这根轴说不出话"，
+    而不是"已经核对过"。数量钉在这里，是为了让文档与汇报里引用这个数时被迫跟着改。
+    """
+    assert audit.relevance_kind('建材', '基建ETF国泰') == 'char'
+    assert audit.relevance_kind('半导体', '半导体ETF国联安') == 'core'
+    assert audit.relevance_kind('区块链', '疫苗ETF富国') is None
+    buckets = _judge(SECTOR_FUND_MAP, roster)
+    weak = [r for r in buckets['R_字面命中'] if r[4].startswith('只与板块共用')]
+    assert all(audit.relevance_kind(r[0], r[3]) == 'char' for r in weak), weak
+    assert len(weak) == 13, (
+        '只靠共字过关的行数变了（现 %d）⇒ 同步改 AGENTS.md 与模块总览里引用这个数的句子'
+        % len(weak))
+    assert '建材' in {r[0] for r in weak}
 
 
 # ---------- 代理登记表不能变成免检通道 ----------
@@ -213,8 +250,43 @@ def test_blocked_sector_can_be_overridden_by_a_user_alias(monkeypatch):
     from src.constants import sector_fund_map as m
     monkeypatch.setattr(m, '_load_db_aliases', lambda: {'风电': '光伏'})
     assert m.get_fund_for_sector('风电') == m.SECTOR_FUND_MAP['光伏']
+    # 人登记的是**更长说法**时同样优先（那是人的决定，不是代码在猜）
+    monkeypatch.setattr(m, '_load_db_aliases', lambda: {'卫星互联网产业': '半导体'})
+    assert m.get_fund_for_sector('卫星互联网产业') == m.SECTOR_FUND_MAP['半导体']
     monkeypatch.setattr(m, '_load_db_aliases', lambda: {})
     assert m.get_fund_for_sector('风电') is None
+
+
+def test_blocked_sector_cannot_be_bypassed_by_a_longer_name():
+    """第 27 轮 C-M2：名单原来只挡**逐字相同**的键，于是 `卫星互联网产业` 从名单边上绕过去，
+    再被 `get_fund_for_sector` 第 5 步的子串匹配吸到表里更短的键 `互联网` 上 ⇒ 拿回的正是
+    本轮声称要挡住的那只 517200 互联网ETF嘉实。`normalize_sector_name` 第 4 步连
+    `len >= 3` 的门槛都没有，而它牵动 sector_core 身份判据 ⇒ 两条腿都要钉住。
+    """
+    from src.constants import sector_fund_map as m
+    offenders = []
+    for blocked in sorted(SECTOR_NO_STATIC_FUND):
+        for name in [blocked] + [blocked + v for v in ('产业', '主题', '板块', '产业链', '概念')]:
+            fund = m.get_fund_for_sector(name)
+            if fund is not None:
+                offenders.append('%s → %s' % (name, fund))
+            normalized = m.normalize_sector_name(name)
+            if normalized != name:
+                offenders.append('%s 被归一成 %s' % (name, normalized))
+    assert not offenders, '屏蔽名单被更长的板块名绕过：%s' % '；'.join(offenders)
+
+
+def test_blocklist_never_swallows_a_static_table_key():
+    """反方向也要成立：名单只挡"名册里查无对口基金"的板块，不许把表里真有的键吸掉。
+
+    `_literal_block_hit` 的判据是"最具体的一方说了算"，这条盯的就是那个比较的另一半。
+    """
+    from src.constants import sector_fund_map as m
+    blocked_keys = [k for k in m.SECTOR_FUND_MAP if m._literal_block_hit(k)]
+    assert not blocked_keys, '这些静态表键被"不许硬凑"名单挡住了：%s' % '、'.join(blocked_keys)
+    wrong = [(k, m.get_fund_for_sector(k)) for k in m.SECTOR_FUND_MAP
+             if m.get_fund_for_sector(k) != m.SECTOR_FUND_MAP[k]]
+    assert not wrong, '这些表键解析不出自己那行基金：%s' % wrong[:5]
 
 
 def test_blocked_sectors_really_have_no_literal_fund_in_the_roster():
@@ -226,6 +298,15 @@ def test_blocked_sectors_really_have_no_literal_fund_in_the_roster():
     """
     raw = json.load(io.open(FIXTURE, encoding='utf-8'))
     d1, checked = raw.get('d1_words') or {}, set(raw.get('checked_sectors') or [])
+    # 第 27 轮 D-MINOR-4：拿一份被截断/空的名册扫一遍，同样会得到"查无对口基金"，
+    # 所以"扫过多少只"和"扫得到别的板块"这两件正对照必须先成立，下面的断言才有意义
+    assert raw.get('roster_size', 0) >= 20000, (
+        '夹具记录的名册规模只有 %s 只 ⇒ 名册被截断，"查无对口"这条前提不成立，重跑 --emit-fixture'
+        % raw.get('roster_size'))
+    assert d1, '夹具里 d1_words 是空的 ⇒ 名册一条都没扫到，下面的"查无"属于空判'
+    blind = [s for s in ('半导体', '白酒', '军工', '黄金')
+             if not any(v in d1 for v in audit.sector_variants(s))]
+    assert not blind, '这些板块名册里明明有对口基金却扫不到 ⇒ 判据或夹具坏了：%s' % '、'.join(blind)
     missing = sorted(set(SECTOR_NO_STATIC_FUND) - checked)
     assert not missing, (
         '夹具没扫过这些被屏蔽的板块（是旧数据刷的？）：%s ⇒ 重跑 --emit-fixture' % '、'.join(missing))
@@ -234,8 +315,63 @@ def test_blocked_sectors_really_have_no_literal_fund_in_the_roster():
     assert not have, '这些板块其实有字面对口的基金，不该屏蔽而该改挂：%s' % '、'.join(have)
 
 
-# ---------- 补档案/净值的脚本：空名字不算成功 ----------
+def test_d1_by_code_leg_names_another_fund_not_the_row_itself():
+    """`by_code` 那条腿（第 26 轮 BLOCKER 的修法）单独钉一次。
 
+    第 27 轮 D-MINOR-2：把这条腿退回"把自己当成更对口的候选、再被 `!= code` 剔掉"的
+    自指写法，当时 16 条守护用例全绿 ⇒ 在线跑法（名册 2.79 万只）从 D1 掉成 D2，
+    丢掉"该换成哪只"这句话，而没人会发现。所以这里要的不仅是"落进 D1 桶"，
+    还要**证据里点出的是另一只基金**。
+    """
+    entries = {'机器人': {'code': '159852', 'name': '云计算ETF'}}
+    by_code = {'159852': {'name': '云计算ETF嘉实'},
+               '562500': {'name': '机器人ETF华夏'}}
+    buckets = audit.classify(entries, by_code, set(entries.keys()) | {'云计算'},
+                             SECTOR_PROXY_ALLOWED, d1_words={})
+    found = buckets['D1_另有更对口']
+    assert [r[0] for r in found] == ['机器人'], buckets
+    assert '562500' in found[0][4] and '159852' not in found[0][4], found[0][4]
+    # 第 27 轮 D-MINOR-1/C-MINOR：回执串必须是 `代码:官方名`，不能是 dict 的 repr——
+    # 这一格人和 LLM 都要读，`161725:{'name': …}` 等于把证据换成噪声
+    assert '机器人ETF华夏' in found[0][4] and "{'name'" not in found[0][4], found[0][4]
+
+
+def test_d1_roster_word_leg_is_reachable_and_wired():
+    """`d1_words`（全网名册里"另有更对口"的那张表）必须是**接上的保险**，不是装饰。
+
+    第 27 轮 C-M3：把 `classify` 收到的 `d1_words` 强制置空，当时 16 条守护用例全绿 ⇒
+    这条腿没人测过。今天表内 109 行确实没有一行**需要**它（`by_code` 那条腿自己就能给出
+    候选），所以不能拿"真实数据里 D1 出自哪条腿"来钉；这里改钉两件事：
+    ① 构造一个只有 `d1_words` 能救的场景 ⇒ 有它落 D1、没它落 D2（腿本身是活的）；
+    ② 脚本 `main()` 里那次 `classify(...)` 必须显式带 `d1_words=` ⇒ 接线不会被顺手删掉。
+    """
+    entries = {'机器人': {'code': '159852', 'name': '云计算ETF'}}
+    by_code = {'159852': {'name': '云计算ETF嘉实'}}    # 光靠 by_code 找不出更对口的候选
+    words = {v: '562500:机器人ETF华夏' for v in audit.sector_variants('机器人')}
+
+    def judge(d1_words):
+        return audit.classify(entries, by_code, {'机器人', '云计算'},
+                              SECTOR_PROXY_ALLOWED, d1_words=d1_words)
+
+    found = judge(words)['D1_另有更对口']
+    assert [r[0] for r in found] == ['机器人'], found
+    assert '562500' in found[0][4], found
+    dropped = judge({})
+    assert not dropped['D1_另有更对口']
+    assert [r[0] for r in dropped['D2_主题冲突嫌疑']] == ['机器人'], dropped
+
+    source = io.open(os.path.join(ROOT, 'scripts', 'audit_static_sector_map.py'),
+                     encoding='utf-8').read()
+    calls = [n for n in ast.walk(ast.parse(source))
+             if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'classify']
+    assert calls, '脚本里找不到 classify 调用 ⇒ 用例判据已失效，请同步改这里'
+    unconnected = [c.lineno for c in calls
+                   if not any(kw.arg == 'd1_words' for kw in c.keywords)]
+    assert not unconnected, (
+        'classify 没带 d1_words= ⇒ 名册那条腿断了（离线时 D1 会瞎）：行 %s' % unconnected)
+
+
+# ---------- 补档案/净值的脚本：空名字不算成功 ----------
 def test_fill_missing_names_fills_from_roster_and_reports_the_rest(test_db, monkeypatch):
     """第 27 轮实测：`update_fund_info` 对新代码会留下**空名字档案**，而我上一版把它算成 `[ok]`
     ⇒ 一次跑完凭空多出 26 行没有名字的基金档案。现在"补上了几个"和"仍补不上几个"都要报数。

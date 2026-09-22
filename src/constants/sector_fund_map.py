@@ -426,6 +426,23 @@ SECTOR_NO_STATIC_FUND = {
 }
 
 
+def _literal_block_hit(sector: str) -> bool:
+    """输入是否落在"不许硬凑"名单上——**包括名单词的更长说法**。
+
+    第 27 轮 C-M2 实测：名单原来只挡逐字相同的键，于是 `卫星互联网产业` 绕过名单，
+    再被 `get_fund_for_sector` 第 5 步的子串匹配吸到表里更短的键 `互联网` 上，
+    拿回的正是本轮声称要挡住的那只 517200 互联网ETF嘉实。
+
+    判据取"最具体的一方说了算"：名单词的命中长度 >= 表里命中的键长度时按屏蔽处理；
+    只有表里的键更长、更具体（如名单里有 '水电' 而输入命中 '水利水电'）才让键赢。
+    """
+    blocked = max((len(b) for b in SECTOR_NO_STATIC_FUND if b in sector), default=0)
+    if not blocked:
+        return False
+    matched = max((len(k) for k in SECTOR_FUND_MAP if len(k) >= 3 and k in sector), default=0)
+    return blocked >= matched
+
+
 def get_fund_for_sector(sector: str) -> Optional[Dict]:
     """
     获取板块对应的基金信息
@@ -449,7 +466,7 @@ def get_fund_for_sector(sector: str) -> Optional[Dict]:
         return SECTOR_FUND_MAP[db_aliases[sector]]
 
     # 3. 明确"不许硬凑"的板块：硬编码别名与模糊匹配都不给，直接交给 agent/映射表
-    if sector in SECTOR_NO_STATIC_FUND:
+    if _literal_block_hit(sector):
         return None
 
     # 4. 硬编码别名匹配
@@ -594,12 +611,13 @@ def normalize_sector_name(sector: str) -> str:
     if sector in db_aliases:
         return db_aliases[sector]
 
-    # 3.5 "不许硬凑"的板块**本身就是标准名**，不能再被子串归到别的板块上去。
+    # 3.5 "不许硬凑"的板块**本身就是标准名**，不能再被子串归到别的板块上去
+    #     （含它的更长说法：`卫星互联网产业` 不许被归一成 `互联网`，见 `_literal_block_hit`）。
     #     第 27 轮实测：把 'A股互联网'/'卫星互联网' 从表里删掉之后，下面第 4 步会把它们
     #     归一成 '互联网' —— 于是板块身份判据（sector_core）也跟着变，
     #     卫星互联网的预测就能顶着"名字含互联网"的相似度被挂到 互联网ETF 上。
     #     归一化不该取决于"这个板块在静态表里有没有基金"。
-    if sector in SECTOR_NO_STATIC_FUND:
+    if _literal_block_hit(sector):
         return sector
 
     # 4. 模糊匹配（检查是否包含标准板块名称）
