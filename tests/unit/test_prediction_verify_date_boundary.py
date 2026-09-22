@@ -1,9 +1,36 @@
 from datetime import date
 
+import pytest
+
 from src.models.database import FundHistory
 from src.services import prediction_verify_service as pvs_module
 from src.services.prediction_verify_service import PredictionVerifyService
 from src.core.config import config as app_config
+
+
+@pytest.fixture(autouse=True)
+def _stub_backfill_leg(monkeypatch):
+    """这几条测的是**日期门**，不是补拉，所以把补拉腿钉成"没补到东西"。
+
+    以前它没钉：`tests/conftest.py` 的零网络守卫抛出来的是 `Exception` 子类，被
+    `verify_prediction` 那句 `except Exception` 吞成"按现有数据继续" ⇒ 用例照样绿，
+    但"这段历史到底问过没有"是假的（第 19 轮 MAJOR-3 把守卫换成 BaseException 才照出来）。
+    桩要打在**模块属性**上：`from src.fund import fund_api` 拿到的是 FundAPI 实例。
+    """
+    import importlib
+    mod = importlib.import_module('src.fund.fund_api')
+
+    def fake_backfill(fund_code, start_date, end_date, db=None, today=None, **kw):
+        return 0        # 0 = 这段没补到东西，与"问过但源端没有"同形
+    monkeypatch.setattr(mod.fund_data_manager, 'backfill_history_range', fake_backfill)
+
+    class _NoLLM:
+        def verify_prediction(self, *a, **kw):
+            return None
+    # LLM 复核那一腿同样要钉：它走 httpx，以前也是"守卫抛→被吞→当没发生"，
+    # 于是本文件里唯一真打了外网的用例（边界分那条）绿灯照拿。
+    monkeypatch.setattr(pvs_module.PredictionVerifyService, 'llm_analyzer',
+                        property(lambda self: _NoLLM()))
 
 
 def _seed_prediction(db, target_date=date(2026, 1, 10), prediction_date=date(2026, 1, 1)):

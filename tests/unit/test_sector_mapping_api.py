@@ -6,6 +6,7 @@ SectorFundMapping`，导致整个函数里的 SectorFundMapping 都变成局部�
 保存内置映射时抛 UnboundLocalError（cannot access local variable ...）。
 """
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,6 +16,24 @@ from src.models.database import Base
 
 
 AUTH_HEADERS = {"X-Access-Password": "sector-mapping-api-test"}
+
+
+@pytest.fixture(autouse=True)
+def _probe_stubbed_as_no_conclusion(monkeypatch):
+    """保存路径上的身份探针钉成"没结论"＝旧行为，但不许真打站。
+
+    第 19 轮 MAJOR-3：以前有 3 条用例是真打了站、被 `_manual_identity_verdict` 的
+    `except Exception` 吞成 unknown 才过的。守卫换成 BaseException 之后信号不再被吞，
+    桩就得显式给：本文件测的是"保存/覆盖/补档案"，不是探针判定。
+    """
+    from src.services import sector_identity_audit as audit
+
+    def fake(code, stored, sector='', **kw):
+        return {'verdict': 'unknown', 'code': code, 'stored_name': stored,
+                'official_name': None, 'jaccard': 0.0, 'status': 'ok',
+                'suggested_code': None, 'suggested_name': None,
+                'reason': '桩：本文件不测探针', 'evidence': {}}
+    monkeypatch.setattr(audit, 'arbitrate_mapping', fake)
 
 
 def _database(tmp_path):

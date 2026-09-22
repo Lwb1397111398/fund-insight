@@ -76,12 +76,18 @@ def accuracy_span(db, stale_ids):
     区间的两端是两个极端假设：**这批结论全部判错** vs **全部判对**。
     真值落在里面，但今天没有人能定到小数点 —— 谁引用准确率，谁就得连区间一起说。
     返回 (已判条数, 现在算出的判对数, 现在百分比, 下界, 上界, 其中失效条数)。
+
+    口径与 `audit()` 同一份（`has_verdict`），不另起一套（第 19 轮 MINOR-7：
+    两把尺子今天都为 1110，但"今天恰好相等"不等于可以各写一份）。
     """
     from src.models.database import Prediction
+    from src.services.verdict_evidence import has_verdict
+
     rows = db.query(Prediction).filter(
         Prediction.is_deleted == False,                      # noqa: E712
         Prediction.is_correct != None,
     ).all()
+    rows = [r for r in rows if has_verdict(r)]
     judged = len(rows)
     correct = sum(1 for r in rows if r.is_correct)
     stale = [r for r in rows if r.id in stale_ids]
@@ -89,6 +95,26 @@ def accuracy_span(db, stale_ids):
     low = 100.0 * (correct - stale_correct) / max(1, judged)
     high = 100.0 * (correct - stale_correct + len(stale)) / max(1, judged)
     return judged, correct, 100.0 * correct / max(1, judged), low, high, len(stale)
+
+
+def unmapped_codes(db):
+    """已判结论挂着的代码里，**映射表根本没提过**的那些：身份体检对它们没有意见。
+
+    `fund_code_is_servable` 刻意保守（没有映射行就放行），所以"自带代码也过体检"这条
+    门只对"映射表提到过的代码"生效（第 19 轮 MAJOR-2）。这里把盲区大小报出来，
+    而不是悄悄把它当成 0：这些行今天既不会被改标、也不会被打 ⚠。
+    """
+    from src.models.database import Prediction, SectorFundMapping
+
+    known = {r[0] for r in db.query(SectorFundMapping.fund_code).distinct().all()}
+    rows = db.query(Prediction).filter(
+        Prediction.is_deleted == False,                      # noqa: E712
+        Prediction.is_correct != None,
+        Prediction.fund_code.isnot(None),
+    ).all()
+    blind = [r for r in rows if (r.fund_code or '').strip() not in known]
+    return len(rows), len(blind), sorted({(r.fund_code or '').strip() for r in blind})[:10]
+
 
 
 def main():
@@ -117,6 +143,11 @@ def main():
               '区间 %.2f%% ~ %.2f%%（宽度 %.2f 个百分点）。'
               % (judged_n, correct_n, now_pct, stale_n, low, high, high - low))
         print(' 引用准确率时必须连这个区间一起引用：单报一个小数点就是在假装精度。')
+        judged_all, blind_n, blind_codes = unmapped_codes(db)
+        print('[体检覆盖面] 已判结论 %d 条里 %d 条挂的代码在 sector_fund_mapping 里'
+              '**根本没有行** ⇒ 身份体检对它们没有意见，既不会被判不可服务、'
+              '也不会触发改标（门是刻意保守的：没有映射行不等于这只基金有问题）。'
+              '例：%s' % (judged_all, blind_n, blind_codes))
         print('\n本脚本不写库。处置已定：不删除（删了就永久失去审计链），'
               '改为读取时派生"证据已失效"标记 + 能复现的定向重验；'
               '每日跑批会报新增条数，见 docs/模块总览/预测验证与准确率统计.md。')

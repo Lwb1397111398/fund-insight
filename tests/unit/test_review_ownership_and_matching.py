@@ -156,3 +156,140 @@ def test_verify_retags_instead_of_judging_on_another_fund(test_db):
     assert test_db.query(PredictionChangeLog).filter(
         PredictionChangeLog.prediction_id == prediction.id).count() == 1
 
+
+
+def _persisted_stats(db, blogger_id):
+    """从**表里**读统计列，绕开会话对象。
+
+    `recalculate_blogger_stats(commit=False)` 会把值直接写进同一会话里的那个
+    `Blogger` 对象 ⇒ "refresh 后拿它跟真值比"是个永远为假的自检
+    （第 19 轮两份复评共同点出我这个写法）。
+    """
+    import sqlalchemy as sa
+    from src.models.database import Blogger
+    row = db.execute(sa.select(
+        Blogger.total_predictions, Blogger.correct_predictions,
+        Blogger.total_verify_score).where(Blogger.id == blogger_id)).one()
+    return {'total_predictions': row[0], 'correct_predictions': row[1],
+            'total_verify_score': float(row[2] or 0)}
+
+
+def test_verify_side_retag_keeps_blogger_stats_honest(test_db):
+    """第 19 轮 MAJOR-1：验证侧改标清了结论，博主统计列必须跟着重算。
+
+    改动前会红：`retag_prediction` 的 `touched_bloggers` 没传 ⇒ 谁都不重算，
+    而 `blogger_stats` 按 `verify_count>0` 现算；本轮验证如果判完，只会再
+    `verified_delta=+1` ⇒ 同一行在"已验证数"里被计两次（评审在副本库实测 87 vs 真值 86）。
+    """
+    from datetime import date, timedelta
+
+    from src.utils.blogger_stats import recalculate_blogger_stats
+
+    _mapping(test_db, sector_name='R19改标', fund_code='BAD003',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name='R19改标', fund_code='GOOD03',
+             fund_name='机器人ETF', reviewed=True)
+    prediction = _prediction_with_code(test_db, 'BAD003', 'R19改标')
+    prediction.is_correct = True
+    prediction.actual_change = 1.23
+    prediction.verify_count = 1
+    prediction.verify_score = 100
+    prediction.status = 'verified'
+    prediction.target_date = date.today() + timedelta(days=30)
+    test_db.commit()
+    blogger = prediction.blogger
+    recalculate_blogger_stats(test_db, blogger.id)
+    assert _persisted_stats(test_db, blogger.id)['total_predictions'] == 1, \
+        '前置：这条结论要被统计到'
+
+    PredictionVerifyService(test_db).verify_prediction(prediction.id)
+
+    # 旧标的的结论已被清掉 ⇒ 真值是 0；列上还留着 1 就是"没重算"
+    assert _persisted_stats(test_db, blogger.id)['total_predictions'] == 0, \
+        '清结论没重算统计列 ⇒ 后面重验的 +1 会变成双计'
+
+
+def test_verify_side_retag_does_not_double_count_blogger_stats(test_db, monkeypatch):
+    """把上一条补成"真跑到 +1 那一腿"（两份复评共同指出早退版测不到）。
+
+    改标清结论后本轮就真的按新标的判完了：`is_newly_completed` 会给博主统计
+    `verified_delta=+1`。少了那次重算，列上仍是旧的 1 ⇒ 同一行计成 2。
+    """
+    from datetime import date
+
+    from src.models.database import FundHistory
+    from src.services import prediction_verify_service as pvs_module
+    from src.utils.blogger_stats import recalculate_blogger_stats
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 6, 9)
+    monkeypatch.setattr(pvs_module, "date", FixedDate)
+
+    _mapping(test_db, sector_name='R19双计', fund_code='BAD004',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name='R19双计', fund_code='GOOD04',
+             fund_name='机器人ETF', reviewed=True)
+    prediction = _prediction_with_code(test_db, 'BAD004', 'R19双计')
+    prediction.is_correct = True
+    prediction.actual_change = 1.0
+    prediction.verify_count = 1
+    prediction.verify_score = 80
+    prediction.status = 'success'
+    prediction.prediction_date = date(2026, 6, 1)
+    prediction.target_date = date(2026, 6, 8)
+    test_db.commit()
+    recalculate_blogger_stats(test_db, prediction.blogger_id)
+    # 只有新标的 GOOD04 有净值：不改标就判不完，改了标才判得完
+    test_db.add_all([FundHistory(fund_code='GOOD04', nav_date=d, nav=n) for d, n in (
+        (date(2026, 6, 1), 1.00), (date(2026, 6, 2), 1.02), (date(2026, 6, 3), 1.03),
+        (date(2026, 6, 4), 1.04), (date(2026, 6, 5), 1.05), (date(2026, 6, 8), 1.06))])
+    test_db.commit()
+
+    result = PredictionVerifyService(test_db).verify_prediction(prediction.id)
+    assert result['success'] is True, result          # 真的判完了
+    assert result['data']['fund_code'] == 'GOOD04'
+
+    persisted = _persisted_stats(test_db, prediction.blogger_id)
+    truth = recalculate_blogger_stats(test_db, prediction.blogger_id, commit=False)
+    assert persisted['total_predictions'] == 1, \
+        '统计列 %s vs 现算真值 1 ⇒ 改标清掉的旧结论没重算，重验的 +1 变成双计' \
+        % persisted['total_predictions']
+    assert persisted['correct_predictions'] == truth['correct_predictions'], persisted
+    assert abs(persisted['total_verify_score'] - truth['total_verify_score']) < 1e-6, \
+        '累计分也不能留旧的那一轮（80 分不能算两次）'
+
+
+def test_rollback_audit_does_not_judge_a_row_by_another_fund(test_db):
+    """第 19 轮 MAJOR-3：标的已漂移的行，不许用"另一只基金缺数据"去撤它的结论。
+
+    改动前会红：`rollback_invalid_verifications` 也调 `match_fund_for_prediction`，
+    拿到的是 B 的代码，却拿它的数据充分性去判 A 的结论该不该撤 ⇒ 一个与这条结论
+    无关的理由把记录抹了。现在这类行只数不撤（改标交给 `verify_prediction`）。
+    """
+    from datetime import date
+
+    _mapping(test_db, sector_name='R19漂移', fund_code='BAD005',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name='R19漂移', fund_code='GOOD05',
+             fund_name='机器人ETF', reviewed=True)      # GOOD05 一条净值都没有
+    prediction = _prediction_with_code(test_db, 'BAD005', 'R19漂移')
+    prediction.is_correct = True
+    prediction.actual_change = 1.23
+    prediction.verify_count = 1
+    prediction.verify_score = 100
+    prediction.status = 'success'      # 回溯审计只扫 success/failed 两种
+    prediction.prediction_date = date(2026, 6, 1)
+    prediction.target_date = date(2026, 6, 8)
+    test_db.commit()
+
+    result = PredictionVerifyService(test_db).rollback_invalid_verifications(
+        dry_run=True, only_ids=[prediction.id])
+
+    data = result['data']
+    assert data['code_diverged'] == 1, data
+    assert data['would_rollback'] == 0, \
+        '按另一只基金缺数据就把这条结论判成"当年判错了" ⇒ 无关理由抹记录'
+    test_db.refresh(prediction)
+    assert prediction.is_correct is True

@@ -78,6 +78,8 @@ class DataPortabilityService:
 
     def __init__(self, db: Session):
         self.db = db
+        # 本次导入剔掉了多少行的"老板署名/体检豁免"（见 `_clean_row`）
+        self.immunity_rows_stripped = 0
 
     def export_data(self) -> Dict[str, Any]:
         exported: Dict[str, Any] = {
@@ -94,13 +96,16 @@ class DataPortabilityService:
                 # 快照要能看出"这条结论的端点证据今天还复现得出来吗"。它是**派生值**、
                 # 不是列，所以导出时现算一份附上：老板拿去别处看数时，⚠ 不会在导出里消失
                 # （第 18 轮 MAJOR-2）。导入侧 `_clean_row` 按列名过滤，未知键自动忽略。
+                # 口径与 `scripts/audit_verdict_evidence.py` 一致：**只算未归档的已判结论**
+                # （第 19 轮 MINOR-4：含归档时导出头报 1192/229，与审计的 1110/197 打脸）。
                 from src.services.verdict_evidence import (
                     EVIDENCE_LABELS, evidence_statuses, has_verdict)
-                statuses = evidence_statuses(self.db, rows)
-                judged = stale = 0
-                for row, payload in zip(rows, serialized):
-                    if has_verdict(row):
-                        judged += 1
+                live = [(row, payload) for row, payload in zip(rows, serialized)
+                        if not row.is_deleted]
+                statuses = evidence_statuses(self.db, [row for row, _ in live])
+                judged = sum(1 for row, _ in live if has_verdict(row))
+                stale = 0
+                for row, payload in live:
                     kind = statuses.get(row.id)
                     if not kind:
                         continue
@@ -109,7 +114,7 @@ class DataPortabilityService:
                     payload['evidence_note'] = EVIDENCE_LABELS.get(kind, kind)
                 exported['predictions_evidence'] = {
                     'judged': judged, 'stale_evidence': stale,
-                    'note': '派生值（不落库）：端点净值在当前标的序列里复现不出来的已判结论',
+                    'note': '派生值（不落库）：未归档已判结论里，端点净值在当前标的序列复现不出来的',
                 }
             exported[spec.export_key] = serialized
 
@@ -140,6 +145,7 @@ class DataPortabilityService:
         failed = {spec.export_key: 0 for spec in TABLE_SPECS}
         created_dependencies = {"fund_info": 0}
         warnings: List[str] = []
+        self.immunity_rows_stripped = 0
 
         try:
             if not isinstance(data, dict):
@@ -240,6 +246,11 @@ class DataPortabilityService:
                     failed[spec.export_key] = 0
 
             self.db.flush()
+            if self.immunity_rows_stripped:
+                warnings.append(
+                    "已剔掉 %d 行板块映射的老板署名/体检豁免（reviewed_by=owner / "
+                    "owner_locked）：这两样只能由老板在页面上逐行确认换来，"
+                    "清单里带的我们不认。" % self.immunity_rows_stripped)
             self._reset_sequences()
             self.db.commit()
             return self._success_response(
@@ -484,6 +495,20 @@ class DataPortabilityService:
             if column is None or key in spec.exclude_fields:
                 continue
             cleaned[key] = self._coerce_value(value, column)
+
+        if spec.model is SectorFundMapping and (
+                cleaned.get("owner_locked") or
+                str(cleaned.get("reviewed_by") or "").strip().lower() == "owner"):
+            # 体检豁免与老板署名**不能从清单里读出来**（第 19 轮 MAJOR-2）：
+            # `/api/config/import` 合并模式既没有总开关也没有确认头，一份自己盖了
+            # `owner_locked=True` 的 JSON 就能给整表买到"身份体检不再管"，
+            # 而 `AGENTS.md` 写的是"只能由显式 owner_confirm 换来"。
+            # 与审计回写侧（`config.py` 的 `_clean_audit_row`）同一口径：剔掉这两列，
+            # 要恢复免疫请在页面上逐行确认。
+            cleaned.pop("owner_locked", None)
+            if str(cleaned.get("reviewed_by") or "").strip().lower() == "owner":
+                cleaned.pop("reviewed_by", None)
+            self.immunity_rows_stripped += 1
 
         return cleaned
 

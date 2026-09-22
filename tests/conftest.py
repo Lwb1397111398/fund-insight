@@ -13,6 +13,18 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+
+class BlockedRealHttp(BaseException):
+    """单测里偷打真实接口的信号。**故意不派生自 Exception**。
+
+    第 19 轮 MAJOR-3：派生自 `AssertionError` 时它会被业务代码里那些
+    "站点抖动一律按没结论处理"的 `except Exception` 吞掉 —— 于是"桩失效"与"接口没结论"
+    长得一模一样，`test_no_conclusion_never_accuses` 那一族在桩完全失灵时仍然全绿，
+    而 `tests/conftest.py` 承诺的"漏网取数会变成看得见的失败"落空。
+    吞异常本身在生产里是对的（不能因为体检坏了就让保存按钮报错），所以修的是信号：
+    只有测试夹具抛这个类，生产路径永远不会遇到它，也就不会被任何 `except Exception` 吃掉。
+    """
+
 # 必须在导入应用配置前覆盖 DATABASE_URL，避免集成测试写入 Supabase。
 _test_db_path = Path(tempfile.gettempdir()) / f"fund-insight-pytest-{os.getpid()}.db"
 # 同名文件复用会把上一轮的**旧表结构**带进来（0007/0008/0009 之前建的文件尤其如此），
@@ -104,7 +116,7 @@ def _block_real_http(monkeypatch):
     import requests
 
     def _refuse_requests(self, request, *args, **kwargs):
-        raise AssertionError(
+        raise BlockedRealHttp(
             '测试禁止真实外呼（请把这条取数路径注入桩）：%s'
             % getattr(request, 'url', request))
 
@@ -125,7 +137,7 @@ def _block_real_http(monkeypatch):
             host = getattr(url, 'host', '') or ''
             if host in local_hosts:
                 return original_client_send(self, request, *args, **kwargs)
-            raise AssertionError(
+            raise BlockedRealHttp(
                 '测试禁止真实外呼（LLM 走 httpx，请把 analyzer 注入桩）：%s' % url)
 
         monkeypatch.setattr(httpx.Client, 'send', _refuse_httpx)

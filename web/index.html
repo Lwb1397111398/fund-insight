@@ -76,7 +76,7 @@
                                     <th>排名</th>
                                     <th>名称</th>
                                     <th>等级</th>
-                                    <th title="存活命中率 = 判对 / 已验证结论（未删）">准确率</th>
+                                    <th title="存活命中率 = 判对 / 已验证结论（未删）。注意：其中一部分结论的端点净值今天已复现不出来（行上带 ⚠），这部分只能按区间看 —— 现算命令 python scripts/audit_verdict_evidence.py">准确率</th>
                                     <th title="verify_score 加权评分，非命中率">加权评分</th>
                                     <th>已验证</th>
                                     <th>判对</th>
@@ -1461,7 +1461,8 @@
                                 <td>{{ b.name }}</td>
                                 <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
                                         }}</span></td>
-                                <td><strong>{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%' : (b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%' : '-') }}</strong></td>
+                                <td><strong :title="b.hit_rate != null ? '命中率 = 判对 / 已验证结论' : '这一行没有命中率数据，显示的是加权评分（口径不同，别当命中率看）—— 第 19 轮 MINOR-5'"
+                                    >{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%' : (b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%（加权评分）' : '-') }}</strong></td>
                                 <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? Number(b.accuracy_rate).toFixed(1) : '-') }}</td>
                                 <td>{{ b.hit_verified != null ? b.hit_verified : (b.total_predictions || 0) }}</td>
                             </tr>
@@ -1651,7 +1652,7 @@
                                     </td>
                                     <td class="table-cell-center">
                                         <span v-if="m.source === 'builtin'" :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: '#f6ffed', color: '#52c41a' }">已审查</span>
-                                        <span v-else :title="m.owner_locked ? '老板逐行确认过：之后的身份体检不再把这一行判成不可服务' : '编辑保存/批量看过，不等于老板确认：体检仍会判这一行'"
+                                        <span v-else :title="m.owner_locked ? '老板逐行确认过：身份体检不再把它判成不可服务，AI 匹配也不会再覆盖你挑的标的（换了基金代码就要重新确认一次）' : '编辑保存/批量看过，不等于老板确认：体检与 AI 覆盖都照常生效（要免疫请点「老板确认」）'"
                                               :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? (m.owner_locked ? '老板已确认' : '已审查') : '待审查' }}</span>
                                     </td>
                                     <td class="table-cell-center">
@@ -2722,9 +2723,10 @@ const fetchWeChatBatch = async () => {
                     // （第 16 轮 m-2 只做了 UI 那一半；第 17 轮 MAJOR-1 指出服务层对有机器证据
                     //  的行仍然无条件盖 owner，现在两边一起吃这个参数）。
                     if (!confirm('确认逐行审查通过这一行？\n\n这一行会记成"老板已审查"（reviewed_by=owner）'
-                                 + '并被锁定，之后的身份体检不再把它判成不可服务。\n'
+                                 + '并被锁定，之后：① 身份体检不再把它判成不可服务；② AI 匹配也不再覆盖你挑的标的'
+                                 + '（这两件事是同一对开关，一起给、一起撤）。\n'
                                  + '（体检已经判为不可服务的行点不动，服务端会直接说明原因。）\n'
-                                 + '要撤销就再点一次"取消审查"。')) return;
+                                 + '要撤销就用"取消审查"。')) return;
                     try {
                         const res = await axios.post(`/api/config/sector-mappings/${id}/review`,
                                                      null, { params: { owner_confirm: true } });
@@ -2735,7 +2737,7 @@ const fetchWeChatBatch = async () => {
                 // 上一版只有「审查」没有撤销入口：一次误点即永久体检免疫且不可撤回，
                 // 而确认文案明明写着「要撤销就再点一次取消审查」（第 17 轮 MAJOR-2）。
                 const unreviewMapping = async (id) => {
-                    if (!confirm('取消这一行的审查？\n\n老板署名与「体检豁免」锁定会一并撤销，这行重新回到待审查队列。')) return;
+                    if (!confirm('取消这一行的审查？\n\n老板署名与「体检豁免 / AI 不得覆盖」这一对锁定会一并撤销，这行重新回到待审查队列。')) return;
                     try {
                         const res = await axios.post(`/api/config/sector-mappings/${id}/review`,
                                                      null, { params: { reviewed: false } });

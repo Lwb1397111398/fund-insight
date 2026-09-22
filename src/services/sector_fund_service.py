@@ -150,6 +150,19 @@ class SectorFundService:
     # （让调用方去碰 `_unservable` 私有名，等于鼓励它在外面自己抄一遍判据）。
     is_unservable = _unservable
 
+    @staticmethod
+    def _drop_owner_immunity(row):
+        """收回"老板署名 + 体检豁免"这一对，**必须一起收**。
+
+        只撤一半就是两处同时说谎：`row_unservable()` 的 owner 例外看
+        `owner_locked or reviewed_by=='owner'`，agent 的覆盖守卫只看 `owner_locked`
+        （`sector_fund_agent.py`），留一半会留下"既躲体检又能驱动改标"的僵尸行
+        （第 8/9 轮各踩过一次）。四条写入路径共用这个 helper（第 19 轮 MINOR-7：
+        之前抄了四份，谁也说不清哪份是最新的）。
+        """
+        row.reviewed_by = None
+        row.owner_locked = False
+
     def get_all_mappings(self) -> Dict[str, Dict]:
         self._load_cache()
         return self._cache.copy()
@@ -276,8 +289,7 @@ class SectorFundService:
                     mapping.reviewed_by = mapping.reviewed_by or 'manual_review'
                 mapping.match_source = mapping.match_source or 'manual'
             else:
-                mapping.owner_locked = False
-                mapping.reviewed_by = None
+                self._drop_owner_immunity(mapping)
             db.commit()
             self.refresh_cache()
             return True
@@ -332,8 +344,7 @@ class SectorFundService:
                     # 以前这里没有 else，批量取消审查会留下"未审查 + reviewed_by='owner'
                     # + owner_locked=True"的僵尸行 —— 它既躲开体检（owner 例外），
                     # 又能驱动预测改标，还把"机器已纠正待复核"的旗标藏起来（第 9 轮 MAJOR-1）。
-                    row.reviewed_by = None
-                    row.owner_locked = False
+                    self._drop_owner_immunity(row)
                     row.updated_at = _dt.now()
                 flipped += 1
             db.commit()
@@ -414,8 +425,8 @@ class SectorFundService:
                     # 审查与锁定，否则"is_fetchable=False"是个永不生效的假动作。
                     mapping.is_fetchable = False
                     mapping.verify_message = accusation
-                    mapping.reviewed, mapping.reviewed_by, mapping.owner_locked = \
-                        False, None, False
+                    mapping.reviewed = False
+                    self._drop_owner_immunity(mapping)
                     if identity is not None:
                         # 老板看得见"到底是哪只基金顶上了这个码"，也才有下一轮体检
                         mapping.evidence = _stamp_identity(mapping.evidence, identity)
@@ -424,8 +435,7 @@ class SectorFundService:
                 # 老板当年锁的是**旧标的**。换代码而不重新确认，留着锁定 = 新代码天生免疫：
                 # `row_unservable()` 的 owner 例外会吃掉整条判据（列与 verdict 都跳过）。
                 # 撤掉的只是继承来的豁免，老板重新点"已审查"（带 owner_confirm）就能拿回。
-                mapping.owner_locked = False
-                mapping.reviewed_by = None
+                self._drop_owner_immunity(mapping)
             if mapping.reviewed and self._unservable(mapping):
                 # 既没换标的也没换名字、只是把状态翻回"已审查" → 拒绝（防一键复活）
                 logger.info('[板块映射] 拒绝标记 %s(%s)：身份体检不通过',

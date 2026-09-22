@@ -5,9 +5,10 @@
 `MappingUpdate` 只有 fund_code/fund_name 两列，Pydantic 会**静默丢掉**其余 11 个审计字段
 （reviewed / owner_locked / reviewed_by / is_fetchable / match_source / match_kind /
 confidence / verify_message / llm_reason / evidence / keywords），而
-`service.update_mapping()` 还会把碰到的每行标成 `reviewed=True + owner_locked=True +
-reviewed_by='owner'`。实测过一遍：13 个字段只有 2 个落地，降级旗标一个都没送到，
-行却被永久锁定（从此免于体检与 agent），脚本却照样打印"成功 N"。
+`service.update_mapping()` 当时还会把碰到的每行标成 `reviewed=True + owner_locked=True +
+reviewed_by='owner'`（第 18 轮 MAJOR-1 后只给 `reviewed=True`，署名与锁定要显式
+`owner_confirm`；但用它回写审计字段这件事仍然不成立）。实测过一遍：13 个字段只有 2 个落地，
+降级旗标一个都没送到，行还被买到永久锁定（从此免于体检与 agent），脚本却照样打印"成功 N"。
 现在整批发给 `POST /api/config/sector-mappings/-/audit-import`，由服务端按 sector_name
 寻址、逐列照搬审计结论，并逐行回执 updated/created/unchanged/refused(原因)。
 

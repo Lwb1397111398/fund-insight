@@ -1445,8 +1445,9 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
 
     为什么不能走现成的 `PUT /sector-mappings/{id}`：它的请求模型 `MappingUpdate`
     只有 fund_code/fund_name 两列，Pydantic 会静默丢掉其余 11 个审计字段，而
-    `service.update_mapping()` 还把碰到的每行标成 `reviewed=True` +
-    `owner_locked=True` + `reviewed_by='owner'`。本轮实测（临时库跑真实路由）
+    `service.update_mapping()` 当时还把碰到的每行标成 `reviewed=True` +
+    `owner_locked=True` + `reviewed_by='owner'`（第 18 轮 MAJOR-1 起署名与锁定只认
+    显式 `owner_confirm`，但"字段丢一半"这件事没变）。本轮实测（临时库跑真实路由）
     13 个字段只有 2 个落地：降级旗标 `is_fetchable=False` 变回 NULL、行被永久锁定，
     回写等于什么都没做，还顺手拆掉了唯一的审查护栏 —— 而脚本照样打印「成功 N」。
     这里按板块名寻址、逐列照搬，让接收端**恰好**停在被审计的状态。

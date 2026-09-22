@@ -316,7 +316,8 @@ def apply_realign(db, plans, created_codes=None, realign_codes=None, manifest_pa
                   written=None):
     """两阶段写入的第二阶段：只写字段，绕开 `update_mapping`。
 
-    `update_mapping` 会把行置成 reviewed=True + owner_locked + reviewed_by='owner'，
+    `update_mapping` 会把行置成 reviewed=True（第 18 轮以前还顺带白送
+    owner_locked + reviewed_by='owner'），
     等于 agent 替老板批了审查（v7.2 第 5 条）。换过标的的行必须回到"待老板一键审查"：
     `reviewed/owner_locked=False`、`reviewed_by=None`，并把上一轮针对旧代码的结论
     （confidence/match_*/llm_reason/keywords/evidence.etf_upgrade）一并复位。

@@ -986,6 +986,13 @@ class PredictionVerifyService:
                 source='verify_unservable_code')
             # 改标是一次真实的决定，不取决于本轮验证能不能判完（可能因为"净值没出"提前返回）
             self.db.commit()
+            if cleared and prediction.blogger_id:
+                # 清掉一条结论 = 博主统计的分子分母都变了，而这里**不**走增量回退：
+                # `blogger_stats` 是按 `verify_count>0` 现算的，少了这次重算，
+                # 后面真正判完时只会 `verified_delta=+1` ⇒ 同一行被计两次
+                # （第 19 轮 MAJOR-1，实测镜像上 total 87 vs 真值 86）。
+                from src.utils.blogger_stats import recalculate_blogger_stats
+                recalculate_blogger_stats(self.db, prediction.blogger_id)
             logger.warning(
                 '[Verify] 预测 %s 标的由 %s 改为体检可服务的 %s %s，%s后按新标的判定',
                 prediction.id, old_code, fund_code, fund_name or '',
@@ -1566,6 +1573,7 @@ class PredictionVerifyService:
                     'total_checked': int,
                     'rolled_back': int,
                     'kept': int,
+                    'code_diverged': int,
                     'errors': int,
                     'rollback_details': list
                 }
@@ -1577,8 +1585,8 @@ class PredictionVerifyService:
                 'message': '真写且未指定 only_ids 时必须显式传 allow_full_sweep=True：'
                            '不限定 id 会把上千条历史结论一起抹掉，其中多数只是本地镜像缺那段历史',
                 'data': {'total_checked': 0, 'would_rollback': 0, 'rolled_back': 0,
-                         'kept': 0, 'skipped_by_filter': 0, 'errors': 0,
-                         'rollback_details': []},
+                         'kept': 0, 'skipped_by_filter': 0, 'code_diverged': 0,
+                         'errors': 0, 'rollback_details': []},
             }
         wanted = set(only_ids) if only_ids is not None else None
         if not dry_run and run_id is None:
@@ -1606,6 +1614,7 @@ class PredictionVerifyService:
         would_rollback = 0
         kept = 0
         errors = 0
+        code_diverged = 0
         rollback_details = []
         affected_bloggers = set()
         
@@ -1614,6 +1623,18 @@ class PredictionVerifyService:
                 fund_code, fund_name = self.match_fund_for_prediction(prediction)
                 if not fund_code:
                     kept += 1
+                    continue
+                if prediction.fund_code and fund_code != prediction.fund_code:
+                    # 标的已经漂到另一只基金上（自带代码被体检否掉）。这时"这段净值缺不缺"
+                    # 说的是**别的那只**，拿它去撤 A 的结论 = 用一个无关的理由撤掉一条记录
+                    # （第 19 轮 MAJOR-3）。这类行交给验证路径正规改标（`verify_prediction`
+                    # 会先 retag 再判），本函数只数不撤。
+                    code_diverged += 1
+                    rollback_details.append({
+                        'prediction_id': prediction.id,
+                        'action': 'skipped_code_diverged',
+                        'row_code': prediction.fund_code, 'resolved_code': fund_code,
+                    })
                     continue
                 
                 period_days = self.parse_period_days(prediction.prediction_period)
@@ -1709,100 +1730,10 @@ class PredictionVerifyService:
                 'rolled_back': rolled_back,
                 'kept': kept,
                 'skipped_by_filter': skipped_by_filter,
+                # 标的已漂到另一只基金的行：本函数不撤它的结论，只数出来（MAJOR-3）
+                'code_diverged': code_diverged,
                 'run_id': run_id,
                 'errors': errors,
                 'rollback_details': rollback_details
             }
-        }
-    
-    def get_verification_status(self, prediction_id: int) -> Dict:
-        """
-        获取预测的验证状态（用于前端显示）
-        
-        Args:
-            prediction_id: 预测 ID
-            
-        Returns:
-            {
-                'can_verify': bool,       # 是否可以验证
-                'reason': str,            # 原因说明
-                'data_status': dict,      # 数据状态
-                'prediction_status': str  # 预测当前状态
-            }
-        """
-        prediction = self.db.query(Prediction).filter(
-            Prediction.id == prediction_id
-        ).first()
-        
-        if not prediction:
-            return {
-                'can_verify': False,
-                'reason': '预测不存在',
-                'data_status': None,
-                'prediction_status': None
-            }
-        
-        fund_code, fund_name = self.match_fund_for_prediction(prediction)
-        if not fund_code:
-            return {
-                'can_verify': False,
-                'reason': f'无法匹配基金：{prediction.sector}',
-                'data_status': None,
-                'prediction_status': prediction.status
-            }
-        
-        period_days = self.parse_period_days(prediction.prediction_period)
-        config = self.get_verify_config(period_days)
-        
-        today = date.today()
-        target_date = prediction.target_date
-        
-        if target_date:
-            days_to_target = (target_date - today).days
-
-            if days_to_target > 0:
-                return {
-                    'can_verify': False,
-                    'reason': f"预测周期尚未结束，请等待至 {target_date.isoformat()} 后再验证",
-                    'data_status': None,
-                    'prediction_status': prediction.status
-                }
-            
-            if days_to_target > config['window_days_before']:
-                return {
-                    'can_verify': False,
-                    'reason': f"验证通道尚未开放，请于目标日期前{config['window_days_before']}天验证",
-                    'data_status': None,
-                    'prediction_status': prediction.status
-                }
-            
-            if days_to_target < -config['window_days_after']:
-                return {
-                    'can_verify': False,
-                    'reason': "验证通道已关闭",
-                    'data_status': None,
-                    'prediction_status': prediction.status
-                }
-
-        # 验证窗口：使用完整预测周期（prediction_date 到 target_date）
-        window_end = target_date
-        nav_start_date = prediction.prediction_date
-
-        data_check = self._check_fund_data_availability(
-            fund_code=fund_code,
-            nav_start_date=nav_start_date,
-            window_end=window_end,
-            min_data_points=2,
-            today=today,
-            target_date=target_date,
-            skip_wait=True,  # rollback 不等待，直接判断是否可验证
-        )
-
-        return {
-            'can_verify': data_check['available'],
-            'reason': data_check['message'],
-            'data_status': data_check,
-            'prediction_status': prediction.status,
-            'fund_code': fund_code,
-            'fund_name': fund_name
         }

@@ -629,27 +629,70 @@ def test_export_carries_derived_evidence_badge_and_round_trips(test_db):
         target_date=date(2026, 3, 6), end_nav=1.0, end_nav_date=date(2026, 3, 2),
         is_correct=True, actual_change=1.0, status="success",
     ))
+    # 同样失效但**已归档**的一条：口径必须与 `audit_verdict_evidence` 一致，不进计数
+    test_db.add(Prediction(
+        post_id=post.id, blogger_id=blogger.id, fund_code="999998",
+        fund_name="已归档证据体检测试基金", sector="测试板块", prediction_type="up",
+        prediction_date=date(2026, 2, 27), prediction_period="1周",
+        target_date=date(2026, 3, 6), end_nav=1.0, end_nav_date=date(2026, 3, 2),
+        is_correct=True, actual_change=1.0, status="success", is_deleted=True,
+    ))
     test_db.commit()
+
+    from src.services.verdict_evidence import EVIDENCE_LABELS
 
     service = DataPortabilityService(test_db)
     exported = service.export_data()
-    row = exported["predictions"][0]
+    row = next(r for r in exported["predictions"] if r["fund_code"] == "999999")
+    archived = next(r for r in exported["predictions"] if r["fund_code"] == "999998")
     assert row["evidence_status"] == "nav_row_missing"
-    assert row["evidence_note"]
-    assert exported["predictions_evidence"] == {
-        "judged": 1, "stale_evidence": 1,
-        "note": exported["predictions_evidence"]["note"],
-    }
+    assert row["evidence_note"] == EVIDENCE_LABELS["nav_row_missing"], \
+        "文案得是真文案，不能拿自己跟自己比"
+    assert "evidence_status" not in archived, "归档行不参与口径（审计也不数它）"
+    assert exported["predictions_evidence"]["judged"] == 1
+    assert exported["predictions_evidence"]["stale_evidence"] == 1
 
     # 往返：派生键不许变成导入报错或"未知区块"警告（`_clean_row` 按列名过滤）
     test_db.query(Prediction).delete()
     test_db.commit()
     result = service.import_data(exported)
     assert result["success"] is True, result
-    assert not [w for w in result.get("warnings", []) if "未知数据区块" in w], result["warnings"]
-    restored = test_db.query(Prediction).one()
-    assert restored.fund_code == "999999" and restored.end_nav == 1.0
+    assert not [w for w in result["data"]["warnings"] if "未知数据区块" in w], \
+        result["data"]["warnings"]
+    restored = test_db.query(Prediction).filter_by(fund_code="999999").one()
+    assert restored.end_nav == 1.0 and restored.is_deleted is False
+    # 归档标记也得跟着往返（否则"不数它"的口径在还原后就变了）
+    assert test_db.query(Prediction).filter_by(fund_code="999998").one().is_deleted is True
     # 端点仍然复现不出来 ⇒ 重新导出还是同一枚徽章（派生值不会在往返里被写成一列）
     again = DataPortabilityService(test_db).export_data()
-    assert again["predictions"][0]["evidence_status"] == "nav_row_missing"
-    assert "evidence_status" not in test_db.query(Prediction).one().__table__.columns.keys()
+    assert next(r for r in again["predictions"]
+                if r["fund_code"] == "999999")["evidence_status"] == "nav_row_missing"
+
+
+def test_import_refuses_to_install_owner_immunity_from_a_manifest(test_db):
+    """第 19 轮 MAJOR-2：`/api/config/import` 合并模式没有总开关也没有确认头，
+    而 `_clean_row` 照搬 `reviewed_by/owner_locked` ⇒ 一份自己盖了章的 JSON
+    就能让整表免于身份体检（`AGENTS.md` 写的"只能由显式 owner_confirm 换来"当场为假）。
+    与审计回写侧同一口径：这两列不认，并且必须说出来。
+    """
+    payload = {
+        "export_version": "1.3",
+        "export_date": datetime.now().isoformat(),
+        "sector_fund_mapping": [{
+            "sector_name": "导入免疫测试", "fund_code": "512480",
+            "fund_name": "半导体ETF", "is_active": True, "reviewed": True,
+            "reviewed_by": "owner", "owner_locked": True,
+            "is_fetchable": False,      # 体检本来就判它不可服务
+        }],
+    }
+    result = DataPortabilityService(test_db).import_data(payload)
+    assert result["success"] is True, result
+
+    row = test_db.query(SectorFundMapping).filter_by(sector_name="导入免疫测试").one()
+    assert row.reviewed is True, '审查状态本身可以导入（它只是"看过"）'
+    assert not row.owner_locked and row.reviewed_by != "owner", \
+        "清单给自己盖章 = 绕过逐行确认，豁免只能由老板在页面上买"
+    # 降级旗标照旧落地（不是被豁免吃掉）
+    from src.services.sector_identity_audit import row_unservable
+    assert row_unservable(row) is True
+    assert any("豁免" in w for w in result["data"]["warnings"]), result["data"]["warnings"]
