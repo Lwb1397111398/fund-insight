@@ -972,6 +972,24 @@ class PredictionVerifyService:
         if not fund_code:
             logger.warning(f"[Verify] 无法匹配基金: sector={prediction.sector}, fund_name={prediction.fund_name}")
             return {"success": False, "message": f"无法匹配基金：{prediction.sector}"}
+
+        if prediction.fund_code and fund_code != prediction.fund_code:
+            # 走到这里说明**行上挂着 A、这一轮要按 B 判**（自带代码被体检否掉，退到板块解析）。
+            # 上一版直接拿 B 算结论、一个字都不回写 ⇒ 判完就是新一族"结论按别的基金判、
+            # 行上挂另一只"（`verdict_under_other_fund` 的成因，第 18 轮 MAJOR-5），
+            # 而且因为回写从不发生，那个徽章在新数据上永远测不到 = 假装有闸门。
+            # 现在先经唯一写入口改标：留痕 + 清掉旧标的的结论，再按新标的重判。
+            from src.fund.fund_sync_manager import FundSyncManager
+            old_code = prediction.fund_code
+            cleared = FundSyncManager.retag_prediction(
+                self.db, prediction, fund_code, fund_name or prediction.fund_name,
+                source='verify_unservable_code')
+            # 改标是一次真实的决定，不取决于本轮验证能不能判完（可能因为"净值没出"提前返回）
+            self.db.commit()
+            logger.warning(
+                '[Verify] 预测 %s 标的由 %s 改为体检可服务的 %s %s，%s后按新标的判定',
+                prediction.id, old_code, fund_code, fund_name or '',
+                '旧结论已清除' if cleared else '本来没有结论')
         
         logger.info(f"[Verify] 匹配到基金: {fund_code} - {fund_name}")
         

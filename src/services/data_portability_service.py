@@ -86,10 +86,32 @@ class DataPortabilityService:
         }
 
         for spec in TABLE_SPECS:
-            exported[spec.export_key] = [
-                self._serialize_row(row, spec.exclude_fields)
-                for row in self.db.query(spec.model).all()
+            rows = self.db.query(spec.model).all()
+            serialized = [
+                self._serialize_row(row, spec.exclude_fields) for row in rows
             ]
+            if spec.model is Prediction:
+                # 快照要能看出"这条结论的端点证据今天还复现得出来吗"。它是**派生值**、
+                # 不是列，所以导出时现算一份附上：老板拿去别处看数时，⚠ 不会在导出里消失
+                # （第 18 轮 MAJOR-2）。导入侧 `_clean_row` 按列名过滤，未知键自动忽略。
+                from src.services.verdict_evidence import (
+                    EVIDENCE_LABELS, evidence_statuses, has_verdict)
+                statuses = evidence_statuses(self.db, rows)
+                judged = stale = 0
+                for row, payload in zip(rows, serialized):
+                    if has_verdict(row):
+                        judged += 1
+                    kind = statuses.get(row.id)
+                    if not kind:
+                        continue
+                    stale += 1
+                    payload['evidence_status'] = kind
+                    payload['evidence_note'] = EVIDENCE_LABELS.get(kind, kind)
+                exported['predictions_evidence'] = {
+                    'judged': judged, 'stale_evidence': stale,
+                    'note': '派生值（不落库）：端点净值在当前标的序列里复现不出来的已判结论',
+                }
+            exported[spec.export_key] = serialized
 
         exported["summary"] = {
             spec.export_key: len(exported[spec.export_key])
@@ -124,7 +146,8 @@ class DataPortabilityService:
                 raise ValueError("导入数据必须是 JSON 对象")
 
             unsupported_keys = sorted(
-                set(data.keys()) - {spec.export_key for spec in TABLE_SPECS} - {"export_version", "export_date", "summary"}
+                set(data.keys()) - {spec.export_key for spec in TABLE_SPECS}
+                - {"export_version", "export_date", "summary", "predictions_evidence"}
             )
             for key in unsupported_keys:
                 warnings.append(f"忽略未知数据区块: {key}")

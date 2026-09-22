@@ -190,11 +190,13 @@ def _seed(session_factory, **kw):
 
 # ===== 缺陷复现：老 PUT 路由会静默丢掉审计字段（这就是新接口存在的理由） =====
 
-def test_legacy_put_drops_audit_fields_and_locks_the_row(monkeypatch, tmp_path):
+def test_legacy_put_drops_audit_fields_and_never_locks_the_row(monkeypatch, tmp_path):
     """PUT /sector-mappings/{id} 只认 fund_code/fund_name：11 个审计字段全丢。
 
     不改这条语义（UI 在用），但必须有测试钉住"它不能用于审计回写"，
     否则下次又有人拿它回写生产。
+    第 18 轮 MAJOR-1：以前它还会顺手给上 `reviewed_by='owner' + owner_locked=True`，
+    等于"一次保存买到永久体检免疫"——审计回写拿不到锁定，逐行确认才行。
     """
     session_factory = _database(tmp_path)
     _seed(session_factory, sector_name=SECTOR, fund_code="512480",
@@ -216,8 +218,8 @@ def test_legacy_put_drops_audit_fields_and_locks_the_row(monkeypatch, tmp_path):
             assert row.evidence is None, "证据链被静默丢弃"
             assert row.keywords is None, "关键词被静默丢弃"
             assert row.match_source != "agent"
-            assert row.owner_locked is True and row.reviewed_by == "owner", \
-                "回写反而把行永久锁定（免于体检与 agent）"
+            assert not row.owner_locked and row.reviewed_by != "owner", \
+                "编辑保存不该送出免疫：署名与锁定只认显式 owner_confirm"
             # 生产读路径仍把这一行当"可服务"——降级等于没做
             from src.services.sector_identity_audit import row_unservable
             assert row_unservable(row) is False

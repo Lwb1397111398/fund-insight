@@ -70,6 +70,27 @@ def audit(db):
     return sum(1 for p in rows if has_verdict(p)), buckets, samples, detail
 
 
+def accuracy_span(db, stale_ids):
+    """把"证据已失效"折算成准确率区间（第 18 轮 MAJOR-3：报数不能靠手算）。
+
+    区间的两端是两个极端假设：**这批结论全部判错** vs **全部判对**。
+    真值落在里面，但今天没有人能定到小数点 —— 谁引用准确率，谁就得连区间一起说。
+    返回 (已判条数, 现在算出的判对数, 现在百分比, 下界, 上界, 其中失效条数)。
+    """
+    from src.models.database import Prediction
+    rows = db.query(Prediction).filter(
+        Prediction.is_deleted == False,                      # noqa: E712
+        Prediction.is_correct != None,
+    ).all()
+    judged = len(rows)
+    correct = sum(1 for r in rows if r.is_correct)
+    stale = [r for r in rows if r.id in stale_ids]
+    stale_correct = sum(1 for r in stale if r.is_correct)
+    low = 100.0 * (correct - stale_correct) / max(1, judged)
+    high = 100.0 * (correct - stale_correct + len(stale)) / max(1, judged)
+    return judged, correct, 100.0 * correct / max(1, judged), low, high, len(stale)
+
+
 def main():
     ap = argparse.ArgumentParser(description='已判结论的端点证据体检（只读，不写库）')
     ap.add_argument('--json', help='把逐行明细写成 JSON')
@@ -89,6 +110,13 @@ def main():
               % (judged, bad, 100.0 * bad / max(1, judged)))
         for kind, n in sorted(buckets.items(), key=lambda kv: -kv[1]):
             print('   %-24s %4d  例如 %s' % (kind, n, samples[kind]))
+        judged_n, correct_n, now_pct, low, high, stale_n = accuracy_span(
+            db, {d['id'] for d in detail})
+        print('\n[准确率只能当区间报] 已判 %d 条、现在落库判对 %d 条 = %.2f%%；'
+              '其中 %d 条端点证据今天复现不出来 ⇒ 把这批按"全判错/全判对"两个极端算，'
+              '区间 %.2f%% ~ %.2f%%（宽度 %.2f 个百分点）。'
+              % (judged_n, correct_n, now_pct, stale_n, low, high, high - low))
+        print(' 引用准确率时必须连这个区间一起引用：单报一个小数点就是在假装精度。')
         print('\n本脚本不写库。处置已定：不删除（删了就永久失去审计链），'
               '改为读取时派生"证据已失效"标记 + 能复现的定向重验；'
               '每日跑批会报新增条数，见 docs/模块总览/预测验证与准确率统计.md。')

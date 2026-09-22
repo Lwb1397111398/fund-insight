@@ -109,3 +109,50 @@ def test_servable_self_code_is_still_used_directly(test_db):
     prediction = _prediction_with_code(test_db, 'KEEP01', 'R17半导体')
     code, _name = PredictionVerifyService(test_db).match_fund_for_prediction(prediction)
     assert code == 'KEEP01'
+    assert prediction.fund_code == 'KEEP01'
+
+
+def test_verify_retags_instead_of_judging_on_another_fund(test_db):
+    """第 18 轮 MAJOR-5：退到别的代码去判，就必须把行改标到那个代码上。
+
+    改动前会红：`verify_prediction` 拿 B 算完结论，`prediction.fund_code` 仍然是 A、
+    一条变更日志都不写 ⇒ "结论按 B 判、行上挂 A"继续新增（`scripts/audit_verdict_evidence.py`
+    的 `verdict_under_other_fund` 那一族），而且因为回写从不发生，那个徽章在新数据上
+    永远测不到 = 闸门是装的。
+    """
+    from datetime import date, timedelta
+
+    from src.models.database import PredictionChangeLog
+    from src.services.prediction_verify_service import has_verdict_trace
+
+    _mapping(test_db, sector_name='R17改标', fund_code='BAD002',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name='R17改标', fund_code='GOOD02',
+             fund_name='机器人ETF', reviewed=True)
+    prediction = _prediction_with_code(test_db, 'BAD002', 'R17改标')
+    # 旧标的上判出来的结论：改标必须一并清掉，不然准确率里留着一张别的基金的成绩单
+    prediction.is_correct = True
+    prediction.actual_change = 1.23
+    prediction.status = 'verified'
+    prediction.verify_count = 1
+    # 目标日推远 ⇒ 本轮验证在匹配之后立刻返回"通道未开放"，正好只测"换标的时做了什么"
+    prediction.target_date = date.today() + timedelta(days=30)
+    test_db.commit()
+    assert has_verdict_trace(prediction) is True
+
+    service = PredictionVerifyService(test_db)
+    res = service.verify_prediction(prediction.id)
+    assert res.get('success') is False        # 本轮没判（通道未开放），但改标已经落库
+
+    test_db.refresh(prediction)
+    assert prediction.fund_code == 'GOOD02', '行上还挂着不可服务的 A'
+    assert has_verdict_trace(prediction) is False, '旧标的的结论没跟着清掉'
+    log = test_db.query(PredictionChangeLog).filter(
+        PredictionChangeLog.prediction_id == prediction.id,
+        PredictionChangeLog.source == 'verify_unservable_code').first()
+    assert log is not None, '改标没留痕 ⇒ 无法整批还原'
+    assert (log.before_state or {}).get('fund_code') == 'BAD002'
+    # 反向不变量：可服务的代码不许被这条路径动过
+    assert test_db.query(PredictionChangeLog).filter(
+        PredictionChangeLog.prediction_id == prediction.id).count() == 1
+

@@ -180,8 +180,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 最近一次核对（2026-09-22，第 18 轮修复之后）：
 
-- `pytest tests/unit -q` → **729 passed / 16 skipped / 0 failed**（约 117 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **738 passed / 16 skipped / 0 failed**。
+- `pytest tests/unit -q` → **733 passed / 16 skipped / 0 failed**（约 113 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **742 passed / 16 skipped / 0 failed**。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛异常。为什么必须这样：`from src.fund import fund_api`
@@ -197,8 +197,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   的终局结论（`run_id=revert-lag-endpoint-20260922`），判对 598→597、判错 569→566。
   ④ 第 18 轮（S9）把 53 条"按改标前那只基金判出来"的结论退回未验证重判
   （`run_id=revert-bad-verdicts-20260922-120657`），判对 597→573、判错 566→537。
-  **准确率现在只能当区间报（≈49%~54%）**：另有 197 条（17.7%）端点净值今天复现不出来
-  （净值被就地改写 108 / 当天缺行 89），列表里带 ⚠ 证据已失效标记，补齐后自行消解。
+  **准确率只能当区间报，而且区间要现算**：`python scripts/audit_verdict_evidence.py` 最后一行
+  打印 `已判 1110 条 / 判对 573 条 = 51.62%`，以及把 197 条（17.7%）证据失效结论按
+  "全判错/全判对"两个极端折算出的 **43.96% ~ 61.71%**（第 18 轮 MAJOR-3：我此前手算报出去
+  的"≈49%~54%"既没有出处、也算错了口径，别再抄）。这 197 条 = 净值被就地改写 108 +
+  当天缺行 89，列表里带 ⚠ 证据已失效标记。
+  **⚠ 不会自己消解**（第 18 轮 MAJOR-6，我此前写过"补齐后自行消解"，是错的）：每日基金同步
+  只回写最近 30 天的净值，而这些结论的端点大多是 2026 年上半年的旧日期；结论行也从不因为
+  ⚠ 被重新排队。要真消解得显式补历史净值 + 重验，目前只做"标出来"。
   拿历史截图/旧导出的准确率数字做对比前先确认是哪一批。
 - **改标的只允许一个入口**：`FundSyncManager.retag_prediction()`。它留痕（无 run_id 会自动生成，
   保证能被 `restore_prediction_batch` 整批还原）、必要时清结论、并登记受影响博主以便重算统计列。
@@ -206,6 +212,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   用 AST 扫 `src/` 里所有 `X.fund_code = ...` 赋值，新增站点会让它变红。
   为什么这么严：第 18 轮实测，`POST /api/funds/update-all`（页面上一个按钮）会按
   "与本板块最后登记的那只基金不一致就改过去"的旧规则清掉 **515/1110** 条已判结论。
+  同一条规则的另一半（第 18 轮 MAJOR-5）：`verify_prediction` 若发现自带代码被体检判不可服务、
+  改按板块解析出**另一个代码**，现在先走 `retag_prediction` 落库再判——以前它拿 B 判结论、
+  行上还挂 A，等于持续新增上面那一族脏数据，而且因为从不回写，⚠ 徽章在新数据上永远测不到。
+- **`reviewed_by='owner'` + `owner_locked`（＝身份体检豁免）只能由显式 `owner_confirm=true` 换来**。
+  三条写入路径同一口径：逐行审查、批量审查、以及第 18 轮 MAJOR-1 才补上的**编辑保存**
+  （`update_mapping`／`PUT|POST /api/config/sector-mappings`）。以前一次普通保存就白送永久免疫。
+  换了基金代码又没重新确认时，**旧标的上继承来的锁定会被一并撤掉**（`row_unservable()` 的
+  owner 例外只认老板这次确认过的那只基金）。页面上区分三种状态：待审查 / 已审查（只是看过）/
+  老板已确认（免疫）。
 - 准确率报表另有派生标记 `evidence_status`（不加列、不落库）：`python scripts/audit_verdict_evidence.py`
   可核对；每日跑批 `verdict_evidence_audit` 只报告不阻塞，要卡合入请手动跑该脚本（默认阈值 0 ⇒ 退码 3）。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。

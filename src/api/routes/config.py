@@ -1571,9 +1571,24 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
     }
 
 
+def _mapping_review_tail(result: dict) -> str:
+    """保存回执的括号部分：只能说真话。
+
+    `reviewed=True` 有两种来源（老板逐行确认 / 只是编辑过），免疫只给前者 ——
+    以前这里固定写"自动标记为已审查"，老板会以为这一行已经锁定了。
+    """
+    if not result.get('reviewed'):
+        return '未标记为已审查'
+    if result.get('reviewed_by') == 'owner':
+        return '已标记为老板已审查，之后的身份体检不再判它不可服务'
+    return '已看过；老板署名与体检免疫需要点"审查"并明确确认'
+
+
 @router.put("/sector-mappings/{mapping_id}")
-def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = Depends(get_db)):
-    """更新映射（自动标记为已审查）"""
+def update_sector_mapping(mapping_id: int, update: MappingUpdate,
+                          owner_confirm: bool = False,
+                          db: Session = Depends(get_db)):
+    """更新映射（编辑即视为已看过；老板署名与体检豁免另需 `owner_confirm=true`）。"""
     from src.services.sector_fund_service import get_sector_fund_service
 
     try:
@@ -1592,7 +1607,8 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = 
         result = service.update_mapping(
             mapping_id=mapping_id,
             fund_code=update.fund_code,
-            fund_name=update.fund_name
+            fund_name=update.fund_name,
+            owner_confirm=owner_confirm
         )
 
         if not result:
@@ -1610,7 +1626,8 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = 
 
         return {
             "success": True,
-            "message": f"已更新映射: {result['sector_name']} → {result['fund_name']}（自动标记为已审查）",
+            "message": "已更新映射: {} → {}（{}）".format(
+                result['sector_name'], result['fund_name'], _mapping_review_tail(result)),
             "data": result
         }
     except Exception as e:
@@ -1618,8 +1635,13 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate, db: Session = 
 
 
 @router.post("/sector-mappings")
-def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db)):
-    """创建新的板块映射（覆盖内置映射或新增）"""
+def create_sector_mapping(mapping: MappingCreate, owner_confirm: bool = False,
+                          db: Session = Depends(get_db)):
+    """创建新的板块映射（覆盖内置映射或新增）
+
+    覆盖已有行走 `update_mapping`，所以署名/体检免疫同样只认显式 `owner_confirm`
+    （第 18 轮 MAJOR-1：PUT 修了、POST 不传等于留了个后门）。
+    """
     from src.services.sector_fund_service import get_sector_fund_service
 
     try:
@@ -1641,7 +1663,8 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
             result = service.update_mapping(
                 mapping_id=existing_mapping.id,
                 fund_code=mapping.fund_code,
-                fund_name=mapping.fund_name
+                fund_name=mapping.fund_name,
+                owner_confirm=owner_confirm
             )
             if result is None:
                 # 门禁拒绝不能报成"更新成功"（前端会显示"已更新映射"）
@@ -1660,7 +1683,9 @@ def create_sector_mapping(mapping: MappingCreate, db: Session = Depends(get_db))
                     print(f"[板块匹配] 级联清理失败（不影响保存）: {e}")
             return {
                 "success": True,
-                "message": f"已更新映射: {mapping.sector_name} → {mapping.fund_name or mapping.fund_code}",
+                "message": "已更新映射: {} → {}（{}）".format(
+                    mapping.sector_name, mapping.fund_name or mapping.fund_code,
+                    _mapping_review_tail(result)),
                 "data": result
             }
 

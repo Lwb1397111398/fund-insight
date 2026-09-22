@@ -93,8 +93,10 @@ def test_no_conclusion_never_accuses(test_db, monkeypatch, verdict):
     test_db.refresh(row)
     assert result['reviewed'] is True
     assert row.is_fetchable is None          # NULL = 可服务（从未体检）
-    assert row.reviewed is True and row.owner_locked is True
-    assert row.reviewed_by == 'owner'
+    # 第 18 轮 MAJOR-1：探针没结论只说明"不能冤枉老板"，不等于"送他永久免疫"。
+    # 审查状态照旧落，署名与锁定要显式 owner_confirm。
+    assert row.reviewed is True and not row.owner_locked
+    assert row.reviewed_by == 'manual_review'
     assert row.verify_message is None        # 没有结论就没有指控
     assert 'identity' not in json.loads(row.evidence or '{}')
 
@@ -107,11 +109,12 @@ def test_probe_crash_is_swallowed(test_db, monkeypatch):
         row.id, fund_code='159995', fund_name='芯片ETF')
     test_db.refresh(row)
     assert result['reviewed'] is True
-    assert row.is_fetchable is None and row.reviewed is True and row.owner_locked is True
+    assert row.is_fetchable is None and row.reviewed is True
+    assert not row.owner_locked, '保存成功 ≠ 体检免疫'
 
 
-def test_valid_fund_code_behaves_exactly_like_before(test_db, monkeypatch):
-    """证明通过 = 今天的行为，一个字都不多写：可服务、已审查、老板锁定。"""
+def test_valid_fund_code_behaves_like_before_except_the_lock(test_db, monkeypatch):
+    """证明通过 = 旧行为减去"白送的锁定"：可服务、已审查，但免疫要老板自己点。"""
     _fake_arbitrate(monkeypatch, 'ok', official='华夏国证半导体芯片ETF')
     row = _mapping(test_db, 'T-手改正常', '512170', '医疗ETF华宝',
                    evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}),
@@ -122,7 +125,7 @@ def test_valid_fund_code_behaves_exactly_like_before(test_db, monkeypatch):
     test_db.refresh(row)
     assert result['reviewed'] is True and result['fund_code'] == '159995'
     assert row.is_fetchable is None, '换标的 = 退回"从未体检"，不许自我背书'
-    assert row.reviewed is True and row.owner_locked is True
+    assert row.reviewed is True and not row.owner_locked
     assert row.verify_message is None
     assert json.loads(row.evidence) == {}, '旧结论讲的是被换掉那只，必须摘干净'
 
@@ -142,8 +145,51 @@ def test_same_code_edit_skips_the_proof(test_db, monkeypatch):
                                               fund_name='医疗ETF华宝')
     test_db.refresh(row)
     assert calls == [], '同码保存不该触发身份探针（PUT 每次都会打一次站）'
-    assert row.reviewed is True and row.owner_locked is True
+    assert row.reviewed is True and not row.owner_locked
 
+
+# ------------------- 第 18 轮 MAJOR-1：署名与豁免只认显式确认
+
+def test_edit_save_cannot_buy_owner_immunity(test_db, monkeypatch):
+    """改动前会红：一次普通 PUT 就落 `reviewed_by=owner + owner_locked`，
+    而这两样之中任何一样都会让 `row_unservable()` 直接返回 False ⇒ 永久体检免疫。
+    """
+    _fake_arbitrate(monkeypatch, 'unknown')
+    row = _mapping(test_db, 'T-编辑免疫', '512170', '医疗ETF华宝')
+    result = SectorFundService(test_db).update_mapping(
+        row.id, fund_code='588000', fund_name='科创50ETF华夏')
+    test_db.refresh(row)
+    assert result['reviewed_by'] != 'owner' and result['owner_locked'] is False
+    assert (row.reviewed_by, row.owner_locked) != ('owner', True)
+    from src.services.sector_identity_audit import row_unservable
+    assert row_unservable(row) is False       # 从未体检，本来就该可服务
+    # 但这一行必须**仍然在体检射程内**：锁定为假 ⇒ owner 例外不该生效
+    row.reviewed_by, row.owner_locked = None, False
+    row.is_fetchable = False
+    assert row_unservable(row) is True, '没锁定的行体检要能判下来'
+
+
+def test_owner_confirm_still_grants_signature_and_lock(test_db, monkeypatch):
+    """显式确认 = 逐行审查那一条路的语义，编辑保存也能买到，但要明说要。"""
+    _fake_arbitrate(monkeypatch, 'ok', official='华夏科创50ETF')
+    row = _mapping(test_db, 'T-确认免疫', '512170', '医疗ETF华宝')
+    SectorFundService(test_db).update_mapping(
+        row.id, fund_code='588000', fund_name='科创50ETF华夏', owner_confirm=True)
+    test_db.refresh(row)
+    assert row.reviewed_by == 'owner' and row.owner_locked is True
+
+
+def test_changing_the_target_revokes_an_inherited_lock(test_db, monkeypatch):
+    """老板当年锁的是旧标的：换代码没重新确认，豁免不能继承给新代码。"""
+    _fake_arbitrate(monkeypatch, 'unknown')
+    row = _mapping(test_db, 'T-继承锁定', '512170', '医疗ETF华宝',
+                   reviewed_by='owner', owner_locked=True)
+    SectorFundService(test_db).update_mapping(
+        row.id, fund_code='588000', fund_name='科创50ETF华夏')
+    test_db.refresh(row)
+    assert not row.owner_locked and row.reviewed_by != 'owner', \
+        '换了标的还留着锁定 = 新代码天生免于体检'
+    assert row.reviewed is True               # 审查状态是"看过"，与免疫分开
 
 # ------------------------------- minor：人工改码要把机器换标溯源一起摘掉
 

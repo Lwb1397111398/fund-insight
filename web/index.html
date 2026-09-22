@@ -1141,6 +1141,11 @@
                                 :style="{ color: (predictionDetail.actual_change || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{
                                 predictionDetail.actual_change !== null && predictionDetail.actual_change !== undefined ? predictionDetail.actual_change.toFixed(2) + '%' : '-'
                                 }}</span></div>
+                        <!-- 列表那一格有 ⚠，抽屉里以前没有：老板从列表点进来看"这条结论凭什么"，
+                             恰好看不见"这个凭据今天已经复现不出来"（第 18 轮 MAJOR-2）。 -->
+                        <div v-if="predictionDetail.evidence_status" class="detail-item"><label>证据：</label>
+                            <span style="color: #d46b08;">⚠ {{ predictionDetail.evidence_note || '端点净值今天复现不出来，结论仅供参考' }}</span>
+                        </div>
                     </div>
                     <div v-if="predictionDetail.prediction_content" class="detail-section mt-16">
                         <h4>预测内容</h4>
@@ -1646,7 +1651,8 @@
                                     </td>
                                     <td class="table-cell-center">
                                         <span v-if="m.source === 'builtin'" :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: '#f6ffed', color: '#52c41a' }">已审查</span>
-                                        <span v-else :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? '已审查' : '待审查' }}</span>
+                                        <span v-else :title="m.owner_locked ? '老板逐行确认过：之后的身份体检不再把这一行判成不可服务' : '编辑保存/批量看过，不等于老板确认：体检仍会判这一行'"
+                                              :style="{ padding: '2px 6px', borderRadius: '3px', fontSize: '11px', background: m.reviewed ? '#f6ffed' : '#fff7e6', color: m.reviewed ? '#52c41a' : '#d46b08' }">{{ m.reviewed ? (m.owner_locked ? '老板已确认' : '已审查') : '待审查' }}</span>
                                     </td>
                                     <td class="table-cell-center">
                                         <template v-if="editingMappingKey !== null && editingMappingKey === (m.sector_name + m.fund_code)">
@@ -1657,7 +1663,10 @@
                                         <template v-else>
                                             <button @click="aiMatchMapping(m)" :disabled="!!aiMatchBusy" style="color: #13c2c2; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">{{ aiMatchBusy === m.sector_name ? 'AI 匹配中…' : 'AI 匹配' }}</button>
                                             <button @click="startEditMapping(m)" style="color: #1890ff; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">编辑</button>
-                                            <button v-if="!m.reviewed && m.source !== 'builtin'" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">审查</button>
+                                            <!-- 编辑保存只给"已审查"，不给老板署名/体检免疫（第 18 轮 MAJOR-1）。
+                                                 所以这一行即使已审查也可能还没确认过：确认入口必须在
+                                                 「已审查但未锁定」的行上仍然存在，否则免疫再也买不到。 -->
+                                            <button v-if="m.source !== 'builtin' && !(m.reviewed && m.owner_locked)" @click="reviewMapping(m.id)" style="color: #52c41a; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">{{ m.reviewed ? '老板确认' : '审查' }}</button>
                                             <!-- 确认文案写着"要撤销就再点一次取消审查"，那这个入口必须真存在
                                                  （第 17 轮 MAJOR-2：以前没有，误点一次就是永久体检免疫）。 -->
                                             <button v-if="m.reviewed && m.source !== 'builtin'" @click="unreviewMapping(m.id)" style="color: #faad14; background: none; border: none; cursor: pointer; font-size: 12px; margin-right: 4px;">取消审查</button>

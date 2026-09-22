@@ -608,3 +608,48 @@ def test_import_merge_mode_still_skips_existing_rows(test_db):
     assert second["data"]["total_imported"] == 0
     assert second["data"]["total_skipped"] == 9
     assert len(calls) == 9  # 合并模式逐行查重仍在
+
+
+def test_export_carries_derived_evidence_badge_and_round_trips(test_db):
+    """导出快照必须带上 ⚠（第 18 轮 MAJOR-2）：它是派生值、不是列，
+    以前只活在列表接口里 ⇒ 老板拿导出去别处看数时，"这条结论的端点今天复现不出来"
+    这件事完全看不见。派生值不能顺手变成导入列，所以还要证明一次往返不报错。
+    """
+    blogger = Blogger(name="证据徽章博主", platform="wechat")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(blogger_id=blogger.id, content="证据徽章帖子", post_date=date(2026, 2, 27))
+    test_db.add(post)
+    test_db.flush()
+    # 已判结论、端点那天没有净值行 ⇒ nav_row_missing
+    test_db.add(Prediction(
+        post_id=post.id, blogger_id=blogger.id, fund_code="999999",
+        fund_name="证据体检测试基金", sector="测试板块", prediction_type="up",
+        prediction_date=date(2026, 2, 27), prediction_period="1周",
+        target_date=date(2026, 3, 6), end_nav=1.0, end_nav_date=date(2026, 3, 2),
+        is_correct=True, actual_change=1.0, status="success",
+    ))
+    test_db.commit()
+
+    service = DataPortabilityService(test_db)
+    exported = service.export_data()
+    row = exported["predictions"][0]
+    assert row["evidence_status"] == "nav_row_missing"
+    assert row["evidence_note"]
+    assert exported["predictions_evidence"] == {
+        "judged": 1, "stale_evidence": 1,
+        "note": exported["predictions_evidence"]["note"],
+    }
+
+    # 往返：派生键不许变成导入报错或"未知区块"警告（`_clean_row` 按列名过滤）
+    test_db.query(Prediction).delete()
+    test_db.commit()
+    result = service.import_data(exported)
+    assert result["success"] is True, result
+    assert not [w for w in result.get("warnings", []) if "未知数据区块" in w], result["warnings"]
+    restored = test_db.query(Prediction).one()
+    assert restored.fund_code == "999999" and restored.end_nav == 1.0
+    # 端点仍然复现不出来 ⇒ 重新导出还是同一枚徽章（派生值不会在往返里被写成一列）
+    again = DataPortabilityService(test_db).export_data()
+    assert again["predictions"][0]["evidence_status"] == "nav_row_missing"
+    assert "evidence_status" not in test_db.query(Prediction).one().__table__.columns.keys()

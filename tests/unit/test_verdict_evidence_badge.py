@@ -179,3 +179,40 @@ def test_list_endpoint_exposes_the_derived_badge(test_db):
     row = next(r for r in payload['data'] if r['id'] == prediction.id)
     assert row['evidence_status'] == 'nav_rewritten', row['evidence_status']
     assert '净值' in row['evidence_note']
+
+
+def test_detail_endpoint_and_drawer_both_carry_the_badge(test_db):
+    """抽屉（点开看"这条结论凭什么"）必须和列表一样知道证据失效（第 18 轮 MAJOR-2）。
+
+    两半各钉一颗钉子：接口给得出、页面绑得上。少任一条，⚠ 都会在这一屏安静地消失。
+    """
+    prediction = _seed_verified_prediction(test_db)
+    prediction.fund_code = '512170'        # 512170 那天是 0.3335，结论存的是 0.3788
+    test_db.commit()
+
+    detail = PredictionQueryService(test_db).get_detail(prediction.id)
+    assert detail['evidence_status'] == 'nav_rewritten', detail['evidence_status']
+    assert detail['evidence_note']
+
+    import io as _io
+    import os as _os
+    html = _io.open(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__)))), 'web', 'index.html'),
+        encoding='utf-8').read()
+    assert 'predictionDetail.evidence_status' in html, \
+        '抽屉里没绑 evidence_status：列表有 ⚠、点进去没有，正是老板最容易误读的那一屏'
+    assert 'predictionDetail.evidence_note' in html
+
+
+def test_export_snapshot_carries_the_badge_too(test_db):
+    """导出的快照也要带着 ⚠（派生值在导出时现算），否则拿出去看数就丢了这个前提。"""
+    from src.services.data_portability_service import DataPortabilityService
+
+    prediction = _seed_verified_prediction(test_db)
+    prediction.fund_code = '512170'
+    test_db.commit()
+
+    exported = DataPortabilityService(test_db).export_data()
+    row = next(r for r in exported['predictions'] if r['id'] == prediction.id)
+    assert row['evidence_status'] == 'nav_rewritten'
+    assert exported['predictions_evidence']['stale_evidence'] == 1

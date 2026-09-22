@@ -173,6 +173,10 @@ class SectorFundService:
                     'fund_code': m.fund_code,
                     'fund_name': m.fund_name,
                     'reviewed': m.reviewed or False,
+                    # 免疫只能由老板逐行确认买到；列表要能区分"老板已确认"与
+                    # "只是编辑过 / 批量看过"（第 18 轮 MAJOR-1）
+                    'reviewed_by': m.reviewed_by,
+                    'owner_locked': bool(m.owner_locked),
                     # 与 GET /sector-mappings 合入的 builtin 条目对齐，
                     # 前端依赖 source 字段区分内置/自定义（此前 DB 行缺该字段）
                     'source': 'custom',
@@ -348,11 +352,17 @@ class SectorFundService:
 
     def update_mapping(self, mapping_id: int, fund_code: str = None,
                        fund_name: str = None,
-                       mark_reviewed: Optional[bool] = None) -> Optional[Dict]:
+                       mark_reviewed: Optional[bool] = None,
+                       owner_confirm: bool = False) -> Optional[Dict]:
         """更新映射（基金代码/名称）。
 
         `mark_reviewed=None` 沿用旧行为（手工编辑即视为已审查）；agent 写库时必须
         显式传 False/True，否则低置信结果会被自动标成"已审查"（审查门禁就废了）。
+
+        **老板署名与体检豁免只认 `owner_confirm`**（与 `mark_reviewed_by_id` /
+        `batch_mark_reviewed` 同一口径，第 18 轮 MAJOR-1）。编辑保存只是"改过这一行"，
+        署名记成 `manual_review`；换了标的却没重新确认时，旧标的上的老板锁定一并撤掉 ——
+        锁的是那只旧基金，不该由一次改码继承给新代码。
 
         **换了标的就先证身份**（`_manual_identity_verdict`）：判"这码根本不是基金"时
         不置审查、不锁老板，写 `is_fetchable=False` 并说明理由；判"没查到"（接口抖动、
@@ -409,6 +419,13 @@ class SectorFundService:
                     if identity is not None:
                         # 老板看得见"到底是哪只基金顶上了这个码"，也才有下一轮体检
                         mapping.evidence = _stamp_identity(mapping.evidence, identity)
+            if changed and not owner_confirm and (
+                    mapping.owner_locked or mapping.reviewed_by == 'owner'):
+                # 老板当年锁的是**旧标的**。换代码而不重新确认，留着锁定 = 新代码天生免疫：
+                # `row_unservable()` 的 owner 例外会吃掉整条判据（列与 verdict 都跳过）。
+                # 撤掉的只是继承来的豁免，老板重新点"已审查"（带 owner_confirm）就能拿回。
+                mapping.owner_locked = False
+                mapping.reviewed_by = None
             if mapping.reviewed and self._unservable(mapping):
                 # 既没换标的也没换名字、只是把状态翻回"已审查" → 拒绝（防一键复活）
                 logger.info('[板块映射] 拒绝标记 %s(%s)：身份体检不通过',
@@ -420,9 +437,15 @@ class SectorFundService:
             if self._unservable(mapping):
                 mapping.is_fetchable = False
             if mapping.reviewed:
-                # 手工编辑/确认 = 老板的决定：记来源并锁定，agent 之后不得覆盖
-                mapping.reviewed_by = 'owner'
-                mapping.owner_locked = True
+                # 第 18 轮 MAJOR-1：上一版这里不看 `owner_confirm`，任何一次编辑保存
+                # （PUT 路由从不传确认参数、UI 保存也没有弹窗）都无条件盖
+                # `reviewed_by='owner' + owner_locked=True` ⇒ 白送永久体检免疫。
+                # 署名与锁定必须一起给、一起撤（第 8 轮教训：只给一半是两处同时说谎）。
+                if owner_confirm:
+                    mapping.reviewed_by = 'owner'
+                    mapping.owner_locked = True
+                else:
+                    mapping.reviewed_by = mapping.reviewed_by or 'manual_review'
                 mapping.match_source = mapping.match_source or 'manual'
             # 编辑即激活：若该行曾被级联清理置为 inactive，保存后必须恢复可见，
             # 否则更新会"成功"但列表按 is_active 过滤后凭空丢失该板块
@@ -442,6 +465,10 @@ class SectorFundService:
                 # 换标的被身份证明否掉时这里是 False：调用方（PUT/POST 路由）不许再
                 # 无条件写"已标记为已审查"，否则老板看到的是一个根本没审过的行
                 'reviewed': bool(mapping.reviewed),
+                # 调用方要按真话回执：老板署名/豁免只在显式确认后才给，
+                # 路由不能只看 `reviewed` 就宣称"已标记为老板已审查"
+                'reviewed_by': mapping.reviewed_by,
+                'owner_locked': bool(mapping.owner_locked),
                 'verify_message': mapping.verify_message,
             }
         finally:
