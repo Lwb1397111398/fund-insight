@@ -7,7 +7,7 @@
   而字面 `「」` 只出现在注释里，两者永不相等；
 - 一条 `<th[^>]*>` 把属性整个吃掉，于是 `not any('title=' in h)` 结构上不可能响。
 所以下面每条判据都配了一个**可复跑的变异**：`python scripts/mutation_proof_frontend.py`
-（28 处变异、覆盖本文件 12 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
+（33 处变异、覆盖本文件 14 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
 跑完逐文件回读比对还原，并校验变异真的落了盘）。判据没配到变异的一律不算数。
 其中两条**不读文本**：`test_the_wake_retry_behaves_the_way_the_page_needs_it` 与
 `test_check_auth_and_the_login_gate_behave_per_status_code` 用 node 执行页面里那份源码，
@@ -142,6 +142,10 @@ def test_the_wake_wait_is_shared_and_always_releases_the_flag():
     assert 'isServiceDown(e)' in retry and 'waitUntilAwake()' in retry, \
         '重试路径不再经过等待 ⇒ "等唤醒"整段成死代码（变异 MU1 的形状）'
     assert 'throw e' in retry, '非服务不可用的错必须原样抛出（401 不能也去等 90 秒）'
+    # 等待时长在四处文案里说同一件事（第 31 轮 B-MINOR-4：三处写"约 30~60 秒"、一处写"最长 90 秒"）
+    assert '（约 30~60 秒）' not in html, '还有旧版唤醒时长说法，四处不一致'
+    assert html.count('通常 30~60 秒，最长再等 90 秒') >= 4, '唤醒时长说法没统一（现 %d 处）' % html.count(
+        '通常 30~60 秒，最长再等 90 秒')
 
 
 def test_a_missing_number_is_not_rendered_as_zero():
@@ -151,8 +155,9 @@ def test_a_missing_number_is_not_rendered_as_zero():
     五个统计卡写的是 `stats.overall?.X || 0` ⇒ 唤醒失败首屏就是"0 博主 / 0 帖子"。
     """
     html = _html()
-    assert re.search(r'const statVal = \(v\) => statsError\.value \? ', html), \
-        '统计卡没走 statVal：取不到时又会报 0'
+    assert 'const statVal = (v) => (statsError.value' in html, '统计卡没走 statVal：取不到时又会报 0'
+    assert 'v === undefined' in _expr(html, 'const statVal'), \
+        'statVal 只看 statsError：后端改字段名时它会报 0（第 31 轮 B-MINOR-1）'
     cards = re.findall(r'<div class="value">\{\{(.*?)\}\}</div>', html, flags=re.S)
     assert len(cards) >= 6, '统计卡只扫到 %d 张，正则或结构变了' % len(cards)
     assert all('statVal(' in c for c in cards if 'stats.overall' in c), \
@@ -393,6 +398,7 @@ def test_check_auth_and_the_login_gate_behave_per_status_code():
     html = _html()
     helpers = (_wake_helpers(html)
                + [_decl(html, 'checkAuth = async () =>'),
+                  _decl(html, 'submitPassword = async () =>'),
                   _decl(html, 'retryConnect = async () =>')])
     driver = """
 const err = (o) => { const e = new Error('x'); Object.assign(e, o); return e; };
@@ -430,6 +436,29 @@ const run = async (name, first, healthDown) => {
     out.push(await run('server_error', err({ response: { status: 500 } }), false));
     out.push(await run('network', err({ code: 'ERR_NETWORK' }), false));
     out.push(await run('never_wakes', err({ code: 'ERR_NETWORK' }), true));
+    // 同一套状态码规则也要覆盖"老板手输口令"那条路（第 31 轮：它此前零判据）
+    const runSubmit = async (name, first) => {
+        for (const k of Object.keys(store)) delete store[k];
+        store['access_password'] = 'old-pw';
+        passwordInput.value = 'typed-pw'; passwordError.value = '';
+        showPasswordModal.value = true; authReady.value = false;
+        calls.length = 0;
+        let n = 0;
+        impl = async (url) => {
+            if (url === '/api/health') { if (first) { fakeNow += 3000; throw err({ code: 'ERR_NETWORK' }); } return { data: { status: 'ok' } }; }
+            n += 1;
+            if (n === 1 && first) throw first;
+            return { data: { success: true, data: {} } };
+        };
+        await submitPassword();
+        return { name, kept_old: !!localStorage.getItem('access_password'),
+                 input_kept: !!passwordInput.value, ready: authReady.value,
+                 err: passwordError.value };
+    };
+    out.push(await runSubmit('submit_ok', null));
+    out.push(await runSubmit('submit_unauthorized', err({ response: { status: 401 } })));
+    out.push(await runSubmit('submit_gateway', err({ response: { status: 502 } })));
+    out.push(await runSubmit('submit_server_error', err({ response: { status: 500 } })));
     process.stdout.write(JSON.stringify(out));
 })();
 """
@@ -453,24 +482,120 @@ const run = async (name, first, healthDown) => {
         '500 是代码 bug，不是实例在睡：不该排队，更不该清口令'
     assert rows['server_error']['modal'] and '500' in rows['server_error']['problem'], \
         '弹窗要说"服务返回 500"，不能含糊成"连不上"'
+    # 手输口令那条路（`submitPassword`）此前零判据：A 放宽/收紧它都绿
+    assert rows['submit_ok']['ready'], '正常口令没能登进系统'
+    assert not rows['submit_unauthorized']['kept_old'], '401 才该把旧口令清掉'
+    assert '密码错误' in rows['submit_unauthorized']['err']
+    for name in ('submit_gateway', 'submit_server_error'):
+        assert rows[name]['kept_old'], '%s 时不许清掉老板存过的口令' % name
+        assert rows[name]['input_kept'], '失败时不许把老板刚输的口令也抹掉（还得重打一遍）'
+        assert '没有丢' in rows[name]['err'], '%s 的提示要与"口令没丢"这件事一致' % name
 
 
-def test_a_waking_service_does_not_lose_a_running_batch_job():
-    """轮询失败要分档：服务不可用时**不许**丢掉任务号（第 30 轮 A-MAJOR-2）。
+def test_a_lost_job_handle_needs_a_404_not_any_error():
+    """任务轮询：只有 404 才允许丢句柄，其余失败留着限次再问（第 31 轮两份复评共同抓到）。
 
-    `pollAnalysisJob` / `pollTask` 的 catch 以前无条件 `clearJob()` / `clearPoll()`
-    （= `localStorage.removeItem(任务号)`）⇒ 实例唤醒期打开页面，一个正在跑的批量分析
-    会静默消失且再也回不来，只剩一行 console.error。现在：服务不可用就留句柄、10 秒后再问；
-    判据只有一处（`index.html` 的 `isServiceDown`），靠 options 注入，不在子模块里另抄一份。
+    第 30 轮我改成"`isServiceDown` 为假就 `clearJob()`"，而 401/403/500 全在"为假"那一侧；
+    更要命的是 `restoreAnalysisJob()` / `restoreViewpointTask()` 在 `onMounted` 里跑，
+    **不等登录门** ⇒ `ACCESS_PASSWORD` 轮换那天，正在跑的批量分析/观点汇总会静默永久失联，
+    老板重输密码后看不到，很可能再点一次造成重复写入。
+    """
+    for fname, clear, retry in (('post-manager.js', 'clearJob()', 'pollAnalysisJob(taskId, attempts + 1)'),
+                                ('viewpoint-manager.js', 'clearPoll()', 'pollTask(taskId, attempts + 1)')):
+        src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
+        i = src.find('error.response.status === 404')
+        assert i >= 0, '%s 的轮询 catch 不再区分 404' % fname
+        tail = src[max(0, i - 220):i + 520]
+        assert 'error.response.status === 404' in tail and clear in tail, \
+            '%s 的 catch 不再区分 404：丢句柄的条件写错了' % fname
+        assert retry in tail, '%s 没有"留着句柄再问一次"这条腿' % fname
+        assert 'MAX_POLL_FAILURES' in tail, '%s 的重试没有上限（会 10 秒一次打到天荒地老）' % fname
+        guard, _, rest = tail.partition('404')
+        _, _, else_leg = rest.partition('} else if')
+        assert clear in guard.split('404)')[-1] or clear in rest[:rest.index('else')], \
+            '%s 的 404 分支没有丢句柄' % fname
+        assert clear not in else_leg, '%s 在非 404 分支里仍然清了句柄' % fname
+    # 句柄还得真的能跨会话恢复：restore* 读的是 localStorage，不在失败路径上删它
+    html = _html()
+    assert 'restoreAnalysisJob()' in html and 'restoreViewpointTask()' in html
+
+
+def _setup_exports(html):
+    start = html.rindex('\n                return {')
+    end = html.index('\n                };', start)
+    names = set()
+    for line in html[start + len('\n                return {'):end].split('\n'):
+        for part in line.strip().rstrip(',').split(','):
+            part = part.strip()
+            if part:
+                names.add(re.split(r'[:(]', part)[0].strip())
+    return names
+
+
+def test_everything_the_template_reads_is_actually_exported():
+    """模板里引用的每个根标识符，必须在 `setup()` 的 return 名单里 —— 少一个就静默失效。
+
+    第 31 轮 A 抓到：`serviceWaited` 用在弹窗第 986 行的 `v-if` 上，却没进 return，
+    于是"已经等过一轮唤醒"那一支**永不渲染**，页面永远说"这不是唤醒问题"。
+    本轮返修时又扫出第二个同类：API Key 输入框读 `showApiKey`，而它从未被声明过
+    （`:type="showApiKey ? 'text' : 'password'"` 恒为 password，等于一个假开关）。
+    这一类没有任何机器闸（浏览器探针常年 skip），所以把它钉成判据。
     """
     html = _html()
-    assert html.count('isServiceDown,') == 2, '两个子模块都要注入 isServiceDown（现在 %d 处）' % html.count('isServiceDown,')
-    for fname, retry in (('post-manager.js', 'pollAnalysisJob(taskId)'),
-                         ('viewpoint-manager.js', 'pollTask(taskId)')):
-        src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
-        i = src.find('options.isServiceDown && options.isServiceDown(error)')
-        assert i >= 0, '%s 的轮询 catch 没分档：唤醒期会把任务号清掉' % fname
-        upto = src[i:src.find(retry, i)]
-        assert retry in src[i:i + 260], '%s 分档后没有"留着句柄再问一次"这条腿' % fname
-        assert 'clearJob();' not in upto and 'clearPoll();' not in upto, \
-            '%s 在"服务不可用"这一支里仍然清掉了句柄' % fname
+    tpl = html[html.index('<div id="app"'):html.index('<script src="/web/post-manager.js">')]
+    tpl = re.sub(r'<!--.*?-->', '', tpl, flags=re.S)
+    exprs = [m.group(1) for m in re.finditer(r'\{\{(.*?)\}\}', tpl, flags=re.S)]
+    for attr in ('v-if', 'v-else-if', 'v-show', 'v-model'):
+        exprs += [m.group(1) for m in re.finditer(r'\s%s="(.*?)"' % attr, tpl, flags=re.S)]
+    exprs += [m.group(1) for m in re.finditer(r'(?:^|\s)(?::|v-bind:)[\w.-]+="(.*?)"', tpl, flags=re.S)]
+    exprs += [m.group(1) for m in re.finditer(r'(?:^|\s)@[\w.-]+="(.*?)"', tpl, flags=re.S)]
+    locals_ = {'$event', '$refs', '$attrs', '$'}     # '$' 来自模板字符串的 `${...}`
+    for f in re.findall(r'\sv-for="(.*?)"', tpl, flags=re.S):
+        lhs, _, rhs = f.partition(' in ')
+        locals_ |= {a.strip() for a in lhs.strip('()').split(',') if a.strip()}
+        exprs.append(rhs)
+    for grp in re.findall(r'\(([^()]*)\)\s*=>', ' '.join(exprs)):
+        locals_ |= {a.strip() for a in grp.split(',') if a.strip()}
+    locals_ |= {m.group(1) for m in re.finditer(r'([A-Za-z_$][\w$]*)\s*=>', ' '.join(exprs))}
+    builtins = set('''true false null undefined typeof in of new this return if else void delete
+        Math Date JSON Object String Number Boolean Array Set Map Intl RegExp Error Promise
+        parseInt parseFloat encodeURIComponent decodeURIComponent isNaN isFinite console window
+        document localStorage alert confirm length value index key toFixed toString includes join
+        split map filter reduce slice push replace trim padStart padEnd startsWith endsWith
+        substring concat sort some every keys entries from'''.split())
+    ids = set()
+    for e in exprs:
+        e = re.sub(r"'[^']*'|\"[^\"]*\"", "''", e)
+        for m in re.finditer(r'(?<![.\w$])([A-Za-z_$][\w$]*)', e):
+            tok = m.group(1)
+            if e[m.end():m.end() + 1] == ':' or tok in builtins or tok in locals_:
+                continue
+            ids.add(tok)
+    exported = _setup_exports(html)
+    assert len(ids) >= 150, '只扫到 %d 个模板标识符，扫描本身失效了（判据会变成恒真）' % len(ids)
+    missing = sorted(i for i in ids if i not in exported)
+    assert not missing, ('模板读了但 setup() 没导出的标识符：%s ⇒ Vue 里恒为 undefined，'
+                         '那一支永远不渲染' % missing)
+
+
+def test_every_list_page_shares_the_same_honesty_rule():
+    """帖子/预测/观点/板块映射也一样：**没取到不能写成"库里没有"**（第 31 轮 B-MAJOR-1/2）。
+
+    上一批只给博主榜立了规矩，判据的正则又只取**第一个** `v-else class="empty-state"`，
+    其余三条腿（`暂无帖子数据`/`暂无预测数据`/`暂无观点数据`）连 catch 都没有，
+    怎么改都不会红。镜像真值 657 帖 / 1616 预测 / 71 观点 ⇒ 唤醒期点进去就是假空。
+    """
+    html = _html()
+    for view in ('posts', 'predictions', 'viewpoints'):
+        assert "emptyText('%s')" % view in html, '%s 页还在无条件说"暂无数据"' % view
+    assert '暂无帖子数据' not in html and '暂无预测数据' not in html and '暂无观点数据' not in html
+    et = _expr(html, 'const emptyText')
+    assert 'serviceWaking.value' in et and 'viewErrors[v]' in et, 'emptyText 少了唤醒/失败两条腿'
+    # 板块映射页的四个数在取不到时不能报"共 0 条 / 已审查 0"
+    assert "viewErrors.mappings" in html, '映射页没有失败态'
+    assert html.count("viewErrors.mappings") >= 3, '映射页的失败态没同时接管计数行与取数函数'
+    ls = [l for l in html.split('\n') if 'const loadSectorMappings' in l]
+    assert len(ls) == 1, 'loadSectorMappings 应该只有一处定义（现 %d）' % len(ls)
+    tail = ls[0][ls[0].rindex('catch'):]
+    assert 'viewErrors.mappings =' in tail and 'isServiceDown(e)' in tail, \
+        '映射页的 catch 又退回只 console.error'

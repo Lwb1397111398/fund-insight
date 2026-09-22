@@ -74,7 +74,8 @@
             pollTimer = null;
         };
 
-        const pollAnalysisJob = async (taskId) => {
+        const MAX_POLL_FAILURES = 90;   // 10 秒一次 ≈ 15 分钟
+        const pollAnalysisJob = async (taskId, attempts = 0) => {
             try {
                 const res = await axios.get(`/api/posts/analysis-jobs/${taskId}`);
                 analysisJob.value = res.data.data;
@@ -94,13 +95,15 @@
                 analyzing.value = true;
                 pollTimer = window.setTimeout(() => pollAnalysisJob(taskId), 3000);
             } catch (error) {
-                // 服务连不上 ≠ 任务没了。以前无条件 `clearJob()` ⇒ 实例唤醒期打开页面会把
-                // 一个正在跑的批量分析任务号永久丢掉（只剩一行 console.error，进度条从此消失）。
-                // 留着句柄、10 秒后再问一次；服务器明确答 4xx 才真的丢。
-                if (options.isServiceDown && options.isServiceDown(error)) {
-                    pollTimer = window.setTimeout(() => pollAnalysisJob(taskId), 10000);
-                } else {
+                // 只有"任务确实不在了"（404）才丢句柄。401/403/500 与唤醒期的网络错都不算：
+                // 第 31 轮两份复评共同指出，`ACCESS_PASSWORD` 轮换那天，正在跑的批量分析
+                // 会因为登录态没确立就被清掉任务号，老板看不到、很可能再点一次造成重复写入。
+                // 其余失败一律留着句柄限次再问（10 秒一次、最多 15 分钟），
+                // 停手也不删 —— 下次打开页面还能接着看。
+                if (error.response && error.response.status === 404) {
                     clearJob();
+                } else if (attempts < MAX_POLL_FAILURES) {
+                    pollTimer = window.setTimeout(() => pollAnalysisJob(taskId, attempts + 1), 10000);
                 }
                 console.error('恢复帖子分析任务失败', error);
             }

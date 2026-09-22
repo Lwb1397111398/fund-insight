@@ -28,6 +28,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 ROOT = Path(__file__).resolve().parents[1]
 HTML = 'web/index.html'
 JS = 'web/prediction-manager.js'
+POST = 'web/post-manager.js'
 T = 'tests/unit/test_frontend_cold_start.py'
 
 # (判据函数, 变异名, 文件, 找, 换成, 是否正则)
@@ -51,8 +52,8 @@ MUTATIONS = [
     ('test_the_wake_wait_is_shared_and_always_releases_the_flag', 'flag_not_reset_in_finally',
      HTML, 'finally { serviceWaking.value = false; wakeWait = null; }', 'finally { wakeWait = null; }', False),
     ('test_a_missing_number_is_not_rendered_as_zero', 'statval_blurs_error',
-     HTML, r"const statVal = \(v\) => statsError\.value \? '—' : \(v \|\| 0\);",
-     "const statVal = (v) => (v || 0);", True),
+     HTML, "const statVal = (v) => (statsError.value || v === undefined || v === null) ? '—' : v;",
+     "const statVal = (v) => (v || 0);", False),
     ('test_a_missing_number_is_not_rendered_as_zero', 'card_back_to_bare_zero',
      HTML, '{{ statVal(stats.overall?.total_bloggers) }}',
      '{{ stats.overall?.total_bloggers || 0 }}', False),
@@ -100,11 +101,23 @@ MUTATIONS = [
     ('test_a_missing_number_is_not_rendered_as_zero', 'retention_card_back_to_zero',
      HTML, "{{ retentionPreview ? (retentionPreview.total || 0) : '—' }}",
      '{{ retentionPreview?.total || 0 }}', False),
-    ('test_a_waking_service_does_not_lose_a_running_batch_job', 'job_handle_still_dropped',
-     'web/post-manager.js', 'options.isServiceDown && options.isServiceDown(error)', 'false', False),
+    ('test_a_lost_job_handle_needs_a_404_not_any_error', 'job_handle_dropped_on_any_error',
+     'web/post-manager.js', 'error.response && error.response.status === 404', 'error.response', False),
+    ('test_a_lost_job_handle_needs_a_404_not_any_error', 'retry_forever',
+     'web/post-manager.js', 'attempts < MAX_POLL_FAILURES', 'true', False),
+    ('test_everything_the_template_reads_is_actually_exported', 'unexport_serviceWaited',
+     HTML, 'serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,',
+     'serviceWaking, serviceUnreachable, serviceProblem, retryConnect,', False),
+    ('test_every_list_page_shares_the_same_honesty_rule', 'posts_blame_the_database',
+     HTML, "{{ emptyText('posts') }}", '暂无帖子数据', False),
+    ('test_every_list_page_shares_the_same_honesty_rule', 'mapping_page_swallows_again',
+     HTML, "viewErrors.mappings = '板块映射拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错');",
+     "console.error('加载板块映射失败:', e);", False),
+    ('test_a_missing_number_is_not_rendered_as_zero', 'statval_ignores_missing_field',
+     HTML, "(statsError.value || v === undefined || v === null)", "(statsError.value)", False),
     ('test_the_empty_state_cannot_lie_while_a_fetch_is_still_pending', 'empty_state_reversed',
-     HTML, r'<template v-if="serviceWaking">正在等待服务唤醒（约 30~60 秒）…</template>',
-     '<template v-if="true">暂无博主数据</template>', True),
+     HTML, r'<template v-if="serviceWaking">正在等待服务唤醒[^<]*</template>',
+     '<template v-if="true">暂无数据</template>', True),
 ]
 
 

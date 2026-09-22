@@ -29,7 +29,7 @@
                 <div class="loading-spinner"></div>
                 <!-- 冷启动最长要等三分多钟（首笔 60 秒超时 + 排队等醒 90 秒 + 重跑 60 秒）。
                      这段时间只写"加载中..."，老板不知道是网慢还是服务在睡，最自然的动作是刷新 ⇒ 计时重来。 -->
-                <div v-if="serviceWaking">正在等待服务唤醒（约 30~60 秒）… 别刷新页面，醒了会自动继续</div>
+                <div v-if="serviceWaking">正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）… 别刷新页面，醒了会自动继续</div>
                 <div v-else>加载中...</div>
             </div>
             <div v-else>
@@ -91,7 +91,7 @@
                         </template>
                     </div>
                     <div v-else class="text-xs" style="color:#bfbfbf; margin: 2px 0 8px 0;">
-                        <template v-if="serviceWaking">服务正在唤醒（约 30~60 秒），好了会自动刷新…</template>
+                        <template v-if="serviceWaking">服务正在唤醒（通常 30~60 秒，最长再等 90 秒），好了会自动刷新…</template>
                         <template v-else-if="evidenceError">
                             结论证据体检拉取失败：{{ evidenceError }} ⇒ <strong>下面的准确率没有区间可看，先别当结论用</strong>
                             <button class="action-btn small" @click="fetchEvidence">重试</button>
@@ -142,7 +142,7 @@
                     <div v-else class="empty-state">
                         <!-- 空表有三种成因，必须先排掉"还在取"和"没取到"，最后才允许说"库里没有"。
                              顺序错了就会在等待唤醒的那几十秒里报出"暂无博主数据"这种假事实。 -->
-                        <template v-if="serviceWaking">正在等待服务唤醒（约 30~60 秒）…</template>
+                        <template v-if="serviceWaking">正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）…</template>
                         <template v-else-if="loading">加载中…</template>
                         <template v-else-if="bloggersError">{{ bloggersError }}
                             <button class="action-btn small" @click="fetchBloggers">重试</button></template>
@@ -221,7 +221,7 @@
                             </tbody>
                         </table>
                     </div>
-                    <div v-else class="empty-state">暂无帖子数据</div>
+                    <div v-else class="empty-state">{{ emptyText('posts') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="postPrevPage" :disabled="postFilters.page <= 1">上一页</button>
                         <span>第 {{ postFilters.page }} 页 · 共 {{ postMeta.total || 0 }} 条</span>
@@ -344,7 +344,7 @@
                             </tbody>
                         </table>
                     </div>
-                    <div v-else class="empty-state">暂无预测数据</div>
+                    <div v-else class="empty-state">{{ emptyText('predictions') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="predictionPrevPage" :disabled="predictionFilters.page <= 1">上一页</button>
                         <span>第 {{ predictionFilters.page }} 页 · 共 {{ predictionMeta.total || 0 }} 条</span>
@@ -474,7 +474,7 @@
                             </tbody>
                         </table>
                     </div>
-                    <div v-else class="empty-state">暂无观点数据</div>
+                    <div v-else class="empty-state">{{ emptyText('viewpoints') }}</div>
                     <div class="viewpoint-pagination" v-if="viewpointMeta.pages > 0">
                         <button class="row-btn" @click="viewpointPrevPage" :disabled="viewpointMeta.page <= 1"><i class="ri-arrow-left-s-line"></i></button>
                         <span>第 {{ viewpointMeta.page }} / {{ viewpointMeta.pages }} 页，共 {{ viewpointMeta.total }} 条</span>
@@ -545,8 +545,8 @@
                         <button class="action-btn danger small" @click="cleanupData" :disabled="analyzing || !retentionPreview || !retentionPreview.total"><i class="ri-delete-bin-line"></i> {{ analyzing ? '安全清理中...' : '安全清理' }}</button>
                         <button class="action-btn small" @click="reclaimSpace" :disabled="analyzing || !cleanupEnabled" title="删除后数据库文件不会自动变小，点这里回收磁盘空间"><i class="ri-hard-drive-2-line"></i> {{ reclaiming ? '回收空间中...' : '回收磁盘空间' }}</button>
                         <span v-if="!cleanupEnabled && !retentionPreviewError" class="text-xs text-danger">清理开关已关闭（ENABLE_DATA_CLEANUP=false）。需要清理时改为 true 或删除该配置后重启</span>
-                        <button v-if="retentionPreviewError" class="action-btn small" @click="fetchRetentionPreview">清单加载失败，点击重试</button>
-                        <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">保留分析加载失败，点击重试</button>
+                        <button v-if="retentionPreviewError" class="action-btn small" @click="fetchRetentionPreview">保留分析加载失败，点击重试</button>
+                        <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">清理清单加载失败，点击重试</button>
                         <button v-if="testData && testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                     </div>
 
@@ -969,8 +969,7 @@
                     <p v-if="passwordError" style="color: #ff4d4f; font-size: 13px; margin-top: 8px;">{{ passwordError }}</p>
                 </div>
                 <div class="modal-footer">
-                    <button class="modal-btn primary" @click="submitPassword" :disabled="passwordVerifying" 
-                        class="w-full">{{ passwordVerifying ? '验证中...' : '确认' }}</button>
+                    <button class="modal-btn primary w-full" @click="submitPassword" :disabled="passwordVerifying">{{ passwordVerifying ? '验证中...' : '确认' }}</button>
                 </div>
             </div>
         </div>
@@ -1646,6 +1645,9 @@
                 </div>
                 <div v-if="configTab === 'mappings'">
                     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
+                        <span v-if="viewErrors.mappings" class="text-sm" style="color:#ff4d4f;">{{ viewErrors.mappings }}
+                            <button class="action-btn small" @click="loadSectorMappings(mappingFilter)">重试</button></span>
+                        <template v-else>
                         <span class="text-sm text-muted">共 {{ sectorMappings.total }} 条（在册 {{ sectorMappings.custom_count }} + 内置 {{ sectorMappings.builtin_count }}）</span>
                         <!-- "已审查/待审查"只数**在册行**：内置那几十条是静态表合成的，
                              `reviewed=True` 是硬编码占位、体检从没看过它们。以前按全量算，
@@ -1661,6 +1663,7 @@
                               style="font-size: 13px; color: #8c8c8c;">（看过未确认 {{ sectorMappings.reviewed_unconfirmed_count }} 条：体检与 AI 覆盖照常生效）</span>
                         <span v-if="sectorMappings.builtin_count"
                               style="font-size: 13px; color: #bfbfbf;">内置 {{ sectorMappings.builtin_count }} 条来自静态表，未跑体检、也没有"确认"这个动作</span>
+                        </template>
                         <button v-if="identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
                         <button v-if="identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
                         <button v-if="identityStats.no_literal" class="action-btn small" @click="identityFilter = identityFilter === 'no_literal' ? 'all' : 'no_literal'" :style="{ background: identityFilter === 'no_literal' ? '#8c8c8c' : '#fafafa', color: identityFilter === 'no_literal' ? '#fff' : '#8c8c8c', border: '1px solid #d9d9d9' }" title="名册里查不到字面对口的标的：这些行是代理关系，换标的得人工定">名册无对口 {{ identityStats.no_literal }}</button>
@@ -1858,14 +1861,14 @@
                     </div>
                     <div v-if="configData.llm_provider === 'volcengine'" style="background: #fff7e6; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
                         <h4 style="color: #d46b08; margin-bottom: 8px;">🔥 火山引擎配置</h4>
-                        <div class="config-item"><label>API Key</label><input :type="showApiKey ? 'text' : 'password'"
+                        <div class="config-item"><label>API Key</label><input type="password"
                                 v-model="configData.volcengine_api_key" :placeholder="configData.volcengine_api_key_set ? '已设置' : '未设置'"></div>
                         <div class="config-item"><label>主力模型</label><input v-model="configData.volcengine_model" placeholder="如: doubao-seed-2-0-pro-260215"></div>
                         <div class="config-item"><label>辅助模型</label><input v-model="configData.volcengine_light_model" placeholder="如: doubao-seed-2-0-lite-260215"></div>
                     </div>
                     <div v-else style="background: #f6ffed; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
                         <h4 style="color: #389e0d; margin-bottom: 8px;">🌿 硅基流动配置</h4>
-                        <div class="config-item"><label>API Key</label><input :type="showApiKey ? 'text' : 'password'"
+                        <div class="config-item"><label>API Key</label><input type="password"
                                 v-model="configData.llm_api_key" :placeholder="configData.llm_api_key_set ? '已设置' : '未设置'"></div>
                         <div class="config-item"><label>Base URL</label><input v-model="configData.llm_base_url"></div>
                         <div class="config-item"><label>主模型</label><input v-model="configData.llm_model"></div>
@@ -2131,7 +2134,7 @@
                     }
                 };
                 // "没取到"不能渲染成 0 —— 0 是一个事实，而它不是事实。
-                const statVal = (v) => statsError.value ? '—' : (v || 0);
+                const statVal = (v) => (statsError.value || v === undefined || v === null) ? '—' : v;
                 const checkAuth = async () => {
                     const savedPassword = localStorage.getItem('access_password');
                     if (savedPassword) {
@@ -2331,8 +2334,6 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
                     onStatsChanged: () => fetchStats(),
                     onPredictionsChanged: () => fetchPredictions(),
-                    // 轮询失败要分档：服务不可用时不许丢掉任务号（判据只写一处，注入出去用）
-                    isServiceDown,
                 });
                 const {
                     posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
@@ -2345,7 +2346,6 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, computed, localStorage, alert, confirm,
                     viewpoints, viewpointDetail, showViewpointDetail, analyzing,
                     onStatsChanged: () => fetchStats(),
-                    isServiceDown,
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
@@ -2567,7 +2567,7 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
-                const showTopBloggers = async () => { try { const res = await withWakeRetry(() => axios.get('/api/bloggers/top?limit=10')); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('TOP 榜取不到：' + (e.response ? '接口报错 ' + e.response.status : '服务连不上（可能在唤醒），稍后再点一次')); } };
+                const showTopBloggers = async () => { try { const res = await withWakeRetry(() => axios.get('/api/bloggers/top?limit=10')); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } else { alert('TOP 榜没取到：' + (res.data.message || '接口未给出原因')); } } catch (e) { alert('TOP 榜取不到：' + (e.response ? '接口报错 ' + e.response.status : '服务连不上（可能在唤醒），稍后再点一次')); } };
                 let fundUpdatePollTimer = null;
                 let lastFundUpdateFinishedAt = null;
                 const clearFundUpdatePoll = () => {
@@ -2760,7 +2760,29 @@ const fetchWeChatBatch = async () => {
                 const loadTestData = async () => { try { const res = await axios.get('/api/test-data/find'); if (res.data.success) testData.value = res.data.data; } catch (e) { console.error('加载测试数据失败:', e); } };
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); msg += '\n'; } if (testData.value.predictions && testData.value.predictions.length > 0) { msg += `测试预测 (${testData.value.predictions.length}):\n`; testData.value.predictions.forEach(p => msg += `  - ${p.fund_name || p.fund_code || p.prediction_content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup', null, { headers: { 'X-Danger-Confirm': 'cleanup-test-data' } }); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
-                const loadView = async (view) => { currentView.value = view; if (view === 'bloggers') await fetchBloggers(); else if (view === 'posts') await fetchPosts(); else if (view === 'predictions') await fetchPredictions(); else if (view === 'viewpoints') await loadViewpoints(); else if (view === 'funds') await fetchFunds(); else if (view === 'cleanup') { await fetchRetentionPreview(); await fetchCleanupPreview(); await loadTestData(); } else if (view === 'advice') { await loadAdviceHistory(); } };
+                const viewErrors = reactive({ posts: '', predictions: '', viewpoints: '', mappings: '' });
+                // 一条规矩覆盖所有列表页：**没取到 ≠ 库里没有**。
+                // 分支顺序就是优先级（唤醒中 → 失败 → 真的空），改了顺序就会在等待期报出假事实。
+                const emptyText = (v) => serviceWaking.value
+                    ? '正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）…'
+                    : (viewErrors[v] ? viewErrors[v] : '暂无数据');
+                const loadView = async (view) => {
+                    currentView.value = view;
+                    const run = async (key, label, fn) => {
+                        try { await fn(); viewErrors[key] = ''; }
+                        catch (e) {
+                            viewErrors[key] = label + '拉取失败：'
+                                + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错') + '，稍后再点一次';
+                        }
+                    };
+                    if (view === 'bloggers') await fetchBloggers();
+                    else if (view === 'posts') await run('posts', '帖子', fetchPosts);
+                    else if (view === 'predictions') await run('predictions', '预测', fetchPredictions);
+                    else if (view === 'viewpoints') await run('viewpoints', '观点', loadViewpoints);
+                    else if (view === 'funds') await fetchFunds();
+                    else if (view === 'cleanup') { await fetchRetentionPreview(); await fetchCleanupPreview(); await loadTestData(); }
+                    else if (view === 'advice') { await loadAdviceHistory(); }
+                };
                 // ===== 板块别名管理 =====
                 const configTab = ref('llm');
                 const aliases = ref({ builtin: [], custom: [], standard_sectors: [] });
@@ -2807,7 +2829,7 @@ const fetchWeChatBatch = async () => {
                         (m.identity_official_name || '').toLowerCase().includes(keyword)
                     );
                 });
-                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await withWakeRetry(() => axios.get(url)); if (res.data.success) sectorMappings.value = res.data.data; } catch (e) { console.error('加载板块映射失败:', e); } };
+                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await withWakeRetry(() => axios.get(url)); if (res.data.success) { sectorMappings.value = res.data.data; viewErrors.mappings = ''; } } catch (e) { viewErrors.mappings = '板块映射拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
                 const aiMatchMapping = async (m) => {
                     if (aiMatchBusy.value) return;
                     aiMatchBusy.value = m.sector_name;
@@ -3086,8 +3108,9 @@ const fetchWeChatBatch = async () => {
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
                 return {
                     theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
-                    serviceWaking, serviceUnreachable, serviceProblem, retryConnect,
-                    bloggersError, statsError, statVal, fetchStats, spanText, fetchEvidence,
+                    serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,
+                    bloggersError, statsError, statVal, viewErrors, emptyText,
+                    fetchStats, spanText, fetchEvidence,
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,

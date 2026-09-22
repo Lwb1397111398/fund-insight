@@ -95,7 +95,8 @@
             pollTimer = null;
             localStorage.removeItem('viewpoint_task_id');
         };
-        const pollTask = async (taskId) => {
+        const MAX_POLL_FAILURES = 90;   // 10 秒一次 ≈ 15 分钟
+        const pollTask = async (taskId, attempts = 0) => {
             if (pollTimer) window.clearTimeout(pollTimer);
             try {
                 const latest = await fetchLatestTask();
@@ -108,14 +109,15 @@
                 localStorage.setItem('viewpoint_task_id', String(taskId));
                 pollTimer = window.setTimeout(() => pollTask(taskId), 3000);
             } catch (error) {
-                // 同 `post-manager.js`：唤醒期的网络错不能算"任务结束"，清掉任务号会让
-                // 正在跑的观点汇总从此失联。留句柄、10 秒后再问。
-                if (options.isServiceDown && options.isServiceDown(error)) {
-                    pollTimer = window.setTimeout(() => pollTask(taskId), 10000);
+                // 与 `post-manager.js` 同一条规矩：只有 404（任务确实不在了）才丢句柄；
+                // 401/403/500 与唤醒期的网络错留着句柄限次再问，停手也不删。
+                if (error.response && error.response.status === 404) {
+                    clearPoll();
+                    analyzing.value = false;
+                } else if (attempts < MAX_POLL_FAILURES) {
+                    pollTimer = window.setTimeout(() => pollTask(taskId, attempts + 1), 10000);
                     return;
                 }
-                clearPoll();
-                analyzing.value = false;
                 console.error('观点任务轮询失败', error);
             }
         };

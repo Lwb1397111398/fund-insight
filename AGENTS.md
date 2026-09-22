@@ -195,13 +195,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 06:27（北京），第 30 轮返修（复评 78/84 驱动）之后，
+最近一次核对（2026-09-23 07:54（北京），第 31 轮返修（复评 80/80 驱动）之后，
 最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **881 passed / 16 skipped / 0 failed**（136 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **890 passed / 16 skipped / 0 failed**（131 秒）。
+- `pytest tests/unit -q` → **883 passed / 16 skipped / 0 failed**（132 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **892 passed / 16 skipped / 0 failed**（135 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 878/887：本批 +3 条（登录门行为判据、任务号不被唤醒吞掉、审查数必须互相闭合）。）
+  （上一基线 881/890 → 本批 883/892：+2 条（模板绑定机器闸、"每个列表页共用同一条诚实规矩"），
+  以及第 31 轮返修里换掉的任务句柄判据。数字与用例改动在同一个提交里。）
   （再上一批 866 —— 那一批把 `tests/` 口径欠了一次实测，本批两个口径都实测过。
   再往前 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
@@ -381,23 +382,30 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   当成"老板看得见"）。本地起服务的固定姿势：
   `DATABASE_URL="sqlite:///data/fund_insight.db" ACCESS_PASSWORD=<一次性口令> python -m uvicorn src.api.main:app --port 8098`
   —— **显式设 `DATABASE_URL` 指向镜像**（`.env` 里它是生产），跑完按端口找 PID 关掉。
-  四条硬规矩：① 首屏**六个**取数点（stats / bloggers / stats+evidence / funds /
-  sector-mappings / predictions+verify-all+status）一律过 `withWakeRetry()`，
-  子模块靠 `createPredictionManager({ withWakeRetry })` 注入拿它；新增首屏取数要走同一条，
-  否则实例唤醒时页面直接空。任务轮询（`post-manager.js` / `viewpoint-manager.js`）走另一条：
-  注入 `isServiceDown`，**服务不可用时不许 `clearJob()`/`clearPoll()`**（那会把正在跑的
-  批量分析任务号永久丢掉），改成留着句柄 10 秒后再问；服务器答 4xx 才算任务结束。
+  五条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
+  predictions+verify-all+status 四笔，**进视图才打的**（funds、sector-mappings、posts/predictions/
+  viewpoints 的列表）也要过 `withWakeRetry()` —— 子模块靠 `createPredictionManager({ withWakeRetry })`
+  注入拿它。别把"首屏六个"当成事实说（第 31 轮 B 实测 `onMounted` 只触发 4 笔）。
+  任务轮询（`post-manager.js` / `viewpoint-manager.js`）是另一条规矩：**只有 404 才允许丢任务号**，
+  其余失败一律留着句柄、10 秒后再问、最多 15 分钟（`MAX_POLL_FAILURES`），停手也不删。
+  上一版写的是"4xx 才算任务结束"，而 `restoreAnalysisJob()` 在 `onMounted` 里跑、**不等登录门** ⇒
+  `ACCESS_PASSWORD` 轮换那天正在跑的批量分析会静默永久失联（第 31 轮两份复评共同抓到）。
   ② **状态码分档**：没答话与 502/503/504 算"服务不可用"（排队等醒，多个失败共用一次等待），
   401/403 才是"口令不对"（只有这一档能清 `localStorage` 里的口令），500 原样抛出
   （既不空等 90 秒也不删口令）—— 本仓库没配 `ACCESS_PASSWORD` 时回的就是 503；
-  ③ **"取不到"不能渲染成 0 或"库里没有"**：统计卡走 `statVal()`（取不到是 `—`），
-  空状态按 `serviceWaking → loading → 失败原因 → 真的空` 排序（镜像实测 27 个博主，
-  唤醒失败时报"暂无博主数据"或"0 个博主"都是假事实）；
+  ③ **"取不到"不能渲染成 0 或"库里没有"，而且这条要覆盖每个列表页**：统计卡走 `statVal()`
+  （取不到或字段缺失都是 `—`），空状态按 `serviceWaking → 失败原因 → 真的空` 排序，
+  帖子/预测/观点/板块映射共用 `emptyText(view)` + `viewErrors`（镜像真值 27 博主 / 657 帖 /
+  1616 预测 / 71 观点 / 222 映射，唤醒失败时报"暂无X数据"或"共 0 条"都是假事实）；
   ④ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
-  对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）。
+  对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）；
+  ⑤ **模板读的每个标识符都必须出现在 `setup()` 的 return 名单里** —— 少一个就静默失效：
+  `serviceWaited` 漏导出时"已经等过一轮唤醒"那一支永不渲染，`showApiKey` 压根没声明过，
+  API Key 输入框的 `:type` 恒为 password（一个假开关）。机器闸：
+  `test_everything_the_template_reads_is_actually_exported`。
   判据：`tests/unit/test_frontend_cold_start.py`（10 条，其中一条用 node **执行页面里那份源码**，
   喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`
-  （28 处变异逐条打红，跑完逐文件回读比对还原，并校验变异真的落了盘）。
+  （33 处变异逐条打红，跑完逐文件回读比对还原，并校验变异真的落了盘）。
   第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
   两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。
