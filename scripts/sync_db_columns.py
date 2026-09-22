@@ -78,7 +78,11 @@ def extra_objects(engine):
 
     insp = sa.inspect(engine)
     db_tables = set(insp.get_table_names())
-    extras = []
+    model_tables = {t.name for t in Base.metadata.sorted_tables}
+    # 叫"双向核对"就得真的双向：库里有、模型没有的**整张表**也要报
+    # （alembic_version 是这套工具自己写的，不算漂移）
+    extras = [('table', t) for t in sorted(db_tables - model_tables)
+              if t != 'alembic_version']
     for table in Base.metadata.sorted_tables:
         if table.name not in db_tables:
             continue
@@ -107,9 +111,15 @@ def extra_objects(engine):
             extras.append(('index', '%s.%s' % (table.name, idx['name'])))
         for con in insp.get_unique_constraints(table.name):
             cols = frozenset(con.get('column_names') or [])
-            if cols and cols not in declared:
-                extras.append(('unique 约束', '%s.%s(%s)'
-                               % (table.name, con.get('name'), ','.join(sorted(cols)))))
+            name = con.get('name')
+            if not cols or cols in declared:
+                continue
+            # 唯一约束的实现形态就是那条同名索引，两处都报会把 1 个对象数成 2 个
+            if any(kind == 'index' and n.endswith('.' + str(name))
+                   for kind, n in extras):
+                continue
+            extras.append(('unique 约束', '%s.%s(%s)'
+                           % (table.name, name, ','.join(sorted(cols)))))
     return extras
 
 
@@ -117,6 +127,8 @@ def main():
     ap = argparse.ArgumentParser(description='按 ORM 元数据补列/补索引（只加不减，默认 dry-run）')
     ap.add_argument('--apply', action='store_true', help='真执行（默认只出计划）')
     ap.add_argument('--confirm', help='必须等于 %s' % CONFIRM_TOKEN)
+    ap.add_argument('--against-production', action='store_true',
+                    help='目标是远程库时必须再给这个开关：本脚本会发 DDL')
     ap.add_argument('--allow-sqlite', action='store_true',
                     help='允许对 SQLite 跑（在镜像副本上演练用）')
     ap.add_argument('--stamp-confirm', metavar='TOKEN',
@@ -130,9 +142,23 @@ def main():
     scheme = url.split('://')[0]
     print('[target] %s%s' % (url.split('@')[-1] if '@' in url else url,
                              '' if scheme.startswith('postgres') else '（非生产）'))
+    override = os.environ.get('LOCAL_DB_URL', '')
+    if override and not scheme.startswith('sqlite'):
+        # `LOCAL_DB_URL` 是本仓库文档给**所有**本地脚本的逃生口。这个脚本以前不认它：
+        # 操作者按文档设好了镜像路径，引擎却照旧连生产，而它带 --apply 是发 DDL 的
+        # （第 23 轮 MINOR-1）。要么认这个变量，要么拒跑，不能装作没看见。
+        print('[abort] 设了 LOCAL_DB_URL 但引擎连的是 %s：本脚本读的是进程环境的 '
+              'DATABASE_URL，请在调用前 export DATABASE_URL="$LOCAL_DB_URL"，'
+              '或改用 scripts/_db_guard 的脚本' % url.split('@')[-1])
+        return 4
     if not scheme.startswith('postgres') and not args.allow_sqlite:
         print('[abort] 目标不是 PostgreSQL（%s）。演练请加 --allow-sqlite，'
               '真补生产库请确认 .env 的 DATABASE_URL。' % scheme)
+        return 4
+    if scheme.startswith('postgres') and not args.against_production:
+        # 远程库 + 会发 DDL ⇒ 第二道开关，防"以为在本地跑"
+        print('[abort] 目标是远程库（%s）。本脚本会执行 ALTER/CREATE，'
+              '确实要对生产动手请加 --against-production' % url.split('@')[-1])
         return 4
     if args.apply and args.confirm != CONFIRM_TOKEN:
         print('[abort] --apply 需要 --confirm %s（防手滑）' % CONFIRM_TOKEN)
@@ -148,9 +174,11 @@ def main():
                  + ('…' if len(extras) > 8 else '')))
     for t in tables:
         print('   ! 整表缺失 %-22s（交给 create_all，本脚本不建表）' % t)
-    if not cols and not idx and not tables:
+    if not cols and not idx and not tables and not args.stamp_head:
         print('[ok] 列与索引都已存在，无需改动')
         return 0
+    # 想 stamp 就不能在这里悄悄返回：以前"已对齐 + --stamp-head"什么都不做就退 0，
+    # 看起来像成功了（第 23 轮 MINOR）。落到下面的统一流程，由 stamp 分支给真结论。
     for t, c, ddl in cols:
         print('   + column  %-22s %s' % (t, ddl))
     for name, t, ccols in idx:
@@ -191,8 +219,8 @@ def main():
     if args.stamp_head:
         if extras:
             # 有模型没声明的东西 ⇒ "没报缺项"不能推出"迁移都跑过"，别写版本号
-            print('[skip] 库里有 %d 个模型未声明的对象 ⇒ 不写 alembic_version，'
-                  '请人工核对迁移历史' % len(extras))
+            print('[skip] 库里有 %d 个模型未声明的对象 ⇒ 不写 alembic_version：%s'
+                  % (len(extras), ', '.join(n for _k, n in extras)))
             return 0
         if after_tables:
             # 记版本＝宣称"0001~0009 都跑过了"，而整表还缺着就是撒谎

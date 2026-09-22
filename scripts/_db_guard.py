@@ -74,9 +74,13 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
                   "或在脚本里显式 pin_local_sqlite(use_mirror_default=True)。"
                   % configured.split("@")[-1])
             raise SystemExit(4)
-    elif not configured:
+    elif configured:
+        # `.env` 里本来就是 SQLite：把值写回进程环境，否则下面按 key 取会 KeyError
+        # （`os.environ.get` 才是我上一轮改成"看得见 .env"之后该有的写法）
+        os.environ["DATABASE_URL"] = configured
+    else:
         os.environ["DATABASE_URL"] = "sqlite:///" + DEFAULT_DB.replace("\\", "/")
-    url = os.environ["DATABASE_URL"]
+    url = os.environ.get("DATABASE_URL", "")
     # 兜底断言（不是 assert：`python -O` 会把 assert 整条剥掉）
     if not url.lower().startswith("sqlite"):
         print("[abort] 最终 DATABASE_URL 仍非 SQLite（%s）" % url.split("@")[-1])

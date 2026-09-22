@@ -485,7 +485,7 @@ def test_db_guard_honors_local_override_even_when_only_dotenv_is_remote(tmp_path
     assert out.stdout.startswith('[env] DATABASE_URL = sqlite:///'), out.stdout
 
 
-def test_column_only_sql_predicate_cannot_be_the_only_guard(tmp_path):
+def test_undeclared_unique_index_must_be_reported_not_hidden(tmp_path):
     """`servable_predicate()` 只看列 ⇒ "库里有、模型没声明"的东西必须被**报出来**。
 
     第 22 轮：生产那条 `sector_fund_mapping_sector_name_key UNIQUE(sector_name)`
@@ -505,6 +505,7 @@ def test_column_only_sql_predicate_cannot_be_the_only_guard(tmp_path):
         # 造一条模型里没有声明的唯一索引（= 生产那条约束在 SQLite 里的等价形状）
         conn.execute(sa.text('CREATE UNIQUE INDEX sector_fund_mapping_sector_name_key '
                              'ON sector_fund_mapping (sector_name)'))
-    found = dict(sync.extra_objects(engine))
-    assert found.get('index') == 'sector_fund_mapping.sector_fund_mapping_sector_name_key', \
-        '未声明的唯一索引被静默 ⇒ stamp 闸门以为一切正常：%s' % (sorted(found.items()),)
+    # 用 list 断言：`dict(...)` 会把同类的多条折叠成最后一条，"报了几个"就查不出来了
+    found = sync.extra_objects(engine)
+    assert ('index', 'sector_fund_mapping.sector_fund_mapping_sector_name_key') in found, \
+        '未声明的唯一索引被静默 ⇒ stamp 闸门以为一切正常：%s' % (sorted(found),)

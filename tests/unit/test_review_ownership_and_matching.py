@@ -465,7 +465,12 @@ def test_retag_destination_is_not_an_unservable_row(test_db):
                     fund_name='机器人ETF', reviewed=False)
     from src.services.sector_identity_audit import row_unservable, servable_predicate
     assert row_unservable(ghost) is True
-    assert servable_predicate() is not None, '前置：SQL 侧那道粗筛确实放行它'
+    # 前提要真的断言：SQL 粗筛**确实**放行这一行，否则这个用例什么都没测
+    # （以前写的是 `servable_predicate() is not None`，那永远为真，第 23 轮 MINOR）
+    admitted = (test_db.query(SectorFundMapping)
+                .filter(SectorFundMapping.id == ghost.id, servable_predicate())
+                .first())
+    assert admitted is not None, '前提不成立：粗筛已经拦住它了，那这条用例测不到判据分叉'
 
     _mapping(test_db, sector_name='R22去处', fund_code='BAD022',
              fund_name='某股票名挂在基金码', is_fetchable=False)
@@ -473,3 +478,40 @@ def test_retag_destination_is_not_an_unservable_row(test_db):
     code, _name = PredictionVerifyService(test_db).match_fund_for_prediction(prediction)
     assert code == 'GOOD22', \
         '第 3 步把被 verdict 否掉的 GHOST9 当成了可服务的替代标的（SQL 粗筛说了算）'
+
+
+def test_ghost_mapping_row_cannot_serve_or_poison_the_cache(test_db):
+    """第 23 轮 MAJOR-1/2：`get_fund_by_sector` 与 `_save_fund_mapping` 也吃同一把尺子。
+
+    上一轮我只给"改标去处"那一条加了 `row_unservable`，另外两处仍只信 SQL 粗筛
+    （`servable_predicate()` 把 `is_fetchable IS NULL` 一律当可服务）。同一形态第三次复现。
+    危害不止是返回一次：`get_fund_by_sector` 会把结果**写进进程内缓存**，
+    此后这个进程里所有帖子分析都拿这只"不是基金"的标的去匹配。
+    """
+    import json
+
+    from src.services.sector_fund_service import SectorFundService
+
+    ghost = _mapping(test_db, sector_name='R23幽灵', fund_code='GHOST9',
+                     fund_name='名字像基金其实不是', reviewed=True, is_fetchable=None,
+                     evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}))
+    SectorFundService(test_db)._cache = {}
+    SectorFundService(test_db)._cache_loaded = False
+
+    hit = SectorFundService(test_db).get_fund_by_sector('R23幽灵')
+    assert hit is None, 'DB 兜底把幽灵行当可服务标的返回了：%s' % hit
+    assert 'R23幽灵' not in SectorFundService._cache, \
+        '返回被否掉的行还写进进程缓存 ⇒ 之后所有分析都吃这一只'
+
+    # `_save_fund_mapping`：同一个粗筛，幽灵行会被当成"该板块已有映射"从而跳过写入
+    test_db.refresh(ghost)
+    assert ghost.reviewed is True
+    from src.analyzer.llm_analyzer import LLMAnalyzer
+    LLMAnalyzer._save_fund_mapping(LLMAnalyzer.__new__(LLMAnalyzer), 'R23幽灵',
+                                   '512170', '医疗ETF', reviewed=False, db=test_db)
+    fresh = test_db.query(type(ghost)).filter(
+        type(ghost).sector_name == 'R23幽灵',
+        type(ghost).fund_code == '512170').first()
+    assert fresh is not None, \
+        '被 verdict 否掉的幽灵行被当成"这板块已经有映射了"，正确的标的行根本没写进去'
+    assert fresh.reviewed is not True, '机器写入不许自带"已审查"'

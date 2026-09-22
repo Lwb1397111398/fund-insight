@@ -107,24 +107,36 @@ class SectorFundService:
                 return cached
 
         db = self._get_db()
+
+        def _first_servable(query):
+            # `servable_predicate()` 只看 `is_fetchable` 列，而"不可服务"还有第二个事实源
+            # （`evidence.identity.verdict`）⇒ 粗筛之后必须再过一次唯一判据，否则
+            # "列 NULL + verdict 否定"的幽灵行会在这里被当成可服务标的返回，
+            # **并且写进进程内缓存**，污染这一进程后续所有帖子分析
+            # （第 23 轮 MAJOR-1：同一形态第三次复现）。
+            for row in query.limit(20).all():
+                if not self._unservable(row):
+                    return row
+            return None
+
         try:
             # 优先查 reviewed=True
-            mapping = db.query(SectorFundMapping).filter(
+            mapping = _first_servable(db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == sector_name,
                 SectorFundMapping.is_active == True,
                 SectorFundMapping.reviewed == True,
                 servable_predicate(),
-            ).first()
+            ))
 
             if not mapping:
                 # 降级查 reviewed=False。降级分支同样要过滤：体检判"不可服务"的行
                 # 如果在这里被捞回来，"取消 reviewed"就等于什么都没做（000725 京东方Ａ
                 # 实测正是这样继续服务帖子分析的）。
-                mapping = db.query(SectorFundMapping).filter(
+                mapping = _first_servable(db.query(SectorFundMapping).filter(
                     SectorFundMapping.sector_name == sector_name,
                     SectorFundMapping.is_active == True,
                     servable_predicate(),
-                ).first()
+                ))
 
             if mapping:
                 result = {

@@ -26,7 +26,8 @@ Fund Insight 是一个基金博主观点分析系统：用户录入或抓取基�
 python -m src
 python -m src --port 8002
 
-# 仅初始化数据库
+# 仅初始化数据库（.env 指向生产时会被守卫 abort，
+# 真要连生产得显式 ALLOW_REMOTE_INIT_DB=1 —— 第 23 轮：文档从没写过这个前提）
 python -m src --init-db
 
 # 直接通过 uvicorn 启动
@@ -158,7 +159,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 ### 生产库结构现状（2026-09-22 实测）
 - 生产 Supabase 的库**不是 alembic 建的**（原来没有 `alembic_version` 表），
   `sector_fund_mapping` 缺 0007+0008 的 10 个列。老板已授权，已用
-  `python scripts/sync_db_columns.py --apply --confirm SYNC-COLUMNS --stamp-head` 补齐
+  `python scripts/sync_db_columns.py --against-production --apply --confirm SYNC-COLUMNS --stamp-head` 补齐
+  （第 23 轮加了 `--against-production`：目标看起来是远程库时连 dry-run 都拒跑，
+  因为它带 `--apply` 就是发 DDL 的工具；`LOCAL_DB_URL` 设了却连着远程也会被拒）
   （12 列 + 5 索引，只加列/建索引、不动任何数据），并把 `alembic_version` 记成 head
   `add_sector_mapping_keywords` ⇒ 后续 0010+ 可以正常 `alembic upgrade head`。
   复核：`sector_fund_mapping` 19 列、映射 118 行、未删预测 1616 行、fund_info 162 行（与补列前一致）。
@@ -216,6 +219,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   的终局结论（`run_id=revert-lag-endpoint-20260922`），判对 598→597、判错 569→566。
   ④ 第 18 轮（S9）把 53 条"按改标前那只基金判出来"的结论退回未验证重判
   （`run_id=revert-bad-verdicts-20260922-120657`），判对 597→573、判错 566→537。
+  **报数必须带库名**（第 23 轮 MAJOR-1：我长期把**本地镜像**的数当成"系统的数"在报）。
+  2026-09-22 同一把尺子在两个库上的实测：
+  - 本地镜像 `data/fund_insight.db`：已判 1110 / 判对 573 = **51.62%**，⚠ 197（17.7%），区间 43.96%~61.71%
+  - 生产 Supabase：已判 1057 / 判对 591 = **55.91%**，⚠ 419（**39.6%**），区间 33.68%~73.32%
+  差这么远的根因是生产数据落后（`fund_history` 9541 行 / 末次验证 09-13；镜像 10600 行 / 09-22；
+  映射 118 vs 145 行）。⇒ 说准确率之前先说哪个库；拿旧截图对数之前先看落后程度。
   **准确率只能当区间报，而且区间要现算**：`python scripts/audit_verdict_evidence.py` 最后一行
   打印 `已判 1110 条 / 判对 573 条 = 51.62%`，以及把 197 条（17.7%）证据失效结论按
   "全判错/全判对"两个极端折算出的 **43.96% ~ 61.71%**（第 18 轮 MAJOR-3：我此前手算报出去

@@ -1275,15 +1275,23 @@ class LLMAnalyzer:
             if db is None:
                 db = SessionLocal()
             try:
-                from src.services.sector_identity_audit import servable_predicate
-                existing = db.query(SectorFundMapping).filter(
+                from src.services.sector_identity_audit import (
+                    row_unservable, servable_predicate)
+                # 同一件事只该有一把尺子：SQL 粗筛放行"列 NULL + verdict 否定"的行，
+                # 而这里一旦认了它，还会顺手给幽灵行盖 `reviewed=True`
+                # （第 23 轮 MAJOR-2）
+                existing = None
+                for row in db.query(SectorFundMapping).filter(
                     SectorFundMapping.sector_name == sector,
                     SectorFundMapping.is_active == True,
                     servable_predicate(),
                 ).order_by(
                     SectorFundMapping.reviewed.desc().nulls_last(),
                     SectorFundMapping.id.asc(),
-                ).first()
+                ).limit(20).all():
+                    if not row_unservable(row):
+                        existing = row
+                        break
                 if existing:
                     if reviewed and existing.fund_code == fund_code and not existing.reviewed:
                         existing.reviewed = True
