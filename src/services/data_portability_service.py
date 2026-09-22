@@ -494,6 +494,9 @@ class DataPortabilityService:
     def _clean_row(self, spec: TableSpec, item: Dict[str, Any]) -> Dict[str, Any]:
         columns = {column.name: column for column in spec.model.__table__.columns}
         cleaned = {}
+        # 逐行复位：不复位的话，第一行剔过豁免之后**后面每一行**都会被计一次
+        # （第 21 轮 MINOR：评审探针 3 行映射只有 1 行带豁免，回执报 5）
+        self.last_row_stripped_immunity = False
 
         for key, value in item.items():
             column = columns.get(key)

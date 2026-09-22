@@ -65,12 +65,51 @@ def plan(engine):
     return missing_cols, missing_idx, missing_tables
 
 
+def extra_objects(engine):
+    """库里有、而 ORM 模型**没声明**的列/索引 —— 只报不动（第 21 轮 MAJOR-3）。
+
+    为什么不假装元数据是双向真值：`SectorFundMapping.__table_args__` 里根本没写
+    `ix_sector_fund_mapping_owner_locked`（那是 0008 迁移建的），反过来模型声明的
+    `ix_prediction_change_logs_run_id` 镜像里又可能没有。所以"本脚本没报缺项"
+    只等于"模型要的东西都在"，不等于"迁移历史都跑过" —— 后者正是 --stamp-head 在宣称的事。
+    """
+    import sqlalchemy as sa
+    from src.models.database import Base
+
+    insp = sa.inspect(engine)
+    db_tables = set(insp.get_table_names())
+    extras = []
+    for table in Base.metadata.sorted_tables:
+        if table.name not in db_tables:
+            continue
+        model_cols = {c.name for c in table.columns}
+        for col in insp.get_columns(table.name):
+            if col['name'] not in model_cols:
+                extras.append(('column', '%s.%s' % (table.name, col['name'])))
+        model_idx = {i.name for i in table.indexes}
+        declared = {c.get('name') for c in insp.get_unique_constraints(table.name)}
+        for idx in insp.get_indexes(table.name):
+            name = idx['name']
+            if name in model_idx or name in declared:
+                continue
+            # 主键与唯一约束在主库里的**实现形态就是索引**（`<表>_pkey` / `*_key`），
+            # 模型侧用 primary_key=True / UniqueConstraint 声明，不进 `table.indexes`。
+            # 不过滤的话这里每次都报出一堆"可疑对象"、`--stamp-head` 的闸门永远拒绝
+            # —— 一个从不放行的闸门和没有闸门一样没用（第 21 轮 MAJOR-3 的自查）。
+            if idx.get('unique') or name.endswith(('_key', '_pkey', '_constraint')):
+                continue
+            extras.append(('index', '%s.%s' % (table.name, name)))
+    return extras
+
+
 def main():
     ap = argparse.ArgumentParser(description='按 ORM 元数据补列/补索引（只加不减，默认 dry-run）')
     ap.add_argument('--apply', action='store_true', help='真执行（默认只出计划）')
     ap.add_argument('--confirm', help='必须等于 %s' % CONFIRM_TOKEN)
     ap.add_argument('--allow-sqlite', action='store_true',
                     help='允许对 SQLite 跑（在镜像副本上演练用）')
+    ap.add_argument('--stamp-confirm', metavar='TOKEN',
+                    help='--stamp-head 单独要的词：STAMP-HEAD（它等于宣称迁移都跑过了）')
     ap.add_argument('--stamp-head', action='store_true',
                     help='补完后把 alembic_version 记成当前 head（让后续 0010+ 能正常 upgrade）')
     args = ap.parse_args()
@@ -89,8 +128,13 @@ def main():
         return 4
 
     cols, idx, tables = plan(engine)
+    extras = extra_objects(engine)
     print('[元数据] 模型 %d 张表；库里缺 %d 张：%s'
           % (len(Base.metadata.sorted_tables), len(tables), tables or '无'))
+    if extras:
+        print('[!] 库里有、模型没声明的对象 %d 个（本脚本不动它们）：%s'
+              % (len(extras), ', '.join('%s.%s' % (k, n) for k, n in extras[:8])
+                 + ('…' if len(extras) > 8 else '')))
     for t in tables:
         print('   ! 整表缺失 %-22s（交给 create_all，本脚本不建表）' % t)
     if not cols and not idx and not tables:
@@ -129,7 +173,16 @@ def main():
         return 3
     print('[ok] 复查：列与索引都已存在')
 
+    if args.stamp_head and args.stamp_confirm != 'STAMP-HEAD':
+        print('[abort] --stamp-head 是在宣称"到 head 的迁移都已生效"，'
+              '必须再给 --stamp-confirm STAMP-HEAD')
+        return 4
     if args.stamp_head:
+        if extras:
+            # 有模型没声明的东西 ⇒ "没报缺项"不能推出"迁移都跑过"，别写版本号
+            print('[skip] 库里有 %d 个模型未声明的对象 ⇒ 不写 alembic_version，'
+                  '请人工核对迁移历史' % len(extras))
+            return 0
         if after_tables:
             # 记版本＝宣称"0001~0009 都跑过了"，而整表还缺着就是撒谎
             print('[skip] 库里仍缺整表 %s ⇒ 不写 alembic_version' % after_tables)

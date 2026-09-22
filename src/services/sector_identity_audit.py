@@ -679,14 +679,16 @@ def denied_code_map(refresh: bool = False, db=None) -> Dict[str, set]:
     if db is not None:
         # 调用方给了 session 就直接查：测试用内存库、批量任务用临时库时，
         # 进程级 TTL 缓存会指向另一个数据库，拒绝集就形同虚设。
-        rows = db.query(SectorFundMapping.sector_name,
-                        SectorFundMapping.fund_code).filter(
-            SectorFundMapping.is_fetchable == False,                 # noqa: E712
+        # 判据必须走 `row_unservable`：以前这里只筛 `is_fetchable == False`，
+        # 于是"列没写、但 evidence 里的 verdict 已是否定"的行在静态表这一步又能溜过去
+        # —— 同一个"不可服务"库里存在第四把尺子（第 21 轮 MAJOR-2）。
+        # 镜像今天背离 0 行，所以这是个潜伏口，不是今天的故障。
+        rows = db.query(SectorFundMapping).filter(
             SectorFundMapping.is_active == True).all()               # noqa: E712
         mapping: Dict[str, set] = {}
-        for sector, code in rows:
-            if sector and code:
-                mapping.setdefault(sector, set()).add(code)
+        for row in rows:
+            if row.sector_name and row.fund_code and row_unservable(row):
+                mapping.setdefault(row.sector_name, set()).add(row.fund_code)
         return mapping
 
     from src.models.database import SessionLocal

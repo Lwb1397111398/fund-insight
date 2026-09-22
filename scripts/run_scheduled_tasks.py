@@ -84,12 +84,17 @@ def run_daily_tasks() -> dict:
             stale_limit = int(os.environ.get("SWEEP_STALE_DAYS", "14"))
             if stamps:
                 age_days = (datetime.now() - max(stamps)).days
-                if age_days > stale_limit:
-                    logger.warning(
-                        "板块映射的身份体检结论已 %d 天没刷新（阈值 %d 天），另有 %d 行从未体检："
-                        "改标门依赖这个结论，结论过期就意味着映射身份没被复核过"
-                        "（要刷新请跑 scripts/sweep_sector_mappings.py）",
-                        age_days, stale_limit, never_audited)
+            # 第 21 轮 MINOR：以前 `if stamps:` 之外一律不响 —— 全表从未体检时 age=None，
+            # 恰恰是最该告警的那种"从来没查过"，被静默掉了；`never_audited` 自己也不触发。
+            if age_days is None or age_days > stale_limit or never_audited:
+                logger.warning(
+                    "板块映射的身份体检结论不新鲜：最新一条 verified_at 距今 %s，"
+                    "另有 %d/%d 行从未体检（阈值 %d 天）。"
+                    "\"改标门\"依赖这个结论，结论过期＝映射身份没被复核过；"
+                    "要刷新请跑 scripts/sweep_sector_mappings.py"
+                    "（那个脚本自己的净值新鲜度阈值是 NAV_STALE_DAYS，与这里无关）",
+                    ('无记录' if age_days is None else '%d 天' % age_days),
+                    never_audited, len(stamps) + never_audited, stale_limit)
             return {"success": True, "stale_total": total, "stale_by_kind": counts,
                     "identity_audit_age_days": age_days,
                     "mapping_rows_never_audited": never_audited}

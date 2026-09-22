@@ -362,3 +362,88 @@ def test_rollback_retags_drifted_rows_instead_of_abandoning_them(test_db):
     assert blogger.total_predictions == 0, \
         '清结论没重算统计列（第 19 轮 MAJOR-1 在第二个入口上重演）'
     assert [d['action'] for d in wet['data']['rollback_details']] == ['retagged']
+
+
+def _two_drifted_plus_one_ok(test_db, sector='R21半成品'):
+    """两条会漂移的行 + 一条正常行（正常那条用来触发循环里的异常）。"""
+    from datetime import date
+
+    _mapping(test_db, sector_name=sector, fund_code='BAD011',
+             fund_name='某股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name=sector, fund_code='BAD012',
+             fund_name='另一只股票名挂在基金码', is_fetchable=False)
+    _mapping(test_db, sector_name=sector, fund_code='GOOD11',
+             fund_name='机器人ETF', reviewed=True)
+    rows = []
+    for code in ('BAD011', 'BAD012', 'GOOD11'):
+        p = _prediction_with_code(test_db, code, sector)
+        p.is_correct = True
+        p.actual_change = 1.0
+        p.verify_count = 1
+        p.verify_score = 100
+        p.status = 'success'
+        p.prediction_date = date(2026, 6, 1)
+        p.target_date = date(2026, 6, 8)
+        rows.append(p)
+    test_db.commit()
+    return rows
+
+
+def test_rollback_error_branch_leaves_no_half_committed_retag(test_db, monkeypatch):
+    """第 21 轮 BLOCKER：共享函数不许中途提交，否则"未保存任何修改"是假话。
+
+    改动前会红：`retag_if_drifted` 里无条件 `self.db.commit()` ⇒ 第三行抛错时
+    前两行的改标 + 清结论已经落库，而函数返回 `success=False /"未保存任何修改"`。
+    """
+    import sqlalchemy as sa
+
+    from src.models.database import Prediction
+
+    rows = _two_drifted_plus_one_ok(test_db)
+
+    def boom(self, **kw):
+        raise RuntimeError('第 3 行的数据检查炸了')
+    monkeypatch.setattr(PredictionVerifyService, '_check_fund_data_availability', boom)
+
+    result = PredictionVerifyService(test_db).rollback_invalid_verifications(
+        dry_run=False, only_ids=[r.id for r in rows])
+    assert result['success'] is False, result
+
+    # 从**表里**读：会话里的对象可能被中途提交过，那正是这个用例要抓的东西
+    persisted = dict(test_db.execute(sa.select(Prediction.id, Prediction.fund_code)).all())
+    assert persisted[rows[0].id] == 'BAD011', \
+        '整批回滚了却留着已提交的改标 ⇒ 回执那句"未保存任何修改"是假话'
+    assert persisted[rows[1].id] == 'BAD012', persisted
+    verdicts = dict(test_db.execute(sa.select(Prediction.id, Prediction.is_correct)).all())
+    assert verdicts[rows[0].id] is True and verdicts[rows[1].id] is True, \
+        '旧结论也必须跟着回滚，不能只回滚一半'
+
+
+def test_rollback_retag_is_recoverable_with_the_advertised_run_id(test_db):
+    """第 21 轮 MAJOR-1：message 广告了 `--run-id`，日志就必须带那个 id。
+
+    改动前会红：改标不传 run_id ⇒ `retag_prediction` 自动生成 `retag-verify_unservable_-<秒>`，
+    与回执里广告的 run_id 两个集合互不相交 ⇒ 照着页面命令撤，一条都撤不回。
+    """
+    from src.models.database import PredictionChangeLog
+
+    rows = _two_drifted_plus_one_ok(test_db, sector='R21还原')
+    # 只放两条漂移行，第三行不动 ⇒ 不会走到数据检查
+    service = PredictionVerifyService(test_db)
+    result = service.rollback_invalid_verifications(
+        dry_run=False, only_ids=[rows[0].id, rows[1].id])
+    assert result['data']['code_diverged'] == 2, result
+
+    run_id = result['data']['run_id']
+    assert run_id and run_id in result['message']
+    logged = test_db.query(PredictionChangeLog).filter(
+        PredictionChangeLog.prediction_id.in_([rows[0].id, rows[1].id])).all()
+    assert logged, '改标没留痕'
+    assert {l.run_id for l in logged} == {run_id}, \
+        '日志里的 run_id 与广告出去的不是同一个 ⇒ restore_prediction_batch 撤不回来'
+    assert {l.source for l in logged} == {'rollback_drifted_code'}, \
+        '两个入口共用 source 就分不撤回溯那一批'
+    # 解析出的新代码不许留着旧基金的名字
+    test_db.refresh(rows[0])
+    assert rows[0].fund_code == 'GOOD11'
+    assert rows[0].fund_name in ('机器人ETF', ''), rows[0].fund_name

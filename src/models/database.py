@@ -541,6 +541,12 @@ class SectorFundMapping(Base):
     owner_locked = Column(Boolean)      # 老板手工挑定（含"有意代理"），agent 不得覆盖
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    __table_args__ = (
+        # 这个索引以前只活在 0008 迁移里、模型不声明 ⇒ "以 ORM 元数据为唯一真值"的
+        # `scripts/sync_db_columns.py` 根本看不见它，于是"生产缺该索引"却被 stamp 成
+        # 已应用（第 21 轮 MAJOR-4）。声明回来，缺不缺由脚本一次比对说了算。
+        Index('ix_sector_fund_mapping_owner_locked', 'owner_locked'),
+    )
 
 
 class SectorAlias(Base):

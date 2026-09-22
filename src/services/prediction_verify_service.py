@@ -63,7 +63,8 @@ def clear_verification_fields(prediction) -> None:
 
     `scripts/resync_verdict_scalars.py` 与还原清单都以本函数为准（少一个字段就会
     在还原之后留下"结论与台账打脸"的半成品）。
-    两个调用方共用同一份清单：`rollback_invalid_verifications`（数据不再支撑结论）、
+    共用同一份清单：`FundSyncManager.retag_prediction`（改标即清结论，**主写方**）、
+    `rollback_invalid_verifications`（数据不再支撑结论）、
     `scripts/revert_degenerate_verdicts.py`（结论本身是退化/未来函数判出来的）。
     第 20 轮 MINOR-9：原来这里还虚指第三个 —— 维护服务的 `_reset_verification`
     早已退化成纯转发、没有任何生产调用点，已连同它的"两条路径等价"用例一起删掉。
@@ -952,12 +953,19 @@ class PredictionVerifyService:
         return None, None
     
     def retag_if_drifted(self, prediction: Prediction, fund_code: str, fund_name: str,
-                         dry_run: bool = False) -> bool:
+                         dry_run: bool = False, commit: bool = True,
+                         run_id: str = None, touched_bloggers: set = None,
+                         source: str = 'verify_unservable_code') -> bool:
         """"行上挂 A、解析出 B"的唯一处置：经 `retag_prediction` 改标 + 清结论 + 重算统计。
 
         两个入口共用（`verify_prediction` 与 `rollback_invalid_verifications`），因为
         只写在一处时另一处就会把同类行"跳过然后没人管"（第 20 轮 MAJOR-2：回溯审计只扫
         已判行，而到期队列只要 `is_correct IS NULL` ⇒ 被跳过的行永远回不到改标那条腿）。
+
+        **提交权在调用方**（第 21 轮 BLOCKER）：回溯审计是"整批要么成、失败就回滚"的语义，
+        它的错误分支写着"未保存任何修改"；这里无条件 commit 会让那句话当场为假
+        （评审用第二连接实测：后一行抛错时前一行的改标已经落库）。
+        `commit=False` 时把博主登记进 `touched_bloggers`，由调用方统一重算 + 提交。
 
         返回是否真的动了（dry_run 时返回"会动"）。
         """
@@ -968,10 +976,20 @@ class PredictionVerifyService:
         if dry_run:
             return True
         old_code = prediction.fund_code
+        if not fund_name:
+            # 以前是 `fund_name or prediction.fund_name` ⇒ 把**旧那只的名字**写到新代码上
+            # （第 21 轮 MINOR：行上"代码 = B、名字 = A"，人眼与后续按名字解析都会再错一次）
+            from src.models.database import FundInfo
+            row = self.db.query(FundInfo).filter(
+                FundInfo.fund_code == fund_code).first()
+            fund_name = (row.fund_name if row else '') or ''
         cleared = FundSyncManager.retag_prediction(
-            self.db, prediction, fund_code, fund_name or prediction.fund_name,
-            source='verify_unservable_code')
-        # 改标是一次真实的决定，不取决于本轮验证能不能判完（可能因为"净值没出"提前返回）
+            self.db, prediction, fund_code, fund_name,
+            source=source, run_id=run_id, touched_bloggers=touched_bloggers)
+        if not commit:
+            return cleared
+        # 单条验证：改标是一次真实的决定，不取决于本轮验证能不能判完
+        # （可能因为"净值没出"提前返回），所以这里必须自己提交。
         self.db.commit()
         if cleared and prediction.blogger_id:
             # 清掉一条结论 = 统计的分子分母都变了，而这里不走增量回退：
@@ -1024,6 +1042,7 @@ class PredictionVerifyService:
             # 行上挂另一只"（`verdict_under_other_fund` 的成因，第 18 轮 MAJOR-5），
             # 而且因为回写从不发生，那个徽章在新数据上永远测不到 = 假装有闸门。
             self.retag_if_drifted(prediction, fund_code, fund_name)
+            # 单条入口：commit 默认 True，见 helper 的说明
         
         logger.info(f"[Verify] 匹配到基金: {fund_code} - {fund_name}")
         
@@ -1652,15 +1671,17 @@ class PredictionVerifyService:
                     kept += 1
                     continue
                 row_code_before = prediction.fund_code
-                if self.retag_if_drifted(prediction, fund_code, fund_name,
-                                         dry_run=dry_run):
+                if self.retag_if_drifted(
+                        prediction, fund_code, fund_name, dry_run=dry_run,
+                        commit=False, run_id=run_id, touched_bloggers=affected_bloggers,
+                        source='rollback_drifted_code'):
                     # 标的已经漂到另一只基金上（自带代码被体检否掉）。"这段净值缺不缺"说的
                     # 是**别的那只**，拿它去撤 A 的结论 = 用一个无关的理由撤掉一条记录
                     # （第 19 轮 MAJOR-3）。但上一版的"只数不撤"也不成立：本函数只扫已判行、
                     # 到期队列又只要 `is_correct IS NULL` ⇒ 被跳过的行再也回不到改标那条腿，
                     # 语义只是从"错误撤销"变成"没人管"（第 20 轮 MAJOR-2）。
-                    # 现在与 `verify_prediction` 共用一个入口：dry-run 报"会改标"，
-                    # 真跑就正规改标（留痕 + 清旧结论 + 重算博主统计）。
+                    # 现在与 `verify_prediction` 共用一个入口：dry-run 报"会改标"，真跑就
+                    # 改标（留痕、带本批 run_id、清旧结论），提交与统计重算由本函数末尾统一做。
                     code_diverged += 1
                     rollback_details.append({
                         'prediction_id': prediction.id,

@@ -696,3 +696,30 @@ def test_import_refuses_to_install_owner_immunity_from_a_manifest(test_db):
     from src.services.sector_identity_audit import row_unservable
     assert row_unservable(row) is True
     assert any("豁免" in w for w in result["data"]["warnings"]), result["data"]["warnings"]
+
+
+def test_immunity_strip_count_only_counts_rows_actually_written(test_db):
+    """第 21 轮 MINOR：逐行标记不复位 + 计数写在通用循环里 ⇒ 回执虚高。
+
+    评审探针：3 行映射里只有 1 行带豁免，回执报 **5**。
+    """
+    payload = {
+        "export_version": "1.3",
+        "export_date": datetime.now().isoformat(),
+        "sector_fund_mapping": [
+            {"sector_name": "计数甲", "fund_code": "512480", "fund_name": "半导体ETF",
+             "is_active": True, "reviewed": True,
+             "reviewed_by": "owner", "owner_locked": True},
+            {"sector_name": "计数乙", "fund_code": "512170", "fund_name": "医疗ETF",
+             "is_active": True, "reviewed": True},
+            {"sector_name": "计数丙", "fund_code": "159995", "fund_name": "芯片ETF",
+             "is_active": True, "reviewed": True},
+        ],
+    }
+    result = DataPortabilityService(test_db).import_data(payload)
+    stripped = [w for w in result["data"]["warnings"] if "豁免" in w]
+    assert len(stripped) == 1, result["data"]["warnings"]
+    assert "1 行" in stripped[0], stripped[0]
+    rows = {r.sector_name: r for r in test_db.query(SectorFundMapping).all()}
+    assert not rows["计数甲"].owner_locked and rows["计数甲"].reviewed_by != "owner"
+    assert test_db.query(SectorFundMapping).count() == 3

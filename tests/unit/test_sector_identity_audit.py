@@ -1377,3 +1377,28 @@ def test_demote_unwritten_respects_midrun_owner_edits(test_db):
     assert demote_unwritten(test_db, results, [plan], []) == 1
     test_db.refresh(row)
     assert row.reviewed is False and row.is_fetchable is False
+
+
+def test_denied_map_uses_the_single_unservable_judge(test_db):
+    """第 21 轮 MAJOR-2：静态表那一步的拒绝集以前只看 `is_fetchable` 列。
+
+    "不可服务"在库里有两处事实源（列 + `evidence.identity.verdict`），拒绝集只认列
+    ⇒ 它是同一件事的**第四把尺子**：列没写、verdict 已否定的行，在硬编码表这一跳
+    又能把代码交回验证链路。镜像今天背离 0 行，所以是潜伏口，不是今天的故障。
+    """
+    import json
+
+    from src.models.database import SectorFundMapping
+    from src.services.sector_identity_audit import denied_code_map, row_unservable
+
+    row = SectorFundMapping(sector_name='拒绝集尺子', fund_code='999001',
+                            fund_name='某股票名挂在基金码', is_active=True,
+                            is_fetchable=None,          # 列没写
+                            evidence=json.dumps({'identity': {'verdict': 'not_a_fund'}}))
+    test_db.add(row)
+    test_db.commit()
+    assert row_unservable(row) is True, '前置：唯一的判据认为它不可服务'
+
+    denied = denied_code_map(db=test_db)
+    assert '999001' in denied.get('拒绝集尺子', set()), \
+        '拒绝集漏掉了"只有 verdict 否定"的行 ⇒ 第 4 步会把不可服务的代码再交出去'
