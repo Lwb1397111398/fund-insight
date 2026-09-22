@@ -27,7 +27,10 @@
         <div class="container">
             <div v-if="loading" class="loading">
                 <div class="loading-spinner"></div>
-                <div>加载中...</div>
+                <!-- 冷启动最长要等三分多钟（首笔 60 秒超时 + 排队等醒 90 秒 + 重跑 60 秒）。
+                     这段时间只写"加载中..."，老板不知道是网慢还是服务在睡，最自然的动作是刷新 ⇒ 计时重来。 -->
+                <div v-if="serviceWaking">正在等待服务唤醒（约 30~60 秒）… 别刷新页面，醒了会自动继续</div>
+                <div v-else>加载中...</div>
             </div>
             <div v-else>
                 <!-- 首屏统计卡：取数失败时数字必须是"—"，不能是 0。0 是一个断言（"库里没有博主"），
@@ -57,7 +60,7 @@
                         <div class="label">基金</div>
                     </div>
                     <div class="stat-mini" @click="loadView('cleanup')">
-                        <div class="value">{{ retentionPreview?.total || 0 }}</div>
+                        <div class="value">{{ retentionPreview ? (retentionPreview.total || 0) : '—' }}</div>
                         <div class="label">待清理</div>
                     </div>
                 </div>
@@ -100,7 +103,8 @@
                              左边是"现算命中率"，右边是"含归档的加权评分"，两者不必相等也不算打脸。 -->
                         <div class="text-xs" style="color:#8c8c8c; margin: 0 0 6px 0;">
                             两列口径不同：<strong>准确率</strong> = 判对 / 已验证结论（只数没删的，现算）；
-                            <strong>加权评分</strong> = 按 verify_score 加权、含已删除归档的累计（等级 grade 按它定）。
+                            <strong>加权评分</strong> = 按 verify_score 加权，另把<strong>物理清理</strong>归档掉的
+                            历史（archived_*）累进来 —— 回收站里的软删<strong>不</strong>进这个数（等级 grade 按它定）。
                         </div>
                         <table>
                             <thead>
@@ -979,8 +983,10 @@
                 <div class="py-16">
                     <p style="color: #666; margin-bottom: 12px;">
                         <strong>{{ serviceProblem || '连不上服务' }}</strong>。
-                        已经等过一轮唤醒（最长 90 秒）仍没连上；免费实例冷启动通常 30~60 秒，
-                        网关超时的那次请求还要再等 60 秒，所以最坏要三分多钟才走到这个弹窗。
+                        <template v-if="serviceWaited">已经等过一轮唤醒（最长 90 秒）仍没连上；
+                            免费实例冷启动通常 30~60 秒，也可能这次更久。</template>
+                        <template v-else>这不是唤醒问题 —— 服务答了话，只是这一笔请求失败了，
+                            等下去也不会变好。</template>
                         <strong>密码没有清掉</strong>，重试就能继续用。
                     </p>
                     <p v-if="serviceWaking" style="color: #1677ff; font-size: 13px;">正在等待服务唤醒…</p>
@@ -1514,8 +1520,8 @@
                     </template>
                     <template v-else-if="evidenceError">结论证据体检拉取失败（{{ evidenceError }}），下面的数没有区间可看。<button class="action-btn small" @click="fetchEvidence">重试</button><br></template>
                     <template v-else-if="!evidenceReport">结论证据体检数据尚未取到；准确率按区间看才诚实。<br></template>
-                    排名按<strong>命中率</strong>（判对 / 已验证，只数没删的）；<strong>加权评分</strong>是含归档、按 verify_score
-                    加权的另一个数（等级按它定），两者不必相等。
+                    排名按<strong>命中率</strong>（判对 / 已验证，只数没删的）；<strong>加权评分</strong>是另一个数：
+                    按 verify_score 加权、并累上物理清理归档（archived_*），软删不进 —— 等级按它定，两者不必相等。
                 </div>
                 <div class="data-table" v-if="topBloggers.length > 0" style="box-shadow: none;">
                     <table>
@@ -1640,16 +1646,21 @@
                 </div>
                 <div v-if="configTab === 'mappings'">
                     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
-                        <span class="text-sm text-muted">共 {{ sectorMappings.total }} 条</span>
-                        <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}</span>
+                        <span class="text-sm text-muted">共 {{ sectorMappings.total }} 条（在册 {{ sectorMappings.custom_count }} + 内置 {{ sectorMappings.builtin_count }}）</span>
+                        <!-- "已审查/待审查"只数**在册行**：内置那几十条是静态表合成的，
+                             `reviewed=True` 是硬编码占位、体检从没看过它们。以前按全量算，
+                             同一行会出现"共 222 / 已审查 200 / 老板已确认 4 / 看过未确认 119"
+                             这种 4+119=123、剩下 77 条无处可去的假数（第 30 轮两份复评共同点到）。 -->
+                        <span style="font-size: 13px; color: #52c41a;">已审查 {{ sectorMappings.reviewed_count }}（在册行内）</span>
                         <span style="font-size: 13px; color: #faad14;">待审查 {{ sectorMappings.unreviewed_count }}</span>
                         <!-- 第三态：`reviewed` 只等于"看过"。真正免疫体检与 AI 覆盖的是老板确认过的行，
                              两态卡片会把 122 条看过说成 122 条锁住（第 20~23 轮连点四轮）。 -->
                         <span v-if="sectorMappings.owner_confirmed_count !== undefined"
-                              style="font-size: 13px; color: #13c2c2;"
-                              :title="'其中老板逐行确认过 ' + sectorMappings.owner_confirmed_count + ' 条（只有这些免疫体检与 AI 覆盖）；另外 ' + sectorMappings.reviewed_unconfirmed_count + ' 条只是看过'">老板已确认 {{ sectorMappings.owner_confirmed_count }}</span>
+                              style="font-size: 13px; color: #13c2c2;">老板已确认 {{ sectorMappings.owner_confirmed_count }}（只有这些免疫体检与 AI 覆盖）</span>
                         <span v-if="sectorMappings.reviewed_unconfirmed_count"
                               style="font-size: 13px; color: #8c8c8c;">（看过未确认 {{ sectorMappings.reviewed_unconfirmed_count }} 条：体检与 AI 覆盖照常生效）</span>
+                        <span v-if="sectorMappings.builtin_count"
+                              style="font-size: 13px; color: #bfbfbf;">内置 {{ sectorMappings.builtin_count }} 条来自静态表，未跑体检、也没有"确认"这个动作</span>
                         <button v-if="identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
                         <button v-if="identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
                         <button v-if="identityStats.no_literal" class="action-btn small" @click="identityFilter = identityFilter === 'no_literal' ? 'all' : 'no_literal'" :style="{ background: identityFilter === 'no_literal' ? '#8c8c8c' : '#fafafa', color: identityFilter === 'no_literal' ? '#fff' : '#8c8c8c', border: '1px solid #d9d9d9' }" title="名册里查不到字面对口的标的：这些行是代理关系，换标的得人工定">名册无对口 {{ identityStats.no_literal }}</button>
@@ -2079,6 +2090,10 @@
                 // 冷启动别把页面卡死：Render 实例睡着时第一笔请求会超时/SSL EOF，
                 // 而 `/api/health` 免鉴权且真做 `SELECT 1` ⇒ 拿它当"醒了吗"的探针，醒了自动重跑。
                 const serviceWaking = ref(false);
+                const serviceProblem = ref('');
+                const serviceWaited = ref(false);
+                const statsError = ref('');
+                const bloggersError = ref('');
                 // 多个取数点同时失败时只排一次队。以前每个调用各起一个 90 秒轮询：
                 // health 探针被放大十几倍，而且谁先退出就把共享的 serviceWaking 置 false，
                 // 别的还在等的调用顶着一句已经消失的提示继续转。
@@ -2110,13 +2125,11 @@
                     try { return await fn(); }
                     catch (e) {
                         if (!isServiceDown(e)) throw e;
+                        serviceWaited.value = true;      // 弹窗要说实话：到底等过没有
                         if (!(await waitUntilAwake())) throw e;
                         return await fn();
                     }
                 };
-                const serviceProblem = ref('');
-                const statsError = ref('');
-                const bloggersError = ref('');
                 // "没取到"不能渲染成 0 —— 0 是一个事实，而它不是事实。
                 const statVal = (v) => statsError.value ? '—' : (v || 0);
                 const checkAuth = async () => {
@@ -2150,6 +2163,8 @@
                 };
                 const retryConnect = async () => {
                     serviceUnreachable.value = false;
+                    serviceWaited.value = false;
+                    serviceProblem.value = '';
                     await checkAuth();
                 };
                 const submitPassword = async () => {
@@ -2167,23 +2182,25 @@
                             window.setTimeout(() => restorePredictionVerifyTask(), 0);
                         } else {
                             const errMsg = res.data?.error || '未知错误';
-                            passwordError.value = '服务器内部错误: ' + errMsg;
+                            passwordError.value = '服务器内部错误: ' + errMsg + '。口令没有存，也没有被清。';
                             delete axios.defaults.headers.common['X-Access-Password'];
-                            localStorage.removeItem('access_password');
                         }
                     } catch (e) {
-                        if (e.response && e.response.status === 401) {
-                            passwordError.value = '密码错误，请重新输入';
+                        // 只有认证层说"口令不对"才清 localStorage：上一版这里无条件 removeItem，
+                        // 而 2189 行自己写着"密码没有丢" —— 句子与代码打脸（第 30 轮 A-MINOR-1）。
+                        if (isAuthRejection(e)) {
+                            passwordError.value = e.response.status === 403
+                                ? '口令不被接受（403），请重新输入' : '密码错误，请重新输入';
+                            localStorage.removeItem('access_password');
+                            delete axios.defaults.headers.common['X-Access-Password'];
                         } else if (e.response) {
                             const detail = e.response.data?.error || e.response.data?.detail || '';
-                            passwordError.value = `服务器错误 (${e.response.status})${detail ? ': ' + detail : '，请稍后重试'}`;
+                            passwordError.value = `服务器错误 (${e.response.status})${detail ? ': ' + detail : '，请稍后重试'}。口令没有丢。`;
                         } else if (e.request) {
                             passwordError.value = '连不上服务（免费实例唤醒要约 30~60 秒）。密码没有丢，等一会儿再点一次确认即可。';
                         } else {
                             passwordError.value = '请求异常: ' + e.message;
                         }
-                        delete axios.defaults.headers.common['X-Access-Password'];
-                        localStorage.removeItem('access_password');
                     }
                     passwordVerifying.value = false;
                 };
@@ -2314,6 +2331,8 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
                     onStatsChanged: () => fetchStats(),
                     onPredictionsChanged: () => fetchPredictions(),
+                    // 轮询失败要分档：服务不可用时不许丢掉任务号（判据只写一处，注入出去用）
+                    isServiceDown,
                 });
                 const {
                     posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
@@ -2326,6 +2345,7 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, computed, localStorage, alert, confirm,
                     viewpoints, viewpointDetail, showViewpointDetail, analyzing,
                     onStatsChanged: () => fetchStats(),
+                    isServiceDown,
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
@@ -2547,7 +2567,7 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
-                const showTopBloggers = async () => { try { const res = await axios.get('/api/bloggers/top?limit=10'); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('获取失败'); } };
+                const showTopBloggers = async () => { try { const res = await withWakeRetry(() => axios.get('/api/bloggers/top?limit=10')); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } } catch (e) { alert('TOP 榜取不到：' + (e.response ? '接口报错 ' + e.response.status : '服务连不上（可能在唤醒），稍后再点一次')); } };
                 let fundUpdatePollTimer = null;
                 let lastFundUpdateFinishedAt = null;
                 const clearFundUpdatePoll = () => {

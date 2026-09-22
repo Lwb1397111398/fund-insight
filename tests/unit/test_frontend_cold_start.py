@@ -7,9 +7,11 @@
   而字面 `「」` 只出现在注释里，两者永不相等；
 - 一条 `<th[^>]*>` 把属性整个吃掉，于是 `not any('title=' in h)` 结构上不可能响。
 所以下面每条判据都配了一个**可复跑的变异**：`python scripts/mutation_proof_frontend.py`
-（21 处变异、覆盖本文件 10 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
-跑完逐文件回读比对还原）。判据没配到变异的一律不算数。
-其中 `test_the_wake_retry_behaves_the_way_the_page_needs_it` 不读文本，它用 node **执行页面里那份源码**。
+（28 处变异、覆盖本文件 12 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
+跑完逐文件回读比对还原，并校验变异真的落了盘）。判据没配到变异的一律不算数。
+其中两条**不读文本**：`test_the_wake_retry_behaves_the_way_the_page_needs_it` 与
+`test_check_auth_and_the_login_gate_behave_per_status_code` 用 node 执行页面里那份源码，
+喂 401 / 403 / 502 / 503 / 500 / 断网 / 叫不醒七种真实形状。
 """
 import json
 import re
@@ -152,10 +154,13 @@ def test_a_missing_number_is_not_rendered_as_zero():
     assert re.search(r'const statVal = \(v\) => statsError\.value \? ', html), \
         '统计卡没走 statVal：取不到时又会报 0'
     cards = re.findall(r'<div class="value">\{\{(.*?)\}\}</div>', html, flags=re.S)
-    stats_cards = [c for c in cards if 'stats.overall' in c]
-    assert len(stats_cards) >= 5, '统计卡数量变了（现 %d），判据要跟着改' % len(stats_cards)
-    assert all('statVal(' in c for c in stats_cards), \
-        ['还是 `|| 0` 形态的卡：%s' % c for c in stats_cards if 'statVal(' not in c]
+    assert len(cards) >= 6, '统计卡只扫到 %d 张，正则或结构变了' % len(cards)
+    assert all('statVal(' in c for c in cards if 'stats.overall' in c), \
+        ['还是 `|| 0` 形态的卡：%s' % c for c in cards if 'stats.overall' in c and 'statVal(' not in c]
+    # 第 6 张"待清理"卡不读 `stats.overall`，上一版判据对它结构上不可能响（第 30 轮两份复评同点）。
+    # 注意不能写成"'|| 0' 且没有 '?'"——`retentionPreview?.total || 0` 里的 `?.` 会把它糊过去。
+    unguarded = [c.strip() for c in cards if 'statVal(' not in c and "'—'" not in c]
+    assert not unguarded, '这些卡把"没取到"报成 0：%s' % unguarded
     assert 'statsError' in _body(html, 'fetchStats = async () =>'), 'fetchStats 不记失败原因'
 
 
@@ -168,10 +173,16 @@ def test_the_empty_state_cannot_lie_while_a_fetch_is_still_pending():
     html = _html()
     block = re.search(r'<div v-else class="empty-state">(.*?)</div>', html, flags=re.S)
     assert block and '暂无博主数据' in block.group(1), '找不到博主榜的空状态'
-    src = block.group(1)
-    order = [k for k in ('serviceWaking', 'loading', 'bloggersError', '暂无博主数据') if k in src]
-    assert order == ['serviceWaking', 'loading', 'bloggersError', '暂无博主数据'], \
-        '空状态分支顺序错了（现 %s）：等待期/在飞期会先撞上"库里没有"那句' % order
+    src = re.sub(r'<!--.*?-->', '', block.group(1), flags=re.S)
+    # 顺序要**从源码位置算出来**：上一版是"从固定元组里筛出现过的词"，
+    # 那跟分支的真实顺序无关，把四支整个倒过来它照样绿（第 30 轮 A-MAJOR-1）。
+    pos = {k: src.find('v-if="%s"' % k) if k == 'serviceWaking' else src.find('v-else-if="%s"' % k)
+           for k in ('serviceWaking', 'loading', 'bloggersError')}
+    pos['暂无博主数据'] = src.find('暂无博主数据')
+    assert all(v >= 0 for v in pos.values()), '少了一条分支：%s' % pos
+    assert [k for k, _ in sorted(pos.items(), key=lambda kv: kv[1])] == \
+        ['serviceWaking', 'loading', 'bloggersError', '暂无博主数据'], \
+        '空状态分支顺序（现 %s）：等待期/在飞期会先撞上"库里没有"那句' % sorted(pos.items(), key=lambda kv: kv[1])
     fb = _body(html, 'fetchBloggers = async () =>')
     clear = fb.find("bloggersError.value = ''")
     ok = fb.find('res.data.success')
@@ -202,8 +213,10 @@ def test_blogger_table_calibers_are_readable_without_hover():
     """两个口径的说明必须是正文，不能只挂在 title 上（手机没有 hover）。"""
     html = _html()
     text = _visible_text(html)
-    for phrase in ('现算命中率', '含归档', '等级 grade 按它定'):
+    for phrase in ('现算命中率', '物理清理', '软删', '等级 grade 按它定'):
         assert phrase in text, '%s 不在正文里：窄屏读不到口径' % phrase
+    # 措辞必须与算法一致：`blogger_stats` 只累 `archived_*`（物理清理），软删不进
+    assert '含已删除归档' not in text, '又写成"含已删除归档"了：回收站软删根本不进这个数'
     assert '排名按' in text and '命中率' in text, 'TOP 博主弹窗没有口径说明'
     # 表头：连**属性**一起看，否则 `title=` 藏在被吃掉的属性里，判据结构上不可能响
     heads = re.findall(r'<th((?:\s[^>]*?)?)>((?:(?!</th>).)*)</th>', html, flags=re.S)
@@ -265,6 +278,8 @@ def test_the_wake_retry_behaves_the_way_the_page_needs_it():
         "let impl = null;\n"
         "const axios = { get: async (url) => { calls.push(url); return impl(url); } };\n"
         "const serviceWaking = ref(false);\n"
+        "const serviceWaited = ref(false);\n"
+        "const serviceProblem = ref('');\n"
         "let wakeWait = null;\n")
     helpers = '\n'.join([
         _expr(html, 'const isAuthRejection'),
@@ -316,3 +331,146 @@ const run = async (name, first) => {
         '500 去排队等唤醒：那是代码 bug，不是实例在睡'
     assert out['network'] == {'ok': True, 'calls': waited}, '断网/超时这条主路径没走通'
     assert out['waking_after'] is False, '等待结束后 serviceWaking 没复位：提示与按钮会永久卡住'
+
+
+def _run_page_js(snippet, helpers):
+    """把 `index.html` 里那份源码 + 桩环境喂给 node，跑真实调用路径。"""
+    if not NODE:
+        pytest.skip('本机没有 node')
+    prelude = """
+const ref = (v) => ({ value: v });
+const store = {};
+const localStorage = { getItem: (k) => (k in store ? store[k] : null),
+                       setItem: (k, v) => { store[k] = String(v); },
+                       removeItem: (k) => { delete store[k]; } };
+const calls = []; const seenWaking = [];
+let impl = null;
+// 唤醒轮询是真会睡 90 秒的代码：这里把时钟与定时器接管掉，让"叫不醒"那一档也能秒级跑完
+let fakeNow = Date.now();
+Date.now = () => fakeNow;
+const setTimeout = (fn) => { fn(); return 0; };
+const axios = { defaults: { headers: { common: {} } },
+                get: async (url) => { calls.push(url); if (url === '/api/health') seenWaking.push(serviceWaking.value); return impl(url); } };
+const window = { setTimeout: () => 0, clearTimeout: () => {}, addEventListener: () => {},
+                 dispatchEvent: () => {}, CustomEvent: class {} };
+const serviceWaking = ref(false); const serviceProblem = ref(''); const serviceWaited = ref(false);
+const statsError = ref(''); const bloggersError = ref(''); const evidenceError = ref('');
+const evidenceReport = ref(null); const stats = ref(null); const loading = ref(true);
+const bloggers = ref([]);
+const showPasswordModal = ref(false), passwordInput = ref(''), passwordVerifying = ref(false);
+const passwordError = ref(''), authReady = ref(false), serviceUnreachable = ref(false);
+let wakeWait = null;
+const fetchStats = async () => {}; const fetchBloggers = () => {};
+const restorePredictionVerifyTask = async () => {};
+"""
+    src = prelude + '\n'.join(helpers) + '\n' + snippet
+    with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as f:
+        f.write(src)
+        path = f.name
+    try:
+        r = subprocess.run([NODE, path], capture_output=True, text=True,
+                           encoding='utf-8', errors='replace', timeout=90)
+        assert r.returncode == 0, 'node 跑挂：%s' % (r.stderr or r.stdout)[:400]
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def _wake_helpers(html):
+    return [_expr(html, 'const isAuthRejection'),
+            _expr(html, 'const isServiceDown'),
+            _decl(html, 'waitUntilAwake = (maxSeconds = 90) =>'),
+            _decl(html, 'withWakeRetry = async (fn) =>')]
+
+
+def test_check_auth_and_the_login_gate_behave_per_status_code():
+    """把 `checkAuth` / `retryConnect` 原样抽出来在 node 里跑，喂四种真实服务端形状。
+
+    第 30 轮 A 的探针证明：只测助手函数（上一条判据）时，把 `isAuthRejection` 放宽到
+    "任何有响应的错都算口令错"、或不置 `serviceWaking`、或压根不弹"连不上服务"，
+    10 条判据全绿。这条测的是**调用点**：口令留没留、弹窗开没开、等没等醒、探针打了几次。
+    """
+    html = _html()
+    helpers = (_wake_helpers(html)
+               + [_decl(html, 'checkAuth = async () =>'),
+                  _decl(html, 'retryConnect = async () =>')])
+    driver = """
+const err = (o) => { const e = new Error('x'); Object.assign(e, o); return e; };
+const run = async (name, first, healthDown) => {
+    for (const k of Object.keys(store)) delete store[k];
+    store['access_password'] = 'right-pw';
+    calls.length = 0; seenWaking.length = 0;
+    serviceProblem.value = ''; serviceWaited.value = false; serviceUnreachable.value = false;
+    showPasswordModal.value = false; authReady.value = false;
+    let n = 0;
+    impl = async (url) => {
+        if (url === '/api/health') {
+            if (healthDown) { fakeNow += 3000; throw err({ code: 'ERR_NETWORK' }); }
+            return { data: { status: 'ok' } };
+        }
+        n += 1;
+        if (n === 1 && first) throw first;
+        return { data: { success: true, data: {} } };
+    };
+    await checkAuth();
+    return { name, kept: !!localStorage.getItem('access_password'),
+             modal: serviceUnreachable.value, pwModal: showPasswordModal.value,
+             ready: authReady.value, waited: serviceWaited.value,
+             probes: calls.filter(u => u === '/api/health').length,
+             statsCalls: calls.filter(u => u === '/api/stats').length,
+             problem: serviceProblem.value, wakingSeen: seenWaking.some(v => v === true) };
+};
+(async () => {
+    const out = [];
+    out.push(await run('ok', null, false));
+    out.push(await run('unauthorized', err({ response: { status: 401 } }), false));
+    out.push(await run('forbidden', err({ response: { status: 403 } }), false));
+    out.push(await run('gateway', err({ response: { status: 502 } }), false));
+    out.push(await run('no_password_config', err({ response: { status: 503 } }), false));
+    out.push(await run('server_error', err({ response: { status: 500 } }), false));
+    out.push(await run('network', err({ code: 'ERR_NETWORK' }), false));
+    out.push(await run('never_wakes', err({ code: 'ERR_NETWORK' }), true));
+    process.stdout.write(JSON.stringify(out));
+})();
+"""
+    rows = {r['name']: r for r in _run_page_js(driver, helpers)}
+    assert rows['ok']['ready'] and rows['ok']['kept'], '正常口令被误清/没进系统'
+    for name in ('unauthorized', 'forbidden'):
+        assert not rows[name]['kept'], '%s 这一档才该清口令' % name
+        assert rows[name]['pwModal'] and not rows[name]['modal'], '口令错要弹密码框，不是弹"连不上"'
+        assert rows[name]['probes'] == 0, '口令错却去轮 /api/health：老板白等 90 秒'
+    for name in ('gateway', 'no_password_config', 'network'):
+        assert rows[name]['kept'], '%s 是服务端的错，清老板口令等于惩罚用错的人' % name
+        assert rows[name]['probes'] >= 1 and rows[name]['waited'], '%s 没排队等醒' % name
+        assert rows[name]['wakingSeen'], '等待期间没置 serviceWaking ⇒ 首屏只有一行"加载中"'
+        assert rows[name]['ready'] and not rows[name]['modal'], '%s 醒了就该进去，别再弹窗' % name
+        assert rows[name]['statsCalls'] == 2, '%s 等醒后没把那一笔重跑' % name
+    assert rows['never_wakes']['kept'] and rows['never_wakes']['modal'], \
+        '叫不醒时要弹"连不上服务"，而且不许清口令'
+    assert rows['never_wakes']['probes'] >= 3, \
+        '等待窗口没真跑起来（探针只 %d 次）' % rows['never_wakes']['probes']
+    assert rows['server_error']['kept'] and rows['server_error']['probes'] == 0, \
+        '500 是代码 bug，不是实例在睡：不该排队，更不该清口令'
+    assert rows['server_error']['modal'] and '500' in rows['server_error']['problem'], \
+        '弹窗要说"服务返回 500"，不能含糊成"连不上"'
+
+
+def test_a_waking_service_does_not_lose_a_running_batch_job():
+    """轮询失败要分档：服务不可用时**不许**丢掉任务号（第 30 轮 A-MAJOR-2）。
+
+    `pollAnalysisJob` / `pollTask` 的 catch 以前无条件 `clearJob()` / `clearPoll()`
+    （= `localStorage.removeItem(任务号)`）⇒ 实例唤醒期打开页面，一个正在跑的批量分析
+    会静默消失且再也回不来，只剩一行 console.error。现在：服务不可用就留句柄、10 秒后再问；
+    判据只有一处（`index.html` 的 `isServiceDown`），靠 options 注入，不在子模块里另抄一份。
+    """
+    html = _html()
+    assert html.count('isServiceDown,') == 2, '两个子模块都要注入 isServiceDown（现在 %d 处）' % html.count('isServiceDown,')
+    for fname, retry in (('post-manager.js', 'pollAnalysisJob(taskId)'),
+                         ('viewpoint-manager.js', 'pollTask(taskId)')):
+        src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
+        i = src.find('options.isServiceDown && options.isServiceDown(error)')
+        assert i >= 0, '%s 的轮询 catch 没分档：唤醒期会把任务号清掉' % fname
+        upto = src[i:src.find(retry, i)]
+        assert retry in src[i:i + 260], '%s 分档后没有"留着句柄再问一次"这条腿' % fname
+        assert 'clearJob();' not in upto and 'clearPoll();' not in upto, \
+            '%s 在"服务不可用"这一支里仍然清掉了句柄' % fname

@@ -112,13 +112,34 @@ def test_mapping_list_counts_the_third_state(env):
     res = client.get('/api/config/sector-mappings', headers=HEADERS)
     assert res.status_code == 200, res.text
     payload = res.json()['data']
-    # 两态那行照旧含内置行（既有行为，不改）；第三态只数自定义行
-    assert payload['reviewed_count'] > payload['custom_count']
     assert payload['custom_count'] == 3, payload
     assert payload['owner_confirmed_count'] == 1, '老板真正确认过的只有 1 条'
     assert payload['reviewed_unconfirmed_count'] == 1, '剩下 1 条只是"看过"，不免疫'
     # 内置行不参与第三态：它们没有"老板确认"这个动作可做，算进来卡片只会变成噪音
     assert payload['owner_confirmed_count'] + payload['reviewed_unconfirmed_count']         <= payload['custom_count']
+
+
+def test_reviewed_counts_do_not_absorb_the_builtin_rows(env):
+    """第 30 轮两份复评共同抓到：镜像上一行同时写着
+    "共 222 / 已审查 200 / 老板已确认 4 / 看过未确认 119"，而 4+119=123 ——
+    那 77 条是静态表合成的内置行，`reviewed=True` 是硬编码占位、`audited:False`，
+    既不会被任何体检旗标点到，也没有"确认"这个按钮。把它们算进分子就是假数。
+    上一版这条文件里甚至写着 `reviewed_count > custom_count`（把缺陷钉成期望）。
+
+    判据形态：四个数必须**互相闭合**，而不是各自数各自的。
+    """
+    client, _db = env
+    payload = client.get('/api/config/sector-mappings', headers=HEADERS).json()['data']
+    builtin = payload['builtin_count']
+    assert builtin == payload['total'] - payload['custom_count'] > 0, '这份夹具就该带内置行'
+    assert payload['reviewed_count'] + payload['unreviewed_count'] == payload['custom_count'], \
+        '"已审查 + 待审查"必须等于在册行数；现在它 %d+%d 对 %d' % (
+            payload['reviewed_count'], payload['unreviewed_count'], payload['custom_count'])
+    assert payload['reviewed_count'] == payload['owner_confirmed_count'] + payload['reviewed_unconfirmed_count']
+    # 内置行确实"没体检过"：不许有任何一档旗标能把它们算成已核对
+    rows = [m for m in payload['mappings'] if m.get('source') == 'builtin']
+    assert all(r['audited'] is False and r['relevance_state'] is None and r['realigned'] is None
+               for r in rows), '内置行被算进了某个体检档'
 
 
 def test_audit_script_consumes_the_single_source():

@@ -108,6 +108,12 @@
                 localStorage.setItem('viewpoint_task_id', String(taskId));
                 pollTimer = window.setTimeout(() => pollTask(taskId), 3000);
             } catch (error) {
+                // 同 `post-manager.js`：唤醒期的网络错不能算"任务结束"，清掉任务号会让
+                // 正在跑的观点汇总从此失联。留句柄、10 秒后再问。
+                if (options.isServiceDown && options.isServiceDown(error)) {
+                    pollTimer = window.setTimeout(() => pollTask(taskId), 10000);
+                    return;
+                }
                 clearPoll();
                 analyzing.value = false;
                 console.error('观点任务轮询失败', error);

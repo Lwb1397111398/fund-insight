@@ -7,11 +7,14 @@
 文本判据只有配上"能把它打红的变异"才算数，所以变异不能只在我脑子里跑一遍就丢掉。
 
 用法：
-    python scripts/mutation_proof_frontend.py            # 全跑，任何一条绿就退码 1
+    python scripts/mutation_proof_frontend.py            # 全跑（28 处），任何一条绿就退码 1
     python scripts/mutation_proof_frontend.py --list     # 只看清单
 
-安全：只改 `web/index.html` 与 `web/prediction-manager.js` 两个文件，跑完无条件按字节还原
-（含异常路径）；不碰数据库、不联网。
+安全：只改 `web/index.html`、`web/post-manager.js`、`web/prediction-manager.js`，
+每处变异都**从干净底本**生成、写盘后回读核对（落了盘、且确实与底本不同）才跑 pytest，
+跑完无条件写回底本并逐文件回读比对。
+**不能与 `pytest tests/` 并发跑**（第 30 轮 B 实测：并发时会假报 12 条 GREEN + 3 条锚点失配，
+还会留下未还原的文件）—— 它改的是被测对象本身，独占仓库目录是前提，不是可选项。
 """
 import argparse
 import io
@@ -83,6 +86,25 @@ MUTATIONS = [
      '', True),
     ('test_the_wake_retry_behaves_the_way_the_page_needs_it', 'retries_on_401_too',
      HTML, 'if (!isServiceDown(e)) throw e;', '', False),
+    # 第 30 轮 A 的探针：只测助手函数时这些都活得很好，现在由 `checkAuth` 那条行为判据接住
+    ('test_check_auth_and_the_login_gate_behave_per_status_code', 'auth_rejection_widened_to_any_status',
+     HTML, r"!!\(e && e\.response && \(e\.response\.status === 401 \|\| e\.response\.status === 403\)\)",
+     '!!(e && e.response)', True),
+    ('test_check_auth_and_the_login_gate_behave_per_status_code', 'waking_flag_never_set',
+     HTML, '                    serviceWaking.value = true;\n                    wakeWait = (async () => {',
+     '                    wakeWait = (async () => {', False),
+    ('test_check_auth_and_the_login_gate_behave_per_status_code', 'pretends_already_awake',
+     HTML, 'if (wakeWait) return wakeWait;', 'if (!wakeWait) { wakeWait = Promise.resolve(true); } return wakeWait;', False),
+    ('test_check_auth_and_the_login_gate_behave_per_status_code', 'no_unreachable_modal',
+     HTML, '                                serviceUnreachable.value = true;', '                                serviceUnreachable.value = false;', False),
+    ('test_a_missing_number_is_not_rendered_as_zero', 'retention_card_back_to_zero',
+     HTML, "{{ retentionPreview ? (retentionPreview.total || 0) : '—' }}",
+     '{{ retentionPreview?.total || 0 }}', False),
+    ('test_a_waking_service_does_not_lose_a_running_batch_job', 'job_handle_still_dropped',
+     'web/post-manager.js', 'options.isServiceDown && options.isServiceDown(error)', 'false', False),
+    ('test_the_empty_state_cannot_lie_while_a_fetch_is_still_pending', 'empty_state_reversed',
+     HTML, r'<template v-if="serviceWaking">正在等待服务唤醒（约 30~60 秒）…</template>',
+     '<template v-if="true">暂无博主数据</template>', True),
 ]
 
 
@@ -115,6 +137,17 @@ def main(list_only=False):
                 failures.append(name)
                 continue
             (ROOT / path).write_text(mutated, encoding='utf-8')
+            # 落盘核对：第 30 轮两份复评都指出"写了不等于改到了"——编辑器/进程可能把文件
+            # 盖回去，那时 pytest 跑的是干净代码，报出来的"绿"是假的。
+            on_disk = (ROOT / path).read_text(encoding='utf-8')
+            if on_disk != mutated:
+                print('%-36s NOT-LANDED（写盘后被别的进程改回去了，这一处的结论不作数）' % name)
+                failures.append(name + ':not-landed')
+                continue
+            if on_disk == pristine[path]:
+                print('%-36s NO-OP（替换后与底本相同 = 变异没生效）' % name)
+                failures.append(name + ':no-op')
+                continue
             r = subprocess.run([sys.executable, '-m', 'pytest', '%s::%s' % (T, test),
                                 '-q', '--no-header', '-p', 'no:cacheprovider'],
                                cwd=str(ROOT), capture_output=True,

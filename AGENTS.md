@@ -195,14 +195,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 05:26（北京），第 29 轮（页面出口 + 两份复评 72/86 的返修）之后，
+最近一次核对（2026-09-23 06:27（北京），第 30 轮返修（复评 78/84 驱动）之后，
 最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **878 passed / 16 skipped / 0 failed**（150 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **887 passed / 16 skipped / 0 failed**（138 秒）。
+- `pytest tests/unit -q` → **881 passed / 16 skipped / 0 failed**（136 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **890 passed / 16 skipped / 0 failed**（131 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 873/882：本批 +5 条用例（`test_frontend_cold_start.py` 从 6 条长成 10 条、
-  `test_sector_identity_audit_v74.py` 加 1 条"内置行必须与 `identity_view` 同形"）。）
+  （上一基线 878/887：本批 +3 条（登录门行为判据、任务号不被唤醒吞掉、审查数必须互相闭合）。）
   （再上一批 866 —— 那一批把 `tests/` 口径欠了一次实测，本批两个口径都实测过。
   再往前 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
@@ -385,7 +384,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   四条硬规矩：① 首屏**六个**取数点（stats / bloggers / stats+evidence / funds /
   sector-mappings / predictions+verify-all+status）一律过 `withWakeRetry()`，
   子模块靠 `createPredictionManager({ withWakeRetry })` 注入拿它；新增首屏取数要走同一条，
-  否则实例唤醒时页面直接空；
+  否则实例唤醒时页面直接空。任务轮询（`post-manager.js` / `viewpoint-manager.js`）走另一条：
+  注入 `isServiceDown`，**服务不可用时不许 `clearJob()`/`clearPoll()`**（那会把正在跑的
+  批量分析任务号永久丢掉），改成留着句柄 10 秒后再问；服务器答 4xx 才算任务结束。
   ② **状态码分档**：没答话与 502/503/504 算"服务不可用"（排队等醒，多个失败共用一次等待），
   401/403 才是"口令不对"（只有这一档能清 `localStorage` 里的口令），500 原样抛出
   （既不空等 90 秒也不删口令）—— 本仓库没配 `ACCESS_PASSWORD` 时回的就是 503；
@@ -395,11 +396,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   ④ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
   对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）。
   判据：`tests/unit/test_frontend_cold_start.py`（10 条，其中一条用 node **执行页面里那份源码**，
-  喂 401/502/500/断网四种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`
-  （21 处变异逐条打红，跑完逐文件回读比对还原）。
+  喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`
+  （28 处变异逐条打红，跑完逐文件回读比对还原，并校验变异真的落了盘）。
   第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
   两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。
+  **本机没有 Chromium**：`tests/unit/test_layout_browser_probe.py` 那 16 条常年是 skipped，
+  所以"浏览器看过"目前只是我每次的手工动作 + 记录，**不是机器闸**。机器闸是
+  `test_frontend_cold_start.py` 里那两条 node 行为判据（执行页面源码本身）。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

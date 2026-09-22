@@ -94,7 +94,14 @@
                 analyzing.value = true;
                 pollTimer = window.setTimeout(() => pollAnalysisJob(taskId), 3000);
             } catch (error) {
-                clearJob();
+                // 服务连不上 ≠ 任务没了。以前无条件 `clearJob()` ⇒ 实例唤醒期打开页面会把
+                // 一个正在跑的批量分析任务号永久丢掉（只剩一行 console.error，进度条从此消失）。
+                // 留着句柄、10 秒后再问一次；服务器明确答 4xx 才真的丢。
+                if (options.isServiceDown && options.isServiceDown(error)) {
+                    pollTimer = window.setTimeout(() => pollAnalysisJob(taskId), 10000);
+                } else {
+                    clearJob();
+                }
                 console.error('恢复帖子分析任务失败', error);
             }
         };
