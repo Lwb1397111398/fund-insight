@@ -195,16 +195,26 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22 22:11，第 26 轮修复之后，最后一次改用例后立刻重跑）：
+最近一次核对（2026-09-22 23:39，第 27 轮（静态板块表守护）修复之后，最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **819 passed / 16 skipped / 0 failed**（约 111 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **828 passed / 16 skipped / 0 failed**（约 104 秒）。
+- `pytest tests/unit -q` → **835 passed / 16 skipped / 0 failed**（约 200 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **844 passed / 16 skipped / 0 failed**（约 180 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 793/805 → 808/817 → 本批 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例
+  （上一基线 808/817 → 819/828 → 本批 835/844。**同一个错我连犯两轮**：写完基线数字后又加用例
   却没复测。规矩改成：最后一次改用例之后先跑数、再写文档，数字与用例改动必须在同一个提交里。）
-  （上一基线 776 / 785；本批 +19 条新用例、删掉 2 条打在已删死路上的用例。
+  （更早的基线 776 / 785；那一批 +19 条新用例、删掉 2 条打在已删死路上的用例。
   第 24 轮评审抓到的是我自己：`AGENTS.md` 里写着 `tests/ 765` 却小于实测的 `tests/unit 776`
   —— 超集不可能比子集小，说明有一行是填数时没跑。）
+- **静态板块表 `SECTOR_FUND_MAP` 现在有用例盯着了**（第 27 轮）：改这张表必须同时跑
+  `python scripts/audit_static_sector_map.py --fixture tests/fixtures/sector_map_roster_snapshot.json`
+  （退码 0 才算干净，判据是"板块↔**名册官方名**"，不看手写标签）与
+  `pytest tests/unit/test_sector_map_guard.py -q`；新增/改代码后要 `--emit-fixture` 刷新夹具、
+  并跑 `scripts/sync_sector_map_funds.py --apply --confirm SYNC-MAP-FUNDS` 确认新代码取得到净值。
+  三条硬规矩：① 非字面命中的条目必须登记进 `SECTOR_PROXY_ALLOWED` 并写理由（登记了其实字面
+  命中的也算死条目，会红）；② "名册里没有对口基金、宁可交给 agent"的板块要写进
+  `SECTOR_NO_STATIC_FUND`——**只把键从表里删掉不够**，第 5~7 步子串模糊匹配还会把它吸到
+  别的板块的标的上（实测 `卫星互联网 → 517200 互联网ETF`），而 `normalize_sector_name` 同样会
+  因此改写 `sector_core`；③ 表里的 `name` 必须逐字等于名册官方名（`--fix-labels` 可代改）。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
   拿到的是 **`FundAPI` 实例**（`src/fund/__init__.py` 把包属性重绑成了实例），在它身上
