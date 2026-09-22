@@ -195,11 +195,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 02:45（北京），第 28 轮回写闸门那一批，最后一次改用例之后重跑两个口径）：
+最近一次核对（2026-09-23 03:04（北京），第 28 轮 B 批（回写闸门 + 字面第三态），最后一次改用例之后两个口径都重跑）：
 
-- `pytest tests/unit -q` → **858 passed / 16 skipped / 0 failed**（131 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **867 passed / 16 skipped / 0 failed**（148 秒）。
-  报数时要写清是哪个口径（867 = 858 + 9，超集必然大于子集；写过"765 &lt; 776"那种反数就是没跑）。
+- `pytest tests/unit -q` → **864 passed / 16 skipped / 0 failed**（131 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **873 passed / 16 skipped / 0 failed**（127 秒）。
+  873 = 864 + 9，超集必然大于子集；报数时必须写清是哪个口径。
   （上一基线 835/844 —— 而 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
   （再早 808/817 → 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例却没复测。
@@ -255,6 +255,17 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   现在 `tests/unit/test_backfill_negative_proof.py::test_fixed_today_reads_never_stamp_proofs_with_the_wall_clock`
   用 AST 扫 `tests/unit/*.py`，同函数内"固定 `today=` 的读 + 不带 `now=` 的 `record_probe`"并存即红。
   同类教训第 17 轮就写过（`record_probe` 的 `now=` 就是那时加的参数）——**加了参数不等于加了护栏**。
+- **字面这根轴现在是三态，不是两态**（第 28 轮，任务 #32）：
+  `sector_identity_audit.relevance_state()` 返回 `relevant` / `alternative_exists` / **`no_literal_fund`**。
+  以前 `sector_relevance()` 把"名册里压根查无含该板块核心词的基金"直接算成 `True`（为了不冤枉
+  `市场→上证50`、`大盘→沪深300` 这类故意宽基代理），后果是 `区块链→云计算ETF`、
+  `核聚变→红利低波ETF` 这批行**永不旗标、无人复核却仍在给新帖挑标的**（镜像实测未审查 17 行）。
+  现在体检把第三态写进 `evidence.identity.relevance_state`，`build_worklist` 单独报数
+  （`no_literal_fund` / `alternative_exists`），`identity_view` 透传给接口/前端。
+  ⇒ **读 `sector_relevance()==True` 时不许再说成"已核对为相关"**；老行只有布尔位时
+  `row_relevance_state()` 保守返回 `relevant`（不许凭空造旗标），等下次体检补全。
+  **服务判据本轮没改**（那 17 行里既有该拦的 `核聚变→红利低波`，也有正确的 `北美→纳指`，
+  硬拦会连对的一起掉）⇒ 拦不拦是老板的决定项。用例：`tests/unit/test_relevance_state.py`（6 条）。
 - **回写清单的"能不能定价"必须由目标库回答，不能在镜像上算**（第 27 轮两份复评共同抓到，第 28 轮修）：
   `POST /api/config/sector-mappings/-/audit-import` 的回执现在逐行带 `items[].nav_priced_here`
   （`src/api/routes/config.py:_servability_by_code`：本库有无 `fund_info` 档案 / 有无净值行 / 是否 <30 行）。

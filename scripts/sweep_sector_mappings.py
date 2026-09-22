@@ -410,6 +410,20 @@ def audit_relevant(sector, official_name):
         return True
 
 
+def audit_relevance_state(sector, official_name):
+    """字面这根轴的**三态**（`relevant` / `alternative_exists` / `no_literal_fund`）。
+
+    `relevance_low` 那一根布尔位把后两态压成了"不旗标"，于是名册里压根查无对口基金的板块
+    （区块链、低空经济、核聚变、海力士…）**永远不会进待复核**却还在给新帖挑标的
+    （第 27 轮任务 #32）。这里把第三态单独落进 `evidence.identity`，先让人看见。
+    """
+    from src.services.sector_identity_audit import RELEVANT, relevance_state
+    try:
+        return relevance_state(sector, official_name)
+    except Exception:
+        return RELEVANT               # 同 `audit_relevant`：判不了不当旗标
+
+
 def reaudit_new_code(code, name, sector):
     """换标的后重新做身份判定，**只用非名册来源**。
 
@@ -431,6 +445,7 @@ def reaudit_new_code(code, name, sector):
         'suggested_code': None, 'suggestions': [],
         'relevance_low': bool(res['verdict'] != 'ok' or not audit_relevant(
             sector, res.get('official_name') or '')),
+        'relevance_state': audit_relevance_state(sector, res.get('official_name') or ''),
         'evidence': res.get('evidence'),
         'checked_at': datetime.now().isoformat(timespec='seconds'),
         'reaudit_after_realign': True,
@@ -533,6 +548,8 @@ def main():
             r['relevance_low'] = bool(
                 r['verdict'] == VERDICT_OK
                 and not sector_relevance(m.sector_name, r.get('official_name') or ''))
+            r['relevance_state'] = audit_relevance_state(
+                m.sector_name, r.get('official_name') or '')
             if args.realign_irrelevant:
                 plan = pick_irrelevant_replacement(db, m, r, used=used_codes,
                                                    cores=realign_cores,
@@ -831,6 +848,7 @@ def apply_results(db, results, demote, evidence_only, upgrade_etf=False,
             'suggested_code': r.get('suggested_code'),
             'suggestions': r.get('suggestions') or [],
             'relevance_low': r.get('relevance_low', False),
+            'relevance_state': r.get('relevance_state') or 'relevant',
             'evidence': r.get('evidence'),
             'checked_at': now.isoformat(timespec='seconds'),
         }

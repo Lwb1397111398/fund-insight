@@ -271,6 +271,29 @@ def row_relevance_low(row) -> bool:
     return bool(isinstance(identity, dict) and identity.get('relevance_low'))
 
 
+def row_relevance_state(row) -> str:
+    """体检写进 `evidence.identity.relevance_state` 的三态；老数据只有布尔位时如实降级解释。
+
+    老行（只写过 `relevance_low`）**不能**被读成"已核对为相关"：那一档里混着
+    "名册查无更对口"与"字面命中"两种情况，本轮之前它们都被压成 `relevance_low=False`。
+    所以老行返回 `RELEVANT`（不改变任何现有判据的行为），并由下一次体检把三态补上。
+    """
+    import json
+    try:
+        payload = json.loads(getattr(row, 'evidence', None) or '{}')
+    except Exception:
+        return RELEVANT
+    if not isinstance(payload, dict):
+        return RELEVANT
+    identity = payload.get('identity')
+    if not isinstance(identity, dict):
+        return RELEVANT
+    state = identity.get('relevance_state')
+    if state in (RELEVANT, RELEVANT_ALT_EXISTS, RELEVANT_NO_LITERAL):
+        return state
+    return RELEVANT_ALT_EXISTS if identity.get('relevance_low') else RELEVANT
+
+
 def cjk_core(text) -> str:
     return ''.join(_CJK.findall(text or ''))
 
@@ -455,29 +478,49 @@ def _find_fund_twin(stored: str, code: str, hits: List[Tuple[str, str, bool]]
     return None
 
 
-def sector_relevance(sector: str, official_name: str,
-                     has_alternative: Optional[Callable[[str], bool]] = None) -> bool:
-    """板块与标的是否"字面相关"（只用于报告，不用于降级）。
+RELEVANT = 'relevant'
+RELEVANT_ALT_EXISTS = 'alternative_exists'
+RELEVANT_NO_LITERAL = 'no_literal_fund'
 
-    判据必须带第二个条件："名册里存在名字含该板块核心词的基金"，否则会把
-    市场→上证50、大盘→沪深300、资源股→有色 这类**故意的宽基代理**全判成不相关
-    （实测单判据命中 102/145 行，毫无用处）。
 
-    核心词用 `sector_core` 而不是 `cjk_core`：后者把 `全A指数` 抽成"全指数"，
-    于是把合理的宽基代理误报成存疑（v7.1 实测 9 条里有 3 条假阳性）。
+def relevance_state(sector: str, official_name: str,
+                    has_alternative: Optional[Callable[[str], bool]] = None) -> str:
+    """字面这根轴的**三态**，而不是"相关 / 不相关"两态。
+
+    - `relevant`             官方名含板块核心词，或至少共用一个汉字；
+    - `alternative_exists`   字面说不出话，**而名册里确实有含该核心词的基金** ⇒ 这才是该降的错挂；
+    - `no_literal_fund`      字面说不出话，且名册里**查无**含该核心词的基金
+                             （区块链、低空经济、核聚变、海力士、液冷…）。
+
+    为什么要第三态（第 27 轮实测，任务 #32）：`sector_relevance` 为了不把
+    市场→上证50、大盘→沪深300 这类**故意的宽基代理**全判成不相关（单判据命中 102/145 行，
+    毫无用处），把"名册里查无更对口"直接算成了"相关" —— 于是这批行**永远不会被旗标**，
+    也没人复核，却还在给新帖子挑标的。它们不是"对"，是"字面这根轴说不出话"。
+    镜像 2026-09-23 实测这样的未审查行有 17 行（含 `核聚变→红利低波ETF`、也含
+    正确的 `北美→纳指ETF`）⇒ 先把状态摆出来给人看，硬不硬拦是老板的决定。
     """
     core = sector_core(sector)
     if not core:
-        return True
+        return RELEVANT
     variants = core_variants(core)
     # 只要共享一个汉字就当作相关：宁可漏报（少报几条给老板看），
     # 也不要误报——误报会让老板以为一堆正确映射有问题。
     if any(contains_core(official_name or '', v) for v in variants):
-        return True
-    if set(cjk_core(core)) & set(cjk_core(official_name)):
-        return True
+        return RELEVANT
+    if set(cjk_core(core)) & set(cjk_core(official_name or '')):
+        return RELEVANT
     checker = has_alternative or _roster_has_fund_containing
-    return not any(checker(v) for v in variants)
+    return RELEVANT_ALT_EXISTS if any(checker(v) for v in variants) else RELEVANT_NO_LITERAL
+
+
+def sector_relevance(sector: str, official_name: str,
+                     has_alternative: Optional[Callable[[str], bool]] = None) -> bool:
+    """板块与标的是否"字面相关"（只用于报告，不用于降级）。
+
+    判据的来龙去脉与三态见 `relevance_state`：这里的 `True` 包含
+    "字面说不出话但名册里也没有更对口的"那一档，**不要**把它读成"已核对过、是对的"。
+    """
+    return relevance_state(sector, official_name, has_alternative) != RELEVANT_ALT_EXISTS
 
 
 def contains_core(name: str, core: str) -> bool:
@@ -612,6 +655,8 @@ def identity_view(row) -> Dict:
         'is_fetchable': getattr(row, 'is_fetchable', None),
         # 前端筛选必须与读路径同一判据：只看列会漏掉"仅 verdict 被否"的行
         'servable': not row_unservable(row),
+        'relevance_low': False,
+        'relevance_state': RELEVANT,          # 没体检过的行：不改变判据，只保证键一定在
         'realigned': None,
     }
     raw = getattr(row, 'evidence', None)
@@ -636,6 +681,8 @@ def identity_view(row) -> Dict:
     # 相关性旗标由体检算好写进 evidence：判据要扫全量名册（2.7 万条），
     # 放在接口路径里会让每次 GET /sector-mappings 变成几百次全表扫描。
     view['relevance_low'] = bool(identity.get('relevance_low'))
+    # 三态：`no_literal_fund` 那一档以前被压成"相关"，于是这批行永不进待复核（任务 #32）
+    view['relevance_state'] = row_relevance_state(row)
     # 被机器换过标的的行（确定性纠正 / ETF 升级）：老板要能看出这是机器改的、原来是什么。
     # 读 `machine_swap_of` 而不是只看 `identity_realign`：只看 realign 会让 ETF 升级行
     # 在分桶里隐身；只看 `match_source` 会被后续 agent 写入洗掉（v7.4 §十四 实测 2 行）。
@@ -662,6 +709,12 @@ def build_worklist(rows: List[Dict]) -> Dict:
                                VERDICT_UNKNOWN, VERDICT_PROBE_UNAVAILABLE)},
         'demote_buckets': buckets,
         'demote_count': len(demote),
+        # 第三态单列出来：这些行"字面说不出话、名册里也查无对口基金"，
+        # 以前被 `relevance_low=False` 压成"相关"，于是永不进待复核（任务 #32）
+        'no_literal_fund': sum(1 for r in rows
+                               if r.get('relevance_state') == RELEVANT_NO_LITERAL),
+        'alternative_exists': sum(1 for r in rows
+                                  if r.get('relevance_state') == RELEVANT_ALT_EXISTS),
         'unreviewable_no_conclusion': sum(
             1 for r in rows
             if r['verdict'] in (VERDICT_UNKNOWN, VERDICT_PROBE_UNAVAILABLE)),
