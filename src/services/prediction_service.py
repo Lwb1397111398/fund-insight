@@ -2,6 +2,7 @@
 预测服务
 处理预测相关的业务逻辑
 """
+import logging
 from typing import List, Optional, Dict, Any
 from datetime import date, timedelta, datetime
 from sqlalchemy.orm import Session, joinedload
@@ -10,6 +11,8 @@ import re
 
 from .base import BaseService
 from src.models.database import Prediction, Post, Blogger, FundInfo
+
+logger = logging.getLogger(__name__)
 from src.services.prediction_change_log_service import (
     add_prediction_change_log,
     snapshot_prediction,
@@ -127,25 +130,32 @@ class PredictionService(BaseService[Prediction]):
             Prediction.is_deleted == False
         ).all()
     
-    def verify(self, prediction_id: int, actual_change: float, is_correct: bool, 
+    def verify(self, prediction_id: int, actual_change: float, is_correct: bool,
                ai_judgment: str = None) -> Optional[Prediction]:
-        """
-        验证预测
-        
-        Args:
-            prediction_id: 预测 ID
-            actual_change: 实际涨跌幅
-            is_correct: 是否正确
-            ai_judgment: AI 判断说明
-            
+        """人工改判一条**已有证据**的结论（不是"下一条结论"的入口）。
+
+        为什么要在这里卡一道"必须已有端点证据"：这个方法以前只写
+        `is_correct / status / actual_change / verified_at`，不碰
+        `end_nav / end_nav_date / verify_count` ⇒ 写出来的是一条
+        "页面显示正确、但任何统计与体检都不认"的半条结论：
+        博主统计按 `verify_count>0` 数、准确率区间按 `has_verdict`（需要端点净值）数，
+        两边都不算它，只有列表那一行写着"正确"。
+        真正下结论必须走 `PredictionVerifyService.verify_prediction`（那里有数据充分性门、
+        休市证据门、退化终点门）。这里只允许在证据齐备的行上改判词。
+
         Returns:
-            更新后的预测实例
+            更新后的预测实例；没有证据可依据时返回 None（不写）。
         """
         prediction = self.db.query(Prediction).filter(
             Prediction.id == prediction_id,
             Prediction.is_deleted == False,
         ).first()
         if not prediction:
+            return None
+        if prediction.end_nav is None or prediction.end_nav_date is None:
+            logger.warning(
+                '[Verify] 拒绝人工改判 预测 %s：没有端点净值/日期，写下去就是一条'
+                '统计与体检都不认的半结论（请走 verify_prediction）', prediction_id)
             return None
 
         before_state = snapshot_prediction(prediction)
