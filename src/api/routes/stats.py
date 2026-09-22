@@ -37,7 +37,7 @@ def get_overall_stats(db: Session = Depends(get_db)):
 
 
 _EVIDENCE_TTL = 60.0
-_evidence_cache: dict = {'at': 0.0, 'report': None, 'key': None}
+_evidence_cache: dict = {'at': 0.0, 'report': None, 'url': None, 'bind': None}
 
 
 @router.get("/evidence")
@@ -57,17 +57,21 @@ def get_evidence_report(db: Session = Depends(get_db)):
 
     from src.services.verdict_evidence import span_report
 
-    # 键里带上 bind 的**对象身份**：`sqlite:///:memory:` 这类 URL 字符串完全相同，
-    # 只按 url 分键的话两个内存库会互相串数（第 25 轮 A 的 MINOR-9）。
+    # 分键要**同时**认 URL 和"是不是同一个 bind 对象"：
+    # `sqlite:///:memory:` 这类 URL 字符串完全相同（第 25 轮 A 的 MINOR-9），
+    # 而只存 `id(bind)` 又会被回收后复用 —— 第 26 轮 A 实测 300 次建/销 Engine 里
+    # 172 次撞同一个 id ⇒ 串数会以更难查的方式回来。存对象本身（缓存只有一格，
+    # 不会无界增长；代价是多留一个旧 Engine 活着，比读错库便宜）。
     bind = db.get_bind()
-    key = '%s#%d' % (bind.url, id(bind))
     now = time.monotonic()
     cached = _evidence_cache
-    if (cached.get('key') == key and cached.get('report') is not None
+    if (cached.get('bind') is bind and str(cached.get('url')) == str(bind.url)
+            and cached.get('report') is not None
             and now - cached['at'] <= _EVIDENCE_TTL):
         return {"success": True, "data": cached['report']}
     report = span_report(db)            # 先算成功再改缓存：异常时不留"键=B、报告=A"
-    cached['key'] = key
+    cached['bind'] = bind
+    cached['url'] = str(bind.url)
     cached['report'] = report
     cached['at'] = now
     return {"success": True, "data": report}

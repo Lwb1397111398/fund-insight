@@ -32,6 +32,10 @@ spec.loader.exec_module(q)
     # 第 25 轮 B 实测：先剥注释再剥字面量会把 `like '%--%'` 拦腰截断（执行串≠输入串）
     "select fund_name from fund_info where fund_name like '%--%' limit 1",
     "select 'it''s a test' as x",
+    # 整段被美元引用包住的东西在 PG 里就是一个字符串字面量（`; delete` 在里面是文本），
+    # 掩掉是对的；真正要挡的是字面量**外面**的分号，见上一条用例。
+    "select $$a ; drop table x$$ as doc",
+    "select $tag$ ; delete from predictions $tag$",
 ])
 def test_read_only_statements_pass(sql):
     assert q._assert_read_only(sql)
@@ -60,6 +64,11 @@ def test_read_only_statements_pass(sql):
     ('select pg_switch_wal()', '强制切 WAL'),
     ('select pg_reload_conf()', '让服务端重读配置'),
     ("select pg_read_file('/etc/passwd')", '读服务器文件'),
+    # 第 26 轮 A 的两条绕过：双引号在 PG 里是标识符（`"set_config"(...)` 仍是那个函数），
+    # 而 `$$…$$` 美元引用里的 `--` 不是注释 —— 旧分词把后半截当注释整段吞掉，
+    # `; drop table` 就这么消失了。
+    ('select "set_config"(\'search_path\',\'public\', false)', '双引号包住的写函数'),
+    ('select $$a--b$$ ; drop table predictions', '美元引用里藏分号与写语句'),
 ])
 def test_write_or_multi_statement_is_refused(sql, why):
     with pytest.raises(ValueError):
@@ -142,13 +151,57 @@ def test_pg_read_only_probe_is_not_self_confirming():
     assert why2, '非只读类错误也要中止，不能当"已通过"'
 
 
+def test_declared_pg_mechanism_is_legal_for_the_installed_dialect():
+    """**这一条才会抓住第 26 轮那个 BLOCKER**：上一版三条用例全打在假连接上，
+    而 `isolation_level='READ ONLY'` 根本不是 psycopg2 方言的合法值
+    （实测 `_isolation_lookup` 只有 AUTOCOMMIT / READ COMMITTED / READ UNCOMMITTED /
+    REPEATABLE READ / SERIALIZABLE）⇒ 两条生产读路上线就崩，测试却全绿，
+    而且旧用例还断言"源码里必须含 `isolation_level='READ ONLY'`"——把坏代码钉死。
+
+    所以这里不测"我写了什么字符串"，而是让**当上方言自己来判**。
+    """
+    import re as _re
+
+    import sqlalchemy as sa
+
+    src = open(os.path.join(ROOT, 'scripts', 'q.py'), encoding='utf-8').read()
+    eng = sa.create_engine('postgresql+psycopg2://u:***@127.0.0.1:5/db')
+    legal = set(eng.dialect._isolation_lookup)
+    code_lines = [ln for ln in src.splitlines()
+                  if 'create_engine' in ln and 'isolation_level' in ln]
+    for value in _re.findall(r"isolation_level=['\"]([^'\"]+)['\"]",
+                             '\n'.join(code_lines)):
+        assert value in legal, (
+            'q.py 写了方言不接受的 isolation_level=%r（合法值：%s）'
+            '：这条路一连生产就是 ArgumentError，只读探针根本没机会跑'
+            % (value, sorted(legal)))
+    assert 'postgresql_readonly' in src, (
+        'PG 侧只读必须由方言支持的机制保证；换写法要同步改这条断言与实现')
+
+
+def test_pg_probe_rolls_back_its_savepoint():
+    """探针必须留下"还能继续用"的连接：SAVEPOINT → 试写 → ROLLBACK TO SAVEPOINT。
+
+    第 26 轮 B 的变异实验：把回滚那句删掉，三种结局的返回值与原版完全一样 ⇒
+    只看返回值的用例挡不住"事务已中止、之后每条查询都报错"这个真故障。
+    """
+    ok = _FakeConn(write_error='cannot execute CREATE TABLE in a read-only transaction')
+    assert q._pg_read_only_probe(ok) is None
+    assert ok.calls[0] == 'SAVEPOINT' and 'ROLLBACK' in ok.calls, ok.calls
+
+    boom = _FakeConn(write_succeeds=True)
+    assert q._pg_read_only_probe(boom)
+    assert 'ROLLBACK' in boom.calls, '探针真写出东西却不回滚 ⇒ 把连的库弄脏了'
+
+
 def test_the_tool_pins_the_mirror_not_the_env_default():
     """工具默认必须走本地镜像：这条测试就是在防我上次那个"只设变量不调守卫"的错。"""
     src = open(os.path.join(ROOT, 'scripts', 'q.py'), encoding='utf-8').read()
     assert 'pin_local_sqlite(use_mirror_default=True)' in src
     assert '--production' in src, '要查生产必须显式说出来，不能靠环境变量碰运气'
-    # PG 侧只读必须由"建连接时的隔离级别 + 真写探针"两件事保证
-    assert "isolation_level='READ ONLY'" in src
+    # PG 侧只读必须由"方言合法的执行选项 + 真写探针"两件事保证
+    # （合法性本身由 test_declared_pg_mechanism_is_legal_for_the_installed_dialect 钉，
+    #   那条用例存在的原因正是上一版把非法值当保证、还把坏代码钉进了断言）
     assert '_pg_read_only_probe(conn)' in src
     assert 'mode=ro' in src
     # 旧那套"SET 完自己 SHOW 一遍"不能回来：核对的是自己刚设的会话值，恒真。

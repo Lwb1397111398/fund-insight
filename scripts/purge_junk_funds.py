@@ -176,14 +176,17 @@ def restore(db, payload_path, apply=False, restore_owner_immunity=False):
             refused += 1
             continue
         exists = None
-        for col in BUSINESS_KEYS.get(entry['table'], ()):
-            attr = getattr(model, col, None)
-            if attr is None or payload.get(col) is None:
-                continue
-            found = db.query(model).filter(attr == payload[col]).first()
-            if found is not None:
-                exists = (col, payload[col])
-                break
+        keys = [c for c in BUSINESS_KEYS.get(entry['table'], ())
+                if getattr(model, c, None) is not None and payload.get(c) is not None]
+        if keys:
+            # **复合键要全部列都相等**才算同一行。第 26 轮两份复评共同判 MAJOR：
+            # 上一版"任一列命中就跳过"，于是同板块已有另一只基金时，
+            # 被删的那行"静默不还原"、回执还写着"本就在库里"——和它要修的原 bug 同一个症状。
+            q = db.query(model)
+            for col in keys:
+                q = q.filter(getattr(model, col) == payload[col])
+            if q.first() is not None:
+                exists = tuple(keys)
         if exists:
             skipped += 1
             continue
@@ -209,7 +212,7 @@ def restore(db, payload_path, apply=False, restore_owner_immunity=False):
     if not apply:
         print('\ndry-run：未写库。真还原：--restore-from %s --apply --confirm RESTORE-JUNK'
               % payload_path)
-        return 0
+        return 0, 0, refused
     for table, model, payload in planned:
         try:
             with db.begin_nested():          # 一行一个 savepoint，别把整批拖下水
@@ -223,9 +226,12 @@ def restore(db, payload_path, apply=False, restore_owner_immunity=False):
             continue
         print('[ok] 还原 %s %s' % (table, restored))
     db.commit()
+    done = len(planned) - failed
     print('[完成] 还原 %d 行、跳过 %d 行、拒还 %d 行、失败 %d 行'
-          % (len(planned) - failed, skipped, refused, failed))
-    return len(planned) - failed
+          % (done, skipped, refused, failed))
+    # 返回值是 (还原, 失败, 拒还)：第 26 轮 A 的 MINOR —— 原先只回"还原了几行"，
+    # 而调用方写的是 `>= 0` ⇒ 四行全部失败也退码 0，失败在退出码上是隐形的。
+    return done, failed, refused
 
 
 def _coerce_row(model, row):
@@ -298,8 +304,14 @@ def main():
             if args.apply and args.confirm != RESTORE_CONFIRM_TOKEN:
                 print('[abort] --apply 还原需要 --confirm %s' % RESTORE_CONFIRM_TOKEN)
                 return 4
-            return 0 if restore(db, args.restore_from, apply=args.apply,
-                                restore_owner_immunity=args.restore_owner_immunity) >= 0 else 1
+            done, failed, refused = restore(
+                db, args.restore_from, apply=args.apply,
+                restore_owner_immunity=args.restore_owner_immunity)
+            if args.apply and failed:
+                print('[abort] 有 %d 行没能还原 ⇒ 退码 3（备份与库现状不一致，别当成功）' % failed)
+                return 3
+            print('[还原回执] 成功 %d、失败 %d、拒还 %d' % (done, failed, refused))
+            return 0
 
         rows = inspect(db, codes)
         for r in rows:

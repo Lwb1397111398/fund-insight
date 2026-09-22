@@ -195,13 +195,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-22 21:29，第 25 轮修复之后）：
+最近一次核对（2026-09-22 22:11，第 26 轮修复之后，最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **808 passed / 16 skipped / 0 failed**（约 119 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **817 passed / 16 skipped / 0 failed**（约 136 秒）。
+- `pytest tests/unit -q` → **819 passed / 16 skipped / 0 failed**（约 111 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **828 passed / 16 skipped / 0 failed**（约 104 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 793 / 805；第 25 轮 A 抓到：我把 `tests/ 802` 写进本文件之后又加了 3 条用例
-  却没复测 —— **改完测试必须回来重跑这一行**，数不是写完就不动的。）
+  （上一基线 793/805 → 808/817 → 本批 819/828。**同一个错我连犯两轮**：写完基线数字后又加用例
+  却没复测。规矩改成：最后一次改用例之后先跑数、再写文档，数字与用例改动必须在同一个提交里。）
   （上一基线 776 / 785；本批 +19 条新用例、删掉 2 条打在已删死路上的用例。
   第 24 轮评审抓到的是我自己：`AGENTS.md` 里写着 `tests/ 765` 却小于实测的 `tests/unit 776`
   —— 超集不可能比子集小，说明有一行是填数时没跑。）
@@ -248,7 +248,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   同一条规则的另一半（第 18 轮 MAJOR-5）：`verify_prediction` 若发现自带代码被体检判不可服务、
   改按板块解析出**另一个代码**，现在先走 `retag_prediction` 落库再判——以前它拿 B 判结论、
   行上还挂 A，等于持续新增上面那一族脏数据，而且因为从不回写，⚠ 徽章在新数据上永远测不到。
-- **下结论（写 `Prediction.is_correct`）只有一个入口**：`PredictionVerifyService.verify_prediction`。
+- **下结论（写 `Prediction.is_correct`）在代码里只有一个入口**：
+  `PredictionVerifyService.verify_prediction`。**措辞边界**（第 26 轮被抓到说过头）：
+  `/api/config/import` 的**合并模式**仍能按整行列插 `is_correct`（`config.py` 里只有
+  `if req.replace:` 才检查 `ENABLE_DATABASE_IMPORT` 与 `X-Danger-Confirm`，
+  合并模式既无总开关也无确认头）⇒ 要不要给合并模式也上闸是老板的决定项（任务 #25）。
   同一条 AST 用例还盯着第二个字段：`src/` 里给 `X.is_correct = ...` 赋值的地方必须只有
   `services/prediction_verify_service.py`（实测 2 处：`verify_prediction` 与
   `clear_verification_fields`）。为什么要这条：`PredictionService.verify()` 是一条

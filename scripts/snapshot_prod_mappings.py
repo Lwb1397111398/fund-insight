@@ -60,7 +60,7 @@ def fetch_via_db(production=False):
         url = os.environ.get('DATABASE_URL', '')
         if not url.lower().startswith(('postgres', 'postgresql')):
             raise RuntimeError('--via-db --production 要求 .env 的 DATABASE_URL 指向 PostgreSQL')
-        engine = sa.create_engine(url, isolation_level='READ ONLY')
+        engine = sa.create_engine(url, execution_options={'postgresql_readonly': True})
         with engine.connect() as conn:
             why = _pg_read_only_probe(conn)      # 真试一次写，被拒才算只读成立
             if why:

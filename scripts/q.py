@@ -10,7 +10,8 @@ import engine..."` 的一次性查询，只设了 `LOCAL_DB_URL` 环境变量而
 只读这件事有**两层**，第二层才是保证：
 1. `_assert_read_only()` 的正则 —— 快、报错友好，但它是我对方言的猜测；
 2. 引擎级 —— SQLite 用 URI `mode=ro` 打开；PostgreSQL 建引擎时带
-   `isolation_level='READ ONLY'`（方言在**建连接时**就把会话特征设好，不等第一条语句），
+   `execution_options={'postgresql_readonly': True}`（psycopg2 方言把它翻译成
+   `connection.readonly = True`，事务一开始就只读），
    然后 `_pg_read_only_probe()` **真试一次写**（临时表），只有它报
    "read-only transaction" 才继续执行。
 第 24 轮两份复评各自证明了只有第 1 层会漏：`select ... into t`、`select nextval('s')`
@@ -52,21 +53,44 @@ WRITE_FUNCS = re.compile(
 # `create or replace` 才是写；`select replace(name,'A','B')` 是读函数。
 WRITE_WORDS_OR_REPLACE = re.compile(r'\bor\s+replace\b', re.I)
 
-# 一次从左到右的分词：字符串/引号标识符与注释**互相包含**时谁先出现谁生效。
+# 一次从左到右的分词：字符串/标识符与注释**互相包含**时谁先出现谁生效。
 # 分成两步做会出错：先剥注释 ⇒ `like '%--%'` 被拦腰截断（第 25 轮 B 实测）；
 # 先剥字面量 ⇒ 注释里一个英文撇号就把后半截当字符串吃掉。
-_TOKENS = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"|--[^\n]*|/\*.*?\*/", re.S)
+# 双引号在 PG 里是**标识符**不是字符串：第 26 轮 A 用 `select "set_config"(...)` 穿过了
+# 上一版（它把双引号内容整段掩成占位符）⇒ 这里"脱壳保留内容"，里面的函数名照样被扫到。
+# `$$...$$` 是 PG 的美元引用，里面的 `--` 不是注释（同一轮 A 的第二条绕过）。
+_TOKENS = re.compile(
+    r"'(?:[^']|'')*'"                                  # 单引号字符串（'' 是转义的单引号）
+    r'|\$\w*\$.*?\$\w*\$'                             # PG 美元引用 $$…$$ / $tag$…$tag$
+    r'|\"([^\"]*)\"'                                   # 双引号=标识符：脱壳保留内容
+    r'|--[^\n]*|/\*.*?\*/', re.S)                     # 注释
+
+
+def _mask_tokens(match):
+    text = match.group(0)
+    if text[0] == "'":
+        return "'_X_'"
+    if text[0] == '"':
+        return match.group(1) or ''
+    if text.startswith('--') or text.startswith('/*'):
+        return ' '
+    return "'_X_'"                                     # 美元引用整段当字面量
 
 
 def _mask_literals(sql):
-    """把字面量与注释换成占位符，供扫描用（执行时仍用原句）。"""
-    return _TOKENS.sub(lambda m: "'_X_'" if m.group(0)[0] in "'\"" else ' ', sql)
+    """扫描用的归一化串：单引号串与 $$ 串换占位、注释换空格、双引号脱壳。
+
+    顺序很重要（第 26 轮 A 的第二条绕过）：`$$a--b$$` 里那个 `--` **不是**注释，
+    上一版把美元引用写成 `\\$[^$]*\\$`（只吃到单个 `$`），于是剩余部分被当成注释，
+    `; drop table` 整段消失 ⇒ 闸门放行。所以美元引用那条必须排在注释之前且匹配成对标签。
+    """
+    return _TOKENS.sub(_mask_tokens, sql)
 
 
 def _assert_read_only(sql):
     """白名单式判"只读"：首词必须 select/with/explain/values、只允许一条语句、
     扫不到写关键词/写函数。真正的兜底不在这里，在 `_connect_sqlite_ro` /
-    PG 的 `isolation_level='READ ONLY'` + `_pg_read_only_probe` —— 正则挡不住所有方言写法，
+    PG 的 `postgresql_readonly` + `_pg_read_only_probe` —— 正则挡不住所有方言写法，
     引擎挡得住。
     """
     scan = _mask_literals(sql)
@@ -111,8 +135,10 @@ def _pg_read_only_probe(conn):
     而 B 用事件监听复现出 `SET`、`SHOW`、业务查询全在**同一条事务**里
     （SQLAlchemy 首条语句才 autobegin），那个 GUC 只管"之后的事务"，
     `SHOW` 读回的又正是自己刚设的会话值 ⇒ 恒真，永远不会报"没生效"。
-    现在改成：方言在建连时就把会话特征设成 READ ONLY（`isolation_level='READ ONLY'`），
-    然后**真试一次写**（临时表），只有它报"read-only transaction"才算数。
+    第 25 轮的替代写法 `isolation_level='READ ONLY'` 又被第 26 轮两份复评判为 BLOCKER：
+    psycopg2 方言的合法值里没有它（实测 `_isolation_lookup`），等于把两条生产读路打断。
+    现在是 `postgresql_readonly` 执行选项 + **真试一次写**（临时表），只有报
+    "read-only transaction" 才算只读成立。
     返回 None 表示只读成立，返回字符串表示原因（调用方必须中止）。
     """
     conn.exec_driver_sql('SAVEPOINT q_guard')
@@ -169,10 +195,14 @@ def main():
     import sqlalchemy as sa
     is_pg = url.lower().startswith('postgres')
     if is_pg:
-        # 只读由**方言在建连接时**设进会话特征（等价于
-        # `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`），
-        # 所以之后每一条事务都是只读 —— 不再依赖"我先 SET 再查"这种事务内动作。
-        engine = sa.create_engine(url, isolation_level='READ ONLY')
+        # 只读由 psycopg2 的**文档化执行选项**保证（`postgresql_readonly=True` →
+        # 方言 `set_readonly` → `connection.readonly = True`，事务一开始就是只读）。
+        # 第 26 轮两份复评共同判 BLOCKER：上一版写的 `isolation_level='READ ONLY'`
+        # **不是 psycopg2 方言的合法值**（实测 `dialect._isolation_lookup` 只有
+        # AUTOCOMMIT / READ COMMITTED / READ UNCOMMITTED / REPEATABLE READ / SERIALIZABLE），
+        # 所以两条生产读路是"连不上"而不是"只读" —— 而三条用例全打在假连接上，绿着。
+        # 现在另加一条用例：本文件里写的 isolation/readonly 选项必须被**当上方言**接受。
+        engine = sa.create_engine(url, execution_options={'postgresql_readonly': True})
         conn = engine.connect()
         why = _pg_read_only_probe(conn)
         if why:

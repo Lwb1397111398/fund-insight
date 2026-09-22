@@ -5,6 +5,7 @@
 而不是靠脚本作者（我）记得看输出。
 """
 import importlib.util
+import io
 import os
 from datetime import date, datetime
 
@@ -162,15 +163,19 @@ def test_backup_then_restore_puts_everything_back(test_db, tmp_path):
     mapping_id = mapping.id
 
     dump = _backup_of(test_db, tmp_path, 'ZZZ007')
-    assert 'fund_history' not in dump, '净值永不会被删，不该被抄进备份（会把备份撑大）'
+    # 断言必须打在**文件内容**上：dump 是路径字符串，
+    # 上一版写 `assert 'fund_history' not in dump` 等于在检查文件名（第 26 轮 A 判 MAJOR：恒真）
+    import json as _json
+    tables = [e['table'] for e in _json.loads(io.open(dump, encoding='utf-8').read())]
+    assert 'fund_history' not in tables, tables
 
     # dry-run 默认不写：这是第 25 轮 A 抓到的"全脚本唯一没有确认词的写路径"
-    assert purge.restore(test_db, dump) == 0
+    assert purge.restore(test_db, dump) == (0, 0, 0)
     test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ007').delete()
     test_db.query(FundInfo).filter_by(fund_code='ZZZ007').delete()
     test_db.commit()
     assert test_db.query(FundInfo).filter_by(fund_code='ZZZ007').first() is None
-    assert purge.restore(test_db, dump) == 0          # 仍然只是计划
+    assert purge.restore(test_db, dump) == (0, 0, 0)     # 仍然只是计划
     assert test_db.query(FundInfo).filter_by(fund_code='ZZZ007').first() is None
 
     purge.restore(test_db, dump, apply=True)
@@ -180,7 +185,7 @@ def test_backup_then_restore_puts_everything_back(test_db, tmp_path):
     assert m is not None and m.id == mapping_id and abs(m.confidence - 0.77) < 1e-6, \
         '还原没按原 id/逐列回来：备份等于没备'
 
-    assert purge.restore(test_db, dump, apply=True) == 0    # 幂等：跑两次不翻倍
+    assert purge.restore(test_db, dump, apply=True) == (0, 0, 0), '幂等：跑两次不翻倍'
     assert test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ007').count() == 1
 
 
@@ -201,7 +206,8 @@ def test_restore_dedupe_uses_business_key_not_the_recyclable_id(test_db, tmp_pat
     test_db.add(FI(id=fid, fund_code='999999', fund_name='占了原 id 的新基金'))
     test_db.commit()
 
-    assert purge.restore(test_db, dump, apply=True) >= 1, \
+    done, failed, refused = purge.restore(test_db, dump, apply=True)
+    assert done >= 1 and failed == 0, \
         '备份里的 id 被别人占了就跳过 ⇒ 该还原的没还原，还报告"本就在库里"'
     back = test_db.query(FI).filter_by(fund_code='ZZZ008').first()
     assert back is not None and back.fund_name == 'id会复用的码'
@@ -222,10 +228,36 @@ def test_restore_refuses_to_regrant_owner_immunity(test_db, tmp_path):
     test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ009').delete()
     test_db.commit()
 
-    assert purge.restore(test_db, dump, apply=True) == 0, '未经显式开关就还原了老板免疫'
+    assert purge.restore(test_db, dump, apply=True) == (0, 0, 1), '未经显式开关就还原了老板免疫'
     assert test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ009').first() is None
 
     purge.restore(test_db, dump, apply=True, restore_owner_immunity=True)
     row = test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ009').first()
     assert row is not None and row.owner_locked and row.reviewed_by == 'owner', \
         '显式开关必须是有效的，否则它就是个假闸门'
+
+def test_restore_dedupe_needs_every_business_column_to_match(test_db, tmp_path):
+    """同一板块已有**另一只**基金时，被删的那行必须还能还原。
+
+    第 26 轮两份复评共同判 MAJOR：业务键判重写成"任一列相等即已存在"，
+    于是同板块占位就让该还原的行"静默不还原"，回执写着"跳过已存在"——
+    与它要修的原 bug 同一个症状。
+    """
+    from src.models.database import SectorFundMapping
+    _add_fund(test_db, 'ZZZ010', '同板块两行')
+    test_db.add_all([
+        SectorFundMapping(sector_name='ZZZ同板块', fund_code='ZZZ010',
+                          fund_name='该还原的行', is_active=True),
+        SectorFundMapping(sector_name='ZZZ同板块', fund_code='999999',
+                          fund_name='占位另一行', is_active=True),
+    ])
+    test_db.commit()
+    dump = _backup_of(test_db, tmp_path, 'ZZZ010')
+    test_db.query(SectorFundMapping).filter_by(fund_code='ZZZ010').delete()
+    test_db.commit()
+
+    done, failed, refused = purge.restore(test_db, dump, apply=True)
+    assert done >= 1, '同板块另有占位行就跳过 ⇒ 复合键只比了一列'
+    codes = sorted(r.fund_code for r in test_db.query(SectorFundMapping).filter_by(
+        sector_name='ZZZ同板块'))
+    assert codes == ['999999', 'ZZZ010'], codes

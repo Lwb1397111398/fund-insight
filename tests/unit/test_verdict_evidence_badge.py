@@ -133,6 +133,10 @@ def test_no_new_direct_fund_code_writes_appear():
         # 下面两处写的是 SectorFundMapping.fund_code（映射表自己的字段），不是预测
         ('services/sector_fund_agent.py', 'apply_decision'),
         ('services/sector_fund_service.py', 'update_mapping'),
+        # 序列化：把 ORM 行拼成响应字典（`{"fund_code": row.fund_code, ...}`），
+        # 不写库。采集器把"字典里出现这个键"也算命中，所以在这里登记例外 ——
+        # 登记而不是放宽规则：真有代码写进来时它照样会红。
+        ('api/routes/viewpoints.py', '_serialize_detail'),
     }
     found = set()
     for dirpath, _dirs, files in os.walk(root):
@@ -143,6 +147,11 @@ def test_no_new_direct_fund_code_writes_appear():
             rel = os.path.relpath(path, root).replace(os.sep, '/')
 
             class _Collector(ast.NodeVisitor):
+                """第 26 轮 A 的 MAJOR：`fund_code` 这半边原先只认属性赋值，
+                `setattr` / 字典批量 / AnnAssign 都能绕过 —— 而 `is_correct` 那半边已经扩了，
+                两条"唯一入口"规则覆盖面不一样，等于又制造"同一判据只修一处"。
+                """
+
                 def __init__(self):
                     self.stack = []
 
@@ -151,10 +160,38 @@ def test_no_new_direct_fund_code_writes_appear():
                     self.generic_visit(node)
                     self.stack.pop()
 
+                visit_AsyncFunctionDef = visit_FunctionDef
+
+                def _here(self):
+                    return (rel, self.stack[-1] if self.stack else '<module>')
+
+                def _assign(self, target):
+                    if isinstance(target, ast.Attribute) and target.attr == 'fund_code':
+                        found.add(self._here())
+
                 def visit_Assign(self, node):
                     for target in node.targets:
-                        if isinstance(target, ast.Attribute) and target.attr == 'fund_code':
-                            found.add((rel, self.stack[-1] if self.stack else '<module>'))
+                        self._assign(target)
+                    self.generic_visit(node)
+
+                def visit_AnnAssign(self, node):
+                    self._assign(node.target)
+                    self.generic_visit(node)
+
+                def visit_Call(self, node):
+                    fname = getattr(node.func, 'attr', None) or getattr(node.func, 'id', None)
+                    hit = (fname == 'setattr' and len(node.args) >= 3
+                           and isinstance(node.args[1], ast.Constant)
+                           and node.args[1].value == 'fund_code')
+                    if not hit and fname in ('update', 'values'):
+                        for sub in ast.walk(node):
+                            if ((isinstance(sub, ast.Constant) and sub.value == 'fund_code')
+                                    or (isinstance(sub, ast.keyword)
+                                        and sub.arg == 'fund_code')):
+                                hit = True
+                                break
+                    if hit:
+                        found.add(self._here())
                     self.generic_visit(node)
 
             _Collector().visit(ast.parse(_io.open(path, encoding='utf-8').read()))
@@ -177,11 +214,13 @@ def test_is_correct_is_only_written_by_the_verify_service():
     两份复评各自复现出"结论 False / 分数 100 / 台账 True / 博主准确率 100% /
     区间 0%"这种五处互相打脸的行。方法已删，这条用例保证它不会被"顺手加回来"。
 
-    措辞边界（第 25 轮 B 指出，别说过头）：还有一条**运维通道**能整表带入 `is_correct`
-    —— `/api/config/import`（`data_portability_service.TABLE_SPECS` 的 predictions 规格）。
-    它是"导出→还原"的正常路径，受 `ENABLE_DATABASE_IMPORT=false` + 确认头双重限制。
-    所以这条断言的范围是"**代码里**对 `is_correct` 的属性/批量写只有验证服务一处"，
-    不是"全系统只有这一条路"。
+    措辞边界（第 26 轮 A 又抓到我一句话说过头）：还有一条路能整表带入 `is_correct`
+    —— `/api/config/import` 的**合并模式**（`data_portability_service.TABLE_SPECS`
+    按整行列插，只剔 owner 两列）。而且那道"总开关 + 确认头"**只管覆盖模式**：
+    `config.py` 里是 `if req.replace:` 才检查 `ENABLE_DATABASE_IMPORT` 与
+    `X-Danger-Confirm` ⇒ 合并模式既无开关也无确认头（有访问密码就能调）。
+    所以本用例断言的范围是"**代码里**对 `is_correct` 的属性/批量写只有验证服务一处"，
+    不是"全系统只有这一条路"。合并模式要不要也上确认头属于对外接口变更，等老板拍板。
     """
     import ast
     import io as _io
