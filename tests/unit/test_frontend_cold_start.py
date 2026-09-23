@@ -548,6 +548,8 @@ def test_everything_the_template_reads_is_actually_exported():
     for attr in ('v-if', 'v-else-if', 'v-show', 'v-model'):
         exprs += [m.group(1) for m in re.finditer(r'\s%s="(.*?)"' % attr, tpl, flags=re.S)]
     exprs += [m.group(1) for m in re.finditer(r'(?:^|\s)(?::|v-bind:)[\w.-]+="(.*?)"', tpl, flags=re.S)]
+    # 裸 `v-bind="{a: b}"`（不带参数名）也要扫 —— 第 32 轮 A 用它骗过了闸
+    exprs += [m.group(1) for m in re.finditer(r'(?:^|\s)v-bind="(.*?)"', tpl, flags=re.S)]
     exprs += [m.group(1) for m in re.finditer(r'(?:^|\s)@[\w.-]+="(.*?)"', tpl, flags=re.S)]
     locals_ = {'$event', '$refs', '$attrs', '$'}     # '$' 来自模板字符串的 `${...}`
     for f in re.findall(r'\sv-for="(.*?)"', tpl, flags=re.S):
@@ -568,7 +570,11 @@ def test_everything_the_template_reads_is_actually_exported():
         e = re.sub(r"'[^']*'|\"[^\"]*\"", "''", e)
         for m in re.finditer(r'(?<![.\w$])([A-Za-z_$][\w$]*)', e):
             tok = m.group(1)
-            if e[m.end():m.end() + 1] == ':' or tok in builtins or tok in locals_:
+            # `x:` 只有紧跟在 `{`/`,` 后面才是对象字面量的键；`cond ? ghostTern: false` 里
+            # 那个 `:` 是三元运算符（第 32 轮 A 用它骗过了这道闸）
+            prev = e[:m.start()].rstrip()
+            if (e[m.end():m.end() + 1] == ':' and prev.endswith(('{', ','))) \
+                    or tok in builtins or tok in locals_:
                 continue
             ids.add(tok)
     exported = _setup_exports(html)
@@ -599,6 +605,9 @@ def test_every_list_page_shares_the_same_honesty_rule():
     tail = ls[0][ls[0].rindex('catch'):]
     assert 'viewErrors.mappings =' in tail and 'isServiceDown(e)' in tail, \
         '映射页的 catch 又退回只 console.error'
+    # `catch` 只挡"没答话"；200 + success:false 是另一半失败（第 32 轮 A 数出的那一族）
+    seg = ls[0][ls[0].index('if (res.data.success)'):ls[0].rindex('} catch')]
+    assert 'else {' in seg and '板块映射没取到' in seg, '映射页的 success:false 又静默了'
 
 
 def test_the_weighted_column_shows_what_it_is_counted_over():
@@ -624,3 +633,122 @@ def test_first_login_says_the_service_is_waking():
     modal = html[start:html.index('class="modal-overlay"', start + 40)]
     assert 'v-if="serviceWaking"' in modal, '密码弹窗里没有等待唤醒的说明'
     assert "serviceWaking ? '唤醒中…'" in modal, '按钮文案没跟着等待状态走'
+
+
+def test_no_page_claims_a_number_it_never_measured():
+    """第 32 轮两份复评共同指到：规矩③只铺了一半，五处还在报 0 / "没有"。
+
+    - 帖子/预测的分页条就挂在"拉取失败"下面 3 行，无条件写"共 0 条"（镜像 657 帖 / 1616 预测）；
+    - 观点洞察四张卡在 `/api/viewpoints/insights` 单独失败时全渲染 0，而表体非空、
+      `emptyText` 根本不渲染；
+    - 投资建议页与"历史建议"弹窗整页零失败态（镜像 `investment_advice` 实有 43 行）；
+    - 配置弹窗"板块别名" tab 失败即"暂无自定义别名"；
+    - 映射表体那一行 `暂无数据` 落在顶栏失败守卫之外。
+    """
+    html = _html()
+    assert '<template v-if="viewErrors.posts">条数没取到</template>' in html, \
+        '帖子分页条还在无条件报"共 0 条"'
+    assert '<template v-if="viewErrors.predictions">条数没取到</template>' in html, \
+        '预测分页条还在无条件报"共 0 条"'
+    assert 'numOrDash(viewpointInsights.direction_total)' in html, '洞察卡还在 `|| 0`'
+    assert "adviceError || '暂无历史建议'" in html, '历史建议失败时说"没有"'
+    assert "aliasError || '暂无自定义别名'" in html, '别名 tab 失败时说"没有"'
+    assert "emptyText('mappings')" in html, '映射表体还在无条件"暂无数据"'
+    assert '这次没有生成建议' in html, '生成建议被 200+success:false 拒绝时仍然整屏没反应'
+
+
+def test_polling_gives_up_loudly_instead_of_locking_the_ui():
+    """轮询数到上限必须放开全局锁并说一句话（第 32 轮 A-M1：我上一批修出来的回归）。
+
+    `analyzing` 跨 5 个视图禁用 13 个按钮。上一批我把"401/500 不再丢句柄"改对之后，
+    耗尽分支既不清 `analyzing` 也不解释 ⇒ 一次 15 分钟以上的服务异常就把整个页面冻住。
+    """
+    html = _html()
+    assert html.count('onPollStalled:') == 2, '两个 manager 都要接停摆回调（现 %d）' % html.count('onPollStalled:')
+    assert 'taskStalled.value =' in html and 'v-if="taskStalled"' in html, '停摆要有一句话给老板看'
+    pm = (PROJECT_ROOT / 'web' / 'post-manager.js').read_text(encoding='utf-8')
+    assert 'postAnalysisRunning.value = false;' in pm and 'onPollStalled' in pm, \
+        '帖子轮询耗尽后没放开锁'
+    vm = (PROJECT_ROOT / 'web' / 'viewpoint-manager.js').read_text(encoding='utf-8')
+    assert 'onPollStalled' in vm, '观点轮询耗尽后没有回调'
+
+
+def test_failure_state_is_cleared_by_the_fetch_that_succeeded():
+    """失败态要由"取数成功"自己清（第 32 轮 B-MINOR-1）。
+
+    上一版只有 `loadView` 里的 `run()` 清一次，而翻页/筛选直连 `fetchPosts` ⇒
+    失败一次之后再成功，页面对"其实成功的空集"仍报"拉取失败"。
+    """
+    html = _html()
+    assert 'watch(() => postMeta.value?.total' in html, '帖子失败态没有自清腿'
+    assert 'watch(() => predictionMeta.value?.total' in html, '预测失败态没有自清腿'
+    assert 'const { createApp, ref, reactive, onMounted, computed, watch } = Vue;' in html, \
+        'watch 没从 Vue 解构出来，上面两条腿是死的'
+
+
+def test_the_fund_view_says_so_when_the_api_says_no():
+    """基金页与它头上的三个数以前只认 `catch`：200 + success:false 时整页照旧。
+
+    第 32 轮 A 数到 16 处 `if (res.data.success)` 没有 else。基金页是其中最有欺骗性的
+    一处：列表停在上一页、三个筛选按钮继续报"本页有几只"，而接口明明回了"失败"。
+    另：筛选按钮括号里的数一直是**本页**（每页 100 只）的，与下方"共 N 只"不是同一口径。
+    """
+    html = _html()
+    body = _body(html, 'fetchFunds = async () =>')
+    assert 'else {' in body and '基金列表没取到' in body, 'fetchFunds 又只剩一条 catch 腿'
+    assert "res.data.message || '接口未给出原因'" in body, '失败原因没带上接口的原话'
+    assert html.count("fundError || fundLoading ? '—'") == 3, \
+        '三个筛选按钮里应有 3 处在失败/加载中报"—"（现 %d）' % html.count("fundError || fundLoading ? '—'")
+    assert '本页' in _visible_text(html) and '不是全库' in _visible_text(html), \
+        '"本页 vs 全库"这个口径只活在代码里，页面上看不见'
+
+
+def test_a_destructive_button_cannot_outlive_its_own_preview():
+    """预览取不到时必须把"执行清理"的开关关掉（它是删数据用的）。
+
+    `fetchRetentionPreview` 的 catch 早就这么做了，但 `success:false` 那条腿没有 else
+    ⇒ 上一轮预览成功留下的 `cleanupEnabled=true` 会继续放行删除，而页面显示的数已经变了。
+    """
+    html = _html()
+    for decl, err in (('fetchRetentionPreview = async () =>', 'retentionPreviewError'),
+                      ('fetchCleanupPreview = async () =>', 'cleanupPreviewError')):
+        body = _body(html, decl)
+        assert 'else {' in body, '%s 的 success:false 没人接' % decl
+        # 只看 else 那一段：截到函数末尾会让 `catch` 里的两行替 else 说话（第 33 轮变异实测）
+        i = body.index('else {')
+        seg = body[i:i + body[i:].index('\n                        }')]
+        assert 'cleanupEnabled.value = false;' in seg and err in seg, \
+            '%s 的失败分支没关删除开关或没报错' % decl
+
+
+def test_the_config_modal_says_which_tab_failed():
+    """配置弹窗两个 tab 以前失败即整块空白（`v-if="configTab === 'llm' && configData"`）。
+
+    老板点"系统配置"看到一片白，不知道是没配过还是没取到；后者要去改的东西不一样。
+    """
+    html = _html()
+    assert "v-if=\"configTab === 'llm' && configError\"" in html, 'LLM tab 没有失败态'
+    assert 'v-if="testDataError"' in html, '测试数据区没有失败态'
+    assert html.count('重新加载') >= 1 and '重新扫描' in html, '失败态要能一键再取一次'
+    for decl, err in (('loadConfig = async () =>', 'configError'),
+                      ('loadTestData = async () =>', 'testDataError')):
+        head = _expr(html, 'const ' + decl)
+        assert 'else {' in head and err in head, '%s 还是一次 200 失败就静默' % decl
+
+
+def test_the_top_blogger_modal_puts_its_calibers_in_text_not_hover():
+    """TOP 榜弹窗：口径要能看见，"已验证"不许拿另一个分母顶。
+
+    第 30/31 轮四条判据都说过"手机没有 hover"，但弹窗那版还留着 `:title="命中率 = …"`；
+    而"已验证"列在 `hit_verified` 缺失时回落到 `total_predictions`（含已删帖的口径），
+    等于挂着头图的名换了一个分母。
+    """
+    html = _html()
+    i = html.index('v-if="topBloggers.length > 0"')
+    modal = html[i - 2600:i + 1600]
+    assert '命中率（判对 / 已验证）' in _visible_text(modal), '弹窗命中率口径没写在表头'
+    assert '加权评分（含归档，非命中率）' in _visible_text(modal), '弹窗加权评分没标口径'
+    assert ':title="b.hit_rate' not in modal, '关键口径又退回 hover 才看得见'
+    assert 'b.hit_correct' in modal and "numOrDash(b.hit_verified)" in modal, \
+        '命中率没有分子分母 / "已验证"还能回落到别的分母'
+    assert 'topNote' in modal, '接口自己的 metric_note 没渲染'

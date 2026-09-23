@@ -104,6 +104,12 @@
                     clearJob();
                 } else if (attempts < MAX_POLL_FAILURES) {
                     pollTimer = window.setTimeout(() => pollAnalysisJob(taskId, attempts + 1), 10000);
+                } else {
+                    // 数到上限必须把全局锁放开：`analyzing` 跨 5 个视图禁用 13 个按钮，
+                    // 第 32 轮 A 实测"耗尽后句柄保住了、但按钮全灰且页面一个字都不说"。
+                    postAnalysisRunning.value = false;
+                    analyzing.value = false;
+                    if (options.onPollStalled) options.onPollStalled('帖子批量分析');
                 }
                 console.error('恢复帖子分析任务失败', error);
             }

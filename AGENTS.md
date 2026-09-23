@@ -195,13 +195,17 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 08:35（北京），第 31 轮返修 + #40/#41 收尾之后，
+最近一次核对（2026-09-23 11:02（北京），第 32 轮返修 + 第 33 轮（生产误写事故与修复）之后，
 最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **885 passed / 16 skipped / 0 failed**（136 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **894 passed / 16 skipped / 0 failed**（139 秒）。
+- `pytest tests/unit -q` → **898 passed / 16 skipped / 0 failed**（119 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **907 passed / 16 skipped / 0 failed**（119 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 883/892 → 本批 885/894：+2 条（加权评分要有自己的基数、首登等唤醒要有说明）。）
+  （上一基线 885/894 → 本批 898/907：+13 条 = 前端失败态 7 条（`test_frontend_cold_start.py` 16→23）、
+  变异体检互斥闸 5 条（`test_mutation_lock.py` 新文件）、"只面向生产的白名单不是后门" 1 条。
+  **这批中途出过一次真事故**：`tests/conftest.py` 顶层的一条 import 排在钉库之后写反了位置，
+  4 条夹具把数据写进了生产 Supabase ⇒ `test_database_url_routing.py` 抓到（详见上面 conftest 那条规矩），
+  期间 `tests/unit` 一度报 4 errors + 1 failure —— 那条 failure 就是闸门本身在响。）
   （再上一批 866 —— 那一批把 `tests/` 口径欠了一次实测，本批两个口径都实测过。
   再往前 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
@@ -271,8 +275,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `核聚变→红利低波ETF` 这批行**永不旗标、无人复核却仍在给新帖挑标的**（镜像实测未审查 17 行）。
   现在体检把第三态写进 `evidence.identity.relevance_state`，`build_worklist` 单独报数
   （`no_literal_fund` / `alternative_exists`），`identity_view` 把它带进 `/api/config/sector-mappings` 的 JSON。
-  **但页面还没读这一列**（`web/` 里 `relevance_state` 0 处命中 —— 第 28 轮 H-MAJOR-3 指出我上一版
-  "透传给接口/前端"说过头了）：剩下的活是页面加筛选档/统计，见任务 #32。
+  **页面已经在读这一列**（第 33 轮核对：`web/index.html` 里 `relevance_state` 4 处命中 ——
+  顶栏"名册无对口 N"按钮、筛选图例、行内灰字、`identityStats` 计数）：
+  第 28 轮那句"`web/` 里 0 处命中"到本次核对时已经过时，别再照抄旧结论。
   ⇒ **读 `sector_relevance()==True` 时不许再说成"已核对为相关"**；老行只有布尔位时
   `row_relevance_state()` 保守返回 `relevant`（不许凭空造旗标），等下次体检补全。
   **服务判据本轮没改**（那 17 行里既有该拦的 `核聚变→红利低波`，也有正确的 `北美→纳指`，
@@ -396,21 +401,44 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （取不到或字段缺失都是 `—`），空状态按 `serviceWaking → 失败原因 → 真的空` 排序，
   帖子/预测/观点/板块映射共用 `emptyText(view)` + `viewErrors`（镜像真值 27 博主 / 657 帖 /
   1616 预测 / 71 观点 / 222 映射，唤醒失败时报"暂无X数据"或"共 0 条"都是假事实）；
+  第 32~33 轮把同一条规矩铺到剩下的角落：分页条（`viewErrors.posts/predictions`）、
+  观点洞察四张卡（`numOrDash`）、基金页三个筛选按钮的括号数（失败/加载中报 `—`，并注明那是
+  **本页**不是全库）、映射表体、历史建议（`adviceError`）、板块别名 tab（`aliasError`）、
+  配置弹窗两个 tab（`configError` / `testDataError`）、TOP 弹窗（口径进表头文字、"已验证"不许换分母）；
   ④ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
   对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）；
   ⑤ **模板读的每个标识符都必须出现在 `setup()` 的 return 名单里** —— 少一个就静默失效：
   `serviceWaited` 漏导出时"已经等过一轮唤醒"那一支永不渲染，`showApiKey` 压根没声明过，
   API Key 输入框的 `:type` 恒为 password（一个假开关）。机器闸：
   `test_everything_the_template_reads_is_actually_exported`。
-  判据：`tests/unit/test_frontend_cold_start.py`（10 条，其中一条用 node **执行页面里那份源码**，
-  喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`
-  （35 处变异逐条打红，跑完逐文件回读比对还原，并校验变异真的落了盘）。
+  ⑥ **200 + `success:false` 也算一次失败**（第 32 轮 A 数出 16 处 `if (res.data.success)` 没有 else）：
+  这个后端很多拒绝走的是 200 + `success:false`（证据门、清理开关没开、映射冲突、别名重复），
+  只写 `catch` 等于漏掉一半失败 ⇒ 现在每个取数点要么有 else 分支、要么明写注释说明为何不报。
+  推论：**删数据用的按钮不许活过自己的预览**（`fetchRetentionPreview` / `fetchCleanupPreview`
+  取不到时 `cleanupEnabled=false`，否则放行的是上一轮的删除计划）。
+  判据：`tests/unit/test_frontend_cold_start.py`（本批实测 23 条，其中两条用 node **执行页面里那份源码**，
+  喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`。
+  **处数别抄文档**：跑 `python scripts/mutation_proof_frontend.py --list`，末行打印"共 N 处变异，覆盖 M 条判据"
+  （第 32 轮 B 抓到 docstring 里那句"28 处"早就过时 ⇒ 会过时的数不留文字版）。
+  体检跑完逐文件回读比对还原、校验变异真的落了盘；开头多一条 **CONTROL** 对照跑：
+  干净代码上判据必须先全绿，否则"每条变异都红"可能只是子 pytest 起手就失败（假满分）。
+  **体检与 pytest 现在互斥**（第 32 轮 B：没有闸拦着的承诺等于没有承诺）：体检抢
+  `src/utils/mutation_lock.py` 的 OS 级文件锁，抢不到就拒绝启动；`tests/conftest.py::pytest_configure`
+  看到锁被持有就 `pytest.exit`。锁由操作系统管，进程被强杀也会自己放开。
+  用例：`tests/unit/test_mutation_lock.py`（5 条，其中两条真起子进程验两端）。
   第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
   两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。
   **本机没有 Chromium**：`tests/unit/test_layout_browser_probe.py` 那 16 条常年是 skipped，
   所以"浏览器看过"目前只是我每次的手工动作 + 记录，**不是机器闸**。机器闸是
   `test_frontend_cold_start.py` 里那两条 node 行为判据（执行页面源码本身）。
+- **`tests/conftest.py` 里"钉 `DATABASE_URL` 到临时 SQLite"之前不许导入任何 `src.*`**（第 33 轮我自己踩的）：
+  `src/__init__.py` 会拉起 `src.core.config`，而 `.env` 指向生产 ⇒ engine 一旦在那之前被创建就绑死生产，
+  后面第 49 行的赋值救不回来（模块已在 `sys.modules` 里）。当时 `tests/unit` 里 4 条夹具把
+  `INSERT INTO fund_info / bloggers / posts` 发到了 Supabase（被唯一约束挡住的只是运气），
+  落地的 18 行测试数据见任务 #42。现在的两道样：① conftest 在赋值后立刻
+  `assert 'src' not in sys.modules`（把原因说清），② `test_database_url_routing.py` 断言 engine 是 sqlite。
+  推论：**任何在 conftest 顶层加的 import，先问它会不会拉起应用配置**。
 - CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
 
 常用重点测试：

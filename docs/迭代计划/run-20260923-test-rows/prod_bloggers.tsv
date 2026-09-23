@@ -1,0 +1,9 @@
+id	name	platform	description	accuracy_rate	total_predictions	correct_predictions	total_verify_score	grade	ultra_short_accuracy	ultra_short_total	ultra_short_correct	sector_coverage	avg_prediction_period	risk_warning_count	last_prediction_date	prediction_frequency	is_active	created_at	updated_at	archived_verified_count	archived_correct_count	archived_verify_score
+334	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:17:45.952451	2026-09-23 10:17:45.952451	0	0	0.0
+335	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:17:55.795942	2026-09-23 10:17:55.795942	0	0	0.0
+336	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:18:03.034405	2026-09-23 10:18:03.034405	0	0	0.0
+337	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:18:10.361884	2026-09-23 10:18:10.361884	0	0	0.0
+338	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:37:49.824474	2026-09-23 10:37:49.824474	0	0	0.0
+339	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:37:59.025145	2026-09-23 10:37:59.025145	0	0	0.0
+340	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:38:05.518390	2026-09-23 10:38:05.518390	0	0	0.0
+341	T-基金列表体检博主	xiaohongshu		0.0	0	0	0	C	0.0	0	0	0	0.0	0		0.0	True	2026-09-23 10:38:13.125140	2026-09-23 10:38:13.125140	0	0	0.0

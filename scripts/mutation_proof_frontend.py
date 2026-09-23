@@ -7,17 +7,23 @@
 文本判据只有配上"能把它打红的变异"才算数，所以变异不能只在我脑子里跑一遍就丢掉。
 
 用法：
-    python scripts/mutation_proof_frontend.py            # 全跑（28 处），任何一条绿就退码 1
-    python scripts/mutation_proof_frontend.py --list     # 只看清单
+    python scripts/mutation_proof_frontend.py            # 全跑，任何一条绿就退码 1
+    python scripts/mutation_proof_frontend.py --list     # 只看清单（末行打印处数与覆盖的判据数）
+
+    注：docstring 里**不写**处数（第 32 轮 B 抓到那句"全跑（28 处）"早就过时）。
+    要引用数量就跑 `--list`，别抄这里。
 
 安全：只改 `web/index.html`、`web/post-manager.js`、`web/prediction-manager.js`，
 每处变异都**从干净底本**生成、写盘后回读核对（落了盘、且确实与底本不同）才跑 pytest，
 跑完无条件写回底本并逐文件回读比对。
 **不能与 `pytest tests/` 并发跑**（第 30 轮 B 实测：并发时会假报 12 条 GREEN + 3 条锚点失配，
-还会留下未还原的文件）—— 它改的是被测对象本身，独占仓库目录是前提，不是可选项。
+还会留下未还原的文件）。这句话现在有代码拦着（第 32 轮补）：体检启动时抢
+`src/utils/mutation_lock.py` 的 OS 级文件锁，抢不到直接拒绝；`tests/conftest.py` 那边
+看到锁被持有就 `pytest.exit`。锁是操作系统管理的，进程被强杀也会自己放开。
 """
 import argparse
 import io
+import os
 import re
 import subprocess
 import sys
@@ -26,6 +32,9 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from src.utils import mutation_lock  # noqa: E402
+
 HTML = 'web/index.html'
 JS = 'web/prediction-manager.js'
 POST = 'web/post-manager.js'
@@ -99,8 +108,8 @@ MUTATIONS = [
     ('test_check_auth_and_the_login_gate_behave_per_status_code', 'no_unreachable_modal',
      HTML, '                                serviceUnreachable.value = true;', '                                serviceUnreachable.value = false;', False),
     ('test_a_missing_number_is_not_rendered_as_zero', 'retention_card_back_to_zero',
-     HTML, "{{ retentionPreview ? (retentionPreview.total || 0) : '—' }}",
-     '{{ retentionPreview?.total || 0 }}', False),
+     HTML, "{{ retentionPreview ? (retentionPreview.total_rows_removed || retentionPreview.total || 0) : '—' }}",
+     '{{ retentionPreview?.total_rows_removed || 0 }}', False),
     ('test_a_lost_job_handle_needs_a_404_not_any_error', 'job_handle_dropped_on_any_error',
      'web/post-manager.js', 'error.response && error.response.status === 404', 'error.response', False),
     ('test_a_lost_job_handle_needs_a_404_not_any_error', 'retry_forever',
@@ -124,6 +133,73 @@ MUTATIONS = [
     ('test_the_empty_state_cannot_lie_while_a_fetch_is_still_pending', 'empty_state_reversed',
      HTML, r'<template v-if="serviceWaking">正在等待服务唤醒[^<]*</template>',
      '<template v-if="true">暂无数据</template>', True),
+    # ---- 第 32 轮：五处"报 0 / 报没有"的假事实，和轮询耗尽后的那把锁 ----
+    ('test_no_page_claims_a_number_it_never_measured', 'pagination_reports_zero_on_failure',
+     HTML, '<template v-if="viewErrors.posts">条数没取到</template><template v-else>共 {{ postMeta.total || 0 }} 条</template>',
+     '共 {{ postMeta.total || 0 }} 条', False),
+    ('test_no_page_claims_a_number_it_never_measured', 'insight_card_back_to_zero',
+     HTML, '{{ numOrDash(viewpointInsights.direction_total) }}',
+     '{{ viewpointInsights.direction_total || 0 }}', False),
+    ('test_no_page_claims_a_number_it_never_measured', 'advice_history_says_none',
+     HTML, "{{ adviceError || '暂无历史建议' }}", '暂无历史建议', False),
+    ('test_no_page_claims_a_number_it_never_measured', 'alias_tab_says_none',
+     HTML, "{{ aliasError || '暂无自定义别名' }}", '暂无自定义别名', False),
+    ('test_no_page_claims_a_number_it_never_measured', 'mapping_body_outside_the_guard',
+     HTML, "{{ mappingSearchKeyword ? '未找到匹配的板块映射' : emptyText('mappings') }}",
+     '暂无数据', False),
+    ('test_no_page_claims_a_number_it_never_measured', 'advice_rejected_silently',
+     HTML, "alert('这次没有生成建议：' + (res.data.message || '接口未给出原因'));",
+     'void 0;', False),
+    ('test_polling_gives_up_loudly_instead_of_locking_the_ui', 'exhaustion_keeps_the_global_lock',
+     'web/post-manager.js',
+     '                    postAnalysisRunning.value = false;\n                    analyzing.value = false;\n                    if (options.onPollStalled) options.onPollStalled(\'帖子批量分析\');',
+     '', False),
+    ('test_polling_gives_up_loudly_instead_of_locking_the_ui', 'viewpoint_exhaustion_silent',
+     'web/viewpoint-manager.js',
+     "                    analyzing.value = false;\n                    if (options.onPollStalled) options.onPollStalled('观点汇总');",
+     '', False),
+    ('test_polling_gives_up_loudly_instead_of_locking_the_ui', 'no_stall_banner',
+     HTML, r'<div v-if="taskStalled" class="text-xs"[^\n]*</div>', '', True),
+    ('test_failure_state_is_cleared_by_the_fetch_that_succeeded', 'watcher_never_clears',
+     HTML, "watch(() => postMeta.value?.total, () => { viewErrors.posts = ''; });", '', False),
+    ('test_failure_state_is_cleared_by_the_fetch_that_succeeded', 'watch_not_imported',
+     HTML, 'const { createApp, ref, reactive, onMounted, computed, watch } = Vue;',
+     'const { createApp, ref, reactive, onMounted, computed } = Vue;', False),
+    ('test_everything_the_template_reads_is_actually_exported', 'unexport_numOrDash',
+     HTML, 'bloggersError, statsError, statVal, numOrDash, viewErrors, emptyText,',
+     'bloggersError, statsError, statVal, viewErrors, emptyText,', False),
+    # ---- 第 33 轮：200 + success:false 的剩余盲区、删除按钮的预览前提、TOP 弹窗口径 ----
+    ('test_the_fund_view_says_so_when_the_api_says_no', 'funds_success_false_silent_again',
+     HTML, "                            fundError.value = '基金列表没取到：' + (res.data.message || '接口未给出原因');",
+     "                            console.error('基金接口返回失败');", False),
+    ('test_the_fund_view_says_so_when_the_api_says_no', 'fund_tab_counts_blur_failure',
+     HTML, "{{ fundError || fundLoading ? '—' : fundsWithPredictions.length }}",
+     '{{ fundsWithPredictions.length }}', False),
+    ('test_the_fund_view_says_so_when_the_api_says_no', 'page_scope_note_gone',
+     HTML, r'\n\s*<div class="text-xs" style="color: #8c8c8c; margin-top: 4px;">括号里是[^\n]*</div>', '', True),
+    ('test_a_destructive_button_cannot_outlive_its_own_preview', 'retention_failure_keeps_delete_armed',
+     HTML, "                            retentionPreview.value = null;\n                            cleanupEnabled.value = false;\n                            retentionPreviewError.value = '三桶预览没取到",
+     "                            retentionPreviewError.value = '三桶预览没取到", False),
+    ('test_a_destructive_button_cannot_outlive_its_own_preview', 'cleanup_success_false_silent',
+     HTML, "                        } else {\n                            cleanupPreview.value = null;\n                            cleanupEnabled.value = false;\n                            cleanupPreviewError.value = '预览没取到：' + (res.data.message || '接口未给出原因');\n                        }",
+     '                        }', False),
+    ('test_the_config_modal_says_which_tab_failed', 'llm_tab_blank_again',
+     HTML, r'\n\s*<div v-if="configTab === \'llm\' && configError"[\s\S]*?</div>\n', '\n', True),
+    ('test_the_config_modal_says_which_tab_failed', 'test_data_tab_blank_again',
+     HTML, r'\n\s*<div v-if="testDataError" class="empty-state"[\s\S]*?</div>\n', '\n', True),
+    ('test_the_config_modal_says_which_tab_failed', 'load_config_swallows_rejection',
+     HTML, "} else { configError.value = '配置没取到：' + (res.data.message || '接口未给出原因'); }",
+     ' }', False),
+    ('test_the_top_blogger_modal_puts_its_calibers_in_text_not_hover', 'top_header_caliber_hidden',
+     HTML, '<th>命中率（判对 / 已验证）</th>', '<th>命中率</th>', False),
+    ('test_the_top_blogger_modal_puts_its_calibers_in_text_not_hover', 'top_verified_column_swaps_denominator',
+     HTML, '<td>{{ numOrDash(b.hit_verified) }}</td>',
+     '<td>{{ b.hit_verified != null ? b.hit_verified : (b.total_predictions || 0) }}</td>', False),
+    ('test_the_top_blogger_modal_puts_its_calibers_in_text_not_hover', 'metric_note_dropped',
+     HTML, '<template v-if="topNote">接口自己的口径：{{ topNote }}</template>', '', False),
+    ('test_every_list_page_shares_the_same_honesty_rule', 'mapping_success_false_silent',
+     HTML, "} else { viewErrors.mappings = '板块映射没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) {",
+     ' } } catch (e) {', False),
 ]
 
 
@@ -139,17 +215,38 @@ def _apply(pristine, path, finding, replacement, is_regex):
     return new, n
 
 
-def main(list_only=False):
+def main(list_only=False, only=None):
+    todo = [m for m in MUTATIONS if not only or only in m[1]]
     if list_only:
-        for i, (test, name, path, *_rest) in enumerate(MUTATIONS, 1):
+        for i, (test, name, path, *_rest) in enumerate(todo, 1):
             print('%2d. %-34s -> %s' % (i, name, test))
-        print('共 %d 处变异，覆盖 %d 条判据' % (len(MUTATIONS), len({m[0] for m in MUTATIONS})))
+        print('共 %d 处变异，覆盖 %d 条判据' % (len(todo), len({m[0] for m in todo})))
         return []
-    pristine = {p: (ROOT / p).read_text(encoding='utf-8')
-                for p in {m[2] for m in MUTATIONS}}
-    failures = []
     try:
-        for test, name, path, finding, repl, is_regex in MUTATIONS:
+        guard = mutation_lock.held_exclusively(ROOT)
+        guard.__enter__()
+    except RuntimeError as exc:
+        print(str(exc))
+        return ['another-harness-holds-the-lock']
+    env = dict(os.environ)
+    env[mutation_lock.ENV_PID] = str(os.getpid())
+    failures = []
+    # 对照组：干净代码上这一整份判据必须**全绿**。没有这一步，"每条变异都红了"可能是假的 ——
+    # 子 pytest 只要起手就失败（conftest 报错、锁把子会话拦死、解释器不对），
+    # 每一处都会报 RED，体检反而满分通过。
+    ctrl = subprocess.run([sys.executable, '-m', 'pytest', T, '-q', '--no-header',
+                           '-p', 'no:cacheprovider', '-k', 'wake_retry_behaves'],
+                          cwd=str(ROOT), capture_output=True, env=env,
+                          text=True, encoding='utf-8', errors='replace')
+    if ctrl.returncode != 0:
+        print('CONTROL-RED：干净代码上跑判据本身就失败，本轮体检结论一律不作数：\n%s'
+              % (ctrl.stdout + ctrl.stderr)[-1200:])
+        return ['control-run']
+    print('CONTROL-GREEN（干净代码上判据通过，下面的红才有意义）')
+    pristine = {p: (ROOT / p).read_text(encoding='utf-8')
+                for p in {m[2] for m in todo}}
+    try:
+        for test, name, path, finding, repl, is_regex in todo:
             mutated, n = _apply(pristine, path, finding, repl, is_regex)
             if n < 1:
                 print('%-36s ANCHOR-MISS（变异锚点没命中，判据本身可疑）' % name)
@@ -169,7 +266,7 @@ def main(list_only=False):
                 continue
             r = subprocess.run([sys.executable, '-m', 'pytest', '%s::%s' % (T, test),
                                 '-q', '--no-header', '-p', 'no:cacheprovider'],
-                               cwd=str(ROOT), capture_output=True,
+                               cwd=str(ROOT), capture_output=True, env=env,
                                text=True, encoding='utf-8', errors='replace')
             red = r.returncode != 0
             print('%-36s %-8s %s' % (name, path.split('/')[-1],
@@ -183,9 +280,13 @@ def main(list_only=False):
                 print('!! 还原后字节不一致：%s —— 手工检查' % p)
                 failures.append('restore:%s' % p)
         print('已还原 %s（逐文件回读比对一致）' % '、'.join(sorted(pristine)))
+        guard.__exit__(None, None, None)
     return failures
 
 
 if __name__ == '__main__':
-    bad = main('--list' in sys.argv)
+    only = None
+    if '--only' in sys.argv:
+        only = sys.argv[sys.argv.index('--only') + 1]
+    bad = main('--list' in sys.argv, only)
     sys.exit(1 if bad else 0)

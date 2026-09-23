@@ -102,8 +102,23 @@ def _refuses_remote_without_a_flag(f):
 # Render 上跑的**生产入口**：它就该连生产，护栏是"把库名印进日志"，不是钉镜像。
 PRODUCTION_ENTRY = {'run_scheduled_tasks.py'}
 
+# **只**面向生产的修复脚本（它要清的就是线上数据，"默认钉镜像"对它没意义）。
+# 护栏必须反过来：见 SQLite 就拒跑 + 必须显式 `--production`。名字写错（文件不存在）
+# 会被下面那条反空判用例当场抓住，所以这张名单不是绕过闸门的后门。
+PRODUCTION_ONLY = {'purge_test_rows_from_prod.py'}
+
+
+def _refuses_local_without_a_flag(f):
+    """与 `_refuses_remote_without_a_flag` 对称：常量里判 `sqlite` + 主动 `raise SystemExit`
+    + CLI 上有 `--production` 旗子，三者齐了才算"靶子声明清楚了"。"""
+    return (any(c.startswith('sqlite') for c in f['consts'])
+            and 'SystemExit' in f['raised']
+            and any('--production' in fl for fl in f['flags']))
+
 
 def _guarded(name, f):
+    if name in PRODUCTION_ONLY:
+        return _refuses_local_without_a_flag(f)
     if name in PRODUCTION_ENTRY:
         return 'database_label' in f['called']
     return ('pin_local_sqlite' in f['called'] or f['env_written']
@@ -143,8 +158,25 @@ def test_hard_delete_scripts_pin_the_mirror_by_default():
         direct = '.delete(' in f['text']
         if not (delegates or direct):
             continue
+        if name in PRODUCTION_ONLY and _refuses_local_without_a_flag(f):
+            continue                      # 只清线上误写的修复脚本：见 SQLite 就拒跑，反向护栏
         if not ('pin_local_sqlite' in f['called'] or f['env_written']
                 or _refuses_remote_without_a_flag(f)):
             bad.append(name + ('（删除发生在 service 里，扫 .delete( 扫不到）'
                               if not direct else ''))
     assert not bad, '这些会物理删数据的脚本默认连的不是本地镜像：%s' % '、'.join(bad)
+
+
+def test_the_production_only_allow_list_is_not_a_backdoor():
+    """`PRODUCTION_ONLY` 里的名字必须**存在**且真的带反向护栏；少一个条件就红。
+
+    为什么单独一条：往任何"白名单"里加名字都是给闸门打洞的最短路径（第 24 轮起反复出现）。
+    这里把两件事钉死：① 文件真的在（拼错的名字会静默放行同名脚本）；
+    ② 它自己必须过 `_refuses_local_without_a_flag` —— 把 `_reject_local` 的 `SystemExit`
+    或 `--production` 旗子删掉，这条立刻变红。
+    """
+    scripts = _scripts()
+    for name in sorted(PRODUCTION_ONLY):
+        assert name in scripts, 'PRODUCTION_ONLY 里的 %s 不存在（拼错的名字=闸门静默放行）' % name
+        assert _refuses_local_without_a_flag(scripts[name]), \
+            '%s 挂着"只面向生产"的名字却没有反向护栏（见 SQLite 就拒跑 + 显式 --production）' % name

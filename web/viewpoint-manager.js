@@ -117,6 +117,11 @@
                 } else if (attempts < MAX_POLL_FAILURES) {
                     pollTimer = window.setTimeout(() => pollTask(taskId, attempts + 1), 10000);
                     return;
+                } else {
+                    // 同 `post-manager.js`：数到上限要放开 `analyzing` 那把全局锁，
+                    // 否则 13 个按钮永久灰掉且没有任何解释（第 32 轮 A-M1）。
+                    analyzing.value = false;
+                    if (options.onPollStalled) options.onPollStalled('观点汇总');
                 }
                 console.error('观点任务轮询失败', error);
             }

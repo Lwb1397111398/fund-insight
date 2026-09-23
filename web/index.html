@@ -60,10 +60,13 @@
                         <div class="label">基金</div>
                     </div>
                     <div class="stat-mini" @click="loadView('cleanup')">
-                        <div class="value">{{ retentionPreview ? (retentionPreview.total || 0) : '—' }}</div>
-                        <div class="label">待清理</div>
+                        <div class="value">{{ retentionPreview ? (retentionPreview.total_rows_removed || retentionPreview.total || 0) : '—' }}</div>
+                        <div class="label">待清理（行）</div>
                     </div>
                 </div>
+                <!-- 轮询数到上限会把 `analyzing` 这把全局锁放开（否则 13 个按钮永久灰掉），
+                     放开时必须说一句为什么，不然页面像卡住了。 -->
+                <div v-if="taskStalled" class="text-xs" style="color:#d46b08; margin: 0 0 8px 0;">{{ taskStalled }}</div>
                 <div class="action-bar">
                     <button class="action-btn primary" @click="showAddBlogger = true"><i class="ri-user-line"></i> 管理博主</button>
                     <button class="action-btn primary" @click="showAddPost = true"><i class="ri-file-text-line"></i> 管理帖子</button>
@@ -225,7 +228,7 @@
                     <div v-else class="empty-state">{{ emptyText('posts') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="postPrevPage" :disabled="postFilters.page <= 1">上一页</button>
-                        <span>第 {{ postFilters.page }} 页 · 共 {{ postMeta.total || 0 }} 条</span>
+                        <span>第 {{ postFilters.page }} 页 · <template v-if="viewErrors.posts">条数没取到</template><template v-else>共 {{ postMeta.total || 0 }} 条</template></span>
                         <button class="row-btn" @click="postNextPage" :disabled="!postMeta.has_more">下一页</button>
                     </div>
                 </div>
@@ -348,7 +351,7 @@
                     <div v-else class="empty-state">{{ emptyText('predictions') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="predictionPrevPage" :disabled="predictionFilters.page <= 1">上一页</button>
-                        <span>第 {{ predictionFilters.page }} 页 · 共 {{ predictionMeta.total || 0 }} 条</span>
+                        <span>第 {{ predictionFilters.page }} 页 · <template v-if="viewErrors.predictions">条数没取到</template><template v-else>共 {{ predictionMeta.total || 0 }} 条</template></span>
                         <button class="row-btn" @click="predictionNextPage" :disabled="!predictionMeta.has_more">下一页</button>
                     </div>
                 </div>
@@ -379,10 +382,10 @@
                     </div>
 
                     <div class="viewpoint-metrics">
-                        <div><span>近期观点</span><strong>{{ viewpointInsights.direction_total || 0 }}</strong></div>
-                        <div><span>看多</span><strong class="metric-up">{{ viewpointInsights.directions?.bullish || 0 }}</strong></div>
-                        <div><span>看空</span><strong class="metric-down">{{ viewpointInsights.directions?.bearish || 0 }}</strong></div>
-                        <div><span>待汇总</span><strong>{{ viewpointInsights.pending_summary?.reduce((sum, item) => sum + item.count, 0) || 0 }}</strong></div>
+                        <div><span>近期观点</span><strong>{{ numOrDash(viewpointInsights.direction_total) }}</strong></div>
+                        <div><span>看多</span><strong class="metric-up">{{ numOrDash(viewpointInsights.directions?.bullish) }}</strong></div>
+                        <div><span>看空</span><strong class="metric-down">{{ numOrDash(viewpointInsights.directions?.bearish) }}</strong></div>
+                        <div><span>待汇总</span><strong>{{ viewpointInsights.pending_summary ? numOrDash(viewpointInsights.pending_summary.reduce((sum, item) => sum + item.count, 0)) : '—' }}</strong></div>
                     </div>
 
                     <div v-if="viewpointTask" class="viewpoint-task-band" :class="'task-' + viewpointTask.status">
@@ -491,10 +494,11 @@
                             analyzing ? '更新中...' : '🔄 更新所有基金' }}</button>
                     </div>
                     <div class="filter-tabs mt-15">
-                        <button :class="['filter-tab', { active: fundFilter === 'has_prediction' }]" @click="fundFilter = 'has_prediction'">有预测 ({{ fundsWithPredictions.length }})</button>
-                        <button :class="['filter-tab', { active: fundFilter === 'no_prediction' }]" @click="fundFilter = 'no_prediction'">无预测 ({{ fundsWithoutPredictions.length }})</button>
-                        <button :class="['filter-tab', { active: fundFilter === 'all' }]" @click="fundFilter = 'all'">全部 ({{ funds.length }})</button>
+                        <button :class="['filter-tab', { active: fundFilter === 'has_prediction' }]" @click="fundFilter = 'has_prediction'">有预测 ({{ fundError || fundLoading ? '—' : fundsWithPredictions.length }})</button>
+                        <button :class="['filter-tab', { active: fundFilter === 'no_prediction' }]" @click="fundFilter = 'no_prediction'">无预测 ({{ fundError || fundLoading ? '—' : fundsWithoutPredictions.length }})</button>
+                        <button :class="['filter-tab', { active: fundFilter === 'all' }]" @click="fundFilter = 'all'">全部 ({{ fundError || fundLoading ? '—' : funds.length }})</button>
                     </div>
+                    <div class="text-xs" style="color: #8c8c8c; margin-top: 4px;">括号里是<b>本页</b>（每页 {{ fundMeta.page_size }} 只）的行数，不是全库；全库见下方"共 N 只"</div>
                     <div v-if="fundLoading" class="empty-state">基金数据加载中...</div>
                     <div v-else-if="fundError" class="empty-state">
                         {{ fundError }}
@@ -758,6 +762,10 @@
                     <div v-if="retentionPreview && retentionPreview.total === 0" class="empty-state">✅ 暂无待清理数据</div>
 
                     <!-- 测试数据区域 -->
+                    <div v-if="testDataError" class="empty-state" style="color: #ff4d4f;">
+                        {{ testDataError }}
+                        <button class="action-btn small" @click="loadTestData">重新扫描</button>
+                    </div>
                     <div v-if="testData && testData.summary && testData.summary.total > 0" style="margin-top: 30px;">
                         <h4 style="color: #ff9800; margin-bottom: 10px;">🧪 测试数据 ({{ testData.summary.total }})</h4>
                         <div class="sub-actions mb-15">
@@ -1526,6 +1534,7 @@
                     <template v-else-if="!evidenceReport">结论证据体检数据尚未取到；准确率按区间看才诚实。<br></template>
                     排名按<strong>命中率</strong>（判对 / 已验证，只数没删的）；<strong>加权评分</strong>是另一个数：
                     按 verify_score 加权、并累上物理清理归档（archived_*），软删不进 —— 等级按它定，两者不必相等。
+                    <template v-if="topNote">接口自己的口径：{{ topNote }}</template>
                 </div>
                 <div class="data-table" v-if="topBloggers.length > 0" style="box-shadow: none;">
                     <table>
@@ -1534,9 +1543,9 @@
                                 <th>排名</th>
                                 <th>名称</th>
                                 <th>等级</th>
-                                <th>命中率</th>
-                                <th>加权评分</th>
-                                <th>已验证</th>
+                                <th>命中率（判对 / 已验证）</th>
+                                <th>加权评分（含归档，非命中率）</th>
+                                <th>已验证（存活结论）</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1545,10 +1554,9 @@
                                 <td>{{ b.name }}</td>
                                 <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
                                         }}</span></td>
-                                <td><strong :title="b.hit_rate != null ? '命中率 = 判对 / 已验证结论' : '这一行没有命中率数据，显示的是加权评分（口径不同，别当命中率看）—— 第 19 轮 MINOR-5'"
-                                    >{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%' : (b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%（加权评分）' : '-') }}</strong></td>
-                                <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? Number(b.accuracy_rate).toFixed(1) : '-') }}</td>
-                                <td>{{ b.hit_verified != null ? b.hit_verified : (b.total_predictions || 0) }}</td>
+                                <td><strong>{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%（' + b.hit_correct + '/' + b.hit_verified + '）' : (b.accuracy_rate ? b.accuracy_rate.toFixed(1) + '%（加权评分，非命中率）' : '—') }}</strong></td>
+                                <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? Number(b.accuracy_rate).toFixed(1) : '—') }}</td>
+                                <td>{{ numOrDash(b.hit_verified) }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -1597,7 +1605,7 @@
                         </div>
                     </div>
                 </div>
-                <div v-else class="empty-state">暂无历史建议</div>
+                <div v-else class="empty-state">{{ adviceError || '暂无历史建议' }}</div>
             </div>
         </div>
         <div v-if="showConfig" class="modal-overlay" @click.self="showConfig = false">
@@ -1636,8 +1644,8 @@
                             </div>
                         </div>
                     </div>
-                    <div v-if="aliases.custom && aliases.custom.length === 0" style="text-align: center; color: #999; padding: 15px 0; margin-bottom: 15px;">
-                        暂无自定义别名
+                    <div v-if="aliasError || (aliases.custom && aliases.custom.length === 0)" :style="'text-align: center; color: ' + (aliasError ? '#ff4d4f' : '#999') + '; padding: 15px 0; margin-bottom: 15px;'">
+                        {{ aliasError || '暂无自定义别名' }}
                     </div>
                     <details>
                         <summary style="cursor: pointer; color: #666; font-size: 13px;">查看系统内置别名 ({{ aliases.builtin ? aliases.builtin.length : 0 }})</summary>
@@ -1798,7 +1806,7 @@
                                     </td>
                                 </tr>
                                 <tr v-if="filteredMappings.length === 0">
-                                    <td colspan="6" style="padding: 20px; text-align: center; color: #999;">{{ mappingSearchKeyword ? '未找到匹配的板块映射' : '暂无数据' }}</td>
+                                    <td colspan="6" style="padding: 20px; text-align: center; color: #999;">{{ mappingSearchKeyword ? '未找到匹配的板块映射' : emptyText('mappings') }}</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1855,6 +1863,10 @@
                     <div v-if="mappingVerifyResult" :style="{ marginTop: '8px', padding: '8px 10px', borderRadius: '6px', fontSize: '13px', background: mappingVerifyResult.ok ? '#f6ffed' : '#fff2f0', color: mappingVerifyResult.ok ? '#52c41a' : '#ff4d4f', border: '1px solid ' + (mappingVerifyResult.ok ? '#b7eb8f' : '#ffccc7') }">
                         {{ mappingVerifyResult.message }}
                     </div>
+                </div>
+                <div v-if="configTab === 'llm' && configError" class="empty-state" style="color: #ff4d4f;">
+                    {{ configError }}
+                    <button class="action-btn small" @click="loadConfig">重新加载</button>
                 </div>
                 <div v-if="configTab === 'llm' && configData">
                     <div class="config-item">
@@ -2075,7 +2087,7 @@
             );
         })();
 
-        const { createApp, ref, reactive, onMounted, computed } = Vue;
+        const { createApp, ref, reactive, onMounted, computed, watch } = Vue;
         createApp({
             setup() {
                 // 主题切换
@@ -2339,6 +2351,8 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
                     onStatsChanged: () => fetchStats(),
                     onPredictionsChanged: () => fetchPredictions(),
+                    onPollStalled: (label) => { taskStalled.value = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
+                        + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
                 });
                 const {
                     posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
@@ -2351,6 +2365,8 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, computed, localStorage, alert, confirm,
                     viewpoints, viewpointDetail, showViewpointDetail, analyzing,
                     onStatsChanged: () => fetchStats(),
+                    onPollStalled: (label) => { taskStalled.value = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
+                        + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
@@ -2432,6 +2448,10 @@ const fetchWeChatBatch = async () => {
                             if (fundFilter.value === 'has_prediction' && fundsWithPredictions.value.length === 0 && funds.value.length > 0) {
                                 fundFilter.value = 'all';
                             }
+                        } else {
+                            // 200 + success:false 以前什么都不做 ⇒ 列表停在旧数据或"暂无基金数据"，
+                            // 而接口明明说了失败（第 32 轮 A 的"没有口径的数"同族）。
+                            fundError.value = '基金列表没取到：' + (res.data.message || '接口未给出原因');
                         }
                     } catch (e) {
                         fundError.value = e.code === 'ECONNABORTED'
@@ -2460,6 +2480,10 @@ const fetchWeChatBatch = async () => {
                             d.health_warnings = d.health_warnings || [];
                             cleanupPreview.value = d;
                             cleanupEnabled.value = Boolean(d.cleanup_enabled);
+                        } else {
+                            cleanupPreview.value = null;
+                            cleanupEnabled.value = false;
+                            cleanupPreviewError.value = '预览没取到：' + (res.data.message || '接口未给出原因');
                         }
                     } catch (e) {
                         cleanupEnabled.value = false;
@@ -2480,9 +2504,15 @@ const fetchWeChatBatch = async () => {
                             d.samples = d.samples || {};
                             retentionPreview.value = d;
                             cleanupEnabled.value = Boolean(d.cleanup_enabled);
+                        } else {
+                            // 预览没拿到就不给按"执行清理"：那个按钮是删数据用的（第 32 轮 A 同族）
+                            retentionPreview.value = null;
+                            cleanupEnabled.value = false;
+                            retentionPreviewError.value = '三桶预览没取到：' + (res.data.message || '接口未给出原因');
                         }
                     } catch (e) {
                         retentionPreview.value = null;
+                        cleanupEnabled.value = false;
                         retentionPreviewError.value = '三桶预览加载失败';
                         console.error(e);
                     }
@@ -2556,7 +2586,7 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const deleteBlogger = async (id) => { if (!confirm('确定删除该博主？')) return; try { await axios.delete(`/api/bloggers/${id}`); await fetchBloggers(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
-                const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } } catch (e) { alert('获取详情失败'); } };
+                const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } else { alert('这只基金的详情没取到：' + (res.data.message || '接口未给出原因')); } } catch (e) { alert('获取详情失败'); } };
                 const deleteFund = async (fundCode, fundName) => {
                     if (!confirm(`确定要删除基金 ${fundName}（${fundCode}）吗？\n\n注意：如果有预测关联此基金，删除可能失败。`)) return;
                     try {
@@ -2572,7 +2602,7 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const parseTrendAnalysis = (trendStr) => { try { if (!trendStr) return null; const data = typeof trendStr === 'string' ? JSON.parse(trendStr) : trendStr; return data; } catch (e) { return null; } };
-                const showTopBloggers = async () => { try { const res = await withWakeRetry(() => axios.get('/api/bloggers/top?limit=10')); if (res.data.success) { topBloggers.value = res.data.data; showTopBloggersModal.value = true; } else { alert('TOP 榜没取到：' + (res.data.message || '接口未给出原因')); } } catch (e) { alert('TOP 榜取不到：' + (e.response ? '接口报错 ' + e.response.status : '服务连不上（可能在唤醒），稍后再点一次')); } };
+                const showTopBloggers = async () => { try { const res = await withWakeRetry(() => axios.get('/api/bloggers/top?limit=10')); if (res.data.success) { topBloggers.value = res.data.data; topNote.value = res.data.metric_note || ''; showTopBloggersModal.value = true; } else { alert('TOP 榜没取到：' + (res.data.message || '接口未给出原因')); } } catch (e) { alert('TOP 榜取不到：' + (e.response ? '接口报错 ' + e.response.status : '服务连不上（可能在唤醒），稍后再点一次')); } };
                 let fundUpdatePollTimer = null;
                 let lastFundUpdateFinishedAt = null;
                 const clearFundUpdatePoll = () => {
@@ -2653,14 +2683,18 @@ const fetchWeChatBatch = async () => {
                             advice.value = res.data.data;
                             adviceIsNew.value = res.data.data.is_new;
                             await loadAdviceHistory();
+                        } else {
+                            // 后端证据门拒绝时回的是 200 + success:false；以前没有 else
+                            // ⇒ 老板点"生成投资建议"整屏没反应（第 32 轮 A-M5）。
+                            alert('这次没有生成建议：' + (res.data.message || '接口未给出原因'));
                         }
                     } catch (e) {
                         alert('生成失败: ' + (e.response?.data?.message || e.message));
                     }
                     adviceGenerating.value = false;
                 };
-                const loadAdviceHistory = async () => { try { const res = await axios.get('/api/advice/history'); if (res.data.success) { adviceHistory.value = res.data.data; console.log('历史记录已更新:', adviceHistory.value.length); } } catch (e) { console.error('加载历史失败:', e); } };
-                const loadConfig = async () => { try { const res = await axios.get('/api/config'); if (res.data.success) configData.value = res.data.data; } catch (e) { console.error(e); } };
+                const loadAdviceHistory = async () => { try { const res = await withWakeRetry(() => axios.get('/api/advice/history')); if (res.data.success) { adviceHistory.value = res.data.data; adviceError.value = ''; } else { adviceError.value = '历史建议没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { adviceError.value = '历史建议拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
+                const loadConfig = async () => { configError.value = ''; try { const res = await axios.get('/api/config'); if (res.data.success) { configData.value = res.data.data; } else { configError.value = '配置没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { configError.value = '配置拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); console.error(e); } };
                 const openConfig = async () => { showConfig.value = true; configTab.value = 'llm'; await loadConfig(); await loadTestData(); };
                 const updateConfig = async () => { try { const res = await axios.post('/api/config', configData.value); alert(res.data.message); showConfig.value = false; } catch (e) { alert('保存失败'); } };
                 const pollCleanupTask = async (taskId) => {
@@ -2762,12 +2796,26 @@ const fetchWeChatBatch = async () => {
                 const testResult = ref(null);
                 const testLLM = async () => { llmTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-llm'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } llmTesting.value = false; };
                 const testVolcengineLight = async () => { visionTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-volcengine-light'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } visionTesting.value = false; };
-                const loadTestData = async () => { try { const res = await axios.get('/api/test-data/find'); if (res.data.success) testData.value = res.data.data; } catch (e) { console.error('加载测试数据失败:', e); } };
+                const loadTestData = async () => { testDataError.value = ''; try { const res = await axios.get('/api/test-data/find'); if (res.data.success) { testData.value = res.data.data; } else { testDataError.value = '测试数据没扫到：' + (res.data.message || '接口未给出原因'); } } catch (e) { testDataError.value = '测试数据扫描失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); console.error('加载测试数据失败:', e); } };
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); msg += '\n'; } if (testData.value.predictions && testData.value.predictions.length > 0) { msg += `测试预测 (${testData.value.predictions.length}):\n`; testData.value.predictions.forEach(p => msg += `  - ${p.fund_name || p.fund_code || p.prediction_content}\n`); } alert(msg); };
                 const cleanupTestData = async () => { if (!confirm('确定要清理所有测试数据吗？\n\n这将删除所有包含"测试"、"test"等关键词的数据，且不可恢复！')) return; analyzing.value = true; try { const res = await axios.post('/api/test-data/cleanup', null, { headers: { 'X-Danger-Confirm': 'cleanup-test-data' } }); if (res.data.success) { alert(res.data.message); testData.value = null; await fetchStats(); await fetchBloggers(); } else { alert('清理失败：' + res.data.message); } } catch (e) { alert('清理失败: ' + e.message); } analyzing.value = false; };
                 const viewErrors = reactive({ posts: '', predictions: '', viewpoints: '', mappings: '' });
                 // 一条规矩覆盖所有列表页：**没取到 ≠ 库里没有**。
                 // 分支顺序就是优先级（唤醒中 → 失败 → 真的空），改了顺序就会在等待期报出假事实。
+                const numOrDash = (v) => (v === undefined || v === null) ? '—' : v;
+                const taskStalled = ref('');
+                const adviceError = ref('');
+                const aliasError = ref('');
+                const configError = ref('');
+                const topNote = ref('');
+                const testDataError = ref('');
+                // 失败态由"各自取数成功"来清：`run()` 只在 `loadView` 里清一次，
+                // 而翻页/筛选直连 `fetchPosts`/`fetchPredictions` ⇒ 失败一次之后再成功，
+                // 页面对"其实成功的空集"仍报"拉取失败"（第 32 轮 B-MINOR-1）。
+                // 这里在 setup 里注册一次即可，不要放进 `loadView`（那会每次切视图叠一个 watcher）。
+                watch(() => postMeta.value?.total, () => { viewErrors.posts = ''; });
+                watch(() => predictionMeta.value?.total, () => { viewErrors.predictions = ''; });
+                watch(() => (viewpoints.value || []).length, () => { viewErrors.viewpoints = ''; });
                 const emptyText = (v) => serviceWaking.value
                     ? '正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）…'
                     : (viewErrors[v] ? viewErrors[v] : '暂无数据');
@@ -2792,7 +2840,7 @@ const fetchWeChatBatch = async () => {
                 const configTab = ref('llm');
                 const aliases = ref({ builtin: [], custom: [], standard_sectors: [] });
                 const newAlias = ref({ alias_name: '', sector_name: '' });
-                const loadAliases = async () => { try { const res = await axios.get('/api/config/aliases'); if (res.data.success) aliases.value = res.data.data; } catch (e) { console.error('加载别名失败:', e); } };
+                const loadAliases = async () => { try { const res = await withWakeRetry(() => axios.get('/api/config/aliases')); if (res.data.success) { aliases.value = res.data.data; aliasError.value = ''; } else { aliasError.value = '别名没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { aliasError.value = '别名拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
                 const addAlias = async () => { const a = newAlias.value; if (!a.alias_name || !a.sector_name) { alert('请填写别名和目标板块'); return; } try { const res = await axios.post('/api/config/aliases', a); if (res.data.success) { alert(res.data.message); newAlias.value = { alias_name: '', sector_name: '' }; await loadAliases(); } else { alert(res.data.message); } } catch (e) { alert('添加失败: ' + (e.response?.data?.detail || e.message)); } };
                 const deleteAlias = async (id, name) => { if (!confirm(`确定删除别名"${name}"？`)) return; try { const res = await axios.delete(`/api/config/aliases/${id}`); if (res.data.success) { alert(res.data.message); await loadAliases(); } else { alert(res.data.message); } } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
                 // ===== 板块匹配管理 =====
@@ -2834,7 +2882,7 @@ const fetchWeChatBatch = async () => {
                         (m.identity_official_name || '').toLowerCase().includes(keyword)
                     );
                 });
-                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await withWakeRetry(() => axios.get(url)); if (res.data.success) { sectorMappings.value = res.data.data; viewErrors.mappings = ''; } } catch (e) { viewErrors.mappings = '板块映射拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
+                const loadSectorMappings = async (reviewed = null) => { mappingFilter.value = reviewed; try { const url = reviewed !== null && reviewed !== undefined ? `/api/config/sector-mappings?reviewed=${reviewed}` : '/api/config/sector-mappings'; const res = await withWakeRetry(() => axios.get(url)); if (res.data.success) { sectorMappings.value = res.data.data; viewErrors.mappings = ''; } else { viewErrors.mappings = '板块映射没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { viewErrors.mappings = '板块映射拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
                 const aiMatchMapping = async (m) => {
                     if (aiMatchBusy.value) return;
                     aiMatchBusy.value = m.sector_name;
@@ -3114,7 +3162,8 @@ const fetchWeChatBatch = async () => {
                 return {
                     theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
                     serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,
-                    bloggersError, statsError, statVal, viewErrors, emptyText,
+                    bloggersError, statsError, statVal, numOrDash, viewErrors, emptyText,
+                    taskStalled, adviceError, aliasError, configError, testDataError, topNote,
                     fetchStats, spanText, fetchEvidence,
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,

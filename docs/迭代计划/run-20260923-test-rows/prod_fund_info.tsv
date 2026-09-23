@@ -1,0 +1,2 @@
+id	fund_code	fund_name	fund_type	sector_type	latest_nav	nav_date	day_growth	week_growth	month_growth	estimated_nav	estimated_nav_time	actual_nav	actual_nav_time	nav_source	fund_scale	establish_date	manager_name	fee_rate	sharpe_ratio	max_drawdown	since_inception_return	data_quality	data_quality_note	last_analyze_date	support_level	resistance_level	ma5	ma10	ma20	vs_sector	vs_market	performance_type	active_predictions	can_delete	is_core_fund	updated_at
+302	159877	占位基金												eastmoney								normal											0	True	False	2026-09-23 10:39:44.830751

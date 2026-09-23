@@ -13,6 +13,18 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# 前端变异体检正在改写 web/ 时，这一轮 pytest 读到的源码不是老板那份 —— 拦掉。
+# 体检自己起的子 pytest（带 MUTATION_HARNESS_PID）放行，见 src/utils/mutation_lock.py。
+# **这里不许在模块顶层 import src.***：`src/__init__.py` 会拉起 `src.core.config`，
+# 那早于下面第 49 行钉 `DATABASE_URL` ⇒ `src.models.database.engine` 绑的就是 `.env` 里的生产库。
+# 这个坑是我自己踩出来的（第 33 轮）：一条单测因此把 `INSERT INTO fund_info` 发到了 Supabase。
+def pytest_configure(config):
+    from src.utils import mutation_lock
+    if mutation_lock.current_session_pid() is None and mutation_lock.is_being_mutated(project_root):
+        pytest.exit('前端变异体检正在改写 web/，此时跑 pytest 得到的红绿都不作数；'
+                    '请等它跑完（锁：%s）。' % mutation_lock.lock_path(project_root),
+                    returncode=2)
+
 
 class BlockedRealHttp(BaseException):
     """单测里偷打真实接口的信号。**故意不派生自 Exception**。
@@ -38,6 +50,11 @@ for _stale in (str(_test_db_path), str(_test_db_path) + '-wal', str(_test_db_pat
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db_path.as_posix()}"
 os.environ.pop("ALEMBIC_DATABASE_URL", None)
 os.environ.setdefault("LLM_API_KEY", "test-key")
+# 上面那行必须**先于任何 `src.*` 导入**执行；这条断言把顺序钉住（第 33 轮我自己破坏了它，
+# 于是 `test_audit_fund_info_identity` 的四条夹具把 INSERT 发到了生产 Supabase）。
+assert 'src' not in sys.modules and 'src.models.database' not in sys.modules, (
+    'conftest 在钉 DATABASE_URL 之前就导入了 `src` 包 ⇒ 应用 engine 绑的是 `.env` 里的库'
+    '（本机就是生产 Supabase）。任何顶层 import 都要挪到这条断言之后。')
 
 from src.models.database import Base
 
