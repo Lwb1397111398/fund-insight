@@ -18,12 +18,20 @@ if project_root not in sys.path:
 # **这里不许在模块顶层 import src.***：`src/__init__.py` 会拉起 `src.core.config`，
 # 那早于下面第 49 行钉 `DATABASE_URL` ⇒ `src.models.database.engine` 绑的就是 `.env` 里的生产库。
 # 这个坑是我自己踩出来的（第 33 轮）：一条单测因此把 `INSERT INTO fund_info` 发到了 Supabase。
+_SESSION_LOCK = None
+
+
 def pytest_configure(config):
     from src.utils import mutation_lock
     if mutation_lock.current_session_pid() is None and mutation_lock.is_being_mutated(project_root):
         pytest.exit('前端变异体检正在改写 web/，此时跑 pytest 得到的红绿都不作数；'
                     '请等它跑完（锁：%s）。' % mutation_lock.lock_path(project_root),
                     returncode=2)
+    # 反向也要拦住（第 33 轮 A-MAJOR-3 / B-MINOR-11：只有上面那一半时，"先起 pytest 再起体检"
+    # 依旧能让体检就地改写 web/）。拿不到不算错 —— 只要有一个会话握着，体检就会被挡住。
+    global _SESSION_LOCK
+    if mutation_lock.current_session_pid() is None:
+        _SESSION_LOCK = mutation_lock.acquire_session_lock(project_root)
 
 
 class BlockedRealHttp(BaseException):
@@ -57,6 +65,15 @@ assert 'src' not in sys.modules and 'src.models.database' not in sys.modules, (
     '（本机就是生产 Supabase）。任何顶层 import 都要挪到这条断言之后。')
 
 from src.models.database import Base
+from src.models.database import engine as _app_engine
+
+# 光有上面那条"没提前导入"的断言不够：真正致命的是**后面 `init_db()` 会发 DDL**。
+# 所以在碰任何表之前，先看一眼应用 engine 到底连的是哪个库（第 33 轮 A/B 两份复评同点：
+# `test_database_url_routing.py` 是事后探测，那时夹具已经写进去了）。
+# 只打印 drivername：连接串里有口令，绝不该出现在报错里。
+assert str(_app_engine.url).startswith('sqlite'), (
+    '应用 engine 连的不是临时 SQLite（driver=%s）⇒ 本轮所有测试会往那个库写。'
+    '十有八九是 `DATABASE_URL` 被 .env/插件在钉库之后又改回去了。' % _app_engine.url.drivername)
 
 
 @pytest.fixture(scope="session", autouse=True)

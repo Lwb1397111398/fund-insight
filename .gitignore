@@ -91,3 +91,6 @@ docs/迭代计划/run-*/*probe*.csv
 
 # 前端变异体检的互斥锁（操作系统级，进程退出自动放开；跑完不留在 git 里）
 .mutation-harness.lock
+
+# pytest 会话锁（体检反向互斥用；操作系统级，进程退出自动放开）
+.pytest-session.lock

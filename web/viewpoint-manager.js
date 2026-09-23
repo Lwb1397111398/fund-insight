@@ -63,9 +63,24 @@
             viewpoints.value = response.data.data || [];
             Object.assign(viewpointMeta, response.data.meta || {});
         };
+        const insightsLoaded = ref(false);
+        const insightsError = ref('');
         const fetchInsights = async () => {
-            const response = await axios.get('/api/viewpoints/insights');
-            viewpointInsights.value = response.data.data || viewpointInsights.value;
+            // 这个端点单独失败时，四张卡以前全渲染 0（表体却有数据 ⇒ "0 条观点看多"是编的）
+            try {
+                const response = await axios.get('/api/viewpoints/insights');
+                if (response.data.success) {
+                    viewpointInsights.value = response.data.data || viewpointInsights.value;
+                    insightsLoaded.value = true;
+                    insightsError.value = '';
+                } else {
+                    insightsError.value = '观点洞察没取到：' + (response.data.message || '接口未给出原因');
+                }
+            } catch (error) {
+                insightsError.value = '观点洞察拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
+                    ? '服务连不上（可能在唤醒）' : '接口报错');
+                throw error;
+            }
         };
         const fetchLatestTask = async () => {
             const response = await axios.get('/api/viewpoints/tasks/latest');
@@ -100,6 +115,7 @@
             if (pollTimer) window.clearTimeout(pollTimer);
             try {
                 const latest = await fetchLatestTask();
+                if (latest && options.onPollRecovered) options.onPollRecovered();
                 if (!latest || latest.task_id !== taskId || ['succeeded', 'failed', 'cancelled'].includes(latest.status)) {
                     clearPoll();
                     analyzing.value = false;
@@ -242,7 +258,7 @@
         }[status] || status || '暂无任务');
 
         return {
-            viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
+            viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, viewpointTask,
             viewpointDetail, showViewpointDetail, sourceMenuOpen, selectedSources, sourceOptions,
             fetchSourceOptions,
             taskRunning, summarizing, summaryStats, showSummaryConfirmModal,

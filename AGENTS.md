@@ -195,12 +195,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 11:02（北京），第 32 轮返修 + 第 33 轮（生产误写事故与修复）之后，
-最后一次改用例后立刻重跑）：
+最近一次核对（2026-09-23 12:36（北京），第 33 轮返修（复评 62/74 驱动）之后，
+最后一次改用例后立刻重跑；**这一批起在默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑** ——
+上一批我是在 UTF-8 环境里报的 898/907，换到默认 locale 就红一条，见下面子进程那条）：
 
-- `pytest tests/unit -q` → **898 passed / 16 skipped / 0 failed**（119 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **907 passed / 16 skipped / 0 failed**（119 秒）。
+- `pytest tests/unit -q` → **912 passed / 16 skipped / 0 failed**（229 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **921 passed / 16 skipped / 0 failed**（186 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
+  （上一基线 885/894（红过一次：897/**1 failed**/16）→ 本批 912/921：+14 条 =
+  清理脚本离线往返 6、`/api/bloggers/top` 路由形状 3、互斥闸反向 2、失败态铺满 3。
+  判据数：前端 26 条 / 变异 66 处（`--list` 末行为准，别抄这里）。）
   （上一基线 885/894 → 本批 898/907：+13 条 = 前端失败态 7 条（`test_frontend_cold_start.py` 16→23）、
   变异体检互斥闸 5 条（`test_mutation_lock.py` 新文件）、"只面向生产的白名单不是后门" 1 条。
   **这批中途出过一次真事故**：`tests/conftest.py` 顶层的一条 import 排在钉库之后写反了位置，
@@ -383,9 +387,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   实测镜像 1110 条已判结论里 **430 条（38.7%）**属于这一类，它们既不会被打 ⚠ 也不会触发改标；
   审计脚本每次把这个数打出来，别把门说成覆盖了全部。
 - **页面改动必须用真实浏览器看过才能说"好了"**（第 29 轮立规矩，起因是连续几轮把"接口有字段"
-  当成"老板看得见"）。本地起服务的固定姿势：
-  `DATABASE_URL="sqlite:///data/fund_insight.db" ACCESS_PASSWORD=<一次性口令> python -m uvicorn src.api.main:app --port 8098`
-  —— **显式设 `DATABASE_URL` 指向镜像**（`.env` 里它是生产），跑完按端口找 PID 关掉。
+  当成"老板看得见"）。本地起服务的固定姿势：**`python scripts/serve_mirror.py --port 8098`**
+  —— 它先 `pin_local_sqlite(use_mirror_default=True)` 再起 uvicorn、只绑 127.0.0.1、
+  没给 `ACCESS_PASSWORD` 就现造一把一次性口令并打印（`.env` 里那个 `DATABASE_URL` 指向生产，
+  手动 `python -m src` / uvicorn 就是往线上打）；跑完按端口找 PID 关掉（`netstat -ano -p tcp` + `taskkill`）。
+  **改了 `web/*-manager.js` 之后要换一个全新端口再核验**（第 33 轮实测：同端口刷新会拿到旧 JS，
+  而 `index.html` 是新的 ⇒ 新解构出来的名字是 `undefined`，页面**静默**少一块数、不报错）。
+  静态子资源没有版本戳这件事记在任务 #43。
   五条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
   predictions+verify-all+status 四笔，**进视图才打的**（funds、sector-mappings、posts/predictions/
   viewpoints 的列表）也要过 `withWakeRetry()` —— 子模块靠 `createPredictionManager({ withWakeRetry })`
@@ -404,7 +412,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   第 32~33 轮把同一条规矩铺到剩下的角落：分页条（`viewErrors.posts/predictions`）、
   观点洞察四张卡（`numOrDash`）、基金页三个筛选按钮的括号数（失败/加载中报 `—`，并注明那是
   **本页**不是全库）、映射表体、历史建议（`adviceError`）、板块别名 tab（`aliasError`）、
-  配置弹窗两个 tab（`configError` / `testDataError`）、TOP 弹窗（口径进表头文字、"已验证"不许换分母）；
+  配置弹窗两个 tab（`configError` / `testDataError`）、TOP 弹窗（口径进表头文字、"已验证"不许换分母）、
+  洞察卡第四张（`insightsLoaded`，初值 `pending_summary: []` 恒真 ⇒ 没取到也报 0）、
+  预览失败时要说清"执行清理为什么被按住"；
+  **列表页的失败态由取数点自己报**（manager 里 `options.onFetchFailure(key, msg)`，成功报空串），
+  第 32 轮那三条 `watch(() => postMeta.value?.total)` 是死的 —— `postMeta` 是 `reactive()`，`postMeta.value` 恒 undefined；
   ④ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
   对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）；
   ⑤ **模板读的每个标识符都必须出现在 `setup()` 的 return 名单里** —— 少一个就静默失效：
@@ -420,12 +432,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`。
   **处数别抄文档**：跑 `python scripts/mutation_proof_frontend.py --list`，末行打印"共 N 处变异，覆盖 M 条判据"
   （第 32 轮 B 抓到 docstring 里那句"28 处"早就过时 ⇒ 会过时的数不留文字版）。
-  体检跑完逐文件回读比对还原、校验变异真的落了盘；开头多一条 **CONTROL** 对照跑：
-  干净代码上判据必须先全绿，否则"每条变异都红"可能只是子 pytest 起手就失败（假满分）。
-  **体检与 pytest 现在互斥**（第 32 轮 B：没有闸拦着的承诺等于没有承诺）：体检抢
-  `src/utils/mutation_lock.py` 的 OS 级文件锁，抢不到就拒绝启动；`tests/conftest.py::pytest_configure`
-  看到锁被持有就 `pytest.exit`。锁由操作系统管，进程被强杀也会自己放开。
-  用例：`tests/unit/test_mutation_lock.py`（5 条，其中两条真起子进程验两端）。
+  体检跑完逐文件回读比对还原、校验变异真的落了盘；开头多一条 **CONTROL** 对照跑（**整份判据文件**在干净代码上必须先全绿），
+  且每一处的判定只认"断言失败"那种红 —— 退码 2/4（用法错、收集错、conftest 起手就炸）记成 `HARNESS-FAIL`，
+  不再混进满分（第 33 轮 A-MAJOR-4：否则子进程一坏，体检反而满分通过）。
+  **体检与 pytest 现在双向互斥**（第 32 轮 B：没有闸拦着的承诺等于没有承诺；第 33 轮 A-MAJOR-3 抓到只做了一半）：
+  两把操作系统级文件锁各管一个方向 —— 体检抢 `.mutation-harness.lock`（抢不到就不启动），
+  `tests/conftest.py::pytest_configure` 看到它被持有就 `pytest.exit`；反过来 pytest 会话握
+  `.pytest-session.lock`，体检启动前先问 `mutation_lock.harness_may_start()`。
+  锁由操作系统管，进程被强杀也会自己放开；两个锁文件都在 `.gitignore` 里。
+  用例：`tests/unit/test_mutation_lock.py`（7 条：两条真起子进程验两端、一条验两头都真的接了线）。
   第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
   两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。

@@ -385,8 +385,9 @@
                         <div><span>近期观点</span><strong>{{ numOrDash(viewpointInsights.direction_total) }}</strong></div>
                         <div><span>看多</span><strong class="metric-up">{{ numOrDash(viewpointInsights.directions?.bullish) }}</strong></div>
                         <div><span>看空</span><strong class="metric-down">{{ numOrDash(viewpointInsights.directions?.bearish) }}</strong></div>
-                        <div><span>待汇总</span><strong>{{ viewpointInsights.pending_summary ? numOrDash(viewpointInsights.pending_summary.reduce((sum, item) => sum + item.count, 0)) : '—' }}</strong></div>
+                        <div><span>待汇总</span><strong>{{ insightsLoaded && viewpointInsights.pending_summary ? numOrDash(viewpointInsights.pending_summary.reduce((sum, item) => sum + item.count, 0)) : '—' }}</strong></div>
                     </div>
+                    <div v-if="insightsError" class="text-xs" style="color: #ff4d4f; margin-top: 6px;">{{ insightsError }} —— 上面四张卡的数是"没取到"，不是"零条"。</div>
 
                     <div v-if="viewpointTask" class="viewpoint-task-band" :class="'task-' + viewpointTask.status">
                         <div>
@@ -498,7 +499,7 @@
                         <button :class="['filter-tab', { active: fundFilter === 'no_prediction' }]" @click="fundFilter = 'no_prediction'">无预测 ({{ fundError || fundLoading ? '—' : fundsWithoutPredictions.length }})</button>
                         <button :class="['filter-tab', { active: fundFilter === 'all' }]" @click="fundFilter = 'all'">全部 ({{ fundError || fundLoading ? '—' : funds.length }})</button>
                     </div>
-                    <div class="text-xs" style="color: #8c8c8c; margin-top: 4px;">括号里是<b>本页</b>（每页 {{ fundMeta.page_size }} 只）的行数，不是全库；全库见下方"共 N 只"</div>
+                    <div v-if="!fundError" class="text-xs" style="color: #8c8c8c; margin-top: 4px;">括号里是<b>本页</b>（每页 {{ fundMeta.page_size }} 只）的行数，不是全库；全库见下方"共 N 只"</div>
                     <div v-if="fundLoading" class="empty-state">基金数据加载中...</div>
                     <div v-else-if="fundError" class="empty-state">
                         {{ fundError }}
@@ -552,6 +553,7 @@
                         <span v-if="!cleanupEnabled && !retentionPreviewError" class="text-xs text-danger">清理开关已关闭（ENABLE_DATA_CLEANUP=false）。需要清理时改为 true 或删除该配置后重启</span>
                         <button v-if="retentionPreviewError" class="action-btn small" @click="fetchRetentionPreview">保留分析加载失败，点击重试</button>
                         <button v-if="cleanupPreviewError" class="action-btn small" @click="fetchCleanupPreview">清理清单加载失败，点击重试</button>
+                        <span v-if="retentionPreviewError || cleanupPreviewError" class="text-xs text-danger">预览没取到时，"执行清理 / 回收空间"会被按住 —— 删数据不能凭上一轮的预览数（第 33 轮 A-MINOR-8）。</span>
                         <button v-if="testData && testData.cleanup_enabled" class="action-btn danger small" @click="cleanupTestData" :disabled="analyzing"><i class="ri-delete-bin-line"></i> {{ analyzing ? '清理中...' : '一键清理测试数据' }}</button>
                     </div>
 
@@ -2353,6 +2355,9 @@ const fetchWeChatBatch = async () => {
                     onPredictionsChanged: () => fetchPredictions(),
                     onPollStalled: (label) => { taskStalled.value = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
                         + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
+                    onPollRecovered: () => { taskStalled.value = ''; },
+                    onFetchFailure: (key, msg) => { viewErrors[key] = msg; },
+                    isServiceDown,
                 });
                 const {
                     posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
@@ -2367,6 +2372,7 @@ const fetchWeChatBatch = async () => {
                     onStatsChanged: () => fetchStats(),
                     onPollStalled: (label) => { taskStalled.value = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
                         + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
+                    onPollRecovered: () => { taskStalled.value = ''; },
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
@@ -2374,6 +2380,7 @@ const fetchWeChatBatch = async () => {
                     summarizing, summaryStats, showSummaryConfirmModal,
                     fetchViewpoints, loadViewpoints, applyViewpointFilters, resetViewpointFilters,
                     viewpointPrevPage, viewpointNextPage, fetchLatestViewpoints, retryViewpointTask,
+                    insightsLoaded, insightsError,
                     viewViewpointDetail, deleteViewpoint, restoreViewpointTask, sourceLabel,
                     directionLabel, taskStatusLabel,
                     batchAnalyzeViewpoints, fetchSummaryStats, showSummaryModal, executeSummary,
@@ -2385,6 +2392,8 @@ const fetchWeChatBatch = async () => {
                     // 唤醒重试要交给子模块用：`restorePredictionVerifyTask()` 也是首屏取数
                     // （onMounted 里就调），漏了它 = 第 6 个取数点在冷启动时静默失败
                     withWakeRetry,
+                    onFetchFailure: (key, msg) => { viewErrors[key] = msg; },
+                    isServiceDown,
                 });
                 const {
                     predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
@@ -2813,8 +2822,9 @@ const fetchWeChatBatch = async () => {
                 // 而翻页/筛选直连 `fetchPosts`/`fetchPredictions` ⇒ 失败一次之后再成功，
                 // 页面对"其实成功的空集"仍报"拉取失败"（第 32 轮 B-MINOR-1）。
                 // 这里在 setup 里注册一次即可，不要放进 `loadView`（那会每次切视图叠一个 watcher）。
-                watch(() => postMeta.value?.total, () => { viewErrors.posts = ''; });
-                watch(() => predictionMeta.value?.total, () => { viewErrors.predictions = ''; });
+                // 曾经这里写的是 `watch(() => postMeta.value?.total, ...)` —— `postMeta` 是
+                // `reactive()` 出来的，`postMeta.value` 恒为 undefined ⇒ 这条 watch 永不触发（第 33 轮 A-MAJOR-2）。
+                // 现在失败态由各取数点自己报、自己清（`onFetchFailure`），不靠 watcher 猜。
                 watch(() => (viewpoints.value || []).length, () => { viewErrors.viewpoints = ''; });
                 const emptyText = (v) => serviceWaking.value
                     ? '正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）…'
@@ -2822,10 +2832,13 @@ const fetchWeChatBatch = async () => {
                 const loadView = async (view) => {
                     currentView.value = view;
                     const run = async (key, label, fn) => {
-                        try { await fn(); viewErrors[key] = ''; }
+                        try { await fn(); }
                         catch (e) {
-                            viewErrors[key] = label + '拉取失败：'
-                                + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错') + '，稍后再点一次';
+                            // 取数点自己报过的话不许被这里盖掉；没报过才补一句（第 33 轮 A-MAJOR-2）
+                            if (!viewErrors[key]) {
+                                viewErrors[key] = label + '拉取失败：'
+                                    + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错') + '，稍后再点一次';
+                            }
                         }
                     };
                     if (view === 'bloggers') await fetchBloggers();
@@ -3169,7 +3182,7 @@ const fetchWeChatBatch = async () => {
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
                     verifyTask, showPredictionMaintenance, maintenancePreview,
-                    viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
+                    viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, viewpointTask,
                     sourceMenuOpen, selectedSources, sourceOptions, fetchSourceOptions, taskRunning,
                     funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds,
                     fundLoading, fundError, fundPage, fundMeta, fetchFunds, fundPrevPage, fundNextPage,

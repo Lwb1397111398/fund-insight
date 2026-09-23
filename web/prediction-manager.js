@@ -54,10 +54,21 @@
                 lifecycle: predictionFilters.lifecycle || undefined,
                 sort: predictionFilters.sort || undefined,
             };
-            const response = await axios.get('/api/predictions', { params });
-            if (response.data.success) {
-                predictions.value = response.data.data || [];
-                Object.assign(predictionMeta, response.data.meta || {});
+            // 同 `post-manager.js`：翻页直连，三种形状都要有话说（第 33 轮 A-MAJOR-2）
+            const report = (msg) => { if (options.onFetchFailure) options.onFetchFailure('predictions', msg); };
+            try {
+                const response = await axios.get('/api/predictions', { params });
+                if (response.data.success) {
+                    predictions.value = response.data.data || [];
+                    Object.assign(predictionMeta, response.data.meta || {});
+                    report('');
+                } else {
+                    report('预测列表没取到：' + (response.data.message || '接口未给出原因'));
+                }
+            } catch (error) {
+                report('预测列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
+                    ? '服务连不上（可能在唤醒）' : '接口报错'));
+                throw error;
             }
         };
 

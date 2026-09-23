@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 LOCK_NAME = '.mutation-harness.lock'
+SESSION_NAME = '.pytest-session.lock'
 # 体检自己起的子 pytest 会继承这个变量（父进程 PID），据此放行它自己。
 ENV_PID = 'MUTATION_HARNESS_PID'
 
@@ -84,6 +85,43 @@ def is_being_mutated(root):
         return not got
     finally:
         fh.close()
+
+
+def session_lock_path(root):
+    return Path(root) / SESSION_NAME
+
+
+def acquire_session_lock(root):
+    """pytest 会话开跑时占住这把锁（**握到进程结束**，别在函数里 close）。
+
+    有了这一把，"先起 pytest、后起体检"那一侧也会被拦 —— 第 33 轮两份复评同点：
+    只有"体检持锁 → pytest 让路"是单向的，并发窗口仍然敞开。
+    体检自己起的子 pytest 不该抢这把锁（会把父体检自己挡住），所以那边带 ENV_PID 时不调用。
+    """
+    fh = open(session_lock_path(root), 'a+')
+    if _try_lock(fh):
+        return fh
+    fh.close()
+    return None
+
+
+def session_lock_is_held(root):
+    path = session_lock_path(root)
+    if not path.exists():
+        return False
+    fh = open(path, 'a+')
+    try:
+        got = _try_lock(fh)
+        if got:
+            _unlock(fh)
+        return not got
+    finally:
+        fh.close()
+
+
+def harness_may_start(root):
+    """体检启动前的反向核对：有 pytest 会话正在跑就不许开始改写 `web/`。"""
+    return not session_lock_is_held(root)
 
 
 def current_session_pid():

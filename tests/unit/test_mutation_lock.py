@@ -52,6 +52,10 @@ def test_a_stray_pytest_session_is_blocked_while_the_harness_holds_the_lock():
     guard.__enter__()
     try:
         env = {k: v for k, v in os.environ.items() if k != mutation_lock.ENV_PID}
+        # 子 pytest 的中文报错必须按 UTF-8 出：中文用户名的机器默认 cp936，父进程按 utf-8
+        # 解码就拿到替换字符 ⇒ 下面那条"报错里要说清原因"永不成立（第 33 轮两份复评同抓，
+        # 我在自己的 UTF-8 环境里跑是绿的 —— 仓里 `test_database_url_routing.py` 早写过这条）。
+        env['PYTHONIOENCODING'] = 'utf-8'
         r = subprocess.run([sys.executable, '-m', 'pytest',
                             'tests/unit/test_mutation_lock.py::test_both_sides_are_actually_wired',
                             '-q', '--no-header', '-p', 'no:cacheprovider'],
@@ -63,12 +67,39 @@ def test_a_stray_pytest_session_is_blocked_while_the_harness_holds_the_lock():
         guard.__exit__(None, None, None)
 
 
+def test_both_directions_are_blocked(tmp_path):
+    """互斥必须是双向的（第 33 轮 A-MAJOR-3 / B-MINOR-11）。
+
+    只有"体检持锁 → pytest 让路"那一半时，先起 pytest 再起体检照样能让体检改写 `web/`。
+    现在 pytest 会话自己握一把 `.pytest-session.lock`，体检启动前先问它。
+    """
+    holder = mutation_lock.acquire_session_lock(tmp_path)
+    assert holder is not None, '第一把会话锁就该拿不到 ⇒ 锁根本没互斥'
+    assert mutation_lock.session_lock_is_held(tmp_path) is True
+    assert mutation_lock.harness_may_start(tmp_path) is False, '体检仍可在 pytest 跑着时启动'
+    second = mutation_lock.acquire_session_lock(tmp_path)
+    assert second is None, '两个 pytest 会话应该能并存（只是体检会被其中一个挡住）'
+    holder.close()
+    assert mutation_lock.session_lock_is_held(tmp_path) is False
+    assert mutation_lock.harness_may_start(tmp_path) is True
+
+
+def test_the_harness_checks_the_session_lock_before_starting():
+    """闸要在**体检那一侧**真的被调用，不是只写着一个函数。"""
+    harness = (PROJECT_ROOT / 'scripts' / 'mutation_proof_frontend.py').read_text(encoding='utf-8')
+    assert 'harness_may_start(' in harness, '体检启动时没问"有没有 pytest 在跑"'
+    assert 'return [\'pytest-session-holds-the-lock\']' in harness, '问到了却没拦住'
+    conftest = (PROJECT_ROOT / 'tests' / 'conftest.py').read_text(encoding='utf-8')
+    assert 'acquire_session_lock(' in conftest, 'pytest 会话没握锁 ⇒ 反向拦截是空的'
+
+
 def test_the_harness_own_child_is_let_through():
     """体检自己起的子 pytest 必须放行，否则它每次跑批都会把自己拦死。"""
     guard = mutation_lock.held_exclusively(PROJECT_ROOT)
     guard.__enter__()
     env = dict(os.environ)
     env[mutation_lock.ENV_PID] = str(os.getpid())
+    env['PYTHONIOENCODING'] = 'utf-8'   # 同上：断言里要比中文字串
     try:
         r = subprocess.run([sys.executable, '-m', 'pytest',
                             'tests/unit/test_mutation_lock.py::test_both_sides_are_actually_wired',

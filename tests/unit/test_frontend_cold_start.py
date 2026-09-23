@@ -673,17 +673,81 @@ def test_polling_gives_up_loudly_instead_of_locking_the_ui():
     assert 'onPollStalled' in vm, '观点轮询耗尽后没有回调'
 
 
-def test_failure_state_is_cleared_by_the_fetch_that_succeeded():
-    """失败态要由"取数成功"自己清（第 32 轮 B-MINOR-1）。
+def _run_manager_js(fname, factory, fetch_name, list_key):
+    """把 `web/<fname>` 那份**真实源码**在 node 里跑一遍 `fetch_name`，看三种形状各报了什么。
 
-    上一版只有 `loadView` 里的 `run()` 清一次，而翻页/筛选直连 `fetchPosts` ⇒
-    失败一次之后再成功，页面对"其实成功的空集"仍报"拉取失败"。
+    第 33 轮 A-MAJOR-2 的教训：上一批我用文本判据声称"失败态由取数成功自己清"，
+    而它挂在一条永远不触发的 `watch` 上 —— 文本判据看不见这种事，所以这里执行源码。
     """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
+    script = """
+const store = {};
+const localStorage = { getItem: (k) => (k in store ? store[k] : null),
+                       setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+const ref = (v) => ({ value: v });
+const reactive = (o) => o;
+const computed = (f) => ({ value: null });
+const window = { addEventListener: () => {}, removeEventListener: () => {}, setTimeout: () => 0,
+                 clearTimeout: () => {}, location: { href: '', search: '' } };
+const document = { addEventListener: () => {}, visibilityState: 'visible',
+                   querySelector: () => null, createElement: () => ({ style: {} }) };
+let impl = null;
+const axios = { defaults: { headers: { common: {} } },
+                get: async (u, c) => impl(u, c), post: async (u, b) => impl(u, b),
+                delete: async (u) => impl(u, null) };
+const seen = [];
+const isServiceDown = (e) => !!e && !e.response;
+%(src)s
+const opts = { axios, ref, reactive, computed, localStorage, alert: () => {}, confirm: () => true,
+               analyzing: ref(false), onFetchFailure: (k, m) => seen.push([k, m]), isServiceDown,
+               viewpoints: ref([]), viewpointDetail: ref(null), showViewpointDetail: ref(false),
+               predictions: ref([]), predictionDetail: ref(null), showPredictionDetail: ref(false),
+               showEditPrediction: ref(false), editingPrediction: reactive({}) };
+(async () => {
+    const m = %(factory)s(opts);
+    const fetch = m['%(fetch_name)s'];
+    impl = () => ({ data: { success: true, data: [], meta: { total: 5 } } });
+    await fetch();
+    impl = () => ({ data: { success: false, message: '清理开关没开' } });
+    await fetch();
+    impl = () => { throw { message: 'Network Error' }; };
+    try { await fetch(); } catch (e) { /* 往上抛是 loadView 的事，这里只看报没报 */ }
+    impl = () => ({ data: { success: true, data: [{ id: 1 }], meta: { total: 5 } } });
+    await fetch();
+    console.log('RESULT' + JSON.stringify({ seen, n: m['%(list_key)s'].value.length }));
+})();
+""" % {'src': src, 'factory': factory, 'fetch_name': fetch_name, 'list_key': list_key}
+    p = subprocess.run([NODE, '-e', script], capture_output=True, text=True,
+                       encoding='utf-8', errors='replace', cwd=str(PROJECT_ROOT))
+    line = [l for l in (p.stdout or '').splitlines() if l.startswith('RESULT')]
+    assert line, 'node 没跑出结果：%s' % ((p.stdout or '') + (p.stderr or ''))[-400:]
+    return json.loads(line[0][len('RESULT'):])
+
+
+def test_failure_state_is_reported_and_cleared_by_the_fetch_itself():
+    """列表页的取数点要自己把"没取到 / 取到了"报给页面，而不是靠一条 watcher 猜。
+
+    上一批写的是 `watch(() => postMeta.value?.total, ...)`：`postMeta` 是 `reactive()` 出来的，
+    `postMeta.value` 恒为 undefined ⇒ 回调永不触发，翻页失败后页面继续报上一页"共 N 条"
+    （第 33 轮 A-MAJOR-2 用 node 实测把它照出来）。现在跑真实源码看三种形状。
+    """
+    for fname, factory, fetch_name, key in (
+            ('post-manager.js', 'window.createPostManager', 'fetchPosts', 'posts'),
+            ('prediction-manager.js', 'window.createPredictionManager', 'fetchPredictions', 'predictions')):
+        out = _run_manager_js(fname, factory, fetch_name, key)
+        seen = [v for _k, v in out['seen']]
+        assert len(seen) == 4, '%s 只报了 %d 次，四种形状各该一次：%s' % (fname, len(seen), out['seen'])
+        assert seen[0] == '', '取到数据时不该留着失败说明：%s' % out['seen']
+        assert '没取到' in seen[1] and '清理开关没开' in seen[1], \
+            '%s 的 200 + success:false 仍然静默：%s' % (fname, seen[1])
+        assert '拉取失败' in seen[2], '%s 抛错时（断网/唤醒失败）没报原因：%s' % (fname, seen[2])
+        assert seen[3] == '', '%s 再取成功却没把失败说明清掉：%s' % (fname, seen[3])
     html = _html()
-    assert 'watch(() => postMeta.value?.total' in html, '帖子失败态没有自清腿'
-    assert 'watch(() => predictionMeta.value?.total' in html, '预测失败态没有自清腿'
-    assert 'const { createApp, ref, reactive, onMounted, computed, watch } = Vue;' in html, \
-        'watch 没从 Vue 解构出来，上面两条腿是死的'
+    assert 'onFetchFailure: (key, msg) => { viewErrors[key] = msg; }' in html, '页面没接这个回调'
+    assert 'if (!viewErrors[key])' in html, 'loadView 的兜底会把取数点自己报的话盖掉'
+
 
 
 def test_the_fund_view_says_so_when_the_api_says_no():
@@ -752,3 +816,41 @@ def test_the_top_blogger_modal_puts_its_calibers_in_text_not_hover():
     assert 'b.hit_correct' in modal and "numOrDash(b.hit_verified)" in modal, \
         '命中率没有分子分母 / "已验证"还能回落到别的分母'
     assert 'topNote' in modal, '接口自己的 metric_note 没渲染'
+
+
+def test_the_insight_cards_cannot_report_zero_before_the_insights_arrive():
+    """四张洞察卡里"待汇总"那张以前是死分支：初值 `pending_summary: []` 恒真 ⇒ 没取到也报 0。
+
+    第 33 轮 B-MAJOR-7 用 node 实测：`/api/viewpoints/insights` 还没回来（或单独失败）时，
+    卡片渲染的是 0，而表体有 71 条观点 —— "0 条待汇总"是一句编的话。
+    现在要 `insightsLoaded` 参与判断，并且洞察单独失败时要在卡下说一句原因。
+    """
+    html = _html()
+    vm = (PROJECT_ROOT / 'web' / 'viewpoint-manager.js').read_text(encoding='utf-8')
+    assert 'const insightsLoaded = ref(false);' in vm, '没有"到底取到没取到"这个事实'
+    body = _body(vm, 'fetchInsights = async () =>', close='\n        };')
+    assert 'insightsLoaded.value = true;' in body, '成功时没登记"已取到"'
+    assert 'else {' in body and '观点洞察没取到' in body, '洞察的 success:false 又没人接'
+    assert 'catch (error)' in body and '观点洞察拉取失败' in body, '洞察单独失败时只剩 console.error'
+    card = [l for l in html.split('\n') if '待汇总' in l][0]
+    assert 'insightsLoaded &&' in card, '那张卡还是把"没取到"当 0 报'
+    assert '上面四张卡的数是"没取到"' in _visible_text(html), '失败原因没写在卡片旁边'
+
+
+def test_a_failed_preview_explains_why_the_clean_up_buttons_are_held():
+    """预览取不到 ⇒ 删除按钮被按住，但页面上要有一句人话解释（第 33 轮 A-MINOR-8）。"""
+    html = _html()
+    i = html.index('v-if="retentionPreviewError" class="action-btn small"')
+    seg = html[i:i + 1400]
+    assert 'retentionPreviewError || cleanupPreviewError' in seg, '只有一个预览失败时会静默按住按钮'
+    assert '不能凭上一轮的预览数' in _visible_text(seg), '按钮为什么按住了，页面上没话说'
+
+
+def test_the_stall_banner_is_taken_down_when_polling_recovers():
+    """`taskStalled` 不能一次停摆就永挂（第 33 轮 A-MINOR-10 / B-MINOR-10）。"""
+    html = _html()
+    assert html.count('onPollRecovered: () => { taskStalled.value = \'\'; },') == 2, \
+        '两个 manager 都要接"恢复了就把话说回去"（现 %d）' % html.count('onPollRecovered')
+    for fname in ('post-manager.js', 'viewpoint-manager.js'):
+        src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
+        assert 'options.onPollRecovered' in src, '%s 轮询成功后不收那句话' % fname

@@ -44,10 +44,22 @@
                 end_date: postFilters.end_date || undefined,
                 quality: postFilters.quality || undefined,
             };
-            const res = await axios.get('/api/posts', { params });
-            if (res.data.success) {
-                posts.value = res.data.data || [];
-                Object.assign(postMeta, res.data.meta || {});
+            // 翻页/筛选是直连这里取数的，不经过 `loadView` 的失败登记 ⇒ 三种形状都得说一句话：
+            // 成功（把旧的失败说明清掉）、200 + success:false、抛错（原来连 catch 都没有）。
+            const report = (msg) => { if (options.onFetchFailure) options.onFetchFailure('posts', msg); };
+            try {
+                const res = await axios.get('/api/posts', { params });
+                if (res.data.success) {
+                    posts.value = res.data.data || [];
+                    Object.assign(postMeta, res.data.meta || {});
+                    report('');
+                } else {
+                    report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));
+                }
+            } catch (error) {
+                report('帖子列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
+                    ? '服务连不上（可能在唤醒）' : '接口报错'));
+                throw error;
             }
         };
 
@@ -79,6 +91,7 @@
             try {
                 const res = await axios.get(`/api/posts/analysis-jobs/${taskId}`);
                 analysisJob.value = res.data.data;
+                if (options.onPollRecovered) options.onPollRecovered();
                 const status = analysisJob.value?.status;
                 const updatedAt = analysisJob.value?.updated_at ? new Date(analysisJob.value.updated_at) : null;
                 const staleRunning = status === 'running' && updatedAt && (Date.now() - updatedAt.getTime() > 15 * 60 * 1000);

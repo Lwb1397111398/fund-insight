@@ -38,6 +38,7 @@ from src.utils import mutation_lock  # noqa: E402
 HTML = 'web/index.html'
 JS = 'web/prediction-manager.js'
 POST = 'web/post-manager.js'
+VP = 'web/viewpoint-manager.js'
 T = 'tests/unit/test_frontend_cold_start.py'
 
 # (判据函数, 变异名, 文件, 找, 换成, 是否正则)
@@ -160,11 +161,15 @@ MUTATIONS = [
      '', False),
     ('test_polling_gives_up_loudly_instead_of_locking_the_ui', 'no_stall_banner',
      HTML, r'<div v-if="taskStalled" class="text-xs"[^\n]*</div>', '', True),
-    ('test_failure_state_is_cleared_by_the_fetch_that_succeeded', 'watcher_never_clears',
-     HTML, "watch(() => postMeta.value?.total, () => { viewErrors.posts = ''; });", '', False),
-    ('test_failure_state_is_cleared_by_the_fetch_that_succeeded', 'watch_not_imported',
-     HTML, 'const { createApp, ref, reactive, onMounted, computed, watch } = Vue;',
-     'const { createApp, ref, reactive, onMounted, computed } = Vue;', False),
+    ('test_failure_state_is_reported_and_cleared_by_the_fetch_itself', 'posts_success_false_silent',
+     POST, "                    report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));",
+     '                    void 0;', False),
+    ('test_failure_state_is_reported_and_cleared_by_the_fetch_itself', 'posts_never_clears',
+     POST, "                    report('');", '                    void 0;', False),
+    ('test_failure_state_is_reported_and_cleared_by_the_fetch_itself', 'predictions_swallow_rejection',
+     JS, "                report('预测列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)\n"
+         "                    ? '服务连不上（可能在唤醒）' : '接口报错'));",
+     '                void 0;', False),
     ('test_everything_the_template_reads_is_actually_exported', 'unexport_numOrDash',
      HTML, 'bloggersError, statsError, statVal, numOrDash, viewErrors, emptyText,',
      'bloggersError, statsError, statVal, viewErrors, emptyText,', False),
@@ -176,7 +181,7 @@ MUTATIONS = [
      HTML, "{{ fundError || fundLoading ? '—' : fundsWithPredictions.length }}",
      '{{ fundsWithPredictions.length }}', False),
     ('test_the_fund_view_says_so_when_the_api_says_no', 'page_scope_note_gone',
-     HTML, r'\n\s*<div class="text-xs" style="color: #8c8c8c; margin-top: 4px;">括号里是[^\n]*</div>', '', True),
+     HTML, r'\n\s*<div v-if="!fundError" class="text-xs" style="color: #8c8c8c; margin-top: 4px;">括号里是[^\n]*</div>', '', True),
     ('test_a_destructive_button_cannot_outlive_its_own_preview', 'retention_failure_keeps_delete_armed',
      HTML, "                            retentionPreview.value = null;\n                            cleanupEnabled.value = false;\n                            retentionPreviewError.value = '三桶预览没取到",
      "                            retentionPreviewError.value = '三桶预览没取到", False),
@@ -200,6 +205,23 @@ MUTATIONS = [
     ('test_every_list_page_shares_the_same_honesty_rule', 'mapping_success_false_silent',
      HTML, "} else { viewErrors.mappings = '板块映射没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) {",
      ' } } catch (e) {', False),
+    # ---- 第 34 轮批次：洞察卡的"没取到"、预览失败的解释、停摆横幅要能收 ----
+    ('test_the_insight_cards_cannot_report_zero_before_the_insights_arrive', 'insights_never_marked_loaded',
+     VP, '                    insightsLoaded.value = true;\n', '', False),
+    ('test_the_insight_cards_cannot_report_zero_before_the_insights_arrive', 'insights_rejection_silent',
+     VP, "                } else {\n                    insightsError.value = '观点洞察没取到：' + (response.data.message || '接口未给出原因');\n                }",
+     '                }', False),
+    ('test_the_insight_cards_cannot_report_zero_before_the_insights_arrive', 'card_blames_the_database_again',
+     HTML, "{{ insightsLoaded && viewpointInsights.pending_summary ? numOrDash(",
+     '{{ viewpointInsights.pending_summary ? numOrDash(', False),
+    ('test_a_failed_preview_explains_why_the_clean_up_buttons_are_held', 'no_word_about_held_buttons',
+     HTML, r'\n\s*<span v-if="retentionPreviewError \|\| cleanupPreviewError" class="text-xs text-danger">[^\n]*</span>',
+     '', True),
+    ('test_the_stall_banner_is_taken_down_when_polling_recovers', 'banner_never_cleared',
+     HTML, "                    onPollRecovered: () => { taskStalled.value = ''; },\n                    onFetchFailure:",
+     '                    onFetchFailure:', False),
+    ('test_the_stall_banner_is_taken_down_when_polling_recovers', 'post_poll_never_recovers',
+     POST, '                if (options.onPollRecovered) options.onPollRecovered();', '', False),
 ]
 
 
@@ -222,6 +244,11 @@ def main(list_only=False, only=None):
             print('%2d. %-34s -> %s' % (i, name, test))
         print('共 %d 处变异，覆盖 %d 条判据' % (len(todo), len({m[0] for m in todo})))
         return []
+    if not mutation_lock.harness_may_start(ROOT):
+        print('另一个 pytest 会话正在跑（%s 被持有）—— 体检会就地改写 web/，'
+              '两边并发时报出来的红绿都不作数。等它跑完再启动。'
+              % mutation_lock.SESSION_NAME)
+        return ['pytest-session-holds-the-lock']
     try:
         guard = mutation_lock.held_exclusively(ROOT)
         guard.__enter__()
@@ -230,17 +257,19 @@ def main(list_only=False, only=None):
         return ['another-harness-holds-the-lock']
     env = dict(os.environ)
     env[mutation_lock.ENV_PID] = str(os.getpid())
+    env['PYTHONIOENCODING'] = 'utf-8'   # 子进程要按 UTF-8 出，否则中文机器上解码成替换字符
     failures = []
     # 对照组：干净代码上这一整份判据必须**全绿**。没有这一步，"每条变异都红了"可能是假的 ——
     # 子 pytest 只要起手就失败（conftest 报错、锁把子会话拦死、解释器不对），
     # 每一处都会报 RED，体检反而满分通过。
     ctrl = subprocess.run([sys.executable, '-m', 'pytest', T, '-q', '--no-header',
-                           '-p', 'no:cacheprovider', '-k', 'wake_retry_behaves'],
+                           '-p', 'no:cacheprovider'],
                           cwd=str(ROOT), capture_output=True, env=env,
                           text=True, encoding='utf-8', errors='replace')
     if ctrl.returncode != 0:
         print('CONTROL-RED：干净代码上跑判据本身就失败，本轮体检结论一律不作数：\n%s'
               % (ctrl.stdout + ctrl.stderr)[-1200:])
+        guard.__exit__(None, None, None)      # 别让早退把锁留到进程退出才放（第 33 轮 A-MINOR-10）
         return ['control-run']
     print('CONTROL-GREEN（干净代码上判据通过，下面的红才有意义）')
     pristine = {p: (ROOT / p).read_text(encoding='utf-8')
@@ -268,10 +297,17 @@ def main(list_only=False, only=None):
                                 '-q', '--no-header', '-p', 'no:cacheprovider'],
                                cwd=str(ROOT), capture_output=True, env=env,
                                text=True, encoding='utf-8', errors='replace')
-            red = r.returncode != 0
-            print('%-36s %-8s %s' % (name, path.split('/')[-1],
-                                      'RED（判据有效）' if red else 'GREEN（判据无效！）'))
-            if not red:
+            out = (r.stdout or '') + (r.stderr or '')
+            # "红"必须是**断言失败**的红：退码 2/4（用法错、收集错、conftest 起手就炸）同样非零，
+            # 一律记成"判据有效"就会造出一个满分假象（第 33 轮 A-MAJOR-4）。
+            if r.returncode == 0:
+                verdict, bad = 'GREEN（判据无效！）', True
+            elif ' failed' in out or ('error' in out and 'INTERNALERROR' not in out):
+                verdict, bad = 'RED（判据有效）', False
+            else:
+                verdict, bad = 'HARNESS-FAIL（子进程没跑到断言，退码 %s）' % r.returncode, True
+            print('%-36s %-8s %s' % (name, path.split('/')[-1], verdict))
+            if bad:
                 failures.append(name)
     finally:
         for p, text in pristine.items():
