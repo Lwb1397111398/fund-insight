@@ -7,7 +7,7 @@
   而字面 `「」` 只出现在注释里，两者永不相等；
 - 一条 `<th[^>]*>` 把属性整个吃掉，于是 `not any('title=' in h)` 结构上不可能响。
 所以下面每条判据都配了一个**可复跑的变异**：`python scripts/mutation_proof_frontend.py`
-（33 处变异、覆盖本文件 14 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
+（35 处变异、覆盖本文件 16 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
 跑完逐文件回读比对还原，并校验变异真的落了盘）。判据没配到变异的一律不算数。
 其中两条**不读文本**：`test_the_wake_retry_behaves_the_way_the_page_needs_it` 与
 `test_check_auth_and_the_login_gate_behave_per_status_code` 用 node 执行页面里那份源码，
@@ -599,3 +599,28 @@ def test_every_list_page_shares_the_same_honesty_rule():
     tail = ls[0][ls[0].rindex('catch'):]
     assert 'viewErrors.mappings =' in tail and 'isServiceDown(e)' in tail, \
         '映射页的 catch 又退回只 console.error'
+
+
+def test_the_weighted_column_shows_what_it_is_counted_over():
+    """加权评分要有自己的基数（第 31 轮 A 残留，任务 #41）。
+
+    "已验证"那一列显示的是**存活**分母（`hit_verified`），而加权评分的分母是
+    `total_predictions`（含物理清理归档）。镜像 27 个博主里 18 行两个分母不相等、
+    8 行差 >5pp ⇒ 老板看到的是"两列在打脸"。现在分母不同时把基数标在数后面。
+    """
+    html = _html()
+    assert '（基数 {{ b.total_predictions' in html, '加权评分没有自己的分母'
+    assert 'b.total_predictions !== b.hit_verified' in html, \
+        '基数无条件显示：两列分母一样时会变成噪音'
+    assert '标出自己的' in _visible_text(html), '这列的口径说明没写进正文'
+
+
+def test_first_login_says_the_service_is_waking():
+    """任务 #40：第一次输口令也可能撞上唤醒，不能只转"验证中…"。"""
+    html = _html()
+    start = html.index('v-if="showPasswordModal"')
+    # 只看这个弹窗自己：下一处 `modal-overlay` 是"连不上服务"那个，它也写着 serviceWaking，
+    # 用固定长度窗口会把两个弹窗混在一起看（第一版就是这么假绿的）
+    modal = html[start:html.index('class="modal-overlay"', start + 40)]
+    assert 'v-if="serviceWaking"' in modal, '密码弹窗里没有等待唤醒的说明'
+    assert "serviceWaking ? '唤醒中…'" in modal, '按钮文案没跟着等待状态走'

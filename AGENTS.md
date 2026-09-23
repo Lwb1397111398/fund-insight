@@ -195,14 +195,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 07:54（北京），第 31 轮返修（复评 80/80 驱动）之后，
+最近一次核对（2026-09-23 08:35（北京），第 31 轮返修 + #40/#41 收尾之后，
 最后一次改用例后立刻重跑）：
 
-- `pytest tests/unit -q` → **883 passed / 16 skipped / 0 failed**（132 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **892 passed / 16 skipped / 0 failed**（135 秒）。
+- `pytest tests/unit -q` → **885 passed / 16 skipped / 0 failed**（136 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **894 passed / 16 skipped / 0 failed**（139 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 881/890 → 本批 883/892：+2 条（模板绑定机器闸、"每个列表页共用同一条诚实规矩"），
-  以及第 31 轮返修里换掉的任务句柄判据。数字与用例改动在同一个提交里。）
+  （上一基线 883/892 → 本批 885/894：+2 条（加权评分要有自己的基数、首登等唤醒要有说明）。）
   （再上一批 866 —— 那一批把 `tests/` 口径欠了一次实测，本批两个口径都实测过。
   再往前 835 那一批后来被证明**是红的**：两条用例 09-22 23:39 测完全绿，
   跨过北京零点后因凭据时间戳自己变红（见下面"凭据写侧"那条）。**基线数字必须带日期与时刻**。）
@@ -405,7 +404,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `test_everything_the_template_reads_is_actually_exported`。
   判据：`tests/unit/test_frontend_cold_start.py`（10 条，其中一条用 node **执行页面里那份源码**，
   喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`
-  （33 处变异逐条打红，跑完逐文件回读比对还原，并校验变异真的落了盘）。
+  （35 处变异逐条打红，跑完逐文件回读比对还原，并校验变异真的落了盘）。
   第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
   两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。

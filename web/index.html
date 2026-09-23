@@ -105,6 +105,7 @@
                             两列口径不同：<strong>准确率</strong> = 判对 / 已验证结论（只数没删的，现算）；
                             <strong>加权评分</strong> = 按 verify_score 加权，另把<strong>物理清理</strong>归档掉的
                             历史（archived_*）累进来 —— 回收站里的软删<strong>不</strong>进这个数（等级 grade 按它定）。
+                            两列分母不一样时，加权评分后面会标出自己的<strong>基数</strong>，免得看着像两列在打脸。
                         </div>
                         <table>
                             <thead>
@@ -127,7 +128,7 @@
                                     <td><span class="grade-badge" :class="'grade-' + (b.grade || 'D')">{{ b.grade || '-'
                                             }}</span></td>
                                     <td><strong>{{ b.hit_rate != null ? b.hit_rate.toFixed(1) + '%' : '-' }}</strong></td>
-                                    <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? b.accuracy_rate.toFixed(1) : '-') }}</td>
+                                    <td>{{ b.weighted_score != null ? b.weighted_score.toFixed(1) : (b.accuracy_rate != null ? b.accuracy_rate.toFixed(1) : '-') }}<span v-if="b.total_predictions !== b.hit_verified" style="color:#bfbfbf; font-size:11px;">（基数 {{ b.total_predictions ?? 0 }}）</span></td>
                                     <td>{{ b.hit_verified != null ? b.hit_verified : (b.total_predictions || 0) }}</td>
                                     <td>{{ b.hit_correct != null ? b.hit_correct : (b.correct_predictions || 0) }}</td>
                                     <td>{{ b.active_posts_count || 0 }}</td>
@@ -967,9 +968,13 @@
                             @keyup.enter="submitPassword" style="width: 100%; padding: 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px;">
                     </div>
                     <p v-if="passwordError" style="color: #ff4d4f; font-size: 13px; margin-top: 8px;">{{ passwordError }}</p>
+                    <!-- 第一次输口令也可能正好撞上唤醒：以前只转"验证中..."，老板分不清
+                         是在等服务器醒还是密码错，会反复点（第 31 轮 B-MINOR-2）。 -->
+                    <p v-if="serviceWaking" style="color: #1677ff; font-size: 13px; margin-top: 8px;">
+                        正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）… 别关窗口，醒了会自动继续</p>
                 </div>
                 <div class="modal-footer">
-                    <button class="modal-btn primary w-full" @click="submitPassword" :disabled="passwordVerifying">{{ passwordVerifying ? '验证中...' : '确认' }}</button>
+                    <button class="modal-btn primary w-full" @click="submitPassword" :disabled="passwordVerifying">{{ serviceWaking ? '唤醒中…' : (passwordVerifying ? '验证中...' : '确认') }}</button>
                 </div>
             </div>
         </div>
