@@ -1926,35 +1926,79 @@ def delete_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
     }
 
 
+def _parse_seed_receipt(stdout: str) -> dict:
+    """把脚本打的 `SEED-RECEIPT:` 行读成回执；读不到就说明脚本没按约定报数。"""
+    import re as _re
+
+    line = next((l for l in (stdout or '').splitlines() if l.startswith('SEED-RECEIPT:')), '')
+    fields = dict(_re.findall(r'(\w+)=(-?\d+)', line))
+    return {'receipt': line, 'added': int(fields.get('新增', -1)),
+            'existing_skipped': int(fields.get('已存在跳过', -1)),
+            'code_mismatch': int(fields.get('其中码不一致', -1)),
+            'owner_rows': int(fields.get('老板行', -1))}
+
+
 @router.post("/sector-mappings/seed")
-def seed_sector_mappings(db: Session = Depends(get_db)):
-    """导入预置板块映射数据"""
+def seed_sector_mappings(request: Request, dry_run: bool = False, db: Session = Depends(get_db)):
+    """补内置板块映射：默认关闭、要确认头、并且**看子进程退码**。
+
+    第 36 轮 B-MAJOR-1：旧写法起子进程跑 `scripts/seed_sector_mappings.py` 却不查退码，
+    脚本自己 `raise`（退码 1）或被钉库守卫 abort（退码 4）都照样回
+    `success:true "预置数据导入完成"`；而且这条路既没有总开关也没有确认头 ——
+    一条 POST 就能把内置表倒回映射（在镜像上量过一次：改 21 行 + 新建 128 行全部"已审查"）。
+    """
+    if os.getenv('ENABLE_SECTOR_SEED_IMPORT', '').lower() != 'true':
+        return {"success": False,
+                "message": "预置映射导入默认关闭：服务端需设 ENABLE_SECTOR_SEED_IMPORT=true。"
+                           "本地运维请直接跑脚本：python scripts/seed_sector_mappings.py --dry-run"}
+    if not dry_run and request.headers.get("X-Danger-Confirm") != "seed-sector-mappings":
+        return {"success": False,
+                "message": '写入需要确认头 X-Danger-Confirm: seed-sector-mappings（只看计划请带 ?dry_run=true）'}
+
+    import subprocess
+    import sys
+
+    cmd = [sys.executable, "scripts/seed_sector_mappings.py"]
+    cmd.append("--dry-run" if dry_run else "--confirm")
+    if not dry_run:
+        cmd.append("SEED-MAP")
+    # 仓库根：config.py 在 src/api/routes/ 下，要往上退**四**层。
+    # 旧写法只退三层（= `src/`），于是 `scripts/seed_sector_mappings.py` 根本不存在，
+    # 子进程以"can't open file"退码 2 —— 而旧版不查退码，照样回 `success:true "预置数据导入完成"`。
+    # 也就是说这条路由在**今天的代码上必定说谎**（实测见 tests/unit/test_sector_seed_route_honesty.py）。
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
     try:
-        import subprocess
-        import sys
-        result = subprocess.run(
-            [sys.executable, "scripts/seed_sector_mappings.py"],
-            capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        )
-
-        # 刷新服务缓存
-        from src.services.sector_fund_service import get_sector_fund_service
-        service = get_sector_fund_service(db)
-        service.refresh_cache()
-
-        return {
-            "success": True,
-            "message": "预置数据导入完成",
-            "data": {
-                "stdout": result.stdout[-500:] if result.stdout else "",
-                "stderr": result.stderr[-500:] if result.stderr else ""
-            }
-        }
+        # 两边都强制 utf-8：控制台默认是 cp936，脚本打的中文回执用父进程默认编码去解会变乱码
+        child_env = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                                errors='replace', cwd=root, env=child_env)
     except Exception as e:
-        return {
-            "success": False,
-            "message": f"导入失败: {str(e)}"
-        }
+        return {"success": False, "message": f"跑不起来，谈不上导入：{e}"}
+
+    receipt = _parse_seed_receipt(result.stdout)
+    if result.returncode != 0:
+        # 退码非 0 就是没写成 —— 不能像旧版那样把"脚本失败"报成"导入完成"
+        tail = (result.stdout or '')[-400:] + (result.stderr or '')[-400:]
+        return {"success": False, "message": "预置脚本退码 %d ⇒ 一行都不算导入：%s"
+                                           % (result.returncode, tail),
+                "data": {"returncode": result.returncode, **receipt}}
+    if receipt['added'] < 0:
+        return {"success": False, "message": "脚本没打 SEED-RECEIPT 回执 ⇒ 无法证明它写了什么，按失败处理",
+                "data": {"returncode": result.returncode, **receipt}}
+
+    changed = receipt['added'] > 0 and not dry_run
+    if changed:
+        # 缓存只有在真插了行时才需要刷；空跑一次不去动它
+        from src.services.sector_fund_service import get_sector_fund_service
+        get_sector_fund_service(db).refresh_cache()
+    return {
+        "success": True,
+        "message": ("dry-run：未写库。%s" % receipt['receipt']) if dry_run
+        else ("已补 %d 行（reviewed=False 待审查）；已存在跳过 %d 行"
+              % (receipt['added'], receipt['existing_skipped'])),
+        "data": {"returncode": result.returncode, "cache_refreshed": changed, **receipt}
+    }
 
 
 # ===== 数据导入导出 =====

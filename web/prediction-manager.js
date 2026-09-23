@@ -250,9 +250,12 @@
                 if (type === 'duplicates') response = await axios.post('/api/predictions/merge-similar');
                 if (type === 'mapping') response = await axios.post('/api/predictions/sync-sector-mapping', null, { params: { dry_run: true } });
                 if (type === 'rollback') response = await axios.post('/api/predictions/rollback-invalid', null, { params: { dry_run: true } });
-                // 后端很多"被护栏按住"走的是 200 + success:false，不看它就等于把拒绝当成预览成功
-                if (response.data && response.data.success === false) {
-                    maintenanceError.value = '预览被拒绝：' + (response.data.message || '接口未给出原因');
+                // 后端很多"被护栏按住"走的是 200 + success:false，不看它就等于把拒绝当成预览成功。
+                // 判据是"没拿到 success:true 就是没成功"，不是"只拦 === false"：
+                // 一份缺 `success` 字段的回执照样能把红色按钮点亮（第 36 轮 A-MINOR-3）。
+                if (!response || !response.data || response.data.success !== true) {
+                    maintenanceError.value = '预览被拒绝：' +
+                        ((response && response.data && response.data.message) || '接口没回 success:true');
                 } else {
                     maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };
                 }
@@ -308,9 +311,9 @@
                     headers: { 'X-Danger-Confirm': confirmValue },
                 });
                 // 后端用 200 + success:false 表达"被护栏拦住"，不看这个字段就会把
-                // 没执行当成执行成功（第 11 轮 M-F）
-                if (response.data && response.data.success === false) {
-                    throw new Error(response.data.message || '后端拒绝执行');
+                // 没执行当成执行成功（第 11 轮 M-F）。**没带 success 字段**同样算没执行（第 36 轮 A-MINOR-3）。
+                if (!response.data || response.data.success !== true) {
+                    throw new Error((response.data && response.data.message) || '后端没回 success:true');
                 }
                 alert(response.data.message);
                 maintenancePreview.value = null;

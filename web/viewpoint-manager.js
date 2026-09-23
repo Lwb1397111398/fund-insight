@@ -252,12 +252,14 @@
             summaryStatsError.value = '';
             try {
                 const res = await axios.get('/api/viewpoints/summary/stats');
-                if (res.data.success) {
-                    summaryStats.value = res.data.data || {};
+                // `success:true` 但 `data` 为空 **不算取到**：那是"没拿到数"的另一种形状
+                // （同一条规矩在洞察四张卡上已经钉过：接口回了 success 却没带数据也要报"没取到"）
+                if (res.data.success && res.data.data) {
+                    summaryStats.value = res.data.data;
                     summaryStatsLoaded.value = true;
                 } else {
                     summaryStats.value = {};
-                    summaryStatsError.value = '汇总统计没取到：' + (res.data.message || '接口未给出原因');
+                    summaryStatsError.value = '汇总统计没取到：' + (res.data.message || '接口没回数据（success:true 但 data 为空）');
                 }
             } catch (error) {
                 summaryStats.value = {};

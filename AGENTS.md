@@ -195,17 +195,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 17:01（北京），第 35 轮返修（复评 75/84 驱动）之后，
+最近一次核对（2026-09-23 18:54（北京），第 36 轮返修（复评 82/78 驱动 + 老板把线降到 80）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **929 passed / 16 skipped / 0 failed**（172 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **938 passed / 16 skipped / 0 failed**（180 秒）。
+- `pytest tests/unit -q` → **948 passed / 16 skipped / 0 failed**（216.75 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **957 passed / 16 skipped / 0 failed**（201.77 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 924/933 → 本批 929/938：+5 条 = 创建路径"只允许基金不允许股票"3 条
-  （第 35 轮 B-MAJOR-1：今天之前整仓零覆盖，变异掉那 7 行判据后 49 条用例照样全绿）
-  + 维护预览因果判据 1 条 + 脚本守卫反退化 1 条。
-  判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`。）
+  （上一基线 929/938 → 本批 948/957：+19 条 =
+  `tests/unit/test_sector_seed_route_honesty.py` 10 条（seed 后门：默认关 / 确认头 / 看退码 /
+  无回执算失败 / cwd 指得到真脚本 / 成功要刷缓存 / 脚本拒写 / 只补缺不覆盖 / dry-run 不写）
+  + `test_seed_owner_proxies_gate.py` 5 条（`--owner-confirm SEED-PROXY` 闸，含"闸排在钉库之前"）
+  + `test_sector_mapping_api.py` +2（`batch-review` 路由级转发 `owner_confirm`、`/verify-fund` 探针形状）
+  + `test_frontend_cold_start.py` +2（汇总统计三种失败形状、模板祖先链「确认执行」）。
+  判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`
+  —— 本次实测 `共 89 处变异，覆盖 35 条判据`，全量逐条 RED（其中两条先报 GREEN/ANCHOR-MISS、
+  修完判据与锚点后各自复跑为 RED）。）
   （上一基线 885/894（红过一次：897/**1 failed**/16）→ 912/921：+14 条 =
   清理脚本离线往返 6、`/api/bloggers/top` 路由形状 3、互斥闸反向 2、失败态铺满 3。）
   （上一基线 885/894 → 本批 898/907：+13 条 = 前端失败态 7 条（`test_frontend_cold_start.py` 16→23）、

@@ -2773,7 +2773,15 @@ const fetchWeChatBatch = async () => {
                             cleanupTask.value = null;
                             alert(res.data.message || '当前没有可清理资料');
                         } else {
-                            const task = await pollCleanupTask(taskId);
+                            let task;
+                            try {
+                                task = await pollCleanupTask(taskId);
+                            } catch (pollError) {
+                                // 清理请求服务端已经接了：这里说"清理失败"老板就会再点一次 = 二次删除
+                                alert('清理任务已发起（任务号 ' + taskId + '），只是进度没取到 ——'
+                                      + ' 刷新页面就能看到结果，请不要重复点击');
+                                return;
+                            }
                             if (task.status === 'failed') alert('清理失败：' + (task.error || '未知错误'));
                             else {
                                 const counts = task.result?.deleted_counts || {};

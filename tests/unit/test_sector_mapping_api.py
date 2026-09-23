@@ -600,3 +600,82 @@ def test_a_clean_probe_creation_still_does_not_grant_owner_immunity(tmp_path, mo
         assert not row.owner_locked and row.reviewed_by != 'owner',             '一次普通创建就盖上老板的章：%s / %s' % (row.reviewed_by, row.owner_locked)
     finally:
         db.close()
+
+
+def test_batch_review_route_forwards_the_owner_confirm(tmp_path, monkeypatch):
+    """批量审查的"老板明确确认"必须在 **API 边界**上转发 —— 第 36 轮 B-MAJOR-2。
+
+    单行那条路由早已有同名用例钉着，批量这条到今天零覆盖：
+    把 `owner_confirm=req.owner_confirm` 删掉，全仓不红，而它的后果正是第 16 轮那个 bug 的形状
+    —— 免疫只能由显式确认换来，路由不转发就等于"确认"只活在浏览器弹窗里。
+    """
+    from datetime import datetime
+    from src.models.database import SectorFundMapping
+
+    sf = _database(tmp_path)
+    db = sf()
+    db.add(SectorFundMapping(sector_name='批量无证据', fund_code='512481',
+                             fund_name='半导体设备ETF', reviewed=False, is_active=True))
+    db.add(SectorFundMapping(sector_name='批量有证据', fund_code='512482', fund_name='卫星ETF',
+                             reviewed=False, is_active=True,
+                             match_source='agent', verified_at=datetime(2026, 9, 1)))
+    db.commit()
+    no_ev = db.query(SectorFundMapping).filter_by(sector_name='批量无证据').one().id
+    with_ev = db.query(SectorFundMapping).filter_by(sector_name='批量有证据').one().id
+    db.close()
+
+    app, client = _client(monkeypatch, sf)
+
+    refused = client.post("/api/config/sector-mappings/batch-review",
+                          json={'ids': [no_ev], 'reviewed': True}, headers=AUTH_HEADERS).json()
+    assert refused['success'] is True and refused['data']['count'] == 0, \
+        '没有老板确认，裸 POST 不该把无证据行标成已审查：%s' % refused
+
+    granted = client.post("/api/config/sector-mappings/batch-review",
+                          json={'ids': [no_ev], 'reviewed': True, 'owner_confirm': True},
+                          headers=AUTH_HEADERS).json()
+    assert granted['data']['count'] == 1, '转发了 owner_confirm 才该给免疫：%s' % granted
+    check = sf()
+    try:
+        row = check.query(SectorFundMapping).get(no_ev)
+        assert row.reviewed is True and row.owner_locked is True and row.reviewed_by == 'owner'
+
+        quiet = check.query(SectorFundMapping).get(with_ev)
+        assert not quiet.owner_locked and quiet.reviewed_by != 'owner'
+    finally:
+        check.close()
+
+    lit = client.post("/api/config/sector-mappings/batch-review",
+                      json={'ids': [with_ev], 'reviewed': True}, headers=AUTH_HEADERS).json()
+    assert lit['data']['count'] == 1, '有机器证据的行不需要老板确认也该能批量看过'
+    check = sf()
+    try:
+        row = check.query(SectorFundMapping).get(with_ev)
+        assert row.reviewed is True and not row.owner_locked, \
+            '批量"看过"绝不该顺带发免疫（第 14 轮 MAJOR-2）：%s/%s' % (row.reviewed_by, row.owner_locked)
+    finally:
+        check.close()
+
+
+def test_verify_fund_endpoint_reports_what_the_probe_said(tmp_path, monkeypatch):
+    """`GET /api/config/verify-fund` 是页面上"这只基金能不能抓"的那支探针（①链）。
+    第 36 轮 B-MINOR-4：到今天 `grep -rn verify-fund tests/` = 0 ⇒ 它改形状没人知道。"""
+    from src.fund.fund_api import fund_api as instance
+
+    seen = {}
+
+    def fake(code, name=None, **kw):
+        seen['code'] = code
+        return {'code': code, 'is_fetchable': False, 'api_name': '国泰纳斯达克100ETF',
+                'status': 'not_found', 'reason': '桩：数据源没这只'}
+
+    monkeypatch.setattr(instance, 'verify_fund_fetchable', fake)
+    app, client = _client(monkeypatch, _database(tmp_path))
+    res = client.get("/api/config/verify-fund", params={'fund_code': '513100'},
+                     headers=AUTH_HEADERS)
+    assert res.status_code == 200
+    body = res.json()
+    assert body['success'] is True
+    assert seen['code'] == '513100', '代码没传进探针 ⇒ 页面报的是别只基金'
+    assert body['data']['is_fetchable'] is False and body['data']['status'] == 'not_found', \
+        '路由把探针结论改了形：页面读的是 is_fetchable / status 这两列'

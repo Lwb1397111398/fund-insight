@@ -887,6 +887,72 @@ def test_a_failed_insights_call_takes_the_four_cards_down_with_it():
     assert '拉取失败' in out[2][1][4], out[2][1][4]
 
 
+def test_the_summary_button_does_not_claim_there_is_nothing_to_summarize():
+    """「汇总观点」这个按钮：统计没取到时，不许说"没有待汇总的观点"（第 36 轮 A-MAJOR-1）。
+
+    上一批我把 `summaryStatsLoaded` / `summaryStatsError` 写进了 manager，页面话术也确实分了三档，
+    但 `grep -rn summaryStats tests/` = 0 —— **除了体检里那几个锚点字符串，没有任何判据读过这两列**。
+    A 在副本里把话术退回 `alert('没有待汇总的观点')`、又把 `fetchSummaryStats` 退回"只写成功不清旧值"，
+    32 条判据全绿。这里补上真判据：跑的是 `web/viewpoint-manager.js` 那份源码，
+    三种失败形状**各自先跑一次成功**（否则前一种已经把状态清了，后几种是空的）。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    body = """
+(async () => {
+    const alerts = [];
+    opts.alert = (m) => alerts.push(m);
+    const m = window.createViewpointManager(opts);
+    const GOOD = { data: { success: true, data: { total_pending_viewpoints: 3 } } };
+    const ZERO = { data: { success: true, data: { total_pending_viewpoints: 0 } } };
+    const failings = [
+        { data: { success: false, message: '统计接口挂了' } },
+        { data: { success: true, data: null } },
+        'throw',
+    ];
+    const route = (payload) => (u) => {
+        if (u.indexOf('/summary/stats') >= 0) {
+            return payload === 'throw' ? (() => { throw { message: 'Network Error' }; })() : payload;
+        }
+        return { data: { success: true, data: [], meta: { total: 5 } } };
+    };
+    const out = [];
+    for (const s of failings) {
+        impl = route(GOOD);                 // 先成功一笔：让"取到了"这件事真实发生过
+        await m.showSummaryModal();
+        const taken = alerts.splice(0, alerts.length);
+        impl = route(s);                    // 再跑这一种失败形状
+        await m.showSummaryModal();
+        out.push([taken, alerts.splice(0, alerts.length),
+                  { loaded: m.summaryStatsLoaded.value, err: m.summaryStatsError.value }]);
+    }
+    // 最后再看一次"确实取到、且为 0"：这时才允许说"没有"
+    impl = route(ZERO);
+    await m.showSummaryModal();
+    out.push([[], alerts.slice(0), { loaded: m.summaryStatsLoaded.value }]);
+    console.log('RESULT' + JSON.stringify(out));
+})();
+"""
+    out = _run_node(body, 'viewpoint-manager.js')
+    assert len(out) == 4, '三种失败形状 + 一种"取到且为 0"：%s' % out
+    for i, shape in enumerate(('success:false', 'success:true 但没 data', '抛错')):
+        first_visit, failing_alerts, state = out[i]
+        assert first_visit == [], '先跑成功这一笔该直接开弹窗，不该说任何话：%s' % first_visit
+        assert failing_alerts, '%s 这一种形状下按钮一句话都没说' % shape
+        said = ' '.join(failing_alerts)
+        # 注意不能写成"不许出现『没有待汇总的观点』这几个字"——
+        # 诚实的那句本身就引用它（`没敢断定"没有待汇总的观点"：…`）。要判的是**句式**：
+        # 必须是"我没敢断定 + 因为没取到/拉取失败"，而不是光秃秃一句结论。
+        assert '没敢断定' in said and re.search(r'没取到|拉取失败', said), \
+            '%s：统计没取到时这句话没在否认自己的结论：%s' % (shape, said)
+        assert state['loaded'] is False, '%s：取不到却把 loaded 记成真：%s' % (shape, state)
+    assert '服务忙' not in str(out[2]), out[2]
+    assert out[2][2]['err'], '抛错那一档也要留下原因话术：%s' % out[2][2]
+    truthy, said_zero, state = out[3]
+    assert said_zero == ['没有待汇总的观点'], '真取到且为 0 时该说"没有"：%s' % said_zero
+    assert state['loaded'] is True, state
+
+
 def test_the_insight_cards_cannot_report_zero_before_the_insights_arrive():
     """四张洞察卡里"待汇总"那张以前是死分支：初值 `pending_summary: []` 恒真 ⇒ 没取到也报 0。
 
@@ -947,39 +1013,215 @@ def _arrow_fns(src):
 
 
 _WRITE_RE = re.compile(r'axios\.(?:post|put|delete)\(')
-_REFRESH_RE = re.compile(r'await (?:fetch[A-Z]\w*|refresh\w*|Promise\.all|'
-                         r'(?:options\.)?onStatsChanged)')
-_REFRESH_TRY = re.compile(r'try \{[\s\S]*?\}\s*catch \(refreshError\)')
+# 第 36 轮 A-M3：以前这里是**白名单**（只认 `fetchX/refreshX/Promise.all/onStatsChanged`），
+# 于是把 `await fetchPredictions()` 改名成 `await loadEverything()` 就整条腿隐身、闸不响。
+# 判据反过来：**写之后的任何 await 都是一条腿**，白名单反而要写注释说明。
+# 但"另一笔写"不算刷新腿：`previewPredictionMaintenance` 那种"三个分支各一笔 post"的形状，
+# 腿要的是**读回列表**，不是第二笔写。
+_LEG_RE = re.compile(r'await\s+(?!axios\.)(?:[\w.$]+\s*\(|Promise\.all\()')
+_TRY_CATCH_RE = re.compile(r'try \{[\s\S]*?\}\s*catch \((\w+)\)')
+_LIE_WORDS = re.compile(r'失败|出错|错误')
+_TRUTH_PHRASE = re.compile(r'没刷新|刷新页面|重新加载')
+# catch 体里这些不算"对老板说的反话"：`console.error('刷新失败')` 是给开发者看的日志、
+# `/* 轮询失败忽略 */` 是注释 —— 把它们一起当假话，只会让闸在噪声上响、在真话上哑。
+_DEV_NOISE_RE = re.compile(r'console\.\w+\([^)]*\)|//[^\n]*|/\*[\s\S]*?\*/')
+
+
+def _said_words(catch_body):
+    return _DEV_NOISE_RE.sub('', catch_body)
+
+
+def _brace_body(src, start):
+    """从 `{` 起做配对，返回 (体, 结束位置)。"""
+    i, depth = start, 0
+    while i < len(src):
+        if src[i] == '{':
+            depth += 1
+        elif src[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return src[start + 1:i], i
+        i += 1
+    return src[start:], i
+
+
+def _catch_bodies(text):
+    """每个 `try { … } catch (X) { … }` 里 catch 那段话。"""
+    out = []
+    for m in _TRY_CATCH_RE.finditer(text):
+        brace = text.find('{', m.end() - 1)
+        if brace >= 0:
+            body, _end = _brace_body(text, brace)
+            out.append(body)
+    return out
+
+
+def _swallows_only(fn_bodies, name):
+    """这个函数自己有没有 catch 且不 re-throw ⇒ `await 它()` 不会 reject，外层 catch 收不到它。
+
+    第 36 轮 #53 的更正：我先前用"刷新腿没单独包 try"就判它说假话，是**只看形状不看 callee**；
+    `index.html` 里 `deleteFund` 的 `await fetchFunds()` 就是这样——`fetchFunds` 自己吞错，
+    那条腿永远走不到外层 catch。所以闸要按"能不能 reject"判，而不是按"有没有包"判。
+    """
+    body = fn_bodies.get(name)
+    if body is None:
+        return False
+    return bool(re.search(r'\}\s*catch', body)) and not re.search(r'\bthrow\b', body)
+
+
+def _scan_write_then_refresh(fname, src, fn_bodies):
+    """返回 (带写后刷新的函数数, 违规清单)。"""
+    offenders, seen = [], 0
+    for name, body in _arrow_fns(src):
+        w = _WRITE_RE.search(body)
+        if not w:
+            continue
+        tail = body[w.end():]
+        legs = list(_LEG_RE.finditer(tail))
+        if not legs:
+            continue
+        seen += 1
+        regions = []
+        for m in _TRY_CATCH_RE.finditer(tail):
+            brace = tail.find('{', m.end() - 1)
+            if brace < 0:
+                continue
+            inner, end = _brace_body(tail, brace)
+            regions.append((m.start(), end + 1, inner))
+        for leg in legs:
+            callee = re.search(r'await\s+([\w.$]+)\s*\(', tail[leg.start():leg.start() + 120])
+            if callee and _swallows_only(fn_bodies, callee.group(1).split('.')[-1]):
+                continue                      # 这条腿自己吞错，永远不会惊动外层 catch
+            pos = leg.start()
+            region = next(((a, b, cb) for a, b, cb in regions if a <= pos < b), None)
+            if region is None:
+                offenders.append('%s::%s 刷新腿没单独 try（外层 catch 会替一件成功的事说"失败"）'
+                                 % (fname, name))
+                break
+            catch_text = _said_words(region[2])
+            if _LIE_WORDS.search(catch_text) and not _TRUTH_PHRASE.search(catch_text):
+                # 第 36 轮 A-M2：只要求"结构上包了 try"等于没要求 ——
+                # catch 里写着「保存失败: …」的那句假话照样能过。
+                offenders.append('%s::%s 刷新腿单独包了，可 catch 里说的是"%s"'
+                                 % (fname, name, catch_text.strip()[:40]))
+                break
+    return seen, offenders
 
 
 def test_a_write_that_succeeded_is_never_reported_as_a_failure():
-    """三个 manager 里**每一个**"写成功之后还要刷新"的函数都必须把刷新腿单独包起来。
+    """**每一个**"写成功之后还要刷新"的函数都必须让那条腿单独收口，且 catch 不许说反话。
 
-    形状要求：写在最前面；写之后出现的每条刷新腿（`await fetchX()` / `await refresh…()` /
-    `await Promise.all([...])` / `onStatsChanged()`）都落在某段 `try { … } catch (refreshError)` 里。
-    否则外层 `catch` 会替一件已经成功的事说"失败"，老板看到就会再点一次
-    （这仓库为"按钮说假话"付过账：一次按钮清掉 515 条结论那次）。
+    覆盖范围第 36 轮起扩到 `web/index.html`（老板真正点的那个文件）。A 手抄它时逐条核过
+    26 处写调用"今天不说假话"，那是**人读出来的**；现在由闸自己判"能不能 reject"。
     """
-    offenders = []
-    seen = 0
-    for fname in ('post-manager.js', 'prediction-manager.js', 'viewpoint-manager.js'):
-        src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
-        for name, body in _arrow_fns(src):
-            w = _WRITE_RE.search(body)
-            if not w:
-                continue
-            tail = body[w.end():]
-            legs = [m.start() for m in _REFRESH_RE.finditer(tail)]
-            if not legs:
-                continue
-            seen += 1
-            regions = [(m.start(), m.end()) for m in _REFRESH_TRY.finditer(tail)]
-            for pos in legs:
-                if not any(a <= pos < b for a, b in regions):
-                    offenders.append('%s::%s' % (fname, name))
-                    break
-    assert seen >= 8, '这条闸只看见 %d 个"写后刷新"的函数，扫描器失效了' % seen
-    assert not offenders, '这些函数会把已成功的写报成失败（刷新腿没单独 try）：%s' % sorted(set(offenders))
+    offenders, seen_mgr, seen_html = [], 0, 0
+    files = ('post-manager.js', 'prediction-manager.js', 'viewpoint-manager.js', 'index.html')
+    sources = {f: (PROJECT_ROOT / 'web' / f).read_text(encoding='utf-8') for f in files}
+    # callee 表要跨整个页面包：`index.html` 里的写函数会去调 manager 里定义的刷新函数
+    # （反之亦然）。只看本文件会把"其实吞错了的腿"误判成假话。
+    bundle = {}
+    for src in sources.values():
+        bundle.update(dict(_arrow_fns(src)))
+    for fname in files:
+        n, bad = _scan_write_then_refresh(fname, sources[fname], bundle)
+        offenders += bad
+        if fname == 'index.html':
+            seen_html = n
+        else:
+            seen_mgr += n
+    assert seen_mgr == 12, \
+        ('三个 manager 里"写后刷新"的函数实测 12 个（旧白名单只看见 10 个：'
+         'archivePrediction / restorePrediction 的 `await afterChange()` 是白名单漏掉的腿），'
+         '现在看见 %d 个 ⇒ 扫描器退化' % seen_mgr)
+    assert seen_html >= 19, 'index.html 只看见 %d 个写后刷新的函数 ⇒ 这条扫描已经失效' % seen_html
+    assert not offenders, '这些函数会把已成功的写报成失败：\n  %s' % '\n  '.join(sorted(set(offenders)))
+
+
+class _PreviewButtonScan(HTMLParser):
+    """按**祖先链**判"确认执行"这颗按钮活在哪条 v-if 下（第 36 轮 A-MAJOR-4）。
+
+    本机没有 Chromium，"浏览器里看过"只是我的人工动作。这条闸不需要浏览器：
+    它读的就是页面里那份模板源码，问一句 Vue 会问的问题 —— 这个元素被渲染的前提是什么。
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []            # [(tag, attrs)]
+        self.buttons = []          # {'text','conds','depth'}
+        self.error_blocks = []     # {'text','clicks','depth'}
+
+    VOID = {'br', 'img', 'input', 'hr', 'meta', 'link', 'source'}
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        entry = (tag, a)
+        if tag not in self.VOID:          # 空元素没有闭合标签：入栈会把栈撑歪
+            self.stack.append(entry)
+        if tag == 'button':
+            # **祖先链**与"自己的 v-if"要分开存：混在一起判就等于没判 ——
+            # 把包裹层从 `maintenancePreview` 改成 `showPredictionMaintenance` 时，
+            # 按钮自己的条件里仍然写着 `maintenancePreview.type`，混合判据照样通过（实测 GREEN 过一次）。
+            conds = ' | '.join(str(at.get('v-if') or at.get('v-show') or '') for _t, at in self.stack[:-1])
+            self.buttons.append({'text': '', 'conds': conds, 'own': str(a.get('v-if') or ''),
+                                 'marker': len(self.stack), 'entry': entry})
+        if a.get('v-if') == 'maintenanceError':
+            self.error_blocks.append({'text': '', 'clicks': [], 'marker': len(self.stack), 'entry': entry})
+        for e in self.error_blocks:
+            click = a.get('@click') or ''
+            if self._open(e) and click.startswith('previewPredictionMaintenance'):
+                e['clicks'].append(click)
+
+    def _open(self, rec):
+        """这条记录还"张着嘴"吗：栈里那个位置**还是它自己**。
+
+        只比标签名不行 —— 后一颗 `<button>` 会落在同一个槽位上，前一颗就一直在收字
+        （实测扫出过"取消扫描重复候选…确认执行"这种串起来的假按钮名）。
+        """
+        return len(self.stack) >= rec['marker'] and self.stack[rec['marker'] - 1] is rec['entry']
+
+    def handle_data(self, data):
+        text = data.strip()
+        if not text:
+            return
+        for b in self.buttons:
+            if self._open(b):
+                b['text'] += text
+        for e in self.error_blocks:
+            if self._open(e):
+                e['text'] += ' ' + text
+
+    def handle_endtag(self, tag):
+        # 只弹栈，不清 `self.buttons`：按钮记录留着，出栈后它的 `depth != len(stack)`，
+        # 自然就不再收字了。（旧版在这里过滤按钮记录，一个空元素把栈撑歪过一次就全清了。）
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == tag:
+                del self.stack[i:]
+                break
+
+
+def test_the_execute_button_cannot_outlive_its_own_preview():
+    """「确认执行」必须活在 `maintenancePreview` 这条 v-if 底下 —— 用祖先链判，不是数子串。
+
+    第 35 轮我加的那道"预览失败就不许有可确认的东西"，判据是**行为**（node 跑源码）。
+    话术里那句「没有可信的预览，"确认执行"不会出现」以前只是我在**描述**这段模板长什么样：
+    A 把 `v-if="maintenancePreview"` 改成 `v-if="showPredictionMaintenance"`（按钮脱离预览），
+    再把红字里那句说明删掉 —— 全仓不红。现在这两个形状各对应一条断言、各配一处变异。
+    """
+    html = (PROJECT_ROOT / 'web' / 'index.html').read_text(encoding='utf-8')
+    scan = _PreviewButtonScan()
+    scan.feed(html)
+    executors = [b for b in scan.buttons if b['text'].strip() == '确认执行']
+    assert executors, '模板里找不到"确认执行"那颗按钮 ⇒ 扫描器或模板变了形状'
+    for b in executors:
+        assert 'maintenancePreview' in b['conds'], \
+            '"确认执行"现在挂在 %s 底下 —— 脱离预览就是"没有可信清单也能真写"' % b['conds']
+
+    assert scan.error_blocks, '红字那一行（v-if="maintenanceError"）没被扫到 ⇒ 它被删了或改了形状'
+    line = scan.error_blocks[0]
+    assert '重新预览' in line['text'], '取不到预览时要给出路：那行得有「重新预览」：%s' % line['text'][:90]
+    assert line['clicks'], '「重新预览」必须真去重新预览（@click=previewPredictionMaintenance）'
+    assert '不会出现' in line['text'], \
+        '那行还得把"为什么红色按钮不见了"说明白：%s' % line['text'][:90]
 
 
 def test_a_failed_preview_leaves_nothing_to_confirm():
@@ -999,6 +1241,7 @@ def test_a_failed_preview_leaves_nothing_to_confirm():
         { data: { success: false, message: '清理开关没开' } },
         'throw',
         { data: { success: true, data: { would_rollback: 3 }, message: '预览：3 条' } },
+        { data: { message: '这份回执压根没带 success 字段' } },
     ];
     for (const s of shapes) {
         impl = (u) => (s === 'throw' ? (() => { throw { message: 'Network Error' }; })() : s);
@@ -1017,6 +1260,9 @@ def test_a_failed_preview_leaves_nothing_to_confirm():
     assert '失败' in out[1][1], out[1][1]
     assert out[2][0] == '预览：3 条', '真正取到的预览要留下：%s' % out[2]
     assert out[2][1] == '', out[2][1]
+    # 第 36 轮 A-MINOR-3：回执**压根没有 `success` 字段**也是"没成功"，不能武装红色按钮
+    assert out[3][0] is None, '接口没回 success 字段却当成预览成功：%s' % out[3]
+    assert 'success:true' in out[3][1] or '没' in out[3][1], out[3][1]
 
 
 def test_a_button_must_not_claim_the_opposite_of_what_happened():

@@ -81,6 +81,13 @@ def _scripts():
 
 def _write_capable(f):
     """CLI 上有写开关 / 确认口令 / 直接执行删除的服务 —— 都算"能改数据"。"""
+    if f['direct_db'] and f['called'] & {'commit', 'add', 'delete'}:
+        # 第 36 轮 B-MINOR-3：**什么写开关都没有、上来就 commit** 的脚本以前落在扫描集合外
+        # （`scripts/seed_sector_mappings.py` 就是这个形状 —— 它连 `--dry-run` 都没有）。
+        # "有没有开关"不该是"受不受管"的前提：会写库就得说清连的是哪个库。
+        # 这条必须排在 `--confirm` 那个分支**前面**：加完它才发现旧顺序会短路
+        # （`import_export.py` 带 `--confirm` 却没有硬删 ⇒ 老早退直接判"不受管"）。
+        return True
     if any(WRITE_SWITCH.search(fl) for fl in f['flags']):
         return True
     if '--confirm' in f['flags'] or f['called'] & {'confirm', 'execute'}:
@@ -134,6 +141,14 @@ def test_there_are_write_capable_scripts_left_to_guard():
     # 一个走 service 层写的脚本被判为"不受管"，正是第 35 轮 B 指出的那条缝）。
     direct = sum(1 for f in _scripts().values() if _write_capable(f) and f['direct_db'])
     assert n >= direct, '受管集合比"直连 ORM"集合还小（%d < %d）⇒ 扫描器把非直连的写脚本漏了' % (n, direct)
+    # 第 36 轮 B-MINOR-3：旧判据的前提是"CLI 上有写开关"，于是**没有开关、上来就 commit**
+    # 的脚本永远进不了集合。这条把那种形状自己钉住：会 commit 的直连脚本必须全部受管。
+    committing = {name for name, f in _scripts().items()
+                  if f['direct_db'] and f['called'] & {'commit', 'add', 'delete'}}
+    unmanaged = sorted(name for name in committing if not _write_capable(_scripts()[name]))
+    assert not unmanaged, '这些脚本直连 ORM 又写库，却没被当成"能改数据"：%s' % '、'.join(unmanaged)
+    assert 'seed_sector_mappings.py' in committing, \
+        'seed 脚本从集合里掉了 ⇒ 判据又被"有没有写开关"卡回去了（它当初就没有开关）'
 
 
 def test_write_capable_scripts_declare_their_database_in_code():

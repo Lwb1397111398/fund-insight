@@ -13,7 +13,9 @@
     注：docstring 里**不写**处数（第 32 轮 B 抓到那句"全跑（28 处）"早就过时）。
     要引用数量就跑 `--list`，别抄这里。
 
-安全：只改 `web/index.html`、`web/post-manager.js`、`web/prediction-manager.js`，
+安全：**只改 `MUTATIONS` 里点到的那些 `web/` 文件**（第 36 轮 A-MINOR-2：这句原先手抄成
+"只改 index.html / post-manager.js / prediction-manager.js"，而那时已有 5 处落在
+`viewpoint-manager.js` 上 ⇒ 会过时的名单一律不写，改跑起来自己打印），
 每处变异都**从干净底本**生成、写盘后回读核对（落了盘、且确实与底本不同）才跑 pytest，
 跑完无条件写回底本并逐文件回读比对。
 **不能与 `pytest tests/` 并发跑**（第 30 轮 B 实测：并发时会假报 12 条 GREEN + 3 条锚点失配，
@@ -283,8 +285,9 @@ MUTATIONS = [
      _js('                await Promise.all([fetchViewpoints(), fetchInsights()]);',
          '                if (options.onStatsChanged) await options.onStatsChanged();'), False),
     ('test_a_failed_preview_leaves_nothing_to_confirm', 'preview_refusal_still_arms_execute',
-     JS, _js('if (response.data && response.data.success === false) {',
-                       '                    maintenanceError.value = \'预览被拒绝：\' + (response.data.message || \'接口未给出原因\');',
+     JS, _js('if (!response || !response.data || response.data.success !== true) {',
+                       "                    maintenanceError.value = '预览被拒绝：' +",
+                       "                        ((response && response.data && response.data.message) || '接口没回 success:true');",
                        '                } else {',
                        '                    maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };'),
      _js('                maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };'), False),
@@ -302,23 +305,72 @@ MUTATIONS = [
     ('test_a_button_must_not_claim_the_opposite_of_what_happened', 'viewpoint_pager_ignores_soft_failure',
      VP, '            try { if (await fetchViewpoints() === false) viewpointFilters.page = back; }',
      '            try { await fetchViewpoints(); }', False),
+    # ---- 第 36 轮 A-MAJOR-1/2/3/4 + MINOR-3：这四条判据自己也要有"能把它打红"的变异 ----
+    # A-MAJOR-2：闸只认"结构上包了 try"，那把 catch 里的话换成「保存失败」它就放行 —— 而那正是本轮要消灭的假话。
+    ('test_a_write_that_succeeded_is_never_reported_as_a_failure', 'catch_body_blames_the_write',
+     VP, "                } catch (refreshError) { alert('观点已删除，只是列表没刷新出来 —— 刷新页面即可'); }",
+     "                } catch (refreshError) { alert('删除失败：' + errorMessage(refreshError)); }", False),
+    # A-MAJOR-3 + #53：`pollCleanupTask` 不在旧的刷新腿白名单里 ⇒ 旧闸对它瞎；现在它是条腿。
+    ('test_a_write_that_succeeded_is_never_reported_as_a_failure', 'cleanup_leg_blames_the_write',
+     HTML, _js('                            let task;',
+               '                            try {',
+               '                                task = await pollCleanupTask(taskId);',
+               '                            } catch (pollError) {',
+               '                                // 清理请求服务端已经接了：这里说"清理失败"老板就会再点一次 = 二次删除',
+               "                                alert('清理任务已发起（任务号 ' + taskId + '），只是进度没取到 ——'",
+               "                                      + ' 刷新页面就能看到结果，请不要重复点击');",
+               '                                return;',
+               '                            }'),
+     '                            const task = await pollCleanupTask(taskId);', False),
+    # A-MAJOR-1：把"没敢断定"退回光秃秃一句结论；以及"success 但没 data"又算取到了。
+    ('test_the_summary_button_does_not_claim_there_is_nothing_to_summarize',
+     'summary_stats_blames_nothing',
+     VP, """                alert(summaryStatsLoaded.value ? '没有待汇总的观点'
+                      : ('没敢断定"没有待汇总的观点"：' + (summaryStatsError.value || '汇总统计没取到')));""",
+     "                alert('没有待汇总的观点');", False),
+    ('test_the_summary_button_does_not_claim_there_is_nothing_to_summarize',
+     'summary_stats_accepts_empty_data',
+     VP, '                if (res.data.success && res.data.data) {',
+     '                if (res.data.success) {', False),
+    # A-MAJOR-4：模板那两条祖先链断言各打一处。
+    ('test_the_execute_button_cannot_outlive_its_own_preview', 'execute_button_escapes_the_preview',
+     HTML, '                        <div v-if="maintenancePreview" class="maintenance-result">',
+     '                        <div v-if="showPredictionMaintenance" class="maintenance-result">', False),
+    ('test_the_execute_button_cannot_outlive_its_own_preview', 'error_line_drops_the_way_out',
+     HTML, ' —— 没有可信的预览，"确认执行"不会出现。<button class="action-btn small" @click="previewPredictionMaintenance(\'rollback\')">重新预览</button>',
+     '。', False),
+    # A-MINOR-3：`success` 字段缺失时不许武装红色按钮（判据是 `!== true`，退回 `=== false` 就该红）。
+    ('test_a_failed_preview_leaves_nothing_to_confirm', 'preview_arms_on_missing_success',
+     JS, '                if (!response || !response.data || response.data.success !== true) {',
+     '                if (!response || !response.data || response.data.success === false) {', False),
+    # 第 28 轮 B：TOP 弹窗那行说明（口径进正文、不许只活在 title）
+    ('test_the_top_modal_says_who_is_excluded', 'top_modal_hides_its_caliber',
+     HTML, '<div v-else class="empty-state">没有博主上榜：这个榜只收<strong>至少 5 条已验证结论</strong>的博主（少于 5 条的命中率没有参考意义）</div>',
+     '<div v-else class="empty-state">暂无数据</div>', False),
 ]
 
 
 def _apply(pristine, path, finding, replacement, is_regex):
     """变异**永远从干净底本出发**：早先版本读磁盘上的当前内容，于是第 N 处变异是叠在
-    第 N-1 处之上的 —— 报出来的"红"可能根本不是这一处造成的（同一把锚点还会第二次失配）。"""
+    第 N-1 处之上的 —— 报出来的"红"可能根本不是这一处造成的（同一把锚点还会第二次失配）。
+
+    改写时**全部命中都改**（第 36 轮 A-MINOR-1）：旧写法 `count=1` 只改第一处，
+    于是三条 `*_pager_ignores_soft_failure` 名字说"两条腿"、实际只打了 prev 那一腿，
+    `empty_state_blames_the_database` 更是 7 处里改 1 处 —— 报"红"了，但红得说不清是哪一处。
+    """
     text = pristine[path]
     if is_regex:
-        new, n = re.subn(finding, replacement, text, count=1, flags=re.S)
+        new, n = re.subn(finding, replacement, text, flags=re.S)
     else:
         n = text.count(finding)
-        new = text.replace(finding, replacement, 1)
+        new = text.replace(finding, replacement)
     return new, n
 
 
 def main(list_only=False, only=None):
     todo = [m for m in MUTATIONS if not only or only in m[1]]
+    # 名单自己算：docstring 里不抄文件名（第 36 轮 A-MINOR-2 就是抄漏了 viewpoint-manager.js）
+    print('本批改写到的文件：%s' % '、'.join(sorted({m[2] for m in todo})))
     if list_only:
         for i, (test, name, path, *_rest) in enumerate(todo, 1):
             print('%2d. %-34s -> %s' % (i, name, test))

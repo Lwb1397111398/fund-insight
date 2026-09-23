@@ -1,6 +1,10 @@
 """
 预置板块-基金映射数据
-将硬编码表 + 额外热门板块写入 SectorFundMapping 表（reviewed=True）
+把内置表 + 额外热门板块里**库里还没有**的板块补进 SectorFundMapping
+（`reviewed=False` + `match_source='seed_builtin'`，交给身份体检与人工审查再决定是否盖章）
+
+第 36 轮 B-MAJOR-1：旧版无条件写 `reviewed=True` 并就地改已有行的 `fund_code`，
+在镜像上一次会"改 21 行 + 新建 128 行全部已审查" ⇒ 现在只补缺、不覆盖，真写要 --confirm。
 """
 import sys
 import os
@@ -12,6 +16,8 @@ from _db_guard import pin_local_sqlite as _pin_local_db
 _pin_local_db(use_mirror_default=True)   # 钉死本地镜像库：.env 的 DATABASE_URL 指向生产，先 import ORM 就会连线上
 
 from src.models.database import SessionLocal, SectorFundMapping, init_db
+
+CONFIRM_TOKEN = 'SEED-MAP'
 
 # 额外的热门板块（不在硬编码表中的）
 EXTRA_MAPPINGS = [
@@ -92,85 +98,91 @@ EXTRA_MAPPINGS = [
 ]
 
 
-def seed_mappings():
-    """将硬编码表 + 额外板块导入数据库（全部 reviewed=True）"""
-    init_db()
-    db = SessionLocal()
+def seed_mappings(dry_run=False, confirm=None, db=None):
+    """把内置表里**库里还没有**的板块落成映射行（`reviewed=False` + `match_source='seed_builtin'`）。
 
+    第 36 轮 B-MAJOR-1 把旧语义量出来了：它曾无条件 `reviewed=True` 并**就地改 `fund_code`**，
+    在镜像上一次就是"改 21 行（其中 15 行已审查、8 行署名 agent）+ 新建 128 行全部已审查"。
+    所以这里改成只补缺、不覆盖：已存在的行交回给体检与人工审查那条路（`retag_prediction` 才是
+    唯一允许改标的的入口）。新行也一律 `reviewed=False` —— 门禁要求 `reviewed=1` 必须带
+    `match_source + verified_at + confidence`，脚本给不出这些，就不该盖章。
+    """
+    if not dry_run and confirm != CONFIRM_TOKEN:
+        print('[abort] 这会往库里插映射行。真写必须 --confirm %s（只看计划加 --dry-run）'
+              % CONFIRM_TOKEN)
+        return 4
+
+    from src.services.verdict_evidence import database_label
+
+    owns_session = db is None
+    if owns_session:
+        if not dry_run:
+            # dry-run 不碰结构：只读计划不该有建表这个副作用
+            init_db()
+        db = SessionLocal()
+    print('[库] %s' % database_label(db))
+    added = skipped_existing = owner_backed = code_diff = 0
+    planned_new = []
     try:
-        added = 0
-        skipped = 0
-        updated = 0
-
-        # 1. 导入硬编码表 SECTOR_FUND_MAP 的所有条目
         from src.constants.sector_fund_map import SECTOR_FUND_MAP
-        for sector_name, fund_info in SECTOR_FUND_MAP.items():
-            fund_code = fund_info.get('code', '')
-            fund_name = fund_info.get('name', '')
+        plan = []
+        for sector_name, info in SECTOR_FUND_MAP.items():
+            plan.append((sector_name, info.get('code', ''), info.get('name', '')))
+        for sector_name, code, name in EXTRA_MAPPINGS:
+            if sector_name not in SECTOR_FUND_MAP:
+                plan.append((sector_name, code, name))
 
+        for sector_name, fund_code, fund_name in plan:
             existing = db.query(SectorFundMapping).filter(
-                SectorFundMapping.sector_name == sector_name
-            ).first()
-
-            if existing:
-                if existing.fund_code == fund_code and existing.reviewed:
-                    skipped += 1
-                else:
-                    existing.fund_code = fund_code
-                    existing.fund_name = fund_name
-                    existing.is_active = True
-                    existing.reviewed = True
-                    updated += 1
-                    print(f"  [更新] {sector_name}: → {fund_name}({fund_code})")
-            else:
-                mapping = SectorFundMapping(
-                    sector_name=sector_name,
-                    fund_code=fund_code,
-                    fund_name=fund_name,
-                    reviewed=True
-                )
-                db.add(mapping)
+                SectorFundMapping.sector_name == sector_name).first()
+            if existing is not None:
+                skipped_existing += 1
+                if existing.fund_code != fund_code:
+                    code_diff += 1
+                    print('  [跳过：不覆盖] %s 库里是 %s，内置表想要 %s（要改标请走页面/体检）'
+                          % (sector_name, existing.fund_code, fund_code))
+                if getattr(existing, 'owner_locked', None) or \
+                        (getattr(existing, 'reviewed_by', None) or '') == 'owner':
+                    owner_backed += 1
+                    print('  [跳过：老板已确认] %s → %s' % (sector_name, existing.fund_code))
+                continue
+            if dry_run:
+                planned_new.append('%s→%s' % (sector_name, fund_code))
                 added += 1
-                print(f"  [新增] {sector_name} → {fund_name} ({fund_code})")
+                continue
+            db.add(SectorFundMapping(sector_name=sector_name, fund_code=fund_code,
+                                     fund_name=fund_name, reviewed=False,
+                                     match_source='seed_builtin', is_active=True))
+            added += 1
+            print('  [新增，待审查] %s → %s (%s)' % (sector_name, fund_name, fund_code))
 
-        # 2. 导入额外的热门板块
-        for sector_name, fund_code, fund_name in EXTRA_MAPPINGS:
-            existing = db.query(SectorFundMapping).filter(
-                SectorFundMapping.sector_name == sector_name
-            ).first()
-
-            if existing:
-                if existing.fund_code == fund_code and existing.reviewed:
-                    skipped += 1
-                else:
-                    existing.fund_code = fund_code
-                    existing.fund_name = fund_name
-                    existing.is_active = True
-                    existing.reviewed = True
-                    updated += 1
-                    print(f"  [更新] {sector_name}: → {fund_name}({fund_code})")
-            else:
-                mapping = SectorFundMapping(
-                    sector_name=sector_name,
-                    fund_code=fund_code,
-                    fund_name=fund_name,
-                    reviewed=True
-                )
-                db.add(mapping)
-                added += 1
-                print(f"  [新增] {sector_name} → {fund_name} ({fund_code})")
-
+        print('\nSEED-RECEIPT: %s 新增=%d 已存在跳过=%d 其中码不一致=%d 老板行=%d 内置计划=%d'
+              % ('dry-run' if dry_run else '真写', added, skipped_existing, code_diff,
+                 owner_backed, len(plan)))
+        for item in planned_new:
+            print('   将新建 %s' % item)
+        if dry_run:
+            print('dry-run：未写库。真写：--confirm %s' % CONFIRM_TOKEN)
+            db.rollback()
+            return 0
         db.commit()
-        print(f"\n完成: 新增 {added}, 更新 {updated}, 跳过 {skipped}")
-        print(f"硬编码表: {len(SECTOR_FUND_MAP)} 条, 额外板块: {len(EXTRA_MAPPINGS)} 条")
+        print('完成: 新增 %d（全部 reviewed=False 待审查）, 跳过已存在 %d' % (added, skipped_existing))
+        print('内置表: %d 条, 额外板块: %d 条' % (len(SECTOR_FUND_MAP) + len(EXTRA_MAPPINGS), len(EXTRA_MAPPINGS)))
+        return 0
 
     except Exception as e:
         db.rollback()
-        print(f"失败: {e}")
+        print('失败: %s' % e)
         raise
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 if __name__ == '__main__':
-    seed_mappings()
+    import argparse
+    ap = argparse.ArgumentParser(description='把内置板块表里库里没有的行补进 sector_fund_mapping（只补缺、不覆盖）')
+    ap.add_argument('--dry-run', action='store_true', help='只出计划，不写库')
+    ap.add_argument('--confirm', help='真写必须等于 %s' % CONFIRM_TOKEN)
+    args = ap.parse_args()
+    raise SystemExit(seed_mappings(dry_run=args.dry_run, confirm=args.confirm))
