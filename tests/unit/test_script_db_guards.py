@@ -28,6 +28,7 @@ def _facts(py):
     tree = ast.parse(text, filename=str(py))
     called, flags, raised, consts, direct_db = set(), set(), set(), set(), False
     env_written = False
+    alembic = False      # `from alembic import command` / `import alembic...`
     alias = {}          # `from _db_guard import pin_local_sqlite as _pin_x` 也要认得出来
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == '_db_guard':
@@ -54,6 +55,8 @@ def _facts(py):
             for al in node.names:
                 if (al.name or '').startswith('src.models.database'):
                     direct_db = True
+                if (al.name or '').split('.')[0] == 'alembic' or mod.split('.')[0] == 'alembic':
+                    alembic = True
         elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Subscript):
             t = node.targets[0]
             if isinstance(t.value, ast.Attribute) and t.value.attr == 'environ':
@@ -61,7 +64,8 @@ def _facts(py):
                 if isinstance(key, ast.Constant) and key.value in ('DATABASE_URL', 'LOCAL_DB_URL'):
                     env_written = True
     return {'text': text, 'called': called, 'flags': flags, 'raised': raised,
-            'consts': consts, 'env_written': env_written, 'direct_db': direct_db}
+            'consts': consts, 'env_written': env_written, 'direct_db': direct_db,
+            'alembic': alembic}
 
 
 def _scripts():
@@ -75,15 +79,27 @@ def _scripts():
             # 解析不了的文件不能悄悄放过：标成"未受管"，让下面三条用例为它变红
             out[py.name] = {'text': py.read_text(encoding='utf-8', errors='replace'),
                             'called': set(), 'flags': set(), 'env_written': False,
-                            'direct_db': True, 'broken': True}
+                            'direct_db': True, 'alembic': False, 'broken': True}
     return out
 
 
+def _issues_schema_ddl(f):
+    """`from alembic import command` + 真调用 `command.upgrade(...)` ⇒ 这脚本能改**表结构**。
+
+    第 37 轮 B 的 M-3：旧判据只认"CLI 上有写开关"或"session.commit/add/delete"，
+    而 `scripts/run_migrations.py` 两条都不沾 —— 于是它压根没进扫描集合，
+    每次 Render 启动往 `.env` 那个库（＝生产 Supabase）发 DDL 却无人要求它自报。
+    """
+    return bool(f.get('alembic')) and 'upgrade' in f['called']
+
+
 def _write_capable(f):
-    """CLI 上有写开关 / 确认口令 / 直接执行删除的服务 —— 都算"能改数据"。"""
+    """CLI 上有写开关 / 确认口令 / 直接执行删除的服务 / 跑迁移 —— 都算"能改数据"。"""
+    if _issues_schema_ddl(f):
+        return True
     if f['direct_db'] and f['called'] & {'commit', 'add', 'delete'}:
         # 第 36 轮 B-MINOR-3：**什么写开关都没有、上来就 commit** 的脚本以前落在扫描集合外
-        # （`scripts/seed_sector_mappings.py` 就是这个形状 —— 它连 `--dry-run` 都没有）。
+        # （`scripts/seed_sector_mappings.py` 当时就是这个形状）。
         # "有没有开关"不该是"受不受管"的前提：会写库就得说清连的是哪个库。
         # 这条必须排在 `--confirm` 那个分支**前面**：加完它才发现旧顺序会短路
         # （`import_export.py` 带 `--confirm` 却没有硬删 ⇒ 老早退直接判"不受管"）。
@@ -123,11 +139,18 @@ def _refuses_local_without_a_flag(f):
             and any('--production' in fl for fl in f['flags']))
 
 
-def _guarded(name, f):
+def _guarded(name, f, schema_ddl=False):
     if name in PRODUCTION_ONLY:
         return _refuses_local_without_a_flag(f)
     if name in PRODUCTION_ENTRY:
         return 'database_label' in f['called']
+    # `os.environ["DATABASE_URL"] = ...` 以前的含义是"这脚本自己动过连接串"，
+    # 但它**不区分方向**：`run_migrations.py` 那句 `= ALEMBIC_DATABASE_URL` 可以是生产，
+    # 照样被判"有守卫"（第 37 轮 B 的 M-3，实测 5 条用例全绿）。
+    # 所以发 DDL 的脚本只认三种真守卫：钉镜像、自报库名、或"见远程就拒跑 + 显式旗子"。
+    if schema_ddl:
+        return ('pin_local_sqlite' in f['called'] or 'database_label' in f['called']
+                or _refuses_remote_without_a_flag(f))
     return ('pin_local_sqlite' in f['called'] or f['env_written']
             or 'database_label' in f['called'] or _refuses_remote_without_a_flag(f))
 
@@ -149,6 +172,13 @@ def test_there_are_write_capable_scripts_left_to_guard():
     assert not unmanaged, '这些脚本直连 ORM 又写库，却没被当成"能改数据"：%s' % '、'.join(unmanaged)
     assert 'seed_sector_mappings.py' in committing, \
         'seed 脚本从集合里掉了 ⇒ 判据又被"有没有写开关"卡回去了（它当初就没有开关）'
+    # 第 37 轮 B 的 M-3：**发 DDL 的迁移脚本**以前两条判据都不沾（无写开关、不 commit），
+    # 整条扫描对它没印象。这两个名字必须仍在集合里，否则说明"迁移型 DDL"信号又退化成一个字面词。
+    ddl = {name for name, f in _scripts().items() if _issues_schema_ddl(f)}
+    assert 'run_migrations.py' in ddl, \
+        'run_migrations.py 不再被认成"会发 DDL" ⇒ 信号被删或改名了，而它每次 Render 启动都在动生产表结构'
+    leaked = sorted(name for name in ddl if not _write_capable(_scripts()[name]))
+    assert not leaked, '这些脚本能改表结构，却没被当成"能改数据"：%s' % '、'.join(leaked)
 
 
 def test_write_capable_scripts_declare_their_database_in_code():
@@ -157,9 +187,26 @@ def test_write_capable_scripts_declare_their_database_in_code():
     这条改的是"以后新加的脚本必须自报"这件事本身。
     """
     bad = [name for name, f in _scripts().items()
-           if _write_capable(f) and not _guarded(name, f)]
+           if _write_capable(f) and not _guarded(name, f, schema_ddl=_issues_schema_ddl(f))]
     assert not bad, ('这些脚本能改数据，却没在代码里说清算哪个库'
                      '（.env 默认指向生产）：%s' % '、'.join(bad))
+
+
+def test_renaming_the_database_url_env_is_not_a_guard():
+    """`os.environ["DATABASE_URL"] = 别的库` 不能算"有守卫"，否则方向反了的脚本照样过关。
+
+    起因：`run_migrations.py` 把 `ALEMBIC_DATABASE_URL` 赋进 `DATABASE_URL` —— 那是**指向生产**
+    的赋值，旧 `_guarded` 只看"有没有对 DATABASE_URL 赋值"，于是把发 DDL 的脚本判成已声明。
+    这条把"赋过值但没有真守卫"的形状自己钉住：把 run_migrations 的自报行删掉，它必须响。
+    """
+    scripts = _scripts()
+    f = scripts.get('run_migrations.py')
+    assert f is not None, 'run_migrations.py 不在了（它仍被 render.yaml 的 startCommand 每次启动跑一遍）'
+    assert f['env_written'] and _issues_schema_ddl(f), \
+        '前提变了：它不再"赋 DATABASE_URL"或不再发 DDL ⇒ 这条用例失去意义，改判据而不是留着空判'
+    assert _write_capable(f)
+    assert _guarded('run_migrations.py', f, schema_ddl=True), \
+        'run_migrations.py 现在又只靠"赋值 DATABASE_URL"过关 ⇒ 发 DDL 的脚本必须钉镜像/自报库名/见远程拒跑'
 
 
 def test_a_production_flag_alone_is_not_a_guard():
@@ -204,3 +251,9 @@ def test_the_production_only_allow_list_is_not_a_backdoor():
         assert name in scripts, 'PRODUCTION_ONLY 里的 %s 不存在（拼错的名字=闸门静默放行）' % name
         assert _refuses_local_without_a_flag(scripts[name]), \
             '%s 挂着"只面向生产"的名字却没有反向护栏（见 SQLite 就拒跑 + 显式 --production）' % name
+    # `PRODUCTION_ENTRY` 同样是名单：它的护栏是"自报库名"，所以名字必须存在、
+    # 代码里必须**真调用** database_label（写进 docstring 不算，_facts 只收 AST）。
+    for name in sorted(PRODUCTION_ENTRY):
+        assert name in scripts, 'PRODUCTION_ENTRY 里的 %s 不存在（拼错的名字=闸门静默放行）' % name
+        assert 'database_label' in scripts[name]['called'], \
+            '%s 挂着"生产入口"的名字却没自报库名' % name

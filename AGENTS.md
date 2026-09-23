@@ -195,14 +195,25 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 18:54（北京），第 36 轮返修（复评 82/78 驱动 + 老板把线降到 80）之后，
-最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
+最近一次核对（2026-09-23 20:15（北京），第 37 轮 B 席 M-3（迁移脚本对生产发 DDL 却不被守卫看见）
+修完之后，最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **948 passed / 16 skipped / 0 failed**（216.75 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **957 passed / 16 skipped / 0 failed**（201.77 秒）。
+- `pytest tests/unit -q` → **955 passed / 16 skipped / 0 failed**（220.47 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **964 passed / 16 skipped / 0 failed**（197.08 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 929/938 → 本批 948/957：+19 条 =
+  这一批另外抓到两条**关于"怎么跑"**的坑：
+  ① 断言子进程的中文输出时，父进程不设 `PYTHONIOENCODING` ⇒ 子进程按 cp936 写、测试按 utf-8 读，
+  那行明明印了却解成一串替换符 ⇒ **假红**（`test_prediction_migrations.py` 的
+  `_run_the_migration_script` 现在 `setdefault` 了 utf-8；这条坑以前只写在文档里，没有机器闸）。
+  ② 满负载时 Windows 会把刚启动的子进程打死（退码 `0xC0000374` = STATUS_HEAP_CORRUPTION，
+  stdout/stderr 全空）。A/B 证明与本次改动无关（把那两行删掉，3 次仍崩 1 次）；
+  现在的处理是**只对这种"被系统打死"的退码重跑**，脚本自己返回 1 的失败一次都不许多试。
+  （上一基线 948/957 → 本批 955/964：+7 条 =
+  `test_database_label_targets.py` 4 条（Session / Engine / Connection / 认不出的一族）、
+  `test_script_db_guards.py` +1 条（"赋值过 `DATABASE_URL`"不等于守卫，发 DDL 的脚本不认它）、
+  `test_prediction_migrations.py` +2 条（只重试被系统打死的退码 / 崩溃退码怎么认）。）
+  （上一基线 929/938 → 948/957：+19 条 =
   `tests/unit/test_sector_seed_route_honesty.py` 10 条（seed 后门：默认关 / 确认头 / 看退码 /
   无回执算失败 / cwd 指得到真脚本 / 成功要刷缓存 / 脚本拒写 / 只补缺不覆盖 / dry-run 不写）
   + `test_seed_owner_proxies_gate.py` 5 条（`--owner-confirm SEED-PROXY` 闸，含"闸排在钉库之前"）
@@ -258,14 +269,26 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `--impact-against tests/fixtures/sector_map_before_round27.py` 量影响面（上一版表已钉进 fixtures —— 第 35 轮 B 抓到原来那条命令指向 `data/_old_map.py`，而 `data/` 整目录不入库，命令当场 FileNotFoundError）：**31 个板块（改码 18 / 删键 13）= 78 条 = 4.8%**）。
   以前文档里写过的"916 条""124 条 / 7.7%"都是手抄没绑口径，已撤回（同一个数被复现成 925/911）。
 - **能写数据的脚本必须说清"连的是哪个库"**（第 28 轮 F-MINOR-6 起有用例钉）：
-  `tests/unit/test_script_db_guards.py` 扫 `scripts/*.py`，凡**带写开关**
-  （`--apply` / `--execute` / `--confirm …`）**且直连 ORM** 的脚本，必须出现
-  `pin_local_sqlite` / 自设 `DATABASE_URL` / 显式 `--against-production` / `database_label` 之一。
+  `tests/unit/test_script_db_guards.py` 扫 `scripts/*.py`，判"能不能改数据"**只看 AST**（注释与
+  docstring 不算）：① 直连 ORM 且代码里真 `commit/add/delete`；② CLI 带写开关
+  （`--apply` / `--execute` / `--confirm …`）；③ **`from alembic import command` + 真调
+  `command.upgrade(...)`（＝能改表结构，第 37 轮 B 的 M-3）**。命中任一条就必须出现
+  `pin_local_sqlite` / 自设 `DATABASE_URL` / 显式 `--against-production` 且见远程就拒跑 / `database_label` 之一。
   起因：`scripts/run_three_bucket_retention.py` 以前直接 `from src.models.database import SessionLocal`
   且不设守卫 —— `.env` 的 `DATABASE_URL` 指向生产 ⇒ 它是那批无守卫脚本里**唯一带硬删**的，
   跑起来默认就在生产上算删除候选、还能 `--execute`。现在默认钉镜像、要动生产得显式说，
   并且第一行印库名。`scripts/run_scheduled_tasks.py`（Render Cron 入口，设计上就跑在生产）
   也补了"[库] …"这行日志 —— 净值停在 09-13 那 9 天之所以查不清，部分就是因为日志不说连哪儿。
+  **第 37 轮把这条闸门补了两处，别再说成"任何自报都算守卫"**：
+  ① `os.environ["DATABASE_URL"] = …` 这个信号**不区分方向**，所以只对"写行"的脚本算守卫；
+  **发 DDL 的脚本不认它** —— `scripts/run_migrations.py` 那句 `= ALEMBIC_DATABASE_URL` 可以是生产，
+  旧判据却把"赋过值"当"有守卫"，于是它每次 Render 启动（`render.yaml:11` 的 `startCommand`）
+  对 `.env` 指的那个库发 `alembic upgrade head` 却全程静默。现在它第一行自报：
+  `[库] 本地镜像库（sqlite）—— alembic upgrade head 会向它发 DDL`（副本库实测；
+  **它仍然没有 dry-run，也没有"见远程就拒跑"**——要加得改 `render.yaml`，那是老板的决定项）。
+  ② `database_label()` 以前只认 Session：SQLAlchemy 2.0 起 `Connection` 没有 `get_bind()`，
+  那个 `except` 把异常吞成"未知库" ⇒ 自报行自己说谎。现在 Session / Engine / Connection 三种都认，
+  用例 `tests/unit/test_database_label_targets.py`（4 条）钉着。
 - **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：
   `tests/unit/test_blogger_hit_rate_map.py` 三条钉 `src/api/routes/bloggers.py:_hit_rate_map`。
   此前全仓对它零覆盖：把判据 `Prediction.is_deleted == False` 反向改成 `== True`
@@ -378,8 +401,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   **还有第四条来源，别把上面那句念成"只有三条"**（第 36 轮 B-MAJOR-3 抓到）：
   `scripts/seed_owner_proxies.py:62-64` 直接写 `reviewed_by='owner' + owner_locked=True`，
   它靠的是**脚本级**旗子 `--owner-confirm SEED-PROXY`（同文件 33-37 行，第 20 轮 MAJOR-1 加的），
-  不是页面上的 `owner_confirm`。这条闸到今天**没有用例钉着**（`grep -rn seed_owner_proxies tests/` = 0）
-  ⇒ 见任务 #54；在它有用例之前，别说成"豁免只有三个入口"。
+  不是页面上的 `owner_confirm`。这条闸**现在有用例钉着**了（第 36 轮返修补的
+  `tests/unit/test_seed_owner_proxies_gate.py` 5 条：不给令牌退 4、给错令牌退 4、`--dry-run` 不写、
+  给了令牌才落 `owner` 署名、以及"闸排在 `pin_local_sqlite` 之前"的源码顺序判据）；
+  但**别说成"豁免只有三个入口"**——第四条来源仍然在，只是它现在需要显式令牌。
   换了基金代码又没重新确认时，**旧标的上继承来的锁定会被一并撤掉**（`row_unservable()` 的
   owner 例外只认老板这次确认过的那只基金）。页面上区分三种状态：待审查 / 已审查（只是看过）/
   老板已确认（免疫）。

@@ -194,10 +194,20 @@ def span_report(db) -> Dict:
 
 
 def database_label(db) -> str:
-    """给老板看的库名：本地镜像 / 线上生产，别说"数据库"这种没信息量的词。"""
-    try:
-        url = str(db.get_bind().url)
-    except Exception:
+    """给老板看的库名：本地镜像 / 线上生产，别说"数据库"这种没信息量的词。
+
+    Session / Engine / Connection 三种都得认得：SQLAlchemy 2.0 起 `Connection` 已经没有
+    `get_bind()`，只认 Session 的话传引擎进来会被下面那个 except 吞掉、静默降级成"未知库"
+    ——而"报出是哪个库"这件事的全部意义就是不许说 Unknown。
+    """
+    url = None
+    for pick in (lambda: db.get_bind().url, lambda: db.url, lambda: db.engine.url):
+        try:
+            url = str(pick())
+            break
+        except Exception:
+            continue
+    if url is None:
         return '未知库'
     if url.startswith('sqlite'):
         return '本地镜像库'
