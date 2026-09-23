@@ -139,7 +139,7 @@ python scripts/fetch_sector_flow.py
 重要限制：
 
 - 项目已建立 Alembic 既有结构基线，首个增量迁移只新增 `prediction_change_logs`。
-- Alembic 不自动读取 `DATABASE_URL`；生产迁移必须显式、安全地提供 `ALEMBIC_DATABASE_URL`。
+- `alembic/env.py` 只在**本地**把 `DATABASE_URL` 继承进来（且它指向 sqlite 时）；解析出的目标一旦看着是远程，命令行直接跑 `alembic` 会被 `[abort]` 拒掉。真要动生产库必须同时给两道旗子：`ALEMBIC_DATABASE_URL` + `ALEMBIC_ALLOW_REMOTE=1`（第 39 轮 B：只靠一个环境变量就放行太松，而上一版只在 ini 等于默认镜像串时才检查方向 —— 换一份 ini 就能让整道闸静默失效）。
 - 修改 `src/models/database.py` 后，必须同时提供并验证只增量的迁移文件。
 - 数据库导入接口 `/api/import-database` 默认关闭；开启后还需要确认头 `X-Danger-Confirm: import-production-database`。
 
@@ -222,7 +222,9 @@ python scripts/backup_database.py --sqlite-path data/fund_insight.db --output-di
 6. 只在隔离库运行迁移预检和应用启动检查，确认旧数据可读、归档预测可恢复、批量验证状态可读取。
 7. 保存迁移前后比对结果和回滚命令，人工确认后才允许安排生产迁移。
 
-生产 Web 启动必须保持 `ENABLE_STARTUP_MIGRATIONS=false`。不得把结构迁移绑定到 Render 启动命令，也不得在未完成隔离恢复演练时对 Supabase 执行迁移。
+生产 Web 启动必须保持 `ENABLE_STARTUP_MIGRATIONS=false`（那是应用内补列/建索引的另一条路径）。
+
+**下面这句是愿望，不是现状，记在这里免得有人照它行动**：「不得把结构迁移绑定到 Render 启动命令」。事实是 `render.yaml:11` 的 `startCommand` = `python scripts/run_migrations.py && uvicorn ...`，也就是**每次 Render 启动都会对 `$DATABASE_URL` 指向的库跑一次 `alembic upgrade head`**（第 37 轮起它动手前先自报 `[库] …`；它没有 dry-run、没有确认头）。要把这句话落成现状（从 startCommand 里去掉迁移，或给它加确认旗子）＝改部署配置 ⇒ 老板决定项，见 `docs/迭代计划/S6-上线前检查单.md` §6 与任务 #57。未完成隔离恢复演练前，不得对 Supabase 手工执行迁移。
 
 ## 配置持久化
 

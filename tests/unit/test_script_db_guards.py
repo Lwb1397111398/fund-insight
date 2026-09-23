@@ -20,6 +20,8 @@ SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
 WRITE_SWITCH = re.compile(r'--(apply|execute|hard-delete|import)\b')
 HARD_DELETE = re.compile(r'CONFIRM_TOKEN|ThreeBucketRetentionService|three-buckets-hard-delete')
 PROD_FLAG = re.compile(r'--against-production')
+HTTP_WRITE = {'post', 'put', 'patch'}     # 会话/requests 的写方法（ORM 侧没有这三个名字）
+OS_SHELL = {'system', 'popen', 'execv', 'execve', 'spawn', 'spawnl'}
 
 
 def _facts(py):
@@ -71,15 +73,21 @@ def _facts(py):
 def _scripts():
     out = {}
     for py in sorted(SCRIPTS.glob('*.py')):
-        if py.name.startswith('_'):
+        # 只放过 `_db_guard.py` 本身（它就是被大家调用的那把钉库守卫）。
+        # 第 39 轮 B 说得对：以前 `startswith('_')` 是**整族豁免**，新写一个 `_x.py`
+        # 的生产写脚本可以永远不进扫描 —— 豁免名单必须是"一个文件"，不是"一个前缀"。
+        if py.name == '_db_guard.py':
             continue
         try:
             out[py.name] = _facts(py)
         except SyntaxError:
             # 解析不了的文件不能悄悄放过：标成"未受管"，让下面三条用例为它变红
+            # 兜底 dict 必须与 `_facts` 返回的键**完全一致**，否则"标成未受管让下面变红"
+            # 这句承诺是假的：扫描器会先 KeyError 崩掉（第 39 轮 A-MINOR-7 实测）。
             out[py.name] = {'text': py.read_text(encoding='utf-8', errors='replace'),
-                            'called': set(), 'flags': set(), 'env_written': False,
-                            'direct_db': True, 'alembic': False, 'broken': True}
+                            'called': set(), 'flags': set(), 'raised': set(), 'consts': set(),
+                            'env_written': False, 'direct_db': True, 'alembic': False,
+                            'broken': True}
     return out
 
 
@@ -96,12 +104,18 @@ def _issues_schema_ddl(f):
     """
     via_api = bool(f.get('alembic')) and (f['called'] & _SCHEMA_ddL_VERBS)
     via_cli = any('alembic' in c for c in f['consts']) and bool(
-        f['called'] & {'run', 'Popen', 'call', 'check_call', 'check_output'})
+        f['called'] & ({'run', 'Popen', 'call', 'check_call', 'check_output'} | OS_SHELL))
     return bool(via_api or via_cli)
 
 
 def _write_capable(f):
     """CLI 上有写开关 / 确认口令 / 直接执行删除的服务 / 跑迁移 —— 都算"能改数据"。"""
+    if f.get('broken'):
+        # 解析不了＝**无法证明它不能写** ⇒ fail-closed 按能写处理。
+        # 以前只写"标成未受管，让下面三条用例为它变红"，实际是：兜底 dict 里没有写开关、
+        # 也没有 commit/add/delete 调用 ⇒ 它压根进不了受管集合，解析失败被静默放过
+        # （这条是我自己新写的判据当场抓出来的，第 39 轮 A-MINOR-7 的第二半）。
+        return True
     if _issues_schema_ddl(f):
         return True
     if f['direct_db'] and f['called'] & {'commit', 'add', 'delete'}:
@@ -110,6 +124,10 @@ def _write_capable(f):
         # "有没有开关"不该是"受不受管"的前提：会写库就得说清连的是哪个库。
         # 这条必须排在 `--confirm` 那个分支**前面**：加完它才发现旧顺序会短路
         # （`import_export.py` 带 `--confirm` 却没有硬删 ⇒ 老早退直接判"不受管"）。
+        return True
+    if f['called'] & HTTP_WRITE:
+        # 第 39 轮 B：`_declares_http_target` 只做"守卫"、不做"触发"，于是
+        # 一个不带 `--confirm` 字样的 HTTP 写口（口令写死在代码里也算）依旧全隐身。
         return True
     if any(WRITE_SWITCH.search(fl) for fl in f['flags']):
         return True
@@ -238,6 +256,56 @@ def test_renaming_the_database_url_env_is_not_a_guard():
     assert _write_capable(f)
     assert _guarded('run_migrations.py', f, schema_ddl=True), \
         'run_migrations.py 现在又只靠"赋值 DATABASE_URL"过关 ⇒ 发 DDL 的脚本必须钉镜像/自报库名/见远程拒跑'
+
+
+def test_the_two_new_triggers_can_actually_fire():
+    """HTTP 写与 `os.system` 起 CLI 这两个触发器**今天 0 实例**（我把 `scripts/*.py` 扫了一遍：
+    唯一的 HTTP 写口 `push_sector_mappings_to_prod.py` 走的是自己的 `request()` 助手）。
+    没有这条合成判据，那两个集合就是两段"写在代码里却永远不会响"的死逻辑。"""
+    def facts(**kw):
+        base = {'text': '', 'called': set(), 'flags': set(), 'raised': set(), 'consts': set(),
+                'env_written': False, 'direct_db': False, 'alembic': False}
+        base.update(kw)
+        return base
+
+    assert _write_capable(facts(called={'post'})), 'HTTP 写不算能改数据 ⇒ 下一条 POST 脚本又隐身'
+    assert _write_capable(facts(called={'put'})), '同上（put）'
+    assert not _write_capable(facts(called={'get'})), 'GET 也算写 ⇒ 判据过宽会淹掉真信号'
+    assert _issues_schema_ddl(facts(alembic=False, called={'system'}, consts={'alembic upgrade head'})), \
+        '`os.system("alembic upgrade head")` 不被认成发 DDL（上一版只认 subprocess 那一族）'
+
+
+def test_underscore_prefixed_scripts_are_not_a_whole_family_exemption():
+    """以前 `startswith('_')` 让 7 个 `_tmp_*.py` 整族不进扫描 ⇒ 新写一个 `_x.py` 的生产写脚本
+    可以永远没人管（第 39 轮 B）。现在豁免名单只有 `_db_guard.py` 一个文件，且它被别处引用。"""
+    names = set(_scripts())
+    assert '_db_guard.py' not in names
+    on_disk = {p.name for p in SCRIPTS.glob('*.py')} - {'_db_guard.py'}
+    assert names == on_disk, '扫描集合不等于目录清单：%s 被悄悄跳过了' % sorted(on_disk - names)
+    assert any(n.startswith('_tmp_') for n in names), '_tmp_* 一个都没扫到 ⇒ 前缀豁免还在'
+
+
+def test_a_syntax_broken_script_breaks_the_scan_not_the_tester():
+    """兜底 dict 必须与 `_facts` 同形，否则"让它变红"这句承诺会先变成 KeyError。"""
+    facts = _scripts()
+    fake = dict(next(iter(facts.values())))
+    fake.update({'text': 'def (:', 'called': set(), 'flags': set(), 'raised': set(),
+                 'consts': set(), 'env_written': False, 'direct_db': True, 'alembic': False,
+                 'broken': True})
+    _write_capable(fake)                                  # 不许抛
+    _guarded('broken.py', fake, schema_ddl=_issues_schema_ddl(fake))   # 不许抛
+    broken = {'x': fake}
+    orig = globals()['_scripts']
+    globals()['_scripts'] = lambda: broken
+    try:
+        try:
+            test_write_capable_scripts_declare_their_database_in_code()
+        except AssertionError:
+            pass                        # 正确形状：判据说"它没自报"，而不是扫描器崩
+        else:
+            raise AssertionError('语法坏掉的文件被判成"没问题" ⇒ 解析失败被静默放过')
+    finally:
+        globals()['_scripts'] = orig
 
 
 def test_every_way_of_changing_the_schema_counts_as_ddl():

@@ -201,12 +201,23 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 22:18（北京），第 38 轮两份复评（A 78 / B 76，取低分 76 未过线）返修完之后，
+最近一次核对（2026-09-23 22:33（北京），第 39 轮返修（A 81 / B 79，取低分 79 差 1 分）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **967 passed / 16 skipped / 0 failed**（232.13 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **976 passed / 16 skipped / 0 failed**（234.38 秒）。
+- `pytest tests/unit -q` → **976 passed / 16 skipped / 0 failed**（261.90 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **985 passed / 16 skipped / 0 failed**（209.37 秒）。
+  （上一基线 967/976 → 本批 976/985：+9 条 = `test_alembic_target_direction.py` +4
+  （第二个 ini 指远程也拒 / 一个环境变量解不开第二道旗子 / 两道旗子都给了必须自报且自报走 stderr /
+  任何往下走的分支都得报 `[库]`）、`test_seed_owner_proxies_gate.py` +1
+  （`ok=True` 但官方名为空 ⇒ 同样不写）、`test_script_db_guards.py` +3
+  （两个新触发器的合成判据 / `_` 前缀不再是整族豁免 / 解析失败的文件必须 fail-closed 而不是崩扫描器）、
+  `test_push_writeback_gate.py` +1（服务端早期拒收某行 ≠ 对端是旧构建，不该锁死整批）。）
+  本批新增/复核的 4 处前端变异全 RED：`--only _title`（3 处）与 `--only caliber_note`（1 处）。
+  变异与判据的条数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`
+  （第 39 轮另修掉一处证据机器自身的洞：`--only` 打错字以前是"0 处变异、CONTROL 全绿、退码 0"
+  ＝**满分通过一次什么都没测的体检**；现在匹配不到就失败，且 CLI 换成真 argparse——
+  它顶部曾 `import argparse` 却从不调用，`--help` 会让它整套开跑就地改写 `web/`）。
   （上一基线 955/964 → 本批 967/976：+12 条 = `test_alembic_target_direction.py` 4 条
   （远程 + 裸 CLI 必须拒跑 / 本地 sqlite 仍继承 / 显式 `ALEMBIC_DATABASE_URL` 覆盖 / 已交连接的启动路径不受影响）、
   `test_seed_owner_proxies_gate.py` +2（探针说取不到 ⇒ 0 行 0 档案；"桩的键 == 真返回的键"）、
@@ -540,9 +551,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `from src.models.database import Base` 已经把 `.env` 灌进进程 ⇒ 文档推荐的
   `alembic upgrade head` / `downgrade prediction_schema_baseline` 本地一跑就是**对生产发 DDL**
   （那支 downgrade 会 `drop_table("prediction_change_logs")`＝审计台账本体）。
-  现在只有三种走法：目标本身是 sqlite、显式给 `ALEMBIC_DATABASE_URL`、或调用方已把连接交进来
-  （`scripts/run_migrations.py` = Render `startCommand` 走的就是这条，不受影响）。
-  四条形状都由 `tests/unit/test_alembic_target_direction.py` 钉着（含"拒跑消息不许泄露口令"）。
+  现在判在**最终解析出的那个值**上（第 39 轮 B 抓到上一版的第二半：只在 ini 等于默认镜像串时
+  才检查方向 ⇒ 换一份 `alembic.ini` 或用 `-c` 指第二个 ini，整道闸连同自报静默失效）。
+  走法只有三种：目标是 sqlite；调用方已把连接交进来（`scripts/run_migrations.py` = Render
+  `startCommand` 走这条，实测不受影响）；或**同时**给 `ALEMBIC_DATABASE_URL` 与
+  `ALEMBIC_ALLOW_REMOTE=1`（两道旗子——一个环境变量就放行太松），且这条分支必须自报
+  `[库] …` 到 **stderr**（`--sql` 的 stdout 是要存成脚本文件的）。
+  八条形状都由 `tests/unit/test_alembic_target_direction.py` 钉着（含"拒跑与放行都不许泄露口令"）。
   **推论（写给判据自己）**：桩/夹具里用的键名必须来自**真函数返回值**（AST 读），
   不许我抄一份 —— 上一轮我写的 `/verify-fund` 用例给探针发明了 `is_fetchable`/`status` 两个键，
   而路由是纯 pass-through，于是那条判据结构上不可能红（页面读的其实是 `d.ok`）。

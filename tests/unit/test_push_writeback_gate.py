@@ -114,6 +114,35 @@ def test_an_old_server_that_never_answers_the_column_sends_nothing(monkeypatch, 
     assert calls[-1]['dry_run'] is True, '拒收之前就该停住，最后一个请求不许是真写'
 
 
+def test_a_row_the_server_refused_early_is_dropped_not_mislabelled(monkeypatch, tmp_path):
+    """服务端在写 `nav_priced_here` **之前**就 `continue` 的那些行（空板块名、字段超长、
+    evidence 坏 JSON…）天生不带这一列。第 39 轮两份同点：旧写法把"被拒收"误诊成
+    "对端是没升级的旧构建" ⇒ 整批 145 行退码 3，还把消息指向"去升级生产"。
+
+    现在：带 `reason` ⇒ 剔掉那一行继续；不带 `reason` 才算旧构建（上一条用例钉那一半）。
+    """
+    calls = _setup(monkeypatch, tmp_path)
+
+    def mixed_server(base, path, password, payload=None, method='GET', timeout=180):
+        calls.append(payload)
+        items = []
+        for r in payload['mappings']:
+            if r['fund_code'] == BAD['fund_code']:
+                items.append({'sector_name': r['sector_name'], 'fund_code': r['fund_code'],
+                              'reason': 'evidence_too_large'})      # 早期拒收，没走到定价那一列
+            else:
+                items.append({'sector_name': r['sector_name'], 'fund_code': r['fund_code'],
+                              'nav_priced_here': True, 'nav_priced_here_note': ''})
+        return 200, {'message': 'ok', 'data': {'items': items}}
+
+    monkeypatch.setattr(push, 'request', mixed_server)
+    monkeypatch.setattr('sys.argv', ['push_sector_mappings_to_prod.py', '--confirm', push.CONFIRM])
+    code = push.main()
+    assert code == 0, '被拒收的一行不该把整批锁死（退码 %s）' % code
+    sent = [r['fund_code'] for r in calls[-1]['mappings']]
+    assert sent == [GOOD['fund_code']], '那行服务端已经拒了，不该再发第二次：%s' % sent
+
+
 def test_a_preflight_that_answers_fewer_rows_sends_nothing(monkeypatch, tmp_path):
     """预检只答了一半的行 ⇒ 剩下那些等于"没问过"，同样不许发。"""
     calls = _setup(monkeypatch, tmp_path)

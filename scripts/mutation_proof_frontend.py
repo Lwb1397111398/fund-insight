@@ -362,6 +362,15 @@ MUTATIONS = [
     ('test_a_missing_number_is_not_rendered_as_zero',
      'post_mini_card_stops_being_a_value_card', HTML,
      '<span class="value">{{ viewErrors.posts', '<span class="metric">{{ viewErrors.posts', False),
+    # 第 39 轮 A-MINOR-8：那条"口径进正文"的判据以前没配变异（commit message 里 6 处全指向别的）。
+    # 把正文那行灰字退回 title-only，就是上一轮那句假话的原形状 ⇒ 必须红。
+    ('test_the_three_prediction_queues_explain_themselves_without_hover',
+     'queue_caliber_moves_back_into_title', HTML,
+     '<div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>',
+     '<div class="filter-caliber-note" title="口径：「待验证到期」= 已到目标日"></div>', False),
+    ('test_the_three_prediction_queues_explain_themselves_without_hover',
+     'caliber_note_loses_its_style_class', HTML,
+     'class="filter-caliber-note"', 'class="caliber-note"', False),
 ]
 
 
@@ -384,6 +393,11 @@ def _apply(pristine, path, finding, replacement, is_regex):
 
 def main(list_only=False, only=None):
     todo = [m for m in MUTATIONS if not only or only in m[1]]
+    if only and not todo:
+        # 第 39 轮 A-MAJOR-2：`--only` 打错字时以前是"0 处变异、CONTROL 全绿、退码 0"
+        # ＝**满分通过一次什么都没测的体检**。整套"文本判据必须配变异"的证据链悬在这个开关上。
+        print('[abort] --only %r 一处变异都没匹配上 ⇒ 拒绝按"通过"收场' % only)
+        return ['only-matched-nothing']
     # 名单自己算：docstring 里不抄文件名（第 36 轮 A-MINOR-2 就是抄漏了 viewpoint-manager.js）
     print('本批改写到的文件：%s' % '、'.join(sorted({m[2] for m in todo})))
     if list_only:
@@ -471,8 +485,11 @@ def main(list_only=False, only=None):
 
 
 if __name__ == '__main__':
-    only = None
-    if '--only' in sys.argv:
-        only = sys.argv[sys.argv.index('--only') + 1]
-    bad = main('--list' in sys.argv, only)
-    sys.exit(1 if bad else 0)
+    # 真用 argparse（第 39 轮 A：文件顶部 import 了它却从没调用 ⇒ 一个"我有 CLI 校验"的假信号，
+    # 结果 `--help` 被当普通参数、整套体检就地开跑改写 web/；未知参数也一律静默接受）。
+    parser = argparse.ArgumentParser(description='前端判据变异体检（会就地改写 web/，跑完还原）')
+    parser.add_argument('--list', action='store_true', help='只列变异清单与覆盖的判据数，不动文件')
+    parser.add_argument('--only', metavar='子串', help='只跑名字里含该子串的变异；匹配不到即失败')
+    args = parser.parse_args()
+    bad = main(args.list, args.only)
+    raise SystemExit(1 if bad else 0)

@@ -87,7 +87,74 @@ def test_a_supplied_connection_still_runs(tmp_path):
         encoding='utf-8')
     result = subprocess.run(
         [sys.executable, str(script)], cwd=str(ROOT),
-        env=_child_env(DATABASE_URL=REMOTE, ALEMBIC_DATABASE_URL=None, LOCAL_DB_URL=None),
+        env=_child_env(DATABASE_URL=REMOTE, ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None,
+                       LOCAL_DB_URL=None),
         capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
     assert 'BOOT-PATH-OK' in result.stdout, \
         '交了连接还被拒 ⇒ 生产启动会被这条闸门挡住（stderr 尾部：%s）' % result.stderr[-600:]
+
+
+def _second_ini(tmp_path, url):
+    """`-c 另一个.ini`：第 39 轮 B 的 MAJOR-1 —— 上一版只在"ini 还等于默认镜像串"时查方向，
+    换一份 ini 就让整道闸（连同自报）静默失效。"""
+    src = (ROOT / 'alembic.ini').read_text(encoding='utf-8')
+    import re as _re
+    src = _re.sub(r'sqlalchemy\.url\s*=.*', 'sqlalchemy.url = ' + url, src)
+    src = _re.sub(r'script_location\s*=.*', 'script_location = '
+                  + (ROOT / 'alembic').as_posix(), src)
+    path = tmp_path / 'alembic_second.ini'
+    path.write_text(src, encoding='utf-8')
+    return str(path)
+
+
+def test_a_second_ini_pointing_at_a_remote_is_refused_too(tmp_path):
+    rc, blob = _run_alembic_offline(DATABASE_URL='sqlite:///data/fund_insight.db',
+                                    ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None,
+                                    LOCAL_DB_URL=None)
+    assert rc == 0 and 'Context impl SQLiteImpl' in blob     # 对照组：默认 ini + 本地库照常
+    ini = _second_ini(tmp_path, REMOTE)
+    result = subprocess.run(
+        [sys.executable, '-m', 'alembic', '-c', ini, 'upgrade', 'head', '--sql'],
+        cwd=str(ROOT), env=_child_env(DATABASE_URL='sqlite:///data/fund_insight.db',
+                                      ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None,
+                                      LOCAL_DB_URL=None),
+        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    blob = result.stdout + result.stderr
+    assert result.returncode != 0 and '[abort]' in blob, \
+        '换一份 ini 指远程就绕过了方向闸（判据又建在"配置是否等于我记得的默认串"上）：%s' % blob[-400:]
+    assert 'S3cr3tPW' not in blob
+
+
+def test_one_environment_variable_alone_does_not_unlock_a_remote(tmp_path):
+    """第 39 轮 B：显式远程那条"被批准的路"曾经 0 自报、0 确认 ⇒ 现在要两道旗子。"""
+    result = subprocess.run(
+        [sys.executable, '-m', 'alembic', 'upgrade', 'head', '--sql'], cwd=str(ROOT),
+        env=_child_env(DATABASE_URL='sqlite:///data/fund_insight.db',
+                       ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE=None, LOCAL_DB_URL=None),
+        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    blob = result.stdout + result.stderr
+    assert result.returncode != 0 and '[abort]' in blob and 'ALEMBIC_ALLOW_REMOTE' in blob, \
+        '只设一个环境变量就能对远程发 DDL：%s' % blob[-300:]
+
+
+def test_the_unlocked_remote_path_says_so_out_loud(tmp_path):
+    """两道旗子都给了 ⇒ 放行，但**必须自报**；而且自报要进 stderr，
+    不许污染 `--sql` 那份要存成文件的 SQL。"""
+    result = subprocess.run(
+        [sys.executable, '-m', 'alembic', 'upgrade', 'head', '--sql'], cwd=str(ROOT),
+        env=_child_env(DATABASE_URL='sqlite:///data/fund_insight.db',
+                       ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE='1', LOCAL_DB_URL=None),
+        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    assert result.returncode == 0, result.stderr[-400:]
+    assert 'Context impl PostgresqlImpl' in result.stderr + result.stdout
+    assert '[库]' in result.stderr, '放行远程却没自报（第 39 轮 B：这条路以前一声不吭）'
+    assert '[库]' not in result.stdout, '自报混进了 stdout —— `--sql` 的产物被解释行脏了'
+    assert 'S3cr3tPW' not in result.stdout + result.stderr
+
+
+def test_every_path_that_gets_here_names_its_target():
+    """仓库规矩（第 37 轮立的）："能动结构的东西必须第一行说清连哪个库"。
+    拒跑与放行两条分支都得有 `[库]` 或 `[abort]`，不许静默。"""
+    src = (ROOT / 'alembic' / 'env.py').read_text(encoding='utf-8')
+    assert 'file=sys.stderr' in src and src.count('[库]') >= 2, \
+        'env.py 的自报分支少了（sqlite 与远程各一条）'

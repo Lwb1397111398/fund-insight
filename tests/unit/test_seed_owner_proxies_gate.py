@@ -167,6 +167,35 @@ def test_a_probe_that_says_not_fetchable_writes_nothing(mod, monkeypatch, tmp_pa
         db.close()
 
 
+def test_a_probe_that_returns_nav_but_no_name_writes_nothing(mod, monkeypatch, tmp_path, capsys):
+    """`ok=True` 而 `api_name` 为空 —— 探针自己就有这一格（场内 ETF 常常拿不到实时名称）。
+
+    第 39 轮两份同点：上一批我只挡了 `ok=False`，是"补了一半形状"。空名行一旦盖上
+    `reviewed_by='owner' + owner_locked + is_fetchable=True`，体检对它永远判"unknown＝不指控"，
+    而服务端 HTTP 写路径本来就把这种行拒收（`fund_name_wiped` / `row_has_no_fund_name`）。
+    """
+    factory = _db(tmp_path)
+    import src.models.database as dbmod
+    import src.services.sector_fund_agent as agent
+    from src.fund.fund_api import fund_api as instance
+
+    monkeypatch.setattr(dbmod, 'SessionLocal', factory)
+    monkeypatch.setattr(agent, 'DELIBERATE_PROXIES', {'测试代理板块': ('512480', '桩：拿不到名字')})
+    monkeypatch.setattr(instance, 'verify_fund_fetchable',
+                        lambda code, name=None, **kw: _probe_stub(ok=True, code=code, api_name=''))
+    monkeypatch.setattr(sys, 'argv', ['seed_owner_proxies.py', '--owner-confirm', 'SEED-PROXY'])
+    rc = mod.main()
+    out = capsys.readouterr().out
+    assert rc == 5, '探针没拿到官方名却按成功收场（退码 %s）：%s' % (rc, out)
+    assert '没拿到官方名' in out, out
+    db = factory()
+    try:
+        assert db.query(SectorFundMapping).count() == 0, '空名行拿到了 owner 豁免'
+        assert db.query(FundInfo).count() == 0, '造出了空名幻影档案行'
+    finally:
+        db.close()
+
+
 def test_the_stub_contract_is_the_real_probe_contract():
     """把"桩不许发明键"这件事本身钉住：真接口今天返回 `ok`，**没有** `is_fetchable` / `status`。
 

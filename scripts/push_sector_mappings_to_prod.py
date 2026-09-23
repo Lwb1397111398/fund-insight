@@ -150,12 +150,29 @@ def main():
         # 对端是"有 audit-import 但还没这一列"的旧版时，**每一行都算过了闸**，
         # 于是这条预检在最需要它的时候是开着的。"没回答"与"回答不可服务"不是一回事，
         # 但两者都不许真写：拒收要显式，不许静默放行。
-        unanswered = [i for i in items if 'nav_priced_here' not in i]
-        if unanswered or len(items) != len(rows):
-            print('[abort] 预检没答完：回执 %d 行 / 发出 %d 行，其中 %d 行没带 `nav_priced_here`。'
-                  '一行都不发 —— 对端多半是还没上"能不能定价"那一列的旧构建'
-                  % (len(items), len(rows), len(unanswered)))
+        missing = [i for i in items if 'nav_priced_here' not in i]
+        # 第 39 轮两份同点（B-MINOR / A-MINOR-6）：服务端在写这一列**之前**就有几条
+        # `continue`（空板块名、字段超长、evidence 太大/坏 JSON…），那种行天生不带这列。
+        # 旧写法把它们一起算成"预检没答完"，于是整批 145 行退码 3，消息还把人支去升级生产。
+        # 现在分开：**没给理由**才算旧构建（拒发整批）；**给了理由**的是服务端已经拒收的行，
+        # 剔掉它们继续，并把剔除数计进 `dropped`，回执里说得出总数。
+        refused = [i for i in missing if i.get('reason')]
+        silent = [i for i in missing if not i.get('reason')]
+        if silent or len(items) != len(rows):
+            print('[abort] 预检没答完：回执 %d 行 / 发出 %d 行，其中 %d 行既没带 `nav_priced_here`'
+                  ' 也没给理由 —— 一行都不发（对端多半是还没上"能不能定价"那一列的旧构建）'
+                  % (len(items), len(rows), len(silent)))
             return 3
+        if refused:
+            print('[预检] 服务端在"能不能定价"之前就拒了 %d 行（行本身被挡，不是定不了价）：' % len(refused))
+            for i in refused[:12]:
+                print('   %-14s %-8s %s' % (i.get('sector_name'), i.get('fund_code'), i.get('reason')))
+            blocked = {i.get('sector_name') for i in refused}
+            before = len(rows)
+            rows = [r for r in rows if r.get('sector_name') not in blocked]
+            dropped += before - len(rows)
+            print('[预检] 已剔除这 %d 行（它们本来就写不进去），剩 %d 行继续'
+                  % (before - len(rows), len(rows)))
         bad = [(i.get('sector_name'), i.get('fund_code'), i.get('nav_priced_here_note'))
                for i in items
                if i.get('nav_priced_here') is False]

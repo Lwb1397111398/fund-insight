@@ -53,11 +53,20 @@ def main():
                 SectorFundMapping.sector_name == sector,
                 SectorFundMapping.fund_code == code).first()
             # 第 38 轮 A 席 MAJOR-3：以前只取名字、**从不读探针的结论**，于是
-            # "查无此码"也照样落 `is_fetchable=True` + 空基金名 + 一行幻影 `fund_info`
-            # —— 那正是 S6 要清的垃圾码形状。探针说取不到 = 这一条不写。
+            # "查无此码"也照样落 `is_fetchable=True` + 空基金名 + 一行幻影 `fund_info`。
+            # 第 39 轮两份同点：只挡 `ok=False` 是补了一半 —— 探针自己就有"ok 但没拿到名字"
+            # 这一格（`fund_api.py` 的文案"可抓取净值数据（接口未返回名称）"，注释还写明
+            # "场内 ETF 常常拿不到实时名称"，而这张名单几乎全是 ETF）。空名行在服务端 HTTP 写
+            # 路径上是被明确拒收的（`fund_name_wiped` / `row_has_no_fund_name`），
+            # 因为名字一空，体检从此判"unknown＝不指控"。
+            why = None
             if not probe.get('ok'):
-                skipped.append('%s→%s（%s）' % (sector, code, probe.get('message') or 'ok=False'))
-                print('%-10s -> %s   [跳过：探针说取不到] %s' % (sector, code, reason))
+                why = '探针说取不到（%s）' % (probe.get('message') or 'ok=False')
+            elif not name:
+                why = '探针说可抓但**没拿到官方名**（空名行会让体检失明）'
+            if why:
+                skipped.append('%s→%s（%s）' % (sector, code, why))
+                print('%-10s -> %s   [跳过：%s] %s' % (sector, code, why, reason))
                 continue
             print('%-10s -> %s %s   %s' % (sector, code, name, reason))
             if args.dry_run:
