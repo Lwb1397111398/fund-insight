@@ -15,7 +15,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _db_guard import pin_local_sqlite as _pin_local_db
 _pin_local_db(use_mirror_default=True)   # 钉死本地镜像库：.env 的 DATABASE_URL 指向生产，先 import ORM 就会连线上
 
-from src.models.database import SessionLocal, SectorFundMapping, init_db
+from src.models.database import FundInfo, SessionLocal, SectorFundMapping, init_db
 
 CONFIRM_TOKEN = 'SEED-MAP'
 
@@ -123,6 +123,7 @@ def seed_mappings(dry_run=False, confirm=None, db=None):
     print('[库] %s' % database_label(db))
     added = skipped_existing = owner_backed = code_diff = 0
     planned_new = []
+    no_info = []
     try:
         from src.constants.sector_fund_map import SECTOR_FUND_MAP
         plan = []
@@ -131,6 +132,12 @@ def seed_mappings(dry_run=False, confirm=None, db=None):
         for sector_name, code, name in EXTRA_MAPPINGS:
             if sector_name not in SECTOR_FUND_MAP:
                 plan.append((sector_name, code, name))
+
+        # `sector_fund_mapping.fund_code` 有外键（SQLite 侧也开了 `PRAGMA foreign_keys`）：
+        # 内置表里那些**本库没有 `fund_info` 档案**的代码，插进去就是 `FOREIGN KEY constraint failed`，
+        # 而单事务会让其余 126 行一起回滚（第 37 轮 B-MAJOR-1 实测：`鸿蒙 159768`、`血制品 512290`）。
+        # 所以先量一遍档案，dry-run 就预报、真写则**跳过并说清原因**，不再让一行拖垮整批。
+        have_info = {r[0] for r in db.query(FundInfo.fund_code).all()}
 
         for sector_name, fund_code, fund_name in plan:
             existing = db.query(SectorFundMapping).filter(
@@ -146,6 +153,9 @@ def seed_mappings(dry_run=False, confirm=None, db=None):
                     owner_backed += 1
                     print('  [跳过：老板已确认] %s → %s' % (sector_name, existing.fund_code))
                 continue
+            if fund_code not in have_info:
+                no_info.append('%s→%s' % (sector_name, fund_code))
+                continue
             if dry_run:
                 planned_new.append('%s→%s' % (sector_name, fund_code))
                 added += 1
@@ -156,9 +166,11 @@ def seed_mappings(dry_run=False, confirm=None, db=None):
             added += 1
             print('  [新增，待审查] %s → %s (%s)' % (sector_name, fund_name, fund_code))
 
-        print('\nSEED-RECEIPT: %s 新增=%d 已存在跳过=%d 其中码不一致=%d 老板行=%d 内置计划=%d'
+        print('\nSEED-RECEIPT: %s 新增=%d 已存在跳过=%d 其中码不一致=%d 老板行=%d 缺档案=%d 内置计划=%d'
               % ('dry-run' if dry_run else '真写', added, skipped_existing, code_diff,
-                 owner_backed, len(plan)))
+                 owner_backed, len(no_info), len(plan)))
+        for item in no_info:
+            print('   [跳过：本库无 fund_info 档案，插了就是外键失败] %s' % item)
         for item in planned_new:
             print('   将新建 %s' % item)
         if dry_run:
@@ -166,8 +178,10 @@ def seed_mappings(dry_run=False, confirm=None, db=None):
             db.rollback()
             return 0
         db.commit()
-        print('完成: 新增 %d（全部 reviewed=False 待审查）, 跳过已存在 %d' % (added, skipped_existing))
-        print('内置表: %d 条, 额外板块: %d 条' % (len(SECTOR_FUND_MAP) + len(EXTRA_MAPPINGS), len(EXTRA_MAPPINGS)))
+        print('完成: 新增 %d（全部 reviewed=False 待审查）, 跳过已存在 %d, 因缺档案跳过 %d'
+              % (added, skipped_existing, len(no_info)))
+        print('计划里去重后的板块数: %d（内置表 %d 键 + 额外板块 %d 条，重名以内置表为准）'
+              % (len(plan), len(SECTOR_FUND_MAP), len(EXTRA_MAPPINGS)))
         return 0
 
     except Exception as e:

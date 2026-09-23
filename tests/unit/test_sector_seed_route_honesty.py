@@ -204,6 +204,16 @@ def test_the_script_creates_missing_rows_without_touching_existing_ones(tmp_path
     mod = _seed_module()
     db = _db(tmp_path)
     try:
+        # 脚本现在会先看"本库有没有这只基金的档案"（`fund_code` 有外键），
+        # 没档案就跳过而不是让整批回滚 ⇒ 用例得把计划里的码先补成档案，否则一行都不会插。
+        from src.constants.sector_fund_map import SECTOR_FUND_MAP
+        from src.models.database import FundInfo
+        codes = {i.get('code', ''): i.get('name', '') for i in SECTOR_FUND_MAP.values()}
+        codes.update({c: n for _s, c, n in mod.EXTRA_MAPPINGS})
+        for code, name in codes.items():          # 去重：同一个码在两张表里都出现
+            if code:
+                db.add(FundInfo(fund_code=code, fund_name=name or code))
+        db.commit()
         db.add(SectorFundMapping(sector_name='半导体', fund_code='512480', fund_name='芯片ETF国泰',
                                  reviewed=True, reviewed_by='owner', owner_locked=True))
         db.add(SectorFundMapping(sector_name='医疗', fund_code='159877', fund_name='现有标的',
