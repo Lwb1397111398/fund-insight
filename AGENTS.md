@@ -367,9 +367,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   区间 0%"这种五处互相打脸的行。方法连同 `PredictionVerify` 请求模型已删；要恢复人工改判
   必须挂在验证服务那一侧（数据充分性门、休市证据门、退化终点门都在那里），别新开一条旁路。
   同类问题的通则：**"唯一入口"这句话必须有测试钉着**，否则下一轮就会多一个入口。
-- **`reviewed_by='owner'` + `owner_locked`（＝身份体检豁免）只能由显式 `owner_confirm=true` 换来**。
-  三条写入路径同一口径：逐行审查、批量审查、以及第 18 轮 MAJOR-1 才补上的**编辑保存**
+- **`reviewed_by='owner'` + `owner_locked`（＝身份体检豁免）只能由显式确认换来**。
+  **页面**上三条写入路径同一口径：逐行审查、批量审查、以及第 18 轮 MAJOR-1 才补上的**编辑保存**
   （`update_mapping`／`PUT|POST /api/config/sector-mappings`）。以前一次普通保存就白送永久免疫。
+  **还有第四条来源，别把上面那句念成"只有三条"**（第 36 轮 B-MAJOR-3 抓到）：
+  `scripts/seed_owner_proxies.py:62-64` 直接写 `reviewed_by='owner' + owner_locked=True`，
+  它靠的是**脚本级**旗子 `--owner-confirm SEED-PROXY`（同文件 33-37 行，第 20 轮 MAJOR-1 加的），
+  不是页面上的 `owner_confirm`。这条闸到今天**没有用例钉着**（`grep -rn seed_owner_proxies tests/` = 0）
+  ⇒ 见任务 #54；在它有用例之前，别说成"豁免只有三个入口"。
   换了基金代码又没重新确认时，**旧标的上继承来的锁定会被一并撤掉**（`row_unservable()` 的
   owner 例外只认老板这次确认过的那只基金）。页面上区分三种状态：待审查 / 已审查（只是看过）/
   老板已确认（免疫）。
@@ -431,7 +436,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   ③ **"取不到"不能渲染成 0 或"库里没有"，而且这条要覆盖每个列表页**：统计卡走 `statVal()`
   （取不到或字段缺失都是 `—`），空状态按 `serviceWaking → 失败原因 → 真的空` 排序，
   帖子/预测/观点/板块映射共用 `emptyText(view)` + `viewErrors`（镜像真值 27 博主 / 657 帖 /
-  1616 预测 / 71 观点 / 222 映射，唤醒失败时报"暂无X数据"或"共 0 条"都是假事实）；
+  1616 预测 / 71 观点 / **222 行映射**，唤醒失败时报"暂无X数据"或"共 0 条"都是假事实）。
+  **222 是"页面/接口口径"**：`GET /api/config/sector-mappings` 会把内置表里 DB 没有的板块并进来
+  （2026-09-23 17:50 实测：DB 145 行 + 内置独有 77 行 = 222；库里行数用
+  `python scripts/q.py "select count(*) from sector_fund_mapping"`）。别把这两个数当一个抄来抄去）；
   第 32~33 轮把同一条规矩铺到剩下的角落：分页条（`viewErrors.posts/predictions`）、
   观点洞察四张卡（`numOrDash`）、基金页三个筛选按钮的括号数（失败/加载中报 `—`，并注明那是
   **本页**不是全库）、映射表体、历史建议（`adviceError`）、板块别名 tab（`aliasError`）、  配置弹窗两个 tab（`configError` / `testDataError`）、TOP 弹窗（口径进表头文字、"已验证"不许换分母）、
