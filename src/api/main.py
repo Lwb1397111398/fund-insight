@@ -44,10 +44,29 @@ from src.api.routes.test_data import router as test_data_router
 
 
 class CachedStaticFiles(StaticFiles):
+    """静态资源缓存头：只有第三方那份不可变的缓存一天，**我们自己跟着页面一起改的一律 no-cache**。
+
+    第 34 轮 B-F-1（实测）：`index.html` 与三个 manager 是同批改的；浏览器若还留着旧的
+    `-manager.js`，页面解构它新导出的名字就拿到 `undefined` ⇒ 那块数**静默**变成 `—`，不报错。
+    老板手上只有 APK 里那一个固定 URL（没有端口可换、也不会去强刷），所以只能服务端说了算。
+    判据按"谁的"分，不按"哪种后缀"分：漏一类文件只是多一次协商请求，反过来则是在骗页面。
+    """
+
+    VENDOR_IMMUTABLE = frozenset({'vue.global.prod.js', 'axios.min.js'})
+
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
-        response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        if path.rsplit('/', 1)[-1] in self.VENDOR_IMMUTABLE:
+            response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        else:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
+
+
+def _html_response(path):
+    """页面本身不许强缓存：APK 里那一个固定 URL 后面换掉的是整份 HTML。"""
+    return FileResponse(str(path), media_type="text/html",
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 def _startup_migrations_enabled() -> bool:
@@ -299,7 +318,7 @@ async def serve_index():
     """服务首页"""
     index_file = web_dir / "index.html"
     if index_file.exists():
-        return FileResponse(str(index_file), media_type="text/html")
+        return _html_response(index_file)
     return {"message": "Fund Insight API - 请访问 /docs 查看 API 文档"}
 
 
@@ -308,7 +327,7 @@ async def serve_index_html():
     """服务 index.html"""
     index_file = web_dir / "index.html"
     if index_file.exists():
-        return FileResponse(str(index_file), media_type="text/html")
+        return _html_response(index_file)
     return {"error": "index.html not found"}
 
 
@@ -317,7 +336,7 @@ async def serve_import_page():
     """服务数据导入页面"""
     html_file = web_dir / "import-data.html"
     if html_file.exists():
-        return FileResponse(str(html_file), media_type="text/html")
+        return _html_response(html_file)
     return {"error": "import-data.html not found"}
 
 

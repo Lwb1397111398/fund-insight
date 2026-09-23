@@ -478,7 +478,12 @@ def test_source_has_no_hardcoded_password():
             if line.strip().startswith('ACCESS_PASSWORD='):
                 secret = line.split('=', 1)[1].strip()
                 break
-    assert secret, '本地 .env 缺少 ACCESS_PASSWORD，无法执行口令泄漏检查'
+    if not secret:
+        # 这条查的是"那把真实口令有没有被写进被跟踪的文件"。干净检出（新机器 / CI）没有 `.env`
+        # 就没什么可查 —— 上一版在这里 `assert`，于是 `git archive HEAD` 出来的副本
+        # 跑 `tests/unit` 必红一条（第 34 轮 A-MAJOR-1）。源码里的硬编码默认值另有 `test_main_no_hardcoded_password` 盯着。
+        pytest.skip('本机 .env 没有 ACCESS_PASSWORD：没有真实口令可查，跳过泄漏比对'
+                    '（源码硬编码默认值是另一条用例）')
 
     out = subprocess.run(['git', 'grep', '-l', '-F', secret], cwd=root,
                          capture_output=True, text=True, encoding='utf-8',

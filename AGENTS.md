@@ -195,16 +195,19 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 12:36（北京），第 33 轮返修（复评 62/74 驱动）之后，
-最后一次改用例后立刻重跑；**这一批起在默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑** ——
-上一批我是在 UTF-8 环境里报的 898/907，换到默认 locale 就红一条，见下面子进程那条）：
+最近一次核对（2026-09-23 14:43（北京），第 34 轮返修（复评 74/78 驱动 + 我自己停服务实测）之后，
+最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
+子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **912 passed / 16 skipped / 0 failed**（229 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **921 passed / 16 skipped / 0 failed**（186 秒）。
+- `pytest tests/unit -q` → **924 passed / 16 skipped / 0 failed**（170 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **933 passed / 16 skipped / 0 failed**（161 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 885/894（红过一次：897/**1 failed**/16）→ 本批 912/921：+14 条 =
-  清理脚本离线往返 6、`/api/bloggers/top` 路由形状 3、互斥闸反向 2、失败态铺满 3。
-  判据数：前端 26 条 / 变异 66 处（`--list` 末行为准，别抄这里）。）
+  （上一基线 912/921 → 本批 924/933：+12 条 = `tests/unit/test_frontend_wiring.py` 7 条
+  （两条参数化 × 3 个 manager + 一条"闸自己不空转"）+ 五个已改文件里新增的 5 条
+  （洞察失败清空卡面、按钮不说反话、TOP 空榜门槛、接线闸两头都在、变异锁反向一条）。
+  判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`。）
+  （上一基线 885/894（红过一次：897/**1 failed**/16）→ 912/921：+14 条 =
+  清理脚本离线往返 6、`/api/bloggers/top` 路由形状 3、互斥闸反向 2、失败态铺满 3。）
   （上一基线 885/894 → 本批 898/907：+13 条 = 前端失败态 7 条（`test_frontend_cold_start.py` 16→23）、
   变异体检互斥闸 5 条（`test_mutation_lock.py` 新文件）、"只面向生产的白名单不是后门" 1 条。
   **这批中途出过一次真事故**：`tests/conftest.py` 顶层的一条 import 排在钉库之后写反了位置，
@@ -393,7 +396,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   手动 `python -m src` / uvicorn 就是往线上打）；跑完按端口找 PID 关掉（`netstat -ano -p tcp` + `taskkill`）。
   **改了 `web/*-manager.js` 之后要换一个全新端口再核验**（第 33 轮实测：同端口刷新会拿到旧 JS，
   而 `index.html` 是新的 ⇒ 新解构出来的名字是 `undefined`，页面**静默**少一块数、不报错）。
-  静态子资源没有版本戳这件事记在任务 #43。
+  这件事第 34 轮从根上堵住了：`CachedStaticFiles` 只给 `vue.global.prod.js` / `axios.min.js` 一天强缓存，
+  页面 / `common.css` / 三个 `*-manager.js` 一律 `no-cache, must-revalidate`（三条 `FileResponse` 页面路由同）
+  ⇒ 部署后不需要老板去强刷，也不会出现"新页面配旧脚本"。`TestClient` 逐条实测响应头。
+  **核验失败态要把服务真停掉再看**（第 34 轮就是这么抓到新 bug 的）：起 `serve_mirror.py` → 登录 →
+  `TaskStop` 掉服务进程 → 在页面上点各视图 / 点写操作按钮，读 `document.body.innerText` 与卡面值。
+  只在服务健康时看过页面，等于只验了一半 —— 这一轮照出来的缺陷是：红字已经写"洞察没取到"，
+  而洞察四张卡里**只有第四张**被 `insightsLoaded` 守住，另外三张还挂着上一轮的真数
+  （`fetchInsights` 失败分支只改旗标、不清 `viewpointInsights`，注释却写着"不许再摆上一轮的数"）。
+  现在失败三种形状（`success:false` / `success:true` 但 `data:null` / 抛错）都会把四张卡一起放下，
+  判据 `test_a_failed_insights_call_takes_the_four_cards_down_with_it` 跑的是 `loadViewpoints` 真实调用路径。
   五条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
   predictions+verify-all+status 四笔，**进视图才打的**（funds、sector-mappings、posts/predictions/
   viewpoints 的列表）也要过 `withWakeRetry()` —— 子模块靠 `createPredictionManager({ withWakeRetry })`
@@ -411,12 +423,18 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   1616 预测 / 71 观点 / 222 映射，唤醒失败时报"暂无X数据"或"共 0 条"都是假事实）；
   第 32~33 轮把同一条规矩铺到剩下的角落：分页条（`viewErrors.posts/predictions`）、
   观点洞察四张卡（`numOrDash`）、基金页三个筛选按钮的括号数（失败/加载中报 `—`，并注明那是
-  **本页**不是全库）、映射表体、历史建议（`adviceError`）、板块别名 tab（`aliasError`）、
-  配置弹窗两个 tab（`configError` / `testDataError`）、TOP 弹窗（口径进表头文字、"已验证"不许换分母）、
+  **本页**不是全库）、映射表体、历史建议（`adviceError`）、板块别名 tab（`aliasError`）、  配置弹窗两个 tab（`configError` / `testDataError`）、TOP 弹窗（口径进表头文字、"已验证"不许换分母）、
   洞察卡第四张（`insightsLoaded`，初值 `pending_summary: []` 恒真 ⇒ 没取到也报 0）、
   预览失败时要说清"执行清理为什么被按住"；
   **列表页的失败态由取数点自己报**（manager 里 `options.onFetchFailure(key, msg)`，成功报空串），
   第 32 轮那三条 `watch(() => postMeta.value?.total)` 是死的 —— `postMeta` 是 `reactive()`，`postMeta.value` 恒 undefined；
+  **同一根轴还有一面：取不到时不许把上一轮的旧数据当新数据**（第 34 轮把服务真停掉才照出来 ——
+  服务健康时看页面永远看不见这一族）。三条列表分页条现在都要说
+  "条数没取到，下面是上一次取到的"，`fetchInsights` 三种失败形状（`success:false` /
+  `success:true` 但 `data:null` / 抛错）都会清空 `viewpointInsights`，四张卡一起变 `—`。
+  推论（写给判据自己）：**一条判据里跑多种失败形状时，每种都要先跑一次成功再跑它** ——
+  连着跑的话前一种已经把状态清了，后一种什么都不做也"看着通过"；
+  这条不是猜的，是 `rejection_keeps_stale_cards` 那一处变异打出 GREEN（判据无效）之后改的。
   ④ 模板里一句文案的每个插槽都要有自己的守卫（`realigned.core`
   对 ETF 升级行是空的，无条件插值就渲染成"按板块核心词「」"）；
   ⑤ **模板读的每个标识符都必须出现在 `setup()` 的 return 名单里** —— 少一个就静默失效：
@@ -428,9 +446,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   只写 `catch` 等于漏掉一半失败 ⇒ 现在每个取数点要么有 else 分支、要么明写注释说明为何不报。
   推论：**删数据用的按钮不许活过自己的预览**（`fetchRetentionPreview` / `fetchCleanupPreview`
   取不到时 `cleanupEnabled=false`，否则放行的是上一轮的删除计划）。
-  判据：`tests/unit/test_frontend_cold_start.py`（本批实测 23 条，其中两条用 node **执行页面里那份源码**，
-  喂 401/403/502/503/500/断网/叫不醒七种真实形状）+ 可复跑的变异 `python scripts/mutation_proof_frontend.py`。
-  **处数别抄文档**：跑 `python scripts/mutation_proof_frontend.py --list`，末行打印"共 N 处变异，覆盖 M 条判据"
+  判据：`tests/unit/test_frontend_cold_start.py` + 可复跑的变异 `python scripts/mutation_proof_frontend.py`。
+  里面若干条不读文本而是用 node **执行页面/manager 里那份真实源码**，喂 401/403/502/503/500/断网/叫不醒等真实形状。
+  **条数与处数别抄文档**：跑 `python scripts/mutation_proof_frontend.py --list`，末行打印"共 N 处变异，覆盖 M 条判据"
   （第 32 轮 B 抓到 docstring 里那句"28 处"早就过时 ⇒ 会过时的数不留文字版）。
   体检跑完逐文件回读比对还原、校验变异真的落了盘；开头多一条 **CONTROL** 对照跑（**整份判据文件**在干净代码上必须先全绿），
   且每一处的判定只认"断言失败"那种红 —— 退码 2/4（用法错、收集错、conftest 起手就炸）记成 `HARNESS-FAIL`，

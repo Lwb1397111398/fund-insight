@@ -66,7 +66,7 @@
                 </div>
                 <!-- 轮询数到上限会把 `analyzing` 这把全局锁放开（否则 13 个按钮永久灰掉），
                      放开时必须说一句为什么，不然页面像卡住了。 -->
-                <div v-if="taskStalled" class="text-xs" style="color:#d46b08; margin: 0 0 8px 0;">{{ taskStalled }}</div>
+                <div v-if="stallText" class="text-xs" style="color:#d46b08; margin: 0 0 8px 0;">{{ stallText }}</div>
                 <div class="action-bar">
                     <button class="action-btn primary" @click="showAddBlogger = true"><i class="ri-user-line"></i> 管理博主</button>
                     <button class="action-btn primary" @click="showAddPost = true"><i class="ri-file-text-line"></i> 管理帖子</button>
@@ -228,7 +228,7 @@
                     <div v-else class="empty-state">{{ emptyText('posts') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="postPrevPage" :disabled="postFilters.page <= 1">上一页</button>
-                        <span>第 {{ postFilters.page }} 页 · <template v-if="viewErrors.posts">条数没取到</template><template v-else>共 {{ postMeta.total || 0 }} 条</template></span>
+                        <span>第 {{ postFilters.page }} 页 · <template v-if="viewErrors.posts">条数没取到，下面是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template></span>
                         <button class="row-btn" @click="postNextPage" :disabled="!postMeta.has_more">下一页</button>
                     </div>
                 </div>
@@ -351,7 +351,7 @@
                     <div v-else class="empty-state">{{ emptyText('predictions') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="predictionPrevPage" :disabled="predictionFilters.page <= 1">上一页</button>
-                        <span>第 {{ predictionFilters.page }} 页 · <template v-if="viewErrors.predictions">条数没取到</template><template v-else>共 {{ predictionMeta.total || 0 }} 条</template></span>
+                        <span>第 {{ predictionFilters.page }} 页 · <template v-if="viewErrors.predictions">条数没取到，下面是上一次取到的</template><template v-else>共 {{ predictionMeta.total || 0 }} 条</template></span>
                         <button class="row-btn" @click="predictionNextPage" :disabled="!predictionMeta.has_more">下一页</button>
                     </div>
                 </div>
@@ -482,7 +482,7 @@
                     <div v-else class="empty-state">{{ emptyText('viewpoints') }}</div>
                     <div class="viewpoint-pagination" v-if="viewpointMeta.pages > 0">
                         <button class="row-btn" @click="viewpointPrevPage" :disabled="viewpointMeta.page <= 1"><i class="ri-arrow-left-s-line"></i></button>
-                        <span>第 {{ viewpointMeta.page }} / {{ viewpointMeta.pages }} 页，共 {{ viewpointMeta.total }} 条</span>
+                        <span>第 {{ viewpointMeta.page }} / {{ viewpointMeta.pages }} 页 · <template v-if="viewErrors.viewpoints">条数没取到，下面是上一次取到的</template><template v-else>共 {{ viewpointMeta.total }} 条</template></span>
                         <button class="row-btn" @click="viewpointNextPage" :disabled="viewpointMeta.page >= viewpointMeta.pages"><i class="ri-arrow-right-s-line"></i></button>
                     </div>
                 </div>
@@ -1563,7 +1563,7 @@
                         </tbody>
                     </table>
                 </div>
-                <div v-else class="empty-state">暂无数据</div>
+                <div v-else class="empty-state">没有博主上榜：这个榜只收<strong>至少 5 条已验证结论</strong>的博主（少于 5 条的命中率没有参考意义）</div>
             </div>
         </div>
         <div v-if="showAdviceHistory" class="modal-overlay" @click.self="showAdviceHistory = false">
@@ -2300,9 +2300,9 @@ const fetchWeChatBatch = async () => {
         wechatUrls.value = '';
     }
     wechatPostDate.value = '';
-    await fetchPosts();
-    await fetchPredictions();
-    await fetchStats();
+    // 抓取已经做完了，最后这三笔刷新失败不许把「抓取中…」永久卡住（第 34 轮 A-MINOR）
+    try { await fetchPosts(); await fetchPredictions(); await fetchStats(); }
+    catch (refreshError) { console.error('抓完之后刷新列表失败:', refreshError); }
     wechatFetching.value = false;
 };
                 const newBlogger = reactive({ name: '', platform: 'xiaohongshu' }), newFund = reactive({ fund_code: '', fund_name: '', sector_type: '' });
@@ -2353,9 +2353,9 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
                     onStatsChanged: () => fetchStats(),
                     onPredictionsChanged: () => fetchPredictions(),
-                    onPollStalled: (label) => { taskStalled.value = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
+                    onPollStalled: (label) => { taskStalled[label] = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
                         + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
-                    onPollRecovered: () => { taskStalled.value = ''; },
+                    onPollRecovered: (label) => { delete taskStalled[label]; },
                     onFetchFailure: (key, msg) => { viewErrors[key] = msg; },
                     isServiceDown,
                 });
@@ -2370,9 +2370,11 @@ const fetchWeChatBatch = async () => {
                     axios, ref, reactive, computed, localStorage, alert, confirm,
                     viewpoints, viewpointDetail, showViewpointDetail, analyzing,
                     onStatsChanged: () => fetchStats(),
-                    onPollStalled: (label) => { taskStalled.value = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
+                    isServiceDown,
+                    onFetchFailure: (key, msg) => { viewErrors[key] = msg; },
+                    onPollStalled: (label) => { taskStalled[label] = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
                         + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
-                    onPollRecovered: () => { taskStalled.value = ''; },
+                    onPollRecovered: (label) => { delete taskStalled[label]; },
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
@@ -2568,7 +2570,16 @@ const fetchWeChatBatch = async () => {
                     overdue_predictions: '逾期待验证预测', unresolved_prediction_funds: '无法匹配基金的预测', stale_funds: '长期未更新基金'
                 };
                 const cleanupWarningLabel = (code) => cleanupWarningLabels[code] || code;
-                const addBlogger = async () => { try { await axios.post('/api/bloggers', newBlogger); showAddBlogger.value = false; newBlogger.name = ''; await fetchBloggers(); await fetchStats(); } catch (e) { alert('添加失败'); } };
+                const addBlogger = async () => {
+                    try {
+                        const res = await axios.post('/api/bloggers', newBlogger);
+                        if (!res.data.success) { alert('没加上：' + (res.data.message || res.data.error || '接口未给出原因')); return; }
+                        showAddBlogger.value = false; newBlogger.name = '';
+                        // 博主已经存下了，刷新失败不能说「添加失败」（第 34 轮 B-MINOR-11 同族）
+                        try { await fetchBloggers(); await fetchStats(); }
+                        catch (refreshError) { alert('博主已添加，只是列表没刷新出来 —— 刷新页面即可'); return; }
+                    } catch (e) { alert('添加失败: ' + (e.response?.data?.detail || e.message)); }
+                };
                 const addFund = async () => { try { const res = await axios.post('/api/funds', newFund); if (res.data.success) { showAddFund.value = false; newFund.fund_code = ''; newFundVerifyResult.value = null; await fetchFunds(); await fetchStats(); alert('添加成功'); } else { alert(res.data.message || '添加失败'); } } catch (e) { alert('添加失败: ' + e.message); } };
                 const newFundVerifying = ref(false);
                 const newFundVerifyResult = ref(null);
@@ -2812,7 +2823,9 @@ const fetchWeChatBatch = async () => {
                 // 一条规矩覆盖所有列表页：**没取到 ≠ 库里没有**。
                 // 分支顺序就是优先级（唤醒中 → 失败 → 真的空），改了顺序就会在等待期报出假事实。
                 const numOrDash = (v) => (v === undefined || v === null) ? '—' : v;
-                const taskStalled = ref('');
+                // 停摆横幅按任务分槽：一条任务恢复了不许把另一条的警告擦掉（第 34 轮 B-MAJOR-6）
+                const taskStalled = reactive({});
+                const stallText = computed(() => Object.values(taskStalled).join(' '));
                 const adviceError = ref('');
                 const aliasError = ref('');
                 const configError = ref('');
@@ -2825,7 +2838,8 @@ const fetchWeChatBatch = async () => {
                 // 曾经这里写的是 `watch(() => postMeta.value?.total, ...)` —— `postMeta` 是
                 // `reactive()` 出来的，`postMeta.value` 恒为 undefined ⇒ 这条 watch 永不触发（第 33 轮 A-MAJOR-2）。
                 // 现在失败态由各取数点自己报、自己清（`onFetchFailure`），不靠 watcher 猜。
-                watch(() => (viewpoints.value || []).length, () => { viewErrors.viewpoints = ''; });
+                // 观点页的失败态也交给取数点自己报（`onFetchFailure`），
+                // 原来这条"长度变了才清"的 watch 在"取到但条数没变"时永不触发（第 34 轮 A-MAJOR-4）。
                 const emptyText = (v) => serviceWaking.value
                     ? '正在等待服务唤醒（通常 30~60 秒，最长再等 90 秒）…'
                     : (viewErrors[v] ? viewErrors[v] : '暂无数据');
@@ -3176,7 +3190,7 @@ const fetchWeChatBatch = async () => {
                     theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
                     serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,
                     bloggersError, statsError, statVal, numOrDash, viewErrors, emptyText,
-                    taskStalled, adviceError, aliasError, configError, testDataError, topNote,
+                    taskStalled, stallText, adviceError, aliasError, configError, testDataError, topNote,
                     fetchStats, spanText, fetchEvidence,
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,

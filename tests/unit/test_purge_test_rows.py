@@ -109,6 +109,18 @@ def test_the_predicate_carries_a_time_floor_into_sql(db_session):
     assert plan['orphan_posts'] == 0 or plan['orphan_posts'] == 1, '挂在测试博主名下的旧帖要单独报出来'
 
 
+def test_deleting_parents_checks_who_references_them(db_session):
+    """删博主/帖子之前必须查引用（第 34 轮 A-MINOR：上一版只给 fund_info 做了这件事）。"""
+    b, p = _mk(db_session, datetime(2026, 9, 23, 10, 30))
+    from src.models.database import AnalysisLog
+    db_session.add(AnalysisLog(post_id=p.id))
+    db_session.flush()
+    hard, soft = purge.fk_ref_counts(db_session, engine, 'post_id', [p.id], 'posts')
+    assert 'analysis_logs=%d' % 1 in hard or any('analysis_logs' in h for h in hard), \
+        '带外键的引用没被认出来：hard=%s soft=%s' % (hard, soft)
+    assert purge.tables_with_column(engine, 'blogger_id'), 'blogger_id 的引用面一个都没扫到'
+
+
 def test_local_database_is_refused_before_anything_is_printed():
     with pytest.raises(SystemExit):
         purge._reject_local('sqlite:///data/fund_insight.db')

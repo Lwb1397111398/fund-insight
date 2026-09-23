@@ -595,6 +595,12 @@ def test_every_list_page_shares_the_same_honesty_rule():
     for view in ('posts', 'predictions', 'viewpoints'):
         assert "emptyText('%s')" % view in html, '%s 页还在无条件说"暂无数据"' % view
     assert '暂无帖子数据' not in html and '暂无预测数据' not in html and '暂无观点数据' not in html
+    # 翻页条是同一族漏得更狠的那一半：表体还挂着上一轮的行时，"共 N 条"要改口说"这是旧数据"
+    # （第 34 轮把服务真停掉点页面才照出来：观点页 71 行旧数据 + "共 71 条"，一句失败都没有）
+    for view in ('posts', 'predictions', 'viewpoints'):
+        line = [l for l in html.split('\n') if '第 {{' in l and 'viewErrors.%s' % view in l]
+        assert len(line) == 1, '%s 页的翻页条没找到或不止一条（现 %d）' % (view, len(line))
+        assert '条数没取到，下面是上一次取到的' in line[0], '%s 页翻页条不承认这是旧数据' % view
     et = _expr(html, 'const emptyText')
     assert 'serviceWaking.value' in et and 'viewErrors[v]' in et, 'emptyText 少了唤醒/失败两条腿'
     # 板块映射页的四个数在取不到时不能报"共 0 条 / 已审查 0"
@@ -646,10 +652,8 @@ def test_no_page_claims_a_number_it_never_measured():
     - 映射表体那一行 `暂无数据` 落在顶栏失败守卫之外。
     """
     html = _html()
-    assert '<template v-if="viewErrors.posts">条数没取到</template>' in html, \
-        '帖子分页条还在无条件报"共 0 条"'
-    assert '<template v-if="viewErrors.predictions">条数没取到</template>' in html, \
-        '预测分页条还在无条件报"共 0 条"'
+    # 两条分页条的规矩写在 `test_every_list_page_shares_the_same_honesty_rule` 里（三条腿一起循环），
+    # 这里不重复一遍同一条规则 —— 上次两处各写一份，改文案时就只红了一处。
     assert 'numOrDash(viewpointInsights.direction_total)' in html, '洞察卡还在 `|| 0`'
     assert "adviceError || '暂无历史建议'" in html, '历史建议失败时说"没有"'
     assert "aliasError || '暂无自定义别名'" in html, '别名 tab 失败时说"没有"'
@@ -665,7 +669,7 @@ def test_polling_gives_up_loudly_instead_of_locking_the_ui():
     """
     html = _html()
     assert html.count('onPollStalled:') == 2, '两个 manager 都要接停摆回调（现 %d）' % html.count('onPollStalled:')
-    assert 'taskStalled.value =' in html and 'v-if="taskStalled"' in html, '停摆要有一句话给老板看'
+    assert 'taskStalled[label] =' in html and 'v-if="stallText"' in html, '停摆要有一句话给老板看'
     pm = (PROJECT_ROOT / 'web' / 'post-manager.js').read_text(encoding='utf-8')
     assert 'postAnalysisRunning.value = false;' in pm and 'onPollStalled' in pm, \
         '帖子轮询耗尽后没放开锁'
@@ -673,16 +677,7 @@ def test_polling_gives_up_loudly_instead_of_locking_the_ui():
     assert 'onPollStalled' in vm, '观点轮询耗尽后没有回调'
 
 
-def _run_manager_js(fname, factory, fetch_name, list_key):
-    """把 `web/<fname>` 那份**真实源码**在 node 里跑一遍 `fetch_name`，看三种形状各报了什么。
-
-    第 33 轮 A-MAJOR-2 的教训：上一批我用文本判据声称"失败态由取数成功自己清"，
-    而它挂在一条永远不触发的 `watch` 上 —— 文本判据看不见这种事，所以这里执行源码。
-    """
-    if not NODE:
-        pytest.skip('本机没有 node')
-    src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
-    script = """
+_NODE_PRELUDE = """
 const store = {};
 const localStorage = { getItem: (k) => (k in store ? store[k] : null),
                        setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
@@ -705,6 +700,29 @@ const opts = { axios, ref, reactive, computed, localStorage, alert: () => {}, co
                viewpoints: ref([]), viewpointDetail: ref(null), showViewpointDetail: ref(false),
                predictions: ref([]), predictionDetail: ref(null), showPredictionDetail: ref(false),
                showEditPrediction: ref(false), editingPrediction: reactive({}) };
+"""
+
+
+def _run_node(src_body, fname):
+    """把 `web/<fname>` 那份真实源码接在桩环境后面，交给 node 跑。"""
+    src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
+    script = _NODE_PRELUDE % {'src': src} + src_body
+    p = subprocess.run([NODE, '-e', script], capture_output=True, text=True,
+                       encoding='utf-8', errors='replace', cwd=str(PROJECT_ROOT))
+    line = [l for l in (p.stdout or '').splitlines() if l.startswith('RESULT')]
+    assert line, 'node 没跑出结果：%s' % ((p.stdout or '') + (p.stderr or ''))[-400:]
+    return json.loads(line[0][len('RESULT'):])
+
+
+def _run_manager_js(fname, factory, fetch_name, list_key):
+    """把 `web/<fname>` 那份**真实源码**在 node 里跑一遍 `fetch_name`，看三种形状各报了什么。
+
+    第 33 轮 A-MAJOR-2 的教训：上一批我用文本判据声称"失败态由取数成功自己清"，
+    而它挂在一条永远不触发的 `watch` 上 —— 文本判据看不见这种事，所以这里执行源码。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    body = """
 (async () => {
     const m = %(factory)s(opts);
     const fetch = m['%(fetch_name)s'];
@@ -718,12 +736,8 @@ const opts = { axios, ref, reactive, computed, localStorage, alert: () => {}, co
     await fetch();
     console.log('RESULT' + JSON.stringify({ seen, n: m['%(list_key)s'].value.length }));
 })();
-""" % {'src': src, 'factory': factory, 'fetch_name': fetch_name, 'list_key': list_key}
-    p = subprocess.run([NODE, '-e', script], capture_output=True, text=True,
-                       encoding='utf-8', errors='replace', cwd=str(PROJECT_ROOT))
-    line = [l for l in (p.stdout or '').splitlines() if l.startswith('RESULT')]
-    assert line, 'node 没跑出结果：%s' % ((p.stdout or '') + (p.stderr or ''))[-400:]
-    return json.loads(line[0][len('RESULT'):])
+""" % {'factory': factory, 'fetch_name': fetch_name, 'list_key': list_key}
+    return _run_node(body, fname)
 
 
 def test_failure_state_is_reported_and_cleared_by_the_fetch_itself():
@@ -818,6 +832,61 @@ def test_the_top_blogger_modal_puts_its_calibers_in_text_not_hover():
     assert 'topNote' in modal, '接口自己的 metric_note 没渲染'
 
 
+def test_a_failed_insights_call_takes_the_four_cards_down_with_it():
+    """洞察失败时四张卡必须一起变 `—`：红字说"没取到"、卡上却挂着上一轮的 3/2/0 是两句假话。
+
+    第 34 轮浏览器实测（把服务停掉再点页面）抓到：我上一批只给"待汇总"那张卡加了
+    `insightsLoaded` 守卫，另外三张还在读没被清空的 `viewpointInsights`，
+    而注释里写着"取不到就不许再摆上一轮的数"。这条判据跑真实源码，四种形状各看一次卡面。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    body = """
+(async () => {
+    const m = window.createViewpointManager(opts);
+    const dash = (v) => (v === undefined || v === null) ? '—' : v;
+    const cards = () => {
+        const i = m.viewpointInsights.value || {};
+        return [dash(i.direction_total), dash(i.directions && i.directions.bullish),
+                dash(i.directions && i.directions.bearish),
+                (m.insightsLoaded.value && i.pending_summary) ? '有' : '—',
+                m.insightsError.value];
+    };
+    const GOOD = { data: { success: true, data: { direction_total: 9, directions: { bullish: 5, bearish: 1 },
+                                                   pending_summary: [{ count: 2 }] } } };
+    const failings = [
+        { data: { success: false, message: '服务忙' } },
+        { data: { success: true, data: null } },
+        'throw',
+    ];
+    const on = (payload) => (u) => (u.indexOf('/insights') < 0
+        ? { data: { success: true, data: [], meta: { total: 5 } } }
+        : (payload === 'throw' ? (() => { throw { message: 'Network Error' }; })() : payload));
+    const out = [];
+    for (const s of failings) {
+        // 每种失败形状都**先跑一次成功**再跑它：三种形状连着跑的话，前一种已经把卡清空了，
+        // 后面那两种就算什么都没做也照样"看着对"（第 34 轮变异体检就是这么抓到我这行的）
+        impl = on(GOOD);
+        await m.loadViewpoints();
+        const before = cards();
+        impl = on(s);
+        await m.loadViewpoints();
+        out.push([before, cards()]);
+    }
+    console.log('RESULT' + JSON.stringify(out));
+})();
+"""
+    out = _run_node(body, 'viewpoint-manager.js')
+    assert len(out) == 3, '三种失败形状各该一组卡面：%s' % out
+    for failing, (before, after) in zip(('success:false', 'success:true 无 data', '抛错'), out):
+        assert before[:4] == [9, 5, 1, '有'], '%s：先跑成功这一笔就没拿到真数 %s' % (failing, before)
+        assert after[:4] == ['—', '—', '—', '—'], \
+            '%s 这一种失败形状下卡面还摆着上一轮的数：%s' % (failing, after)
+    assert '没取到' in out[0][1][4] and '服务忙' in out[0][1][4], out[0][1][4]
+    assert '没取到' in out[1][1][4], '接口回了 success 但没带数据，也不能算"取到了"：%s' % out[1][1][4]
+    assert '拉取失败' in out[2][1][4], out[2][1][4]
+
+
 def test_the_insight_cards_cannot_report_zero_before_the_insights_arrive():
     """四张洞察卡里"待汇总"那张以前是死分支：初值 `pending_summary: []` 恒真 ⇒ 没取到也报 0。
 
@@ -849,8 +918,57 @@ def test_a_failed_preview_explains_why_the_clean_up_buttons_are_held():
 def test_the_stall_banner_is_taken_down_when_polling_recovers():
     """`taskStalled` 不能一次停摆就永挂（第 33 轮 A-MINOR-10 / B-MINOR-10）。"""
     html = _html()
-    assert html.count('onPollRecovered: () => { taskStalled.value = \'\'; },') == 2, \
-        '两个 manager 都要接"恢复了就把话说回去"（现 %d）' % html.count('onPollRecovered')
+    assert 'taskStalled[label] =' in html and 'v-if="stallText"' in html, '停摆要有一句话给老板看'
+    assert html.count("onPollRecovered: (label) => { delete taskStalled[label]; },") == 2, \
+        '两个 manager 都要接"恢复了就把这一条擦掉"（现 %d）' % html.count('onPollRecovered')
+    assert 'const taskStalled = reactive({});' in html, '横幅必须按任务分槽（一条恢复不许擦另一条的警告）'
+    assert 'const stallText = computed(' in html, '分槽之后要有一个人读的汇总话术'
+
+
+def test_a_button_must_not_claim_the_opposite_of_what_happened():
+    """删除/保存/归档成功、只是刷新失败时，不许弹「失败」（第 34 轮 B-MAJOR-5）。
+
+    这仓库为"按钮说假话"付过账（一个按钮清掉 515 条结论那次）。同一族里还有一条轻的：
+    翻页失败后页码已经加过去了，页面会出现「第 4 页」配第 3 页的数据（B-MINOR-15）。
+    """
+    pm = (PROJECT_ROOT / 'web' / 'post-manager.js').read_text(encoding='utf-8')
+    vm = (PROJECT_ROOT / 'web' / 'viewpoint-manager.js').read_text(encoding='utf-8')
+    pdm = (PROJECT_ROOT / 'web' / 'prediction-manager.js').read_text(encoding='utf-8')
+    for name, src in (('post-manager.js', pm), ('prediction-manager.js', pdm)):
+        assert '只是列表没刷新出来' in src, '%s 的写操作还是把"刷新失败"说成"操作失败"' % name
+    for src in (pm, vm, pdm):
+        assert re.search(r'catch \(error\) \{ \w+Filters\.page = back; \}', src), \
+            '翻页失败没把页码退回去'
+    html = _html()
+    assert '博主已添加，只是列表没刷新出来' in html and "没加上：" in html, \
+        '管理博主弹窗仍然把"已加上"说成"添加失败"'
+    assert 'try { await fetchPosts(); await fetchPredictions(); await fetchStats(); }' in html, \
+        '微信批量抓取的收尾刷新没包住：一失败「抓取中…」就永久卡住'
+
+
+def test_the_top_modal_says_who_is_excluded():
+    """TOP 榜空列表不等于"没有博主"：门槛是"至少 5 条已验证结论"（第 34 轮 B-MAJOR-3）。"""
+    html = _html()
+    i = html.index('v-if="topBloggers.length > 0"')
+    tail = html[i:i + 6000]
+    assert '至少 5 条已验证结论' in _visible_text(tail), '空榜被渲染成"暂无数据"'
+    line = [l for l in tail.split('\n') if '至少 5 条已验证结论' in l][0]
+    assert line.lstrip().startswith('<div v-else'), '空榜说明必须和表格互斥渲染，否则有数据时也在解释"为什么没人上榜"'
+    assert ':title=' not in line, '门槛又跑回只有 hover 才看得见的地方'
+
+
+def test_the_wiring_gate_covers_both_directions():
+    """接线闸必须两头都在（第 34 轮：解构到 undefined、options 漏注入，两种都真实发生过）。"""
+    gate = (PROJECT_ROOT / 'tests' / 'unit' / 'test_frontend_wiring.py')
+    assert gate.exists(), '接线闸文件不见了'
+    src = gate.read_text(encoding='utf-8')
+    assert 'def test_everything_the_page_destructures_is_actually_exported' in src
+    assert 'def test_every_option_the_manager_reads_is_actually_injected' in src
+    html = _html()
+    for factory in ('createPostManager', 'createViewpointManager', 'createPredictionManager'):
+        i = html.index('window.%s(' % factory)
+        seg = html[i:i + 900]
+        assert 'isServiceDown' in seg and 'onFetchFailure' in seg, '%s 的 options 少了这两样' % factory
     for fname in ('post-manager.js', 'viewpoint-manager.js'):
         src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
         assert 'options.onPollRecovered' in src, '%s 轮询成功后不收那句话' % fname

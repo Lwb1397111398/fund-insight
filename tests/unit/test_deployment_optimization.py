@@ -112,7 +112,7 @@ def test_health_detail_returns_sanitized_diagnostics(monkeypatch):
 
 
 def test_static_assets_have_cache_headers(monkeypatch):
-    """静态 JS 资源应带缓存头，降低 Render 静态资源重复传输"""
+    """只有第三方那份不可变的资源允许强缓存，我们自己的页面与脚本一律要问服务器。"""
     monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
 
     from src.api.main import app
@@ -122,3 +122,11 @@ def test_static_assets_have_cache_headers(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "public, max-age=86400"
+
+    # 会跟着页面一起改的不许强缓存：新 index.html + 旧 manager = 页面静默少一块数（第 34 轮 B-F-1）
+    for url in ("/web/viewpoint-manager.js", "/web/common.css", "/web/index.html", "/", "/index.html"):
+        got = client.get(url)
+        assert got.status_code == 200, url
+        cache = got.headers.get("Cache-Control", "")
+        assert "max-age" not in cache, "%s 被强缓存了：%s" % (url, cache)
+        assert "no-cache" in cache, "%s 至少要 no-cache，实际：%s" % (url, cache)

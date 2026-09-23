@@ -40,8 +40,18 @@ JS = 'web/prediction-manager.js'
 POST = 'web/post-manager.js'
 VP = 'web/viewpoint-manager.js'
 T = 'tests/unit/test_frontend_cold_start.py'
+WIRING = 'tests/unit/test_frontend_wiring.py'
+# 判据不止一个文件：接线闸（`test_frontend_wiring.py`）也得能被自己的变异打红。
+WIRING_TESTS = ('test_every_option_the_manager_reads_is_actually_injected',
+                'test_everything_the_page_destructures_is_actually_exported')
 
 # (判据函数, 变异名, 文件, 找, 换成, 是否正则)
+def _drop_isServiceDown(match):
+    # 正则变异用：从 `createViewpointManager({…})` 那一段里只去掉 `isServiceDown,` 那一行，
+    # 其余原样留着（第 34 轮 A-MAJOR-2 就是这个注入被漏掉）。
+    return re.sub(r'\n\s*isServiceDown,', '', match.group(0), count=1)
+
+
 MUTATIONS = [
     ('test_first_load_fetches_all_go_through_the_wake_retry', 'unwrap_bloggers_fetch',
      HTML, "withWakeRetry(() => axios.get('/api/bloggers'))", "axios.get('/api/bloggers')", False),
@@ -135,8 +145,8 @@ MUTATIONS = [
      HTML, r'<template v-if="serviceWaking">正在等待服务唤醒[^<]*</template>',
      '<template v-if="true">暂无数据</template>', True),
     # ---- 第 32 轮：五处"报 0 / 报没有"的假事实，和轮询耗尽后的那把锁 ----
-    ('test_no_page_claims_a_number_it_never_measured', 'pagination_reports_zero_on_failure',
-     HTML, '<template v-if="viewErrors.posts">条数没取到</template><template v-else>共 {{ postMeta.total || 0 }} 条</template>',
+    ('test_every_list_page_shares_the_same_honesty_rule', 'pagination_reports_zero_on_failure',
+     HTML, '<template v-if="viewErrors.posts">条数没取到，下面是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template>',
      '共 {{ postMeta.total || 0 }} 条', False),
     ('test_no_page_claims_a_number_it_never_measured', 'insight_card_back_to_zero',
      HTML, '{{ numOrDash(viewpointInsights.direction_total) }}',
@@ -160,7 +170,7 @@ MUTATIONS = [
      "                    analyzing.value = false;\n                    if (options.onPollStalled) options.onPollStalled('观点汇总');",
      '', False),
     ('test_polling_gives_up_loudly_instead_of_locking_the_ui', 'no_stall_banner',
-     HTML, r'<div v-if="taskStalled" class="text-xs"[^\n]*</div>', '', True),
+     HTML, r'<div v-if="stallText" class="text-xs"[^\n]*</div>', '', True),
     ('test_failure_state_is_reported_and_cleared_by_the_fetch_itself', 'posts_success_false_silent',
      POST, "                    report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));",
      '                    void 0;', False),
@@ -209,7 +219,7 @@ MUTATIONS = [
     ('test_the_insight_cards_cannot_report_zero_before_the_insights_arrive', 'insights_never_marked_loaded',
      VP, '                    insightsLoaded.value = true;\n', '', False),
     ('test_the_insight_cards_cannot_report_zero_before_the_insights_arrive', 'insights_rejection_silent',
-     VP, "                } else {\n                    insightsError.value = '观点洞察没取到：' + (response.data.message || '接口未给出原因');\n                }",
+     VP, "                } else {\n                    forget();\n                    insightsError.value = '观点洞察没取到：' + (response.data.message || '接口未给出原因');\n                }",
      '                }', False),
     ('test_the_insight_cards_cannot_report_zero_before_the_insights_arrive', 'card_blames_the_database_again',
      HTML, "{{ insightsLoaded && viewpointInsights.pending_summary ? numOrDash(",
@@ -218,10 +228,37 @@ MUTATIONS = [
      HTML, r'\n\s*<span v-if="retentionPreviewError \|\| cleanupPreviewError" class="text-xs text-danger">[^\n]*</span>',
      '', True),
     ('test_the_stall_banner_is_taken_down_when_polling_recovers', 'banner_never_cleared',
-     HTML, "                    onPollRecovered: () => { taskStalled.value = ''; },\n                    onFetchFailure:",
-     '                    onFetchFailure:', False),
+     HTML, "                    onPollRecovered: (label) => { delete taskStalled[label]; },\n", '', False),
     ('test_the_stall_banner_is_taken_down_when_polling_recovers', 'post_poll_never_recovers',
-     POST, '                if (options.onPollRecovered) options.onPollRecovered();', '', False),
+     POST, r'\n\s*if \(options\.onPollRecovered\) options\.onPollRecovered\([^\n]*\);', '', True),
+    # ---- 第 34 轮浏览器实测（把服务停掉）抓到的那一族：失败时卡上还挂着上一轮的真数 ----
+    ('test_a_failed_insights_call_takes_the_four_cards_down_with_it', 'soft_failure_keeps_stale_cards',
+     VP, "                    forget();\n                    insightsError.value = '观点洞察没取到：",
+     "                    insightsError.value = '观点洞察没取到：", False),
+    ('test_a_failed_insights_call_takes_the_four_cards_down_with_it', 'rejection_keeps_stale_cards',
+     VP, "                forget();\n                insightsError.value = '观点洞察拉取失败：",
+     "                insightsError.value = '观点洞察拉取失败：", False),
+    ('test_a_failed_insights_call_takes_the_four_cards_down_with_it', 'success_without_payload_counts_as_loaded',
+     VP, 'if (response.data.success && response.data.data) {', 'if (response.data.success) {', False),
+    # ---- 第 34 轮浏览器实测（停服务点页面）照出来的另一族：旧数据冒充新数据 ----
+    # （帖子那一腿已有 `pagination_reports_zero_on_failure`，这里补预测与观点两条）
+    ('test_every_list_page_shares_the_same_honesty_rule', 'predictions_pager_claims_fresh_rows',
+     HTML, '<template v-if="viewErrors.predictions">条数没取到，下面是上一次取到的</template>'
+           '<template v-else>共 {{ predictionMeta.total || 0 }} 条</template>',
+     '共 {{ predictionMeta.total || 0 }} 条', False),
+    ('test_every_list_page_shares_the_same_honesty_rule', 'viewpoints_pager_has_no_failure_branch',
+     HTML, '<template v-if="viewErrors.viewpoints">条数没取到，下面是上一次取到的</template>'
+           '<template v-else>共 {{ viewpointMeta.total }} 条</template>',
+     '共 {{ viewpointMeta.total }} 条', False),
+    # ---- 接线闸自己的两条：把第 34 轮的两种漏法现场复现一遍 ----
+    ('test_every_option_the_manager_reads_is_actually_injected[createViewpointManager]',
+     'viewpoint_manager_never_gets_isServiceDown',
+     HTML, r'window\.createViewpointManager\(\{[\s\S]*?\n                \}\);',
+     _drop_isServiceDown, True),
+    ('test_everything_the_page_destructures_is_actually_exported[createViewpointManager]',
+     'manager_stops_exporting_insights_flag',
+     VP, 'viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, viewpointTask,',
+     'viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,', False),
 ]
 
 
@@ -262,7 +299,7 @@ def main(list_only=False, only=None):
     # 对照组：干净代码上这一整份判据必须**全绿**。没有这一步，"每条变异都红了"可能是假的 ——
     # 子 pytest 只要起手就失败（conftest 报错、锁把子会话拦死、解释器不对），
     # 每一处都会报 RED，体检反而满分通过。
-    ctrl = subprocess.run([sys.executable, '-m', 'pytest', T, '-q', '--no-header',
+    ctrl = subprocess.run([sys.executable, '-m', 'pytest', T, WIRING, '-q', '--no-header',
                            '-p', 'no:cacheprovider'],
                           cwd=str(ROOT), capture_output=True, env=env,
                           text=True, encoding='utf-8', errors='replace')
@@ -293,17 +330,20 @@ def main(list_only=False, only=None):
                 print('%-36s NO-OP（替换后与底本相同 = 变异没生效）' % name)
                 failures.append(name + ':no-op')
                 continue
-            r = subprocess.run([sys.executable, '-m', 'pytest', '%s::%s' % (T, test),
+            tfile = WIRING if test.startswith(WIRING_TESTS) else T
+            r = subprocess.run([sys.executable, '-m', 'pytest', '%s::%s' % (tfile, test),
                                 '-q', '--no-header', '-p', 'no:cacheprovider'],
                                cwd=str(ROOT), capture_output=True, env=env,
                                text=True, encoding='utf-8', errors='replace')
             out = (r.stdout or '') + (r.stderr or '')
-            # "红"必须是**断言失败**的红：退码 2/4（用法错、收集错、conftest 起手就炸）同样非零，
-            # 一律记成"判据有效"就会造出一个满分假象（第 33 轮 A-MAJOR-4）。
-            if r.returncode == 0:
-                verdict, bad = 'GREEN（判据无效！）', True
-            elif ' failed' in out or ('error' in out and 'INTERNALERROR' not in out):
+            # "红"必须是**跑完并且断言失败**的红。pytest 的退码有讲究：
+            # 0 全过 / 1 有失败 / 2 被中断 / 3 内部错 / 4 用法错（参数或 test id 写错）/ 5 没收集到用例。
+            # 上一版只 grep 字符串，`--bogus-flag` 那种用法错的输出里也带 "error:" ⇒ 记成"判据有效"
+            # （第 33 轮 A-MAJOR-4 / 第 34 轮 A-MAJOR-5：分类器本身零覆盖）。
+            if r.returncode == 1 and ' failed' in out:
                 verdict, bad = 'RED（判据有效）', False
+            elif r.returncode == 0:
+                verdict, bad = 'GREEN（判据无效！）', True
             else:
                 verdict, bad = 'HARNESS-FAIL（子进程没跑到断言，退码 %s）' % r.returncode, True
             print('%-36s %-8s %s' % (name, path.split('/')[-1], verdict))

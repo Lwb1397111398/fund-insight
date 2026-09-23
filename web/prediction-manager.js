@@ -106,39 +106,44 @@
             predictionFilters.page = 1;
             await fetchPredictions();
         };
+        // 翻页失败把页码退回去（同 `post-manager.js`，第 34 轮 B-MINOR-15）
         const predictionPrevPage = async () => {
-            if (predictionFilters.page > 1) {
-                predictionFilters.page -= 1;
-                await fetchPredictions();
-            }
+            if (predictionFilters.page <= 1) return;
+            const back = predictionFilters.page; predictionFilters.page -= 1;
+            try { await fetchPredictions(); } catch (error) { predictionFilters.page = back; }
         };
         const predictionNextPage = async () => {
-            if (predictionMeta.has_more) {
-                predictionFilters.page += 1;
-                await fetchPredictions();
-            }
+            if (!predictionMeta.has_more) return;
+            const back = predictionFilters.page; predictionFilters.page += 1;
+            try { await fetchPredictions(); } catch (error) { predictionFilters.page = back; }
         };
 
         const refreshAfterChange = async () => {
             await fetchPredictions();
             if (options.onStatsChanged) await options.onStatsChanged();
         };
+        // 刷新失败 ≠ 动作失败：预测已经移进/移出回收站了，说「失败」会让老板再点一次
+        const afterChange = async (doneText) => {
+            try { await refreshAfterChange(); }
+            catch (refreshError) { alert(doneText + '，只是列表没刷新出来 —— 刷新页面即可'); return; }
+        };
         const archivePrediction = async (id) => {
             if (!confirm('将该预测移入回收站？之后可以恢复。')) return;
             try {
                 await axios.delete(`/api/predictions/${id}`);
-                await refreshAfterChange();
+                await afterChange('已移入回收站');
             } catch (error) { alert('归档失败: ' + errorMessage(error)); }
         };
         const restorePrediction = async (id) => {
             try {
                 await axios.post(`/api/predictions/${id}/restore`);
-                await refreshAfterChange();
+                await afterChange('已恢复');
             } catch (error) { alert('恢复失败: ' + errorMessage(error)); }
         };
         const viewPredictionDetail = async (id) => {
             try {
                 const response = await axios.get(`/api/predictions/${id}`);
+                if (!response.data.success) { alert('这条预测的详情没取到：' + (response.data.message || '接口未给出原因')); return; }
                 predictionDetail.value = response.data.data;
                 showPredictionDetail.value = true;
             } catch (error) { alert('获取详情失败: ' + errorMessage(error)); }

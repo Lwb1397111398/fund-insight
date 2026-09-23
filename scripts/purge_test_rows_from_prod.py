@@ -33,11 +33,14 @@ from datetime import date, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-for _st in (sys.stdout, sys.stderr):
-    try:
-        _st.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
+def _reconfigure_streams():
+    # 只在**自己当脚本跑**时改输出编码。放在模块顶层，被单测 import 一下就顺带改掉整个
+    # pytest 会话的 stdout（第 34 轮 A-MINOR：正是本批声称要防的那类环境副作用）。
+    for _st in (sys.stdout, sys.stderr):
+        try:
+            _st.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
 
 CONFIRM_TOKEN = 'CLEAN-TEST-ROWS'
 RESTORE_CONFIRM_TOKEN = 'RESTORE-TEST-ROWS'
@@ -99,6 +102,39 @@ def tables_with_column(engine, column):
     insp = sa_inspect(engine)
     return sorted(t for t in insp.get_table_names()
                   if column in {c['name'] for c in insp.get_columns(t)})
+
+
+def fk_ref_counts(db, engine, column, values, refer_target):
+    """删父表行之前，先看谁引用这些 id。返回（带外键的引用、没有外键的引用）。
+
+    第 34 轮 A-MINOR：上一版只给 `fund_info` 做了这件事，`bloggers` / `posts` 完全没查
+    （`analysis_logs.post_id`、`predictions.blogger_id` 都带外键）⇒ 真删起来是 flush 期
+    IntegrityError，"逐行回执"打到一半断。
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
+
+    insp = sa_inspect(engine)
+    holders = [t for t in insp.get_table_names()
+               if any(fk.get('referred_table') == refer_target
+                      and (fk.get('constrained_columns') or [None])[0] == column
+                      for fk in insp.get_foreign_keys(t))]
+    # 没有外键、但按名字也引用它的表（`analysis_logs` 这类历史表常常不带 FK）
+    loose = [t for t in tables_with_column(engine, column) if t not in holders and t != refer_target]
+    inlist = ', '.join(str(int(v)) for v in values)
+
+    def count(tables):
+        out = []
+        for t in tables:
+            if t == refer_target:
+                continue
+            n = db.execute(text('select count(*) from %s where %s in (%s)'
+                                % (_ident(t), _ident(column), inlist))).scalar() or 0
+            if n:
+                out.append('%s=%d' % (t, n))
+        return out
+
+    return count(holders), count(loose)
 
 
 def build_insert(tbl, cols):
@@ -164,6 +200,7 @@ def _row(obj):
 
 
 def main():
+    _reconfigure_streams()
     ap = argparse.ArgumentParser()
     ap.add_argument('--production', action='store_true', required=True,
                     help='显式声明靶子是生产库（缺了就拒跑）')
@@ -181,9 +218,25 @@ def main():
     try:
         p = plan(db, engine)
         print('[target] %s' % str(engine.url).split('@')[-1])
-        print('[预检] 谓词=夹具名/键 + `created_at >= %s`（两条都在 SQL 里，不是打印给人看）：'
-              'posts %d → bloggers %d → system_config %d → fund_info %d'
-              % (SINCE, len(p['posts']), len(p['bloggers']), len(p['config']), len(p['funds'])))
+        print('[预检] 谓词=夹具名/键，且 bloggers/posts/system_config 三条都带 `created_at >= %s`'
+              '（在 SQL 里，不是打印给人看）；`fund_info` 没有 created_at，只能按 code+名字精确匹配'
+              % SINCE)
+        print('        posts %d → bloggers %d → system_config %d → fund_info %d'
+              % (len(p['posts']), len(p['bloggers']), len(p['config']), len(p['funds'])))
+        # 删博主/帖子前先看谁引用它们：带外键的会直接让删除失败（回执打到一半断），
+        # 没外键的只是留孤儿行 —— 报出来给人看，不拦（第 34 轮 A-MINOR）。
+        for column, target, rows in (('blogger_id', 'bloggers', p['bloggers']),
+                                     ('post_id', 'posts', p['posts'])):
+            vals = [r.id for r in rows]
+            if not vals:
+                continue
+            hard, soft = fk_ref_counts(db, engine, column, vals, target)
+            if hard:
+                print('[abort] 这些 %s 被**带外键**的表引用（%s）⇒ 顺序上得先处理那些表'
+                      % (target, '、'.join(hard)))
+                return 6
+            if soft:
+                print('[提醒] 删掉这些 %s 后，没有外键的表会留下引用（%s）' % (target, '、'.join(soft)))
         if p['orphan_posts']:
             print('[abort] 有 %d 行帖子挂在测试博主名下但 created_at 早于 %s'
                   '⇒ 谓词与时间窗不自洽，先人工看清再说' % (p['orphan_posts'], SINCE))

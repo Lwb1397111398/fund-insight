@@ -68,8 +68,17 @@
             Object.assign(postFilters, { keyword: '', blogger_id: '', analysis_status: '', start_date: '', end_date: '', quality: '', page: 1 });
             await fetchPosts();
         };
-        const postPrevPage = async () => { if (postFilters.page > 1) { postFilters.page -= 1; await fetchPosts(); } };
-        const postNextPage = async () => { if (postMeta.has_more) { postFilters.page += 1; await fetchPosts(); } };
+        // 翻页失败要把页码退回去：否则「第 4 页」配的是第 3 页的数据（第 34 轮 B-MINOR-15）
+        const postPrevPage = async () => {
+            if (postFilters.page <= 1) return;
+            const back = postFilters.page; postFilters.page -= 1;
+            try { await fetchPosts(); } catch (error) { postFilters.page = back; }
+        };
+        const postNextPage = async () => {
+            if (!postMeta.has_more) return;
+            const back = postFilters.page; postFilters.page += 1;
+            try { await fetchPosts(); } catch (error) { postFilters.page = back; }
+        };
 
         const refreshRelated = async () => {
             await fetchPosts();
@@ -91,7 +100,7 @@
             try {
                 const res = await axios.get(`/api/posts/analysis-jobs/${taskId}`);
                 analysisJob.value = res.data.data;
-                if (options.onPollRecovered) options.onPollRecovered();
+                if (options.onPollRecovered) options.onPollRecovered('帖子批量分析');
                 const status = analysisJob.value?.status;
                 const updatedAt = analysisJob.value?.updated_at ? new Date(analysisJob.value.updated_at) : null;
                 const staleRunning = status === 'running' && updatedAt && (Date.now() - updatedAt.getTime() > 15 * 60 * 1000);
@@ -180,7 +189,9 @@
                     } else {
                         alert('帖子已保存');
                     }
-                    await refreshRelated();
+                    // 同上：帖子已经存下了，刷新失败不许说「添加失败」
+                    try { await refreshRelated(); }
+                    catch (refreshError) { alert('帖子已保存，只是列表没刷新出来 —— 刷新页面即可'); }
                 } else {
                     alert('添加失败: ' + (res.data.message || '未知错误'));
                 }
@@ -234,7 +245,11 @@
                 });
                 if (res.data.success) {
                     showEditPost.value = false;
-                    await fetchPosts();
+                    // 刷新失败不能说"保存失败"：帖子已经改好了，那句话会让老板再点一次（第 34 轮 B-MAJOR-5）
+                    try { await fetchPosts(); }
+                    catch (refreshError) { alert('帖子已保存，只是列表没刷新出来 —— 刷新页面或再点一次就能看见'); }
+                } else {
+                    alert('这次没保存成功：' + (res.data.message || '接口未给出原因'));
                 }
             } catch (error) { alert('保存失败: ' + errorMessage(error)); }
         };
@@ -246,7 +261,9 @@
                 const message = `此操作不可恢复。将删除帖子及 ${p.prediction_count || 0} 条预测、${p.verification_task_count || 0} 个验证任务、${p.prediction_group_count || 0} 个预测组、${p.analysis_log_count || 0} 条分析日志；${p.viewpoint_detach_count || 0} 条观点仅解除关联。确定继续？`;
                 if (!confirm(message)) return;
                 await axios.delete(`/api/posts/${id}`, { headers: { 'X-Danger-Confirm': 'delete-post' } });
-                await refreshRelated();
+                // 删除已经落库了，刷新失败不能报"删除失败"（老板会再点一次，而东西早没了）
+                try { await refreshRelated(); }
+                catch (refreshError) { alert('帖子及关联数据已删除，只是列表没刷新出来 —— 刷新页面即可'); return; }
                 alert('帖子及关联运行数据已彻底删除');
             } catch (error) { alert('删除失败: ' + errorMessage(error)); }
         };

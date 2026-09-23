@@ -74,7 +74,7 @@ def test_both_directions_are_blocked(tmp_path):
     现在 pytest 会话自己握一把 `.pytest-session.lock`，体检启动前先问它。
     """
     holder = mutation_lock.acquire_session_lock(tmp_path)
-    assert holder is not None, '第一把会话锁就该拿不到 ⇒ 锁根本没互斥'
+    assert holder is not None, '第一个 pytest 会话拿不到自己的会话锁 ⇒ 锁的实现有问题'
     assert mutation_lock.session_lock_is_held(tmp_path) is True
     assert mutation_lock.harness_may_start(tmp_path) is False, '体检仍可在 pytest 跑着时启动'
     second = mutation_lock.acquire_session_lock(tmp_path)

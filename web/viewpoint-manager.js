@@ -59,24 +59,42 @@
                 date_to: viewpointFilters.date_to || undefined,
                 viewpoint_type: viewpointFilters.viewpoint_type || undefined,
             };
-            const response = await axios.get('/api/viewpoints', { params });
-            viewpoints.value = response.data.data || [];
-            Object.assign(viewpointMeta, response.data.meta || {});
+            // 与 posts/predictions 同一条规矩：筛选与翻页直连这里，不经过 `loadView` 的兜底，
+            // 所以三种形状都得自己说一句话（第 34 轮 A-MAJOR-4 / B-MAJOR-4）。
+            const report = (msg) => { if (options.onFetchFailure) options.onFetchFailure('viewpoints', msg); };
+            try {
+                const response = await axios.get('/api/viewpoints', { params });
+                if (response.data.success) {
+                    viewpoints.value = response.data.data || [];
+                    Object.assign(viewpointMeta, response.data.meta || {});
+                    report('');
+                } else {
+                    report('观点列表没取到：' + (response.data.message || '接口未给出原因'));
+                }
+            } catch (error) {
+                report('观点列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
+                    ? '服务连不上（可能在唤醒）' : '接口报错'));
+                throw error;
+            }
         };
         const insightsLoaded = ref(false);
         const insightsError = ref('');
         const fetchInsights = async () => {
             // 这个端点单独失败时，四张卡以前全渲染 0（表体却有数据 ⇒ "0 条观点看多"是编的）
+            // 失败还要把上一轮的真数一起清掉：红字说"没取到"、卡上却挂着 3/2/0，一样是假话
+            const forget = () => { viewpointInsights.value = {}; insightsLoaded.value = false; };
             try {
                 const response = await axios.get('/api/viewpoints/insights');
-                if (response.data.success) {
-                    viewpointInsights.value = response.data.data || viewpointInsights.value;
+                if (response.data.success && response.data.data) {
+                    viewpointInsights.value = response.data.data;
                     insightsLoaded.value = true;
                     insightsError.value = '';
                 } else {
+                    forget();
                     insightsError.value = '观点洞察没取到：' + (response.data.message || '接口未给出原因');
                 }
             } catch (error) {
+                forget();
                 insightsError.value = '观点洞察拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
                     ? '服务连不上（可能在唤醒）' : '接口报错');
                 throw error;
@@ -88,7 +106,9 @@
             return viewpointTask.value;
         };
         const loadViewpoints = async () => {
-            await Promise.all([fetchViewpoints(), fetchInsights(), fetchLatestTask()]);
+            // 三笔各自报各自的（一起 `Promise.all` 会让"最新任务"失败被说成"观点拉取失败"，主语错）
+            await Promise.all([fetchViewpoints(), fetchInsights().catch(() => null),
+                               fetchLatestTask().catch(() => null)]);
             if (taskRunning.value) pollTask(viewpointTask.value.task_id);
         };
         const applyViewpointFilters = async () => { viewpointFilters.page = 1; await fetchViewpoints(); };
@@ -99,11 +119,16 @@
             });
             await fetchViewpoints();
         };
+        // 同 `post-manager.js`：失败就把页码退回去，别拿「第 N 页」配第 N-1 页的数据
         const viewpointPrevPage = async () => {
-            if (viewpointFilters.page > 1) { viewpointFilters.page -= 1; await fetchViewpoints(); }
+            if (viewpointFilters.page <= 1) return;
+            const back = viewpointFilters.page; viewpointFilters.page -= 1;
+            try { await fetchViewpoints(); } catch (error) { viewpointFilters.page = back; }
         };
         const viewpointNextPage = async () => {
-            if (viewpointFilters.page < viewpointMeta.pages) { viewpointFilters.page += 1; await fetchViewpoints(); }
+            if (viewpointFilters.page >= viewpointMeta.pages) return;
+            const back = viewpointFilters.page; viewpointFilters.page += 1;
+            try { await fetchViewpoints(); } catch (error) { viewpointFilters.page = back; }
         };
         const clearPoll = () => {
             if (pollTimer) window.clearTimeout(pollTimer);
@@ -115,7 +140,7 @@
             if (pollTimer) window.clearTimeout(pollTimer);
             try {
                 const latest = await fetchLatestTask();
-                if (latest && options.onPollRecovered) options.onPollRecovered();
+                if (latest && options.onPollRecovered) options.onPollRecovered('观点汇总');
                 if (!latest || latest.task_id !== taskId || ['succeeded', 'failed', 'cancelled'].includes(latest.status)) {
                     clearPoll();
                     analyzing.value = false;
