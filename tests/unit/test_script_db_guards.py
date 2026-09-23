@@ -21,6 +21,7 @@ WRITE_SWITCH = re.compile(r'--(apply|execute|hard-delete|import)\b')
 HARD_DELETE = re.compile(r'CONFIRM_TOKEN|ThreeBucketRetentionService|three-buckets-hard-delete')
 PROD_FLAG = re.compile(r'--against-production')
 HTTP_WRITE = {'post', 'put', 'patch'}     # 会话/requests 的写方法（ORM 侧没有这三个名字）
+HTTP_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}   # urllib 那一族：方法藏在 method='POST' 里
 OS_SHELL = {'system', 'popen', 'execv', 'execve', 'spawn', 'spawnl'}
 
 
@@ -125,7 +126,10 @@ def _write_capable(f):
         # 这条必须排在 `--confirm` 那个分支**前面**：加完它才发现旧顺序会短路
         # （`import_export.py` 带 `--confirm` 却没有硬删 ⇒ 老早退直接判"不受管"）。
         return True
-    if f['called'] & HTTP_WRITE:
+    if f['called'] & HTTP_WRITE or ('urlopen' in f['called'] and f['consts'] & HTTP_METHODS):
+        # 第 40 轮 A 席 M5：上一版只认 `post/put/patch`，而本仓那个生产写口用的是
+        # `urllib.request.urlopen(Request(..., method='POST'))` ⇒ 触发器精确覆盖了"仓库里没有的形状"。
+
         # 第 39 轮 B：`_declares_http_target` 只做"守卫"、不做"触发"，于是
         # 一个不带 `--confirm` 字样的 HTTP 写口（口令写死在代码里也算）依旧全隐身。
         return True
@@ -275,37 +279,81 @@ def test_the_two_new_triggers_can_actually_fire():
         '`os.system("alembic upgrade head")` 不被认成发 DDL（上一版只认 subprocess 那一族）'
 
 
-def test_underscore_prefixed_scripts_are_not_a_whole_family_exemption():
-    """以前 `startswith('_')` 让 7 个 `_tmp_*.py` 整族不进扫描 ⇒ 新写一个 `_x.py` 的生产写脚本
-    可以永远没人管（第 39 轮 B）。现在豁免名单只有 `_db_guard.py` 一个文件，且它被别处引用。"""
-    names = set(_scripts())
-    assert '_db_guard.py' not in names
-    on_disk = {p.name for p in SCRIPTS.glob('*.py')} - {'_db_guard.py'}
-    assert names == on_disk, '扫描集合不等于目录清单：%s 被悄悄跳过了' % sorted(on_disk - names)
-    assert any(n.startswith('_tmp_') for n in names), '_tmp_* 一个都没扫到 ⇒ 前缀豁免还在'
+def _scan_into(tmp_path, files, monkeypatch):
+    """判据不许依赖"我机器上恰好有 7 个未入库的 `_tmp_*.py`"。
+
+    第 40 轮 A 席 M2：上一版那条 `any(n.startswith('_tmp_'))` 在**干净克隆**上必红
+    ——tracked 的 `scripts/*.py` 只有 45 个，磁盘上 52 个，差额全在 `.gitignore` 里。
+    要验形状就现造文件。
+    """
+    import sys as _sys
+    for name, body in files.items():
+        (tmp_path / name).write_text(body, encoding='utf-8')
+    monkeypatch.setattr(_sys.modules[__name__], 'SCRIPTS', tmp_path)
+    return _scripts()
 
 
-def test_a_syntax_broken_script_breaks_the_scan_not_the_tester():
-    """兜底 dict 必须与 `_facts` 同形，否则"让它变红"这句承诺会先变成 KeyError。"""
-    facts = _scripts()
-    fake = dict(next(iter(facts.values())))
-    fake.update({'text': 'def (:', 'called': set(), 'flags': set(), 'raised': set(),
-                 'consts': set(), 'env_written': False, 'direct_db': True, 'alembic': False,
-                 'broken': True})
-    _write_capable(fake)                                  # 不许抛
-    _guarded('broken.py', fake, schema_ddl=_issues_schema_ddl(fake))   # 不许抛
-    broken = {'x': fake}
-    orig = globals()['_scripts']
-    globals()['_scripts'] = lambda: broken
-    try:
-        try:
-            test_write_capable_scripts_declare_their_database_in_code()
-        except AssertionError:
-            pass                        # 正确形状：判据说"它没自报"，而不是扫描器崩
-        else:
-            raise AssertionError('语法坏掉的文件被判成"没问题" ⇒ 解析失败被静默放过')
-    finally:
-        globals()['_scripts'] = orig
+_WRITER = '''"""会写库、什么都没声明的脚本"""
+import os
+from src.models.database import SessionLocal
+db = SessionLocal()
+db.add(1)
+db.commit()
+'''
+
+
+def test_underscore_prefixed_scripts_are_still_scanned(tmp_path, monkeypatch):
+    """`_` 前缀不再是整族豁免（第 39 轮 B：新写一个 `_x.py` 的生产写脚本可以永远没人管）。"""
+    scanned = _scan_into(tmp_path, {'_x_writer.py': _WRITER, 'ok_writer.py': _WRITER}, monkeypatch)
+    assert {'_x_writer.py', 'ok_writer.py'} <= set(scanned), sorted(scanned)
+    for name in ('_x_writer.py', 'ok_writer.py'):
+        f = scanned[name]
+        assert _write_capable(f), '%s 直连 ORM 又 commit，却不被认成能改数据' % name
+        assert not _guarded(name, f), '前提：这两个桩文件都没自报库名 ⇒ 下面那条判据必须抓到它们'
+    bad = sorted(n for n, f in scanned.items()
+                 if _write_capable(f) and not _guarded(n, f, schema_ddl=_issues_schema_ddl(f)))
+    assert bad == ['_x_writer.py', 'ok_writer.py'],         '扫描或判据失效（这两个都该被抓到，实际：%s）' % bad
+
+
+def test_a_syntax_broken_script_fails_the_gate_instead_of_the_scanner(tmp_path, monkeypatch):
+    """解析不了 = **无法证明它不能写** ⇒ fail-closed 按能写处理。
+
+    以前只有 docstring 里一句"标成未受管让下面变红"，实际兜底 dict 缺 `consts`/`raised`
+    两个键 ⇒ 扫描器先 KeyError；补上键之后仍是静默放过（它没有写开关、也没 commit 调用）。
+    第 39 轮 A-MINOR-7 与第 40 轮 A-MAJOR-3 是同一条账的两半。
+    """
+    import pytest as _pt
+    scanned = _scan_into(tmp_path, {'broken_one.py': 'def (:{', 'ok_writer.py': _WRITER},
+                         monkeypatch)
+    assert scanned['broken_one.py'].get('broken') is True
+    assert _write_capable(scanned['broken_one.py']), '解析失败被放过了 ⇒ fail-closed 没生效'
+    with _pt.raises(AssertionError):
+        test_write_capable_scripts_declare_their_database_in_code()
+
+
+def test_the_http_write_trigger_catches_the_shape_this_repo_actually_uses(tmp_path, monkeypatch):
+    """仓库里的生产写口用的是 `urlopen(Request(..., method='POST'))`，不是 `session.post(...)`。
+
+    第 40 轮 A-M5：触发器只认 `post/put/patch` 时，它精确覆盖了"今天没有实例"的那种形状，
+    而真实那种一旦不带 `--confirm` 字样照样隐身。这条用**真写法**验，不用假写法。
+    """
+    body = ("""import urllib.request
+"""
+            """def push(url, payload):
+"""
+            """    req = urllib.request.Request(url, data=payload, method='POST')
+"""
+            """    return urllib.request.urlopen(req)
+""")
+    scanned = _scan_into(tmp_path, {'http_writer.py': body}, monkeypatch)
+    f = scanned['http_writer.py']
+    assert _write_capable(f), 'urllib 的 POST 不被认成写操作 ⇒ 下一份不带口令的 HTTP 写口仍隐身'
+    assert not _guarded('http_writer.py', f)
+    only_get = body.replace("method='POST'", "method='GET'")
+    other = tmp_path / 'get_only'
+    other.mkdir()
+    s2 = _scan_into(other, {'reader.py': only_get}, monkeypatch)
+    assert not _write_capable(s2['reader.py']), 'GET 也算写 ⇒ 判据过宽会淹掉真信号'
 
 
 def test_every_way_of_changing_the_schema_counts_as_ddl():

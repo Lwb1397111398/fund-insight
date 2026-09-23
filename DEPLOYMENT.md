@@ -176,7 +176,7 @@ alembic downgrade prediction_schema_baseline
 alembic upgrade head
 ```
 
-生产环境只在完成 `pg_dump`、隔离恢复和迁移预检后，才在受控维护窗口显式设置 `ALEMBIC_DATABASE_URL`。
+生产环境只在完成 `pg_dump`、隔离恢复和迁移预检后，才在受控维护窗口显式设置 `ALEMBIC_DATABASE_URL` **并且** `ALEMBIC_ALLOW_REMOTE=1`（少任何一道都会被 `env.py` 拒跑）。
 **更正（第 38 轮）**：本段原先写"本仓库的测试、启动命令和 Render Web 启动均不会自动执行 Alembic"，
 这是假的 —— `render.yaml:11` 的 `startCommand` 每次启动都跑 `python scripts/run_migrations.py`
 （它先自报 `[库] …` 再 `upgrade head`；`tests/unit/test_prediction_migrations.py` 也会起它，

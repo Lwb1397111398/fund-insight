@@ -768,3 +768,40 @@ def test_thin_nav_is_reported_as_a_note_not_a_refusal(monkeypatch, tmp_path):
         assert body["data"]["no_nav_priced_in_this_db"] == 0, body["data"]
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+class _Req:
+    """路由只要 `request.headers.get(...)`，不必起整个 TestClient。"""
+
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+
+def test_a_dry_run_plan_says_when_the_switch_is_closed(tmp_path, monkeypatch):
+    """总开关没开时，dry-run 那份"计划"必须自己说出来（第 40 轮 B 的 M-4）。
+
+    `import_disabled` 以前只在 `_audit_apply_row` 里判，而那个函数只在**真写**分支才被调用
+    ⇒ 计划结构上不可能带出这个信息：拿计划的人看到"更新 118、新建 27"，按下去撞上 145 行全拒。
+    上面那条 `test_audit_switch_is_closed_by_default` 走的是内部函数，看不见这一层，
+    所以这条走**路由**、且不借助夹具把开关打开。
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.models.database import Base
+    from src.api.routes import config as cfg
+
+    engine = create_engine('sqlite:///%s' % (tmp_path / 'audit.db').as_posix())
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        monkeypatch.delenv('ENABLE_SECTOR_AUDIT_IMPORT', raising=False)
+        payload = cfg.AuditImportRequest(
+            mappings=[{'sector_name': '半导体', 'fund_code': '512480'}], dry_run=True)
+        res = cfg.import_sector_mapping_audit(payload, _Req(), db)
+        assert res['success'] is True and res['dry_run'] is True
+        assert '没开' in res['message'] and 'import_disabled' in res['message'], res['message']
+        monkeypatch.setenv('ENABLE_SECTOR_AUDIT_IMPORT', 'true')
+        ok = cfg.import_sector_mapping_audit(payload, _Req(), db)
+        assert '没开' not in ok['message'], '开关开了还警告 ⇒ 这句红字会变成噪音'
+    finally:
+        db.close()

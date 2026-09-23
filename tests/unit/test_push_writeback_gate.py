@@ -143,6 +143,63 @@ def test_a_row_the_server_refused_early_is_dropped_not_mislabelled(monkeypatch, 
     assert sent == [GOOD['fund_code']], '那行服务端已经拒了，不该再发第二次：%s' % sent
 
 
+def test_both_dropping_reasons_are_counted_together(monkeypatch, tmp_path, capsys):
+    """两格剔除同时亮时，回执必须报**总数**（第 40 轮 B 的 M-3：`dropped = len(drop)` 覆盖掉了
+    前一批，3 行清单只发 1 行却说"另有 1 行没发"，与同批改过的模块总览那句"计入剔除数"打脸）。"""
+    rows = [{'sector_name': '半导体', 'fund_code': '512480', 'fund_name': '半导体ETF'},
+            {'sector_name': '卫星', 'fund_code': '159206', 'fund_name': '卫星ETF'},
+            {'sector_name': '创新药', 'fund_code': '159992', 'fund_name': '创新药ETF'}]
+    io.open(str(tmp_path / 'manifest.json'), 'w', encoding='utf-8').write(json.dumps(
+        {'sha256': 'x', 'generated_at': '2026-09-23T15:14:00', 'mappings': rows}, ensure_ascii=False))
+    monkeypatch.setattr(push, 'MANIFEST', str(tmp_path / 'manifest.json'))
+    monkeypatch.setenv('ACCESS_PASSWORD', 'gate-test')
+    calls = []
+
+    def server(base, path, password, payload=None, method='GET', timeout=180):
+        calls.append(payload)
+        items = []
+        for r in payload['mappings']:
+            if r['fund_code'] == '159206':
+                items.append(dict(r, reason='evidence_too_large'))            # 早期拒收，无该列
+            elif r['fund_code'] == '159992':
+                items.append(dict(r, nav_priced_here=False, nav_priced_here_note='本库没有档案'))
+            else:
+                items.append(dict(r, nav_priced_here=True, nav_priced_here_note=''))
+        return 200, {'message': 'ok', 'data': {'items': items}}
+
+    monkeypatch.setattr(push, 'request', server)
+    monkeypatch.setattr('sys.argv', ['x', '--confirm', push.CONFIRM])
+    code = push.main()
+    out = capsys.readouterr().out
+    assert code == 0, code
+    assert [r['fund_code'] for r in calls[-1]['mappings']] == ['512480'], '两批各剔各的才发得对'
+    assert calls[-1]['dry_run'] is False
+    # 回执里那句"另有 N 行没发"必须是 **2**（早期拒收 1 + 定不了价 1）。
+    # 旧写法 `dropped = len(drop)` 把前一批覆盖掉 ⇒ 只报 1，把"少写了两行"说成"少写一行"。
+    assert '另有 2 行**没发**' in out, '剔除总数被覆盖了（回执：%s）' % out[-400:]
+
+
+def test_a_batch_refused_wholesale_never_sends_a_real_write(monkeypatch, tmp_path):
+    """全部行都被早期拒收 ⇒ 不许再发那个 0 行的真写请求、不许打印"[完成]"、不许退 0。
+
+    第 40 轮 B 的 M-2：`nav_priced_here is False` 那一格有"剔光就停"，上一批新加的 `refused`
+    那一格没有 ⇒ 一次什么都没写进去的生产回写以"完成 + 退码 0"收场，
+    任何按退码判断的人会记成"已回写"。
+    """
+    calls = _setup(monkeypatch, tmp_path)
+
+    def all_refused(base, path, password, payload=None, method='GET', timeout=180):
+        calls.append(payload)
+        items = [dict(r, reason='too_long:fund_name') for r in payload['mappings']]
+        return 200, {'message': 'ok', 'data': {'items': items}}
+
+    monkeypatch.setattr(push, 'request', all_refused)
+    monkeypatch.setattr('sys.argv', ['x', '--confirm', push.CONFIRM])
+    code = push.main()
+    assert code == 5, '整批被拒却按成功收场（退码 %s）' % code
+    assert calls and all(c['dry_run'] is True for c in calls), '不许发出真写请求（哪怕是空批次）'
+
+
 def test_a_preflight_that_answers_fewer_rows_sends_nothing(monkeypatch, tmp_path):
     """预检只答了一半的行 ⇒ 剩下那些等于"没问过"，同样不许发。"""
     calls = _setup(monkeypatch, tmp_path)

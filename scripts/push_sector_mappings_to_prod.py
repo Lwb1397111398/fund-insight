@@ -184,13 +184,21 @@ def main():
                 print('   ...其余 %d 行省略' % (len(bad) - 40))
             if not args.allow_unservable:
                 drop = {s for s, _c, _n in bad}
-                dropped = len(drop)
+                dropped += len(drop)   # 第 40 轮 B：以前是覆盖，两路同时剔时少报（注释承诺的是"计进总数"）
                 rows = [r for r in rows if r.get('sector_name') not in drop]
                 print('[预检] 已剔除 %d 行，剩 %d 行待发；确实要把不可服务的行也发上去，'
                       '加 --allow-unservable' % (len(drop), len(rows)))
                 if not rows:
                     print('[abort] 剔除后没有可发的行了')
                     return 5
+
+    # 第 40 轮 B 的 M-2：上面"早期拒收"那一格剔完没有"剔光了就停"的闸（"定不了价"那一格有），
+    # 于是整批被拒时仍会发出一个 0 行的真写请求、打印"[完成] 生产已落在被审计的状态"、退码 0
+    # —— 一次什么都没写进去的生产回写以成功收场，按退码判断的人（包括下一轮的我）会记成"已回写"。
+    if apply_write and not rows:
+        print('[abort] 预检把这批 %d 行全剔完了（早期拒收 / 生产定不了价），一行都没发 —— '
+              '这不是"完成"，是按计划什么都没写。逐行原因见上面两段预检清单。' % dropped)
+        return 5
 
     status, body = request(args.base, ENDPOINT, password,
                            {'mappings': rows, 'dry_run': not apply_write,
@@ -242,7 +250,7 @@ def main():
         return 4
     print('[完成] 生产已落在被审计的状态：更新 %d、新建 %d、本就一致 %d%s'
           % (counts.get('updated', 0), counts.get('created', 0), counts.get('unchanged', 0),
-             '；另有 %d 行**没发**（生产定不了价，剔除原因见上面预检清单）' % dropped
+             '；另有 %d 行**没发**（早期拒收 / 生产定不了价，逐行原因见上面预检清单）' % dropped
              if dropped else ''))
     return 0
 

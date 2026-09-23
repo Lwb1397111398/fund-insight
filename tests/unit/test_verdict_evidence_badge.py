@@ -111,6 +111,41 @@ def test_retag_without_change_is_a_no_op(test_db):
     assert prediction.is_correct is True, '无事也要清结论就是数据破坏'
 
 
+def _bulk_write_hits(node, column):
+    """`query.update(<dict>)` / `.values(...)` 的**参数位**上有没有这一列 —— 三种 key 写法都要认。
+
+    第 40 轮 B 的 M-5：两版收集器都只认字符串 key（`{'is_correct': v}`）与关键字
+    （`values(is_correct=v)`），而 SQLAlchemy 的地道批量写法是**把列对象当 key**
+    （`update({Prediction.is_correct: True})`）—— 仓库里今天就有 3 处这么写
+    （`routes/viewpoints.py:473`、`retention_cleanup_service.py:907`、
+    `retention_three_buckets.py:1108`），说明这条路团队真的会走。
+
+    只认参数位（我第一版扫整棵子树，当场误伤 6 处只读代码：
+    `filter(Prediction.fund_code == x).update({'status': ...})` 里的 `fund_code` 是筛选条件，
+    不是被写的列）。
+    """
+    import ast
+    if not isinstance(node, ast.Call):
+        return False
+    names = [getattr(node.func, 'attr', None), getattr(node.func, 'id', None)]
+    keyed = [kw.arg for kw in node.keywords if kw.arg is not None]
+    if column not in keyed and 'update' not in names and 'values' not in names:
+        return False
+    for arg in node.args:
+        if isinstance(arg, ast.Dict):
+            for key in arg.keys:
+                is_const = isinstance(key, ast.Constant) and key.value == column
+                is_column = isinstance(key, ast.Attribute) and key.attr == column
+                if is_const or is_column:
+                    return True
+        elif isinstance(arg, ast.Attribute) and arg.attr == column:
+            return True
+    for kw in node.keywords:
+        if kw.arg == column:
+            return True
+    return False
+
+
 def test_no_new_direct_fund_code_writes_appear():
     """改标的写动作只允许出现在已审的地方（第 18 轮 M-2："唯一入口"必须有测试挡）。
 
@@ -184,12 +219,7 @@ def test_no_new_direct_fund_code_writes_appear():
                            and isinstance(node.args[1], ast.Constant)
                            and node.args[1].value == 'fund_code')
                     if not hit and fname in ('update', 'values'):
-                        for sub in ast.walk(node):
-                            if ((isinstance(sub, ast.Constant) and sub.value == 'fund_code')
-                                    or (isinstance(sub, ast.keyword)
-                                        and sub.arg == 'fund_code')):
-                                hit = True
-                                break
+                        hit = _bulk_write_hits(node, 'fund_code')
                     if hit:
                         found.add(self._here())
                     self.generic_visit(node)
@@ -231,12 +261,7 @@ def test_is_correct_is_only_written_by_the_verify_service():
     writers = set()
 
     def _mentions(node):
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Constant) and sub.value == 'is_correct':
-                return True
-            if isinstance(sub, ast.keyword) and sub.arg == 'is_correct':
-                return True
-        return False
+        return _bulk_write_hits(node, 'is_correct')
 
     class _C(ast.NodeVisitor):
         """四种写法都要认（第 25 轮 A 的 MINOR-6：只认 `x.is_correct = ...` 太窄）。
@@ -336,3 +361,23 @@ def test_export_snapshot_carries_the_badge_too(test_db):
     row = next(r for r in exported['predictions'] if r['id'] == prediction.id)
     assert row['evidence_status'] == 'nav_rewritten'
     assert exported['predictions_evidence']['stale_evidence'] == 1
+
+def test_the_bulk_write_detector_recognises_all_five_spellings():
+    """收集器自己的样品：参数位上的三种写法都要认，非参数位的两处不许误伤，用的就是仓库里真有的那种形状。
+
+    没有这条，'已扩展到批量写'又是一次"加了参数不等于加了护栏"（第 17/27/39 轮同一族）。
+    """
+    import ast
+    shapes = [
+        ('dict 的 key 是列对象，必须认', 'q.update({Prediction.is_correct: True})', 'is_correct', True),
+        ('dict 的 key 是字符串，以前就认', 'q.update({"is_correct": True})', 'is_correct', True),
+        ('values 的关键字，以前就认', 'q.values(is_correct=True)', 'is_correct', True),
+        ('列名只出现在筛选条件里，不许误伤只读代码', 'q.filter(Prediction.fund_code == x).update({"status": 1})', 'fund_code', False),
+        ('读它不算写', 'x = Prediction.is_correct', 'is_correct', False),
+        ('写别的列不算写这一列', 'q.update({Prediction.sector: y})', 'is_correct', False),
+    ]
+    for name, src, col, want in shapes:
+        tree = ast.parse(src)
+        call = next((n for n in ast.walk(tree) if isinstance(n, ast.Call)), None)
+        got = _bulk_write_hits(call, col)
+        assert got == want, '%s：判成 %s，应为 %s（源码：%s）' % (name, got, want, src)

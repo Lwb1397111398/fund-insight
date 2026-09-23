@@ -59,6 +59,31 @@ def test_a_local_database_url_is_still_inherited():
                                     ALEMBIC_DATABASE_URL=None, LOCAL_DB_URL=None)
     assert rc == 0, blob[-600:]
     assert 'Context impl SQLiteImpl' in blob, blob[-600:]
+    # 第 40 轮 A-M4：以前"每条往下走的分支都报名"只用 `src.count('[库]') >= 2` 撑着，
+    # 而 abort 文案里也有一句 `[库]` ⇒ 把本地这条自报整段删掉，计数仍然 >= 2、用例全绿。
+    assert '[库]' in blob, '本地这条分支没自报库名 ⇒ "每条路都报名"是假话'
+
+
+def test_the_second_flag_alone_does_not_unlock_an_inherited_remote():
+    """第 40 轮 B 的 M-1：仓库的**默认状态**就是"`.env` 里躺着生产串 + 没人设
+    `ALEMBIC_DATABASE_URL`"。上一版在这种状态下，只要 shell 里有过一个
+    `ALEMBIC_ALLOW_REMOTE=1`（比如谁把它写进了 profile 或 CI env），就直接给生产生成 DDL
+    ——而我自己的 abort 文案与 AGENTS/DEPLOYMENT 都写着"要两道旗子"。
+    放行远程的前提改成：那条远程串得由人**亲口交给** `ALEMBIC_DATABASE_URL`。"""
+    rc, blob = _run_alembic_offline(DATABASE_URL=REMOTE, ALEMBIC_DATABASE_URL=None,
+                                    ALEMBIC_ALLOW_REMOTE='1', LOCAL_DB_URL=None)
+    assert rc != 0, '只给一道旗子就继承了 .env 的生产串并放行 DDL ⇒ 第 38 轮那条 BLOCKER 复活'
+    assert '[abort]' in blob and 'Context impl Postgresql' not in blob, blob[-400:]
+    assert 'S3cr3tPW' not in blob, '拒跑消息里带出了连接串口令'
+    # 反向对照：同一目标由人交给 ALEMBIC_DATABASE_URL + 两道旗子 ⇒ 该放行，且报名要报到 host
+    rc2, blob2 = _run_alembic_offline(DATABASE_URL='sqlite:///data/fund_insight.db',
+                                      ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE='1',
+                                      LOCAL_DB_URL=None)
+    assert rc2 == 0, blob2[-400:]
+    assert 'evil.invalid/proddb' in blob2, '自报只报了 scheme，没报到是哪台机器'
+    assert 'S3cr3tPW' not in blob2, '自报把口令打出来了'
+
+
 
 
 def test_an_explicit_alembic_url_overrides_a_remote_one():

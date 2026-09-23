@@ -368,6 +368,20 @@ MUTATIONS = [
      'queue_caliber_moves_back_into_title', HTML,
      '<div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>',
      '<div class="filter-caliber-note" title="口径：「待验证到期」= 已到目标日"></div>', False),
+    # 第 40 轮 A-M1：evidence 取失败必须把上一轮的区间放下（不清旧报告 = 那句红字永远渲染不出来）
+    ('test_the_evidence_line_does_not_keep_yesterdays_report_on_a_failed_refresh',
+     'evidence_keeps_stale_report', HTML,
+     r"evidenceReport\.value = null;\s+evidenceError\.value = res\.data\.message",
+     "                            evidenceError.value = res.data.message", True),
+    ('test_the_evidence_line_does_not_keep_yesterdays_report_on_a_failed_refresh',
+     'evidence_catch_keeps_stale_report', HTML,
+     r"evidenceReport\.value = null;\s+evidenceError\.value = isServiceDown",
+     "                        evidenceError.value = isServiceDown(e)", True),
+    # 第 40 轮 A-m6：四个体检按钮的失败守卫（清掉守卫 = 继续摆上一轮的计数）
+    ('test_the_audit_counters_hang_up_when_the_list_was_not_fetched',
+     'audit_counters_drop_their_guard', HTML,
+     '<button v-if="!viewErrors.mappings && identityStats.',
+     '<button v-if="identityStats.', False),
     ('test_the_three_prediction_queues_explain_themselves_without_hover',
      'caliber_note_loses_its_style_class', HTML,
      'class="filter-caliber-note"', 'class="caliber-note"', False),
@@ -398,6 +412,11 @@ def main(list_only=False, only=None):
         # ＝**满分通过一次什么都没测的体检**。整套"文本判据必须配变异"的证据链悬在这个开关上。
         print('[abort] --only %r 一处变异都没匹配上 ⇒ 拒绝按"通过"收场' % only)
         return ['only-matched-nothing']
+    if only and len(todo) < len(MUTATIONS):
+        # 第 40 轮 A-m2：子串匹配还可能"只命中一小撮却像跑完了一套"（`--only _titl` 就中了 3/100）。
+        # 不改判定，只把分母打出来 —— 按退码判断的人至少看得见"这次只覆盖 N/M"。
+        print('[提示] --only %r 只匹配 %d/%d 处、判据 %d 条 ⇒ 这不是全套体检'
+              % (only, len(todo), len(MUTATIONS), len({m[0] for m in todo})))
     # 名单自己算：docstring 里不抄文件名（第 36 轮 A-MINOR-2 就是抄漏了 viewpoint-manager.js）
     print('本批改写到的文件：%s' % '、'.join(sorted({m[2] for m in todo})))
     if list_only:

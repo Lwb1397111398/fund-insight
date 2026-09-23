@@ -1635,6 +1635,13 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
                     % (unservable,
                        '，**本次已照样写入**（要拦请用 scripts/push_sector_mappings_to_prod.py）'
                        if not dry_run else '（计划阶段，未写入）'))
+    # 第 40 轮 B 的 M-4：`import_disabled` 只在 `_audit_apply_row` 里判，而那个函数只在
+    # `not dry_run` 才被调用 ⇒ **dry-run 的计划结构上不可能说出"总开关没开"**，
+    # 于是拿计划的人（老板）看到"更新 118、新建 27"，按下去却撞上 145 行全拒。
+    if os.getenv('ENABLE_SECTOR_AUDIT_IMPORT', '').lower() != 'true':
+        message += ('；⚠ 本库**没开** ENABLE_SECTOR_AUDIT_IMPORT ⇒ 这份计划现在执行不了：'
+                    '真写阶段每一行都会被拒（reason=import_disabled）。'
+                    '要先在服务端把它设为 true，再按这份清单回写')
     return {
         'success': True,
         'dry_run': dry_run,

@@ -1370,3 +1370,71 @@ def test_the_wiring_gate_covers_both_directions():
     for fname in ('post-manager.js', 'viewpoint-manager.js'):
         src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
         assert 'options.onPollRecovered' in src, '%s 轮询成功后不收那句话' % fname
+
+
+def test_the_evidence_line_does_not_keep_yesterdays_report_on_a_failed_refresh():
+    """/api/stats/evidence 失败时必须把**上一轮的报告**放下（第 40 轮 A 席 MAJOR-1）。
+
+    模板是 `v-if="evidenceReport"` ⇒ 旧报告不清，第 98-101 行那句"证据体检拉取失败、
+    先别当结论用"结构上永远渲染不出来，页面上继续印着
+    "已判 1110 / ⚠ 197 / 区间 43.96%~61.71% · 本地镜像库 · 截至 …"。
+    触发路径不是理论：`fetchStats()` 每次都顺带刷 evidence，而每次写操作后都刷 stats，
+    唤醒期一次 502 就命中。跑的是 index.html 里那份真源码；
+    并且按第 34 轮的推论，**每种失败形状前都先跑一次成功**，否则后几种是空的。
+    """
+    html = _html()
+    body = _decl(html, 'fetchEvidence = async () =>')
+    assert 'evidenceReport.value = res.data.data' in body, '取数点被改了形 ⇒ 这条判据要重核'
+    helpers = _wake_helpers(html) + [_expr(html, 'const spanText'),
+                                     _decl(html, 'fetchEvidence = async () =>')]
+    good = {'data': {'success': True, 'data': {'span_low_pct': 43.96, 'span_high_pct': 61.71,
+                                               'judged_rows': 1110, 'stale_rows': 197}}}
+    shapes = [{'data': {'success': False, 'message': '证据体检返回失败'}},
+              {'data': {'success': True, 'data': None}},
+              'throw']
+    snippet = ("""
+(async () => {
+    const GOOD = %s;
+    const failings = %s;
+    const snap = () => ({ report: evidenceReport.value ? 'in' : 'out',
+                          span: spanText(), err: evidenceError.value });
+    const others = (u) => (u !== '/api/stats/evidence' ? { data: { success: true, data: [] } } : null);
+    const out = [];
+    for (const s of failings) {
+        impl = (u) => others(u) || GOOD;
+        await fetchEvidence();
+        const before = snap();
+        impl = (u) => {
+            const other = others(u); if (other) return other;
+            if (s === 'throw') throw { message: 'Network Error' };
+            return s;
+        };
+        await fetchEvidence();
+        out.push([before, snap()]);
+    }
+    console.log(JSON.stringify(out));
+})();
+""" % (json.dumps(good), json.dumps(shapes)))
+    out = _run_page_js(snippet.replace("'RESULT' + JSON.stringify", '"RESULT" + JSON.stringify', 1), helpers)
+    assert isinstance(out, list) and len(out) == 3, out
+    for before, after in out:
+        assert before['report'] == 'in' and before['span'] == '43.96%~61.71%', \
+            '成功那一轮没先把报告摆上 ⇒ 后面几种形状是空的（第 34 轮的老错）：%s' % before
+        assert after['report'] == 'out', '失败后旧区间还在页上：红字永远出不去（%s）' % after
+        assert after['span'] == '-', after
+        assert after['err'], '失败却没写可见原因：' + str(after)
+
+
+def test_the_audit_counters_hang_up_when_the_list_was_not_fetched():
+    """四个体检筛选按钮读的是**上一轮的行数**（第 40 轮 A 席 m6）。
+
+    `loadSectorMappings` 失败只写 `viewErrors.mappings`、不清 `sectorMappings`，
+    而表体自己在 `v-if/v-else` 里已经换成"拉取失败"——同屏一边说失败、一边继续报
+    "体检不可服务 N / 名册无对口 N"，等于把昨天的数当今天的用。
+    """
+    html = _html()
+    buttons = re.findall(r'<button v-if="([^"]*)" class="action-btn small" '
+                         r'@click="identityFilter', html)
+    assert len(buttons) == 4, '体检按钮只扫到 %d 个（应为 4）⇒ 结构变了，这条要重核' % len(buttons)
+    for cond in buttons:
+        assert 'viewErrors.mappings' in cond, '这个按钮还在摆上一轮的计数：%s' % cond

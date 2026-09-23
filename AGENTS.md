@@ -173,7 +173,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `src/models/database.py` 的元数据（库里缺整表会被**说出来**并且拒绝 stamp）。
   ⚠ 用之前知道两件事：① 它没有 dry-run，② 裸 `alembic` CLI（`upgrade head` / `downgrade …`）
   在 `.env` 指向生产时**会被 `alembic/env.py` 当场拒跑**（第 38 轮 B 的 BLOCKER：旧写法把
-  `DATABASE_URL` 悄悄顶进 ini，等于给生产发 DDL；要动远程得显式 `ALEMBIC_DATABASE_URL`）。
+  `DATABASE_URL` 悄悄顶进 ini，等于给生产发 DDL；要动远程得**同时**给 `ALEMBIC_DATABASE_URL` 与 `ALEMBIC_ALLOW_REMOTE=1`（第 40 轮 B：只给一道旗子、目标还来自 `.env`，等于把那条 BLOCKER 重新打开））。
 
 - Render Web Service：`uvicorn src.api.main:app --host 0.0.0.0 --port $PORT`。
 - Render Cron：每天 10:30 运行 `python scripts/run_scheduled_tasks.py daily`。
@@ -201,12 +201,27 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 22:33（北京），第 39 轮返修（A 81 / B 79，取低分 79 差 1 分）之后，
+最近一次核对（2026-09-24 00:0x（北京），第 40 轮返修（A 78 / B 79，取低分 78）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **976 passed / 16 skipped / 0 failed**（261.90 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **985 passed / 16 skipped / 0 failed**（209.37 秒）。
+- `pytest tests/unit -q` → **984 passed / 16 skipped / 0 failed**（205.72 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **993 passed / 16 skipped / 0 failed**（196.44 秒）。
+  （上一基线 976/985 → 本批 984/993：+8 条，分布在 `test_alembic_target_direction.py`
+  （"只给一道远程旗子、目标来自 `.env`"必须仍拒跑）、`test_script_db_guards.py`
+  （三条**机器无关**的重写：临时目录现造 `_x.py` 验前缀豁免 / 现造语法坏的文件验 fail-closed /
+  用仓库真在用的 `urlopen(Request(..., method='POST'))` 验 HTTP 触发器）、
+  `test_push_writeback_gate.py`（两路剔除都要计数、整批被拒不许发真写）、
+  `test_sector_mapping_audit_import.py`（**路由级** dry-run 必须报出总开关没开 —— 以前只有内部函数判据）、
+  `test_frontend_cold_start.py`（evidence 失败要放下旧区间 + 四个体检按钮的失败守卫）、
+  `test_verdict_evidence_badge.py`（批量写判据的六格样品：列对象当 key 要认，
+  只出现在筛选条件里不许误伤）。
+  ⚠ 本批还有一条操作事故要记：我写判据时在 bash heredoc 里用了嵌套三引号，字符串提前截断
+  把 `_WRITER` 那几行**当成真代码执行**了一次（`SessionLocal()` 建了会话、`db.add(1)` 当场抛
+  `UnmappedInstanceError`）—— 没 flush、没 commit、没连库，但它正是"一次性代码不钉库"的形状。
+  同类第二起：我把三条新变异插进体检脚本时转义写错，**把 `scripts/mutation_proof_frontend.py` 写成了
+  语法错误** —— 而第 39 轮刚加的"解析失败的文件按能写处理"立刻把它报成 `write_capable=True` 并让判据变红
+  ⇒ 那条新判据是活的（这也是它第一次在真实场景里起作用）。）
   （上一基线 967/976 → 本批 976/985：+9 条 = `test_alembic_target_direction.py` +4
   （第二个 ini 指远程也拒 / 一个环境变量解不开第二道旗子 / 两道旗子都给了必须自报且自报走 stderr /
   任何往下走的分支都得报 `[库]`）、`test_seed_owner_proxies_gate.py` +1
@@ -241,7 +256,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （上一基线 929/938 → 948/957：+19 条 =
   `tests/unit/test_sector_seed_route_honesty.py` 10 条（seed 后门：默认关 / 确认头 / 看退码 /
   无回执算失败 / cwd 指得到真脚本 / 成功要刷缓存 / 脚本拒写 / 只补缺不覆盖 / dry-run 不写）
-  + `test_seed_owner_proxies_gate.py` 5 条（`--owner-confirm SEED-PROXY` 闸，含"闸排在钉库之前"）
+  + `test_seed_owner_proxies_gate.py` 5 条（`--owner-confirm SEED-PROXY` 闸，含"闸排在钉库之前"；今天该文件 8 条，数一律 `grep -c '^def test_' <文件>`）
   + `test_sector_mapping_api.py` +2（`batch-review` 路由级转发 `owner_confirm`、`/verify-fund` 探针形状）
   + `test_frontend_cold_start.py` +2（汇总统计三种失败形状、模板祖先链「确认执行」）。
   判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`
@@ -320,7 +335,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （＝只算回收站），`pytest tests/ -q` **854 条全绿** —— 而这一列正是老板判断"谁可信"的依据。
   其中一条用例同时钉住**两个口径本就该不同**：同一批数据，命中率 3/4=75%，
   加权评分（排除 flat 与 `verify_count=0`）是 2/2=100% ⇒ 页面必须分开说明（不许只写进 `title`，
-  手机没有 hover；这条还没做，见任务 #30）。
+  手机没有 hover；这条**已做完**（第 29~31 轮：博主榜两个表头分开写 + 行内基数），任务 #30 已关）。
 - **写侧凭据的 `now=` 必须与读侧的 `today=` 同一天**（第 27 轮 C-B1，实测踩过）：
   `backfill_proofs.record_probe(...)` 不打 `now=` 就取墙上时钟，而 `_fresh` 把"来自未来的
   时间戳"判为不可信（`age < -1`）⇒ 用例若同时注入固定 `today=date(2026,9,21)`，
@@ -353,7 +368,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   09-21 那份（`1ed8e42a`）量出**无档案 31 行**，09-23 15:14 重导那份（`230767a8`）量出**29 行**，
   两份都印"牵动 249 条活预测"（12 处标的变更里 5 个板块出桶、3 个进桶）。
   ⇒ 报这个数必须同时给**你用的是哪份清单**，别再说成一个常数（检查单 §7 / §7.4 存了两份原始回执）。
-  用例：`tests/unit/test_push_writeback_gate.py`（4 条）+ `test_sector_mapping_audit_import.py`（3 条）。
+  用例条数别抄这里：`grep -c '^def test_' tests/unit/test_push_writeback_gate.py`（本批改完后它同时钉"旧构建缺列""整批被拒不许发真写""两路剔除都要计数"）。
   生产侧全量预检可重跑：`python scripts/prod_writeback_preflight_readonly.py`（只读，退码 5=有不可服务行）。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
   `requests.Session.send` 换成抛 `BlockedRealHttp`。为什么必须这样：`from src.fund import fund_api`
@@ -479,8 +494,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   判据 `test_a_failed_insights_call_takes_the_four_cards_down_with_it` 跑的是 `loadViewpoints` 真实调用路径。
   五条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
   predictions+verify-all+status 四笔，**进视图才打的**（funds、sector-mappings、posts/predictions/
-  viewpoints 的列表）也要过 `withWakeRetry()` —— 子模块靠 `createPredictionManager({ withWakeRetry })`
-  注入拿它。别把"首屏六个"当成事实说（第 31 轮 B 实测 `onMounted` 只触发 4 笔）。
+  viewpoints 的列表）也要过 `withWakeRetry()` —— **这条承诺今天只兑现了一半**（第 40 轮 A-m7 实测：
+  `post-manager.js` 与 `viewpoint-manager.js` 里 `withWakeRetry` **0 处**，`prediction-manager.js` 只有 2 处
+  且只用在 `verify-all/status`；`fetchPosts` / `fetchPredictions` / `fetchViewpoints` 都是裸 `axios.get`）。
+  失败态本身是诚实的（`viewErrors` 会报"没取到"），但后果是** Render 睡着时这几个列表要老板自己再点一次**，
+  而另外五个取数点会自己等 90 秒 ⇒ 见任务 #58。别把"首屏六个"当成事实说（第 31 轮 B 实测 `onMounted` 只触发 4 笔）。
   任务轮询（`post-manager.js` / `viewpoint-manager.js`）是另一条规矩：**只有 404 才允许丢任务号**，
   其余失败一律留着句柄、10 秒后再问、最多 15 分钟（`MAX_POLL_FAILURES`），停手也不删。
   上一版写的是"4xx 才算任务结束"，而 `restoreAnalysisJob()` 在 `onMounted` 里跑、**不等登录门** ⇒

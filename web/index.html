@@ -1681,10 +1681,10 @@
                         <span v-if="sectorMappings.builtin_count"
                               style="font-size: 13px; color: #bfbfbf;">内置 {{ sectorMappings.builtin_count }} 条来自静态表，未跑体检、也没有"确认"这个动作</span>
                         </template>
-                        <button v-if="identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
-                        <button v-if="identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
-                        <button v-if="identityStats.no_literal" class="action-btn small" @click="identityFilter = identityFilter === 'no_literal' ? 'all' : 'no_literal'" :style="{ background: identityFilter === 'no_literal' ? '#8c8c8c' : '#fafafa', color: identityFilter === 'no_literal' ? '#fff' : '#8c8c8c', border: '1px solid #d9d9d9' }" title="名册里查不到字面对口的标的：这些行是代理关系，换标的得人工定">名册无对口 {{ identityStats.no_literal }}</button>
-                        <button v-if="identityStats.realigned" class="action-btn small" @click="identityFilter = identityFilter === 'realigned' ? 'all' : 'realigned'" :style="{ background: identityFilter === 'realigned' ? '#13c2c2' : '#e6fffb', color: identityFilter === 'realigned' ? '#fff' : '#13c2c2', border: '1px solid #87e8de' }">机器已纠正待复核 {{ identityStats.realigned }}</button>
+                        <button v-if="!viewErrors.mappings && identityStats.unservable" class="action-btn small" @click="identityFilter = identityFilter === 'unservable' ? 'all' : 'unservable'" :style="{ background: identityFilter === 'unservable' ? '#ff4d4f' : '#fff1f0', color: identityFilter === 'unservable' ? '#fff' : '#ff4d4f', border: '1px solid #ffccc7' }">体检不可服务 {{ identityStats.unservable }}</button>
+                        <button v-if="!viewErrors.mappings && identityStats.relevance" class="action-btn small" @click="identityFilter = identityFilter === 'relevance' ? 'all' : 'relevance'" :style="{ background: identityFilter === 'relevance' ? '#d46b08' : '#fff7e6', color: identityFilter === 'relevance' ? '#fff' : '#d46b08', border: '1px solid #ffd591' }">相关性存疑 {{ identityStats.relevance }}</button>
+                        <button v-if="!viewErrors.mappings && identityStats.no_literal" class="action-btn small" @click="identityFilter = identityFilter === 'no_literal' ? 'all' : 'no_literal'" :style="{ background: identityFilter === 'no_literal' ? '#8c8c8c' : '#fafafa', color: identityFilter === 'no_literal' ? '#fff' : '#8c8c8c', border: '1px solid #d9d9d9' }" title="名册里查不到字面对口的标的：这些行是代理关系，换标的得人工定">名册无对口 {{ identityStats.no_literal }}</button>
+                        <button v-if="!viewErrors.mappings && identityStats.realigned" class="action-btn small" @click="identityFilter = identityFilter === 'realigned' ? 'all' : 'realigned'" :style="{ background: identityFilter === 'realigned' ? '#13c2c2' : '#e6fffb', color: identityFilter === 'realigned' ? '#fff' : '#13c2c2', border: '1px solid #87e8de' }">机器已纠正待复核 {{ identityStats.realigned }}</button>
                         <span class="flex-1"></span>
                         <input v-model="mappingSearchKeyword" placeholder="搜索板块名、基金名称或基金代码" style="width: 220px; padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px;">
                         <button class="action-btn small" @click="loadSectorMappings(null)" :style="{ background: mappingFilter === null ? '#1890ff' : '#f5f5f5', color: mappingFilter === null ? '#fff' : '#666' }">全部</button>
@@ -2425,10 +2425,20 @@ const fetchWeChatBatch = async () => {
                 const fetchEvidence = async () => {
                     try {
                         const res = await withWakeRetry(() => axios.get('/api/stats/evidence'));
-                        if (res.data.success) { evidenceReport.value = res.data.data; evidenceError.value = ''; }
-                        else { evidenceError.value = res.data.message || '证据体检返回失败'; }
+                        if (res.data.success && res.data.data) {
+                            evidenceReport.value = res.data.data; evidenceError.value = '';
+                        } else {
+                            // 取不到就把上一轮的报告放下：模板是 `v-if="evidenceReport"`，
+                            // 旧报告不清 ⇒ 下面那句"拉取失败、先别当结论用"永远渲染不出来，
+                            // 页面上继续印着昨天的区间（第 40 轮 A 席 MAJOR-1；与第 34 轮
+                            // 洞察四张卡同族的第三个现场，而 `fetchStats` 每次都顺带刷它）。
+                            evidenceReport.value = null;
+                            evidenceError.value = res.data.message
+                                || '接口没回数据（success 为真但 data 为空）';
+                        }
                     } catch (e) {
                         // 以前这里只 console.error ⇒ 页面永远停在"加载中"，准确率就光着报出去
+                        evidenceReport.value = null;
                         evidenceError.value = isServiceDown(e) ? '服务连不上（可能在唤醒）' : '证据体检接口报错';
                     }
                 };
