@@ -24,6 +24,7 @@
         const verifyTask = ref(null);
         const showPredictionMaintenance = ref(false);
         const maintenancePreview = ref(null);
+        const maintenanceError = ref('');
         const filteredPredictions = computed(() => predictions.value);
         let verifyPollTimer = null;
 
@@ -62,9 +63,10 @@
                     predictions.value = response.data.data || [];
                     Object.assign(predictionMeta, response.data.meta || {});
                     report('');
-                } else {
-                    report('预测列表没取到：' + (response.data.message || '接口未给出原因'));
+                    return true;
                 }
+                report('预测列表没取到：' + (response.data.message || '接口未给出原因'));
+                return false;
             } catch (error) {
                 report('预测列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
                     ? '服务连不上（可能在唤醒）' : '接口报错'));
@@ -110,12 +112,14 @@
         const predictionPrevPage = async () => {
             if (predictionFilters.page <= 1) return;
             const back = predictionFilters.page; predictionFilters.page -= 1;
-            try { await fetchPredictions(); } catch (error) { predictionFilters.page = back; }
+            try { if (await fetchPredictions() === false) predictionFilters.page = back; }
+            catch (error) { predictionFilters.page = back; }
         };
         const predictionNextPage = async () => {
             if (!predictionMeta.has_more) return;
             const back = predictionFilters.page; predictionFilters.page += 1;
-            try { await fetchPredictions(); } catch (error) { predictionFilters.page = back; }
+            try { if (await fetchPredictions() === false) predictionFilters.page = back; }
+            catch (error) { predictionFilters.page = back; }
         };
 
         const refreshAfterChange = async () => {
@@ -177,7 +181,9 @@
                     prediction_period: prediction.prediction_period,
                 });
                 showEditPrediction.value = false;
-                await fetchPredictions();
+                // 预测已经改好了，刷新失败不能说「保存失败」（那会让老板再点一次保存）
+                try { await fetchPredictions(); }
+                catch (refreshError) { alert('预测已保存，只是列表没刷新出来 —— 刷新页面即可'); }
             } catch (error) { alert('保存失败: ' + errorMessage(error)); }
         };
 
@@ -207,11 +213,15 @@
                 const response = await axios.post('/api/predictions/verify-all');
                 verifyTask.value = response.data.data || null;
                 alert(response.data.message);
-                if (verifyTask.value?.in_progress) await pollVerifyTask();
-                else {
-                    analyzing.value = false;
-                    await refreshAfterChange();
+                // 验证任务已经起来了，收尾这两腿失败不能说「验证失败」
+                try {
+                    if (verifyTask.value?.in_progress) await pollVerifyTask();
+                    else {
+                        analyzing.value = false;
+                        await refreshAfterChange();
+                    }
                 }
+                catch (refreshError) { alert('验证已开始，只是列表没刷新出来 —— 刷新页面即可'); }
             } catch (error) {
                 analyzing.value = false;
                 alert('验证失败: ' + errorMessage(error));
@@ -231,13 +241,22 @@
 
         const previewPredictionMaintenance = async (type) => {
             analyzing.value = true;
+            // 红色「确认执行」活在 `maintenancePreview` 上 ⇒ 每次预览先把它擦掉：
+            // 留着上一轮的数就等于让老板按旧清单点真写（AGENTS ⑥ 的推论）
+            maintenancePreview.value = null;
+            maintenanceError.value = '';
             try {
                 let response;
                 if (type === 'duplicates') response = await axios.post('/api/predictions/merge-similar');
                 if (type === 'mapping') response = await axios.post('/api/predictions/sync-sector-mapping', null, { params: { dry_run: true } });
                 if (type === 'rollback') response = await axios.post('/api/predictions/rollback-invalid', null, { params: { dry_run: true } });
-                maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };
-            } catch (error) { alert('预览失败: ' + errorMessage(error)); }
+                // 后端很多"被护栏按住"走的是 200 + success:false，不看它就等于把拒绝当成预览成功
+                if (response.data && response.data.success === false) {
+                    maintenanceError.value = '预览被拒绝：' + (response.data.message || '接口未给出原因');
+                } else {
+                    maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };
+                }
+            } catch (error) { maintenanceError.value = '预览失败：' + errorMessage(error); }
             analyzing.value = false;
         };
         const executePredictionMaintenance = async () => {
@@ -295,7 +314,8 @@
                 }
                 alert(response.data.message);
                 maintenancePreview.value = null;
-                await refreshAfterChange();
+                try { await refreshAfterChange(); }
+                catch (refreshError) { alert('已执行' + label + '，只是列表没刷新出来 —— 刷新页面即可'); }
             } catch (error) { alert('执行失败: ' + errorMessage(error)); }
             analyzing.value = false;
         };
@@ -303,7 +323,7 @@
         return {
             predictions, predictionDetail, showPredictionDetail, showEditPrediction, editingPrediction,
             predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
-            showPredictionMaintenance, maintenancePreview,
+            showPredictionMaintenance, maintenancePreview, maintenanceError,
             fetchPredictions, applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
             setPredictionSort,
             predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,

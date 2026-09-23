@@ -17,6 +17,9 @@
         const showViewpointDetail = options.showViewpointDetail || ref(false);
         const summarizing = ref(false);
         const summaryStats = ref(null);
+        // "取到了吗"与"为什么没取到"是两个事实：只有前者成立才许说"没有待汇总的观点"
+        const summaryStatsLoaded = ref(false);
+        const summaryStatsError = ref('');
         const showSummaryConfirmModal = ref(false);
         const sourceMenuOpen = ref(false);
         const selectedSources = reactive({ sina_blog: true, stock_guba: true, fund_guba: true });
@@ -68,9 +71,10 @@
                     viewpoints.value = response.data.data || [];
                     Object.assign(viewpointMeta, response.data.meta || {});
                     report('');
-                } else {
-                    report('观点列表没取到：' + (response.data.message || '接口未给出原因'));
+                    return true;
                 }
+                report('观点列表没取到：' + (response.data.message || '接口未给出原因'));
+                return false;
             } catch (error) {
                 report('观点列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
                     ? '服务连不上（可能在唤醒）' : '接口报错'));
@@ -123,12 +127,14 @@
         const viewpointPrevPage = async () => {
             if (viewpointFilters.page <= 1) return;
             const back = viewpointFilters.page; viewpointFilters.page -= 1;
-            try { await fetchViewpoints(); } catch (error) { viewpointFilters.page = back; }
+            try { if (await fetchViewpoints() === false) viewpointFilters.page = back; }
+            catch (error) { viewpointFilters.page = back; }
         };
         const viewpointNextPage = async () => {
             if (viewpointFilters.page >= viewpointMeta.pages) return;
             const back = viewpointFilters.page; viewpointFilters.page += 1;
-            try { await fetchViewpoints(); } catch (error) { viewpointFilters.page = back; }
+            try { if (await fetchViewpoints() === false) viewpointFilters.page = back; }
+            catch (error) { viewpointFilters.page = back; }
         };
         const clearPoll = () => {
             if (pollTimer) window.clearTimeout(pollTimer);
@@ -232,24 +238,44 @@
                 }
                 // alert 放在轮询启动后，避免阻塞 UI 更新
                 alert(message);
-                await fetchViewpoints();
-                await fetchInsights();
+                // 任务已经建起来了，这里刷新失败不能说「分析失败」（那句会让老板以为没跑）
+                try { await fetchViewpoints(); await fetchInsights(); }
+                catch (refreshError) { console.error('分析完之后刷新列表失败', refreshError); }
             } catch (error) {
                 analyzing.value = false;
                 alert('分析失败: ' + errorMessage(error));
             }
         };
         const fetchSummaryStats = async () => {
+            // 取不到就把旧统计放下：否则"有没有待汇总"的判断活在上一轮的数据上
+            summaryStatsLoaded.value = false;
+            summaryStatsError.value = '';
             try {
                 const res = await axios.get('/api/viewpoints/summary/stats');
-                if (res.data.success) summaryStats.value = res.data.data;
-            } catch (error) { console.error('获取汇总统计失败:', error); }
+                if (res.data.success) {
+                    summaryStats.value = res.data.data || {};
+                    summaryStatsLoaded.value = true;
+                } else {
+                    summaryStats.value = {};
+                    summaryStatsError.value = '汇总统计没取到：' + (res.data.message || '接口未给出原因');
+                }
+            } catch (error) {
+                summaryStats.value = {};
+                summaryStatsError.value = '汇总统计拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
+                    ? '服务连不上（可能在唤醒）' : '接口报错');
+                console.error('获取汇总统计失败:', error);
+            }
         };
         const showSummaryModal = async () => {
             await fetchSummaryStats();
             const pending = (summaryStats.value && summaryStats.value.total_pending_viewpoints)
                 || (viewpointInsights.value.pending_summary && viewpointInsights.value.pending_summary.length > 0);
-            if (!pending) { alert('没有待汇总的观点'); return; }
+            if (!pending) {
+                // 只有"确实取到了、而且为 0"才许说"没有"；取不到就说取不到
+                alert(summaryStatsLoaded.value ? '没有待汇总的观点'
+                      : ('没敢断定"没有待汇总的观点"：' + (summaryStatsError.value || '汇总统计没取到')));
+                return;
+            }
             showSummaryConfirmModal.value = true;
         };
         const executeSummary = async () => {
@@ -257,9 +283,13 @@
             showSummaryConfirmModal.value = false;
             try {
                 const res = await axios.post('/api/viewpoints/summary/execute', {});
+                if (res.data && res.data.success === false) throw new Error(res.data.message || '后端拒绝执行');
                 alert(res.data.message);
-                await Promise.all([fetchViewpoints(), fetchInsights(), fetchSummaryStats()]);
-                if (onStatsChanged) await onStatsChanged();
+                // 汇总已经做了，刷新失败不能说「汇总失败」
+                try {
+                    await Promise.all([fetchViewpoints(), fetchInsights(), fetchSummaryStats()]);
+                    if (onStatsChanged) await onStatsChanged();
+                } catch (refreshError) { alert('观点已汇总，只是列表没刷新出来 —— 刷新页面即可'); }
             } catch (error) { alert('汇总失败: ' + errorMessage(error)); }
             summarizing.value = false;
         };
@@ -267,8 +297,11 @@
             if (!confirm('此操作会永久删除该观点，无法恢复。确定继续？')) return;
             try {
                 await axios.delete(`/api/viewpoints/${id}`, { headers: { 'X-Danger-Confirm': 'delete-viewpoint' } });
-                await Promise.all([fetchViewpoints(), fetchInsights()]);
-                if (options.onStatsChanged) await options.onStatsChanged();
+                // 永久删除已经执行完了，刷新失败不能说「删除失败」（那会让老板再点一次删另一条）
+                try {
+                    await Promise.all([fetchViewpoints(), fetchInsights()]);
+                    if (options.onStatsChanged) await options.onStatsChanged();
+                } catch (refreshError) { alert('观点已删除，只是列表没刷新出来 —— 刷新页面即可'); }
             } catch (error) { alert('删除失败: ' + errorMessage(error)); }
         };
         const sourceLabel = (source) => ({
@@ -283,7 +316,7 @@
         }[status] || status || '暂无任务');
 
         return {
-            viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, viewpointTask,
+            viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, summaryStatsLoaded, summaryStatsError, viewpointTask,
             viewpointDetail, showViewpointDetail, sourceMenuOpen, selectedSources, sourceOptions,
             fetchSourceOptions,
             taskRunning, summarizing, summaryStats, showSummaryConfirmModal,

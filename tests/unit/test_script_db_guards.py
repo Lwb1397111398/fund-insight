@@ -129,12 +129,21 @@ def test_there_are_write_capable_scripts_left_to_guard():
     """用例不能变成空判：受管脚本的数量必须>0，否则这条扫描已经失效。"""
     n = sum(1 for f in _scripts().values() if _write_capable(f))
     assert n >= 5, '只找到 %d 个受管脚本 ⇒ 先确认这条扫描还有效，再放行' % n
+    # "直连 ORM"不是受管的前提了，所以这个数必须**不小于**旧口径看到的数：
+    # 若哪天扫描器退化到只认 import SessionLocal，这里会先响（旧版靠 `direct_db` 挡着，
+    # 一个走 service 层写的脚本被判为"不受管"，正是第 35 轮 B 指出的那条缝）。
+    direct = sum(1 for f in _scripts().values() if _write_capable(f) and f['direct_db'])
+    assert n >= direct, '受管集合比"直连 ORM"集合还小（%d < %d）⇒ 扫描器把非直连的写脚本漏了' % (n, direct)
 
 
 def test_write_capable_scripts_declare_their_database_in_code():
+    """判据**不再要求"直连 ORM"**（第 35 轮 B 的残留）：只走 service 层写的脚本一样会跟着
+    `.env` 连生产，旧口径把它当不存在。今天加宽后没有新增漏网（16 个带写开关的脚本全都自报了库），
+    这条改的是"以后新加的脚本必须自报"这件事本身。
+    """
     bad = [name for name, f in _scripts().items()
-           if f['direct_db'] and _write_capable(f) and not _guarded(name, f)]
-    assert not bad, ('这些脚本能改数据、又直连 ORM，却没在代码里说清算哪个库'
+           if _write_capable(f) and not _guarded(name, f)]
+    assert not bad, ('这些脚本能改数据，却没在代码里说清算哪个库'
                      '（.env 默认指向生产）：%s' % '、'.join(bad))
 
 

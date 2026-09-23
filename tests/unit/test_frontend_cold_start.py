@@ -7,7 +7,7 @@
   而字面 `「」` 只出现在注释里，两者永不相等；
 - 一条 `<th[^>]*>` 把属性整个吃掉，于是 `not any('title=' in h)` 结构上不可能响。
 所以下面每条判据都配了一个**可复跑的变异**：`python scripts/mutation_proof_frontend.py`
-（35 处变异、覆盖本文件 16 条判据；把源码逐处退回"修复前的形状"，对应判据必须红，
+（处数与判据数**不要写在这里**，跑 `--list` 看末行；把源码逐处退回"修复前的形状"，对应判据必须红，
 跑完逐文件回读比对还原，并校验变异真的落了盘）。判据没配到变异的一律不算数。
 其中两条**不读文本**：`test_the_wake_retry_behaves_the_way_the_page_needs_it` 与
 `test_check_auth_and_the_login_gate_behave_per_status_code` 用 node 执行页面里那份源码，
@@ -600,7 +600,7 @@ def test_every_list_page_shares_the_same_honesty_rule():
     for view in ('posts', 'predictions', 'viewpoints'):
         line = [l for l in html.split('\n') if '第 {{' in l and 'viewErrors.%s' % view in l]
         assert len(line) == 1, '%s 页的翻页条没找到或不止一条（现 %d）' % (view, len(line))
-        assert '条数没取到，下面是上一次取到的' in line[0], '%s 页翻页条不承认这是旧数据' % view
+        assert '条数没取到，表里是上一次取到的' in line[0], '%s 页翻页条不承认这是旧数据' % view
     et = _expr(html, 'const emptyText')
     assert 'serviceWaking.value' in et and 'viewErrors[v]' in et, 'emptyText 少了唤醒/失败两条腿'
     # 板块映射页的四个数在取不到时不能报"共 0 条 / 已审查 0"
@@ -925,25 +925,124 @@ def test_the_stall_banner_is_taken_down_when_polling_recovers():
     assert 'const stallText = computed(' in html, '分槽之后要有一个人读的汇总话术'
 
 
-def test_a_button_must_not_claim_the_opposite_of_what_happened():
-    """删除/保存/归档成功、只是刷新失败时，不许弹「失败」（第 34 轮 B-MAJOR-5）。
+def _arrow_fns(src):
+    """产出 (函数名, 函数体)：用花括号配对切 `const NAME = async (…) => { … }`。
 
-    这仓库为"按钮说假话"付过账（一个按钮清掉 515 条结论那次）。同一族里还有一条轻的：
-    翻页失败后页码已经加过去了，页面会出现「第 4 页」配第 3 页的数据（B-MINOR-15）。
+    第 35 轮 A-M1/M2 的根因不是"某处没改"，是**判据的形态**：旧版只做文件级 substring，
+    一个文件里有一处写对了就整文件通过，而且没有任何变异打向它。改成"扫所有写函数"。
     """
+    out = []
+    for m in re.finditer(r'const (\w+) = (?:async )?\(([^)]*)\) => \{', src):
+        i, depth = m.end() - 1, 0
+        while i < len(src):
+            if src[i] == '{':
+                depth += 1
+            elif src[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        out.append((m.group(1), src[m.end():i]))
+    return out
+
+
+_WRITE_RE = re.compile(r'axios\.(?:post|put|delete)\(')
+_REFRESH_RE = re.compile(r'await (?:fetch[A-Z]\w*|refresh\w*|Promise\.all|'
+                         r'(?:options\.)?onStatsChanged)')
+_REFRESH_TRY = re.compile(r'try \{[\s\S]*?\}\s*catch \(refreshError\)')
+
+
+def test_a_write_that_succeeded_is_never_reported_as_a_failure():
+    """三个 manager 里**每一个**"写成功之后还要刷新"的函数都必须把刷新腿单独包起来。
+
+    形状要求：写在最前面；写之后出现的每条刷新腿（`await fetchX()` / `await refresh…()` /
+    `await Promise.all([...])` / `onStatsChanged()`）都落在某段 `try { … } catch (refreshError)` 里。
+    否则外层 `catch` 会替一件已经成功的事说"失败"，老板看到就会再点一次
+    （这仓库为"按钮说假话"付过账：一次按钮清掉 515 条结论那次）。
+    """
+    offenders = []
+    seen = 0
+    for fname in ('post-manager.js', 'prediction-manager.js', 'viewpoint-manager.js'):
+        src = (PROJECT_ROOT / 'web' / fname).read_text(encoding='utf-8')
+        for name, body in _arrow_fns(src):
+            w = _WRITE_RE.search(body)
+            if not w:
+                continue
+            tail = body[w.end():]
+            legs = [m.start() for m in _REFRESH_RE.finditer(tail)]
+            if not legs:
+                continue
+            seen += 1
+            regions = [(m.start(), m.end()) for m in _REFRESH_TRY.finditer(tail)]
+            for pos in legs:
+                if not any(a <= pos < b for a, b in regions):
+                    offenders.append('%s::%s' % (fname, name))
+                    break
+    assert seen >= 8, '这条闸只看见 %d 个"写后刷新"的函数，扫描器失效了' % seen
+    assert not offenders, '这些函数会把已成功的写报成失败（刷新腿没单独 try）：%s' % sorted(set(offenders))
+
+
+def test_a_failed_preview_leaves_nothing_to_confirm():
+    """预览取不到 ⇒ 手里那张"确认执行"必须一起消失（因果，不是文案）。
+
+    第 35 轮 A-M3：`previewPredictionMaintenance` 以前既不查 `success`（后端很多"被护栏按住"
+    走的就是 200 + success:false），抛错时也不清 `maintenancePreview` —— 于是红色按钮
+    活在上一轮的预览上，老板按下去执行的是他没看到的那份清单。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    body = """
+(async () => {
+    const m = window.createPredictionManager(opts);
+    const seen = [];
+    const shapes = [
+        { data: { success: false, message: '清理开关没开' } },
+        'throw',
+        { data: { success: true, data: { would_rollback: 3 }, message: '预览：3 条' } },
+    ];
+    for (const s of shapes) {
+        impl = (u) => (s === 'throw' ? (() => { throw { message: 'Network Error' }; })() : s);
+        m.maintenancePreview.value = { type: 'rollback', message: '上一轮的旧预览', data: { would_rollback: 99 } };
+        await m.previewPredictionMaintenance('rollback');
+        seen.push([m.maintenancePreview.value ? m.maintenancePreview.value.message : null,
+                   m.maintenanceError.value]);
+    }
+    console.log('RESULT' + JSON.stringify(seen));
+})();
+"""
+    out = _run_node(body, 'prediction-manager.js')
+    assert out[0][0] is None, '后端回 200 + success:false，预览却还是"可执行"状态：%s' % out[0]
+    assert '没开' in out[0][1] or '拒绝' in out[0][1], out[0][1]
+    assert out[1][0] is None, '预览抛错之后红色按钮还活在上一轮的清单上：%s' % out[1]
+    assert '失败' in out[1][1], out[1][1]
+    assert out[2][0] == '预览：3 条', '真正取到的预览要留下：%s' % out[2]
+    assert out[2][1] == '', out[2][1]
+
+
+def test_a_button_must_not_claim_the_opposite_of_what_happened():
+    """翻页失败要退页码；几个说人话的位置必须还在（第 34 轮 B-MAJOR-5 / B-MINOR-11/15）。"""
     pm = (PROJECT_ROOT / 'web' / 'post-manager.js').read_text(encoding='utf-8')
     vm = (PROJECT_ROOT / 'web' / 'viewpoint-manager.js').read_text(encoding='utf-8')
     pdm = (PROJECT_ROOT / 'web' / 'prediction-manager.js').read_text(encoding='utf-8')
-    for name, src in (('post-manager.js', pm), ('prediction-manager.js', pdm)):
+    for name, src in (('post-manager.js', pm), ('prediction-manager.js', pdm), ('viewpoint-manager.js', vm)):
         assert '只是列表没刷新出来' in src, '%s 的写操作还是把"刷新失败"说成"操作失败"' % name
-    for src in (pm, vm, pdm):
-        assert re.search(r'catch \(error\) \{ \w+Filters\.page = back; \}', src), \
-            '翻页失败没把页码退回去'
+    # 翻页函数逐个查（**不是文件级 substring**：一个文件里两处翻页只改对一处，
+    # 文件级判据就放行 —— 第 35 轮 A 就是这样把我上一条"已修"打回的，三处变异当时全 GREEN）
+    pagers = 0
+    for fname, src in (('post-manager.js', pm), ('prediction-manager.js', pdm), ('viewpoint-manager.js', vm)):
+        assert 'return false;' in src, '%s 的列表取数函数没把"软失败"告诉调用方' % fname
+        for name, body in _arrow_fns(src):
+            if 'Filters.page = back' not in body:
+                continue
+            pagers += 1
+            assert re.search(r'=== false\) \w+Filters\.page = back;', body), \
+                '%s::%s 只在抛错时退页码，200 + success:false 时页码还挂着' % (fname, name)
+            assert re.search(r'catch \(error\) \{ \w+Filters\.page = back; \}', body), \
+                '%s::%s 抛错那一腿没把页码退回去' % (fname, name)
+    assert pagers >= 6, '只看见 %d 个翻页函数 ⇒ 这条闸的扫描失效了' % pagers
     html = _html()
-    assert '博主已添加，只是列表没刷新出来' in html and "没加上：" in html, \
-        '管理博主弹窗仍然把"已加上"说成"添加失败"'
-    assert 'try { await fetchPosts(); await fetchPredictions(); await fetchStats(); }' in html, \
-        '微信批量抓取的收尾刷新没包住：一失败「抓取中…」就永久卡住'
+    assert '博主已添加，只是列表没刷新出来' in html and "没加上：" in html,         '管理博主弹窗仍然把"已加上"说成"添加失败"'
+    assert 'try { await fetchPosts(); await fetchPredictions(); await fetchStats(); }' in html,         '微信批量抓取的收尾刷新没包住：一失败「抓取中…」就永久卡住'
 
 
 def test_the_top_modal_says_who_is_excluded():

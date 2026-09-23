@@ -53,9 +53,10 @@
                     posts.value = res.data.data || [];
                     Object.assign(postMeta, res.data.meta || {});
                     report('');
-                } else {
-                    report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));
+                    return true;
                 }
+                report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));
+                return false;
             } catch (error) {
                 report('帖子列表拉取失败：' + (options.isServiceDown && options.isServiceDown(error)
                     ? '服务连不上（可能在唤醒）' : '接口报错'));
@@ -69,15 +70,19 @@
             await fetchPosts();
         };
         // 翻页失败要把页码退回去：否则「第 4 页」配的是第 3 页的数据（第 34 轮 B-MINOR-15）
+        // 两条腿都要退页码：抛错那一腿以前退了，200 + success:false 那一腿没退
+        // （第 35 轮 A 的 MINOR：软失败时页面会挂着「第 4 页」显示第 3 页的数据）
         const postPrevPage = async () => {
             if (postFilters.page <= 1) return;
             const back = postFilters.page; postFilters.page -= 1;
-            try { await fetchPosts(); } catch (error) { postFilters.page = back; }
+            try { if (await fetchPosts() === false) postFilters.page = back; }
+            catch (error) { postFilters.page = back; }
         };
         const postNextPage = async () => {
             if (!postMeta.has_more) return;
             const back = postFilters.page; postFilters.page += 1;
-            try { await fetchPosts(); } catch (error) { postFilters.page = back; }
+            try { if (await fetchPosts() === false) postFilters.page = back; }
+            catch (error) { postFilters.page = back; }
         };
 
         const refreshRelated = async () => {
@@ -110,7 +115,9 @@
                 }
                 if (['succeeded', 'failed', 'cancelled'].includes(status)) {
                     clearJob();
-                    await refreshRelated();
+                    // 任务已经是终态了，刷新失败不该被当成"这一轮问失败了"再排一轮
+                    try { await refreshRelated(); }
+                    catch (refreshError) { console.error('任务收尾后刷新列表失败', refreshError); }
                     return;
                 }
                 postAnalysisRunning.value = true;
@@ -157,7 +164,9 @@
             try {
                 await axios.post(`/api/posts/analysis-jobs/${taskId}/cancel`);
                 clearJob();
-                await refreshRelated();
+                // 任务已经取消了，刷新失败不能说「取消失败」（那会让老板再点一次取消）
+                try { await refreshRelated(); }
+                catch (refreshError) { alert('任务已取消，只是列表没刷新出来 —— 刷新页面即可'); }
             } catch (error) {
                 alert('取消失败: ' + errorMessage(error));
             }
@@ -168,7 +177,13 @@
                 post_ids: postIds?.length ? postIds : null,
                 limit: postIds?.length || 100,
             });
-            if (res.data.success) rememberJob(res.data.data);
+            if (res.data.success) {
+                rememberJob(res.data.data);
+            } else {
+                // 后端拒绝开工走的是 200 + success:false。不吭声就等于"点了没反应"，
+                // 而调用方（addPost / 批量分析）随后会照旧说「已加入分析队列」
+                alert('分析队列没启动：' + (res.data.message || '接口未给出原因'));
+            }
             return res;
         };
 
@@ -228,6 +243,9 @@
                 if (res.data.success) {
                     postDetail.value = res.data.data;
                     showPostDetail.value = true;
+                } else {
+                    // 点了"查看详情"却什么都不弹，老板只能以为页面卡住（200 + success:false 那一族）
+                    alert('这条帖子的详情没取到：' + (res.data.message || '接口未给出原因'));
                 }
             } catch (error) { alert('获取详情失败: ' + errorMessage(error)); }
         };

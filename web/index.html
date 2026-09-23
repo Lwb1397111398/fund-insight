@@ -228,7 +228,7 @@
                     <div v-else class="empty-state">{{ emptyText('posts') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="postPrevPage" :disabled="postFilters.page <= 1">上一页</button>
-                        <span>第 {{ postFilters.page }} 页 · <template v-if="viewErrors.posts">条数没取到，下面是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template></span>
+                        <span>第 {{ postFilters.page }} 页 · <template v-if="viewErrors.posts">条数没取到，表里是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template></span>
                         <button class="row-btn" @click="postNextPage" :disabled="!postMeta.has_more">下一页</button>
                     </div>
                 </div>
@@ -291,6 +291,7 @@
                             <button class="row-btn" @click="previewPredictionMaintenance('mapping')" :disabled="analyzing"><i class="ri-links-line"></i> 预览映射同步</button>
                             <button class="row-btn" @click="previewPredictionMaintenance('rollback')" :disabled="analyzing"><i class="ri-history-line"></i> 预览验证回溯</button>
                         </div>
+                        <div v-if="maintenanceError" class="text-xs" style="color:#ff4d4f;">{{ maintenanceError }} —— 没有可信的预览，"确认执行"不会出现。<button class="action-btn small" @click="previewPredictionMaintenance('rollback')">重新预览</button></div>
                         <div v-if="maintenancePreview" class="maintenance-result">
                             <strong>{{ maintenancePreview.message }}</strong>
                             <span v-if="maintenancePreview.type === 'duplicates'">候选组 {{ maintenancePreview.data.duplicate_groups || 0 }}，涉及 {{ maintenancePreview.data.candidate_predictions || 0 }} 条，可清理 {{ maintenancePreview.data.removable_predictions || 0 }} 条（每组保留一条，移入回收站）</span>
@@ -351,7 +352,7 @@
                     <div v-else class="empty-state">{{ emptyText('predictions') }}</div>
                     <div class="pagination-bar">
                         <button class="row-btn" @click="predictionPrevPage" :disabled="predictionFilters.page <= 1">上一页</button>
-                        <span>第 {{ predictionFilters.page }} 页 · <template v-if="viewErrors.predictions">条数没取到，下面是上一次取到的</template><template v-else>共 {{ predictionMeta.total || 0 }} 条</template></span>
+                        <span>第 {{ predictionFilters.page }} 页 · <template v-if="viewErrors.predictions">条数没取到，表里是上一次取到的</template><template v-else>共 {{ predictionMeta.total || 0 }} 条</template></span>
                         <button class="row-btn" @click="predictionNextPage" :disabled="!predictionMeta.has_more">下一页</button>
                     </div>
                 </div>
@@ -482,7 +483,7 @@
                     <div v-else class="empty-state">{{ emptyText('viewpoints') }}</div>
                     <div class="viewpoint-pagination" v-if="viewpointMeta.pages > 0">
                         <button class="row-btn" @click="viewpointPrevPage" :disabled="viewpointMeta.page <= 1"><i class="ri-arrow-left-s-line"></i></button>
-                        <span>第 {{ viewpointMeta.page }} / {{ viewpointMeta.pages }} 页 · <template v-if="viewErrors.viewpoints">条数没取到，下面是上一次取到的</template><template v-else>共 {{ viewpointMeta.total }} 条</template></span>
+                        <span>第 {{ viewpointMeta.page }} / {{ viewpointMeta.pages }} 页 · <template v-if="viewErrors.viewpoints">条数没取到，表里是上一次取到的</template><template v-else>共 {{ viewpointMeta.total }} 条</template></span>
                         <button class="row-btn" @click="viewpointNextPage" :disabled="viewpointMeta.page >= viewpointMeta.pages"><i class="ri-arrow-right-s-line"></i></button>
                     </div>
                 </div>
@@ -2399,7 +2400,7 @@ const fetchWeChatBatch = async () => {
                 });
                 const {
                     predictionFilter, predictionMeta, predictionFilters, filteredPredictions, verifyTask,
-                    showPredictionMaintenance, maintenancePreview,
+                    showPredictionMaintenance, maintenancePreview, maintenanceError,
                     fetchPredictions, applyPredictionFilters, resetPredictionFilters, setPredictionFilter,
                     setPredictionSort,
                     predictionPrevPage, predictionNextPage, archivePrediction, restorePrediction,
@@ -3195,7 +3196,7 @@ const fetchWeChatBatch = async () => {
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,
-                    verifyTask, showPredictionMaintenance, maintenancePreview,
+                    verifyTask, showPredictionMaintenance, maintenancePreview, maintenanceError,
                     viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, viewpointTask,
                     sourceMenuOpen, selectedSources, sourceOptions, fetchSourceOptions, taskRunning,
                     funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds,

@@ -24,8 +24,9 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
 from _db_guard import pin_local_sqlite          # noqa: E402  必须先钉再碰 ORM
 
-OUT_DEFAULT = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20',
-                           't3-goldset-seed.csv')
+# 默认输出**不入库**：第 35 轮 B 抓到原来的默认路径正好落在已提交的金标种子 CSV 上，
+# 谁按文档裸跑一次命令，就把大家核对用的基准销毁一次（同一族病只改了兄弟脚本）。
+OUT_DEFAULT = os.path.join(ROOT, 'data', 't3-goldset-seed.csv')
 
 
 def find_t3(node):

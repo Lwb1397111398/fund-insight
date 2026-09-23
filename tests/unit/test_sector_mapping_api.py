@@ -513,3 +513,90 @@ def test_source_secret_not_in_planned_docs():
             if secret and secret in text:
                 hits.append(os.path.relpath(path, root))
     assert hits == [], '文档里泄漏了真实口令：%s' % hits
+
+
+# ---- 第 35 轮 B-MAJOR-1：创建路径那道"只允许基金不允许股票"的门，此前零覆盖 ----
+# 复现（B 与我各做一次）：把 config.py:1797-1803 整段删掉、再把 1811-1813 改回
+# `reviewed=True / verify_message=None / is_fetchable=None`，本文件与
+# `test_sector_fund_manual_proof.py`、`test_sector_mapping_audit_import.py`
+# 仍是 49 passed / 1 skipped —— 也就是这条门坏了没人报警。
+
+
+def _post_create(client, payload):
+    return client.post("/api/config/sector-mappings", json=payload, headers=AUTH_HEADERS)
+
+
+def test_a_code_the_fund_domain_does_not_know_cannot_be_created(tmp_path, monkeypatch):
+    """名字为空 + 基金域查无此码 ⇒ 必须**拒**并且**库里不留行**（第 7 轮 MAJOR-2 的原始形状）。"""
+    from src.models.database import SectorFundMapping
+    sf = _database(tmp_path)
+    calls = []
+
+    def fake_domain(self, code, use_roster=False):
+        calls.append(code)
+        return {'status': 'ok', 'name': ''}          # 名册里没有这个码（股票的典型结局）
+
+    import importlib
+    monkeypatch.setattr(importlib.import_module('src.fund.fund_api').FundAPI,
+                        'get_fund_domain_name', fake_domain)
+    app, client = _client(monkeypatch, sf)
+    res = _post_create(client, {"sector_name": "测试白酒", "fund_code": "600519"})
+    body = res.json()
+    assert body.get("success") is False, '股票码被创建成功了：%s' % body
+    assert '拒绝创建' in (body.get('message') or ''), body
+    assert calls == ['600519'], '没有去基金域查过名字（探针根本没跑）：%s' % calls
+    db = sf()
+    try:
+        left = db.query(SectorFundMapping).filter_by(sector_name='测试白酒').count()
+    finally:
+        db.close()
+    assert left == 0, '虽然回了 success:false，行还是落库了（%d 行）' % left
+
+
+def test_created_row_takes_no_immunity_when_the_probe_accuses(tmp_path, monkeypatch):
+    """补到了名字但身份体检指控（股票名挂在基金码上）⇒ 落库必须是**未审查 + 不可服务 + 有理由**。"""
+    from src.models.database import SectorFundMapping
+    sf = _database(tmp_path)
+
+    import importlib
+    _FundAPI = importlib.import_module('src.fund.fund_api').FundAPI
+    monkeypatch.setattr(_FundAPI, 'get_fund_domain_name',
+                        lambda self, code, use_roster=False: {'status': 'ok', 'name': '贵州茅台'})
+    monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                        lambda code, name, sector='': ('名字对不上：600519 在基金域不是这只', None))
+    app, client = _client(monkeypatch, sf)
+    body = _post_create(client, {"sector_name": "测试白酒创建", "fund_code": "600519"}).json()
+    assert body.get("success") is True, body
+    db = sf()
+    try:
+        row = db.query(SectorFundMapping).filter_by(sector_name='测试白酒创建').one()
+        got = (row.reviewed, row.is_fetchable, row.verify_message,
+               getattr(row, 'owner_locked', None), getattr(row, 'reviewed_by', None))
+    finally:
+        db.close()
+    assert got[0] is False, '被指控的行拿到 reviewed=True：%s' % (got,)
+    assert got[1] is False, '被指控的行仍被当成可服务：%s' % (got,)
+    assert got[2] and '名字对不上' in got[2], '理由没落库：%s' % (got,)
+    assert not got[3] and got[4] != 'owner', '创建路径白送了老板免疫（#20 那条唯一入口）：%s' % (got,)
+
+
+def test_a_clean_probe_creation_still_does_not_grant_owner_immunity(tmp_path, monkeypatch):
+    """探针不指控时创建可以是"已审查"，但**绝不**顺带 `reviewed_by='owner'`/`owner_locked`。"""
+    from src.models.database import SectorFundMapping
+    sf = _database(tmp_path)
+    import importlib
+    _FundAPI = importlib.import_module('src.fund.fund_api').FundAPI
+    monkeypatch.setattr(_FundAPI, 'get_fund_domain_name',
+                        lambda self, code, use_roster=False: {'status': 'ok', 'name': '白酒ETF'})
+    monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                        lambda code, name, sector='': (None, {'verdict': 'unknown'}))
+    app, client = _client(monkeypatch, sf)
+    body = _post_create(client, {"sector_name": "测试干净创建", "fund_code": "512699"}).json()
+    assert body.get("success") is True, body
+    db = sf()
+    try:
+        row = db.query(SectorFundMapping).filter_by(sector_name='测试干净创建').one()
+        assert row.fund_name == '白酒ETF', '空名字应由基金域补上，实际 %r' % row.fund_name
+        assert not row.owner_locked and row.reviewed_by != 'owner',             '一次普通创建就盖上老板的章：%s / %s' % (row.reviewed_by, row.owner_locked)
+    finally:
+        db.close()

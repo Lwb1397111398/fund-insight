@@ -52,6 +52,10 @@ def _drop_isServiceDown(match):
     return re.sub(r'\n\s*isServiceDown,', '', match.group(0), count=1)
 
 
+def _js(*lines):
+    """跨行 JS 片段的拼装器：变异锚点必须能写出真实的缩进与换行。"""
+    return chr(10).join(lines)
+
 MUTATIONS = [
     ('test_first_load_fetches_all_go_through_the_wake_retry', 'unwrap_bloggers_fetch',
      HTML, "withWakeRetry(() => axios.get('/api/bloggers'))", "axios.get('/api/bloggers')", False),
@@ -146,7 +150,7 @@ MUTATIONS = [
      '<template v-if="true">暂无数据</template>', True),
     # ---- 第 32 轮：五处"报 0 / 报没有"的假事实，和轮询耗尽后的那把锁 ----
     ('test_every_list_page_shares_the_same_honesty_rule', 'pagination_reports_zero_on_failure',
-     HTML, '<template v-if="viewErrors.posts">条数没取到，下面是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template>',
+     HTML, '<template v-if="viewErrors.posts">条数没取到，表里是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template>',
      '共 {{ postMeta.total || 0 }} 条', False),
     ('test_no_page_claims_a_number_it_never_measured', 'insight_card_back_to_zero',
      HTML, '{{ numOrDash(viewpointInsights.direction_total) }}',
@@ -172,7 +176,7 @@ MUTATIONS = [
     ('test_polling_gives_up_loudly_instead_of_locking_the_ui', 'no_stall_banner',
      HTML, r'<div v-if="stallText" class="text-xs"[^\n]*</div>', '', True),
     ('test_failure_state_is_reported_and_cleared_by_the_fetch_itself', 'posts_success_false_silent',
-     POST, "                    report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));",
+     POST, "                report('帖子列表没取到：' + (res.data.message || '接口未给出原因'));",
      '                    void 0;', False),
     ('test_failure_state_is_reported_and_cleared_by_the_fetch_itself', 'posts_never_clears',
      POST, "                    report('');", '                    void 0;', False),
@@ -243,11 +247,11 @@ MUTATIONS = [
     # ---- 第 34 轮浏览器实测（停服务点页面）照出来的另一族：旧数据冒充新数据 ----
     # （帖子那一腿已有 `pagination_reports_zero_on_failure`，这里补预测与观点两条）
     ('test_every_list_page_shares_the_same_honesty_rule', 'predictions_pager_claims_fresh_rows',
-     HTML, '<template v-if="viewErrors.predictions">条数没取到，下面是上一次取到的</template>'
+     HTML, '<template v-if="viewErrors.predictions">条数没取到，表里是上一次取到的</template>'
            '<template v-else>共 {{ predictionMeta.total || 0 }} 条</template>',
      '共 {{ predictionMeta.total || 0 }} 条', False),
     ('test_every_list_page_shares_the_same_honesty_rule', 'viewpoints_pager_has_no_failure_branch',
-     HTML, '<template v-if="viewErrors.viewpoints">条数没取到，下面是上一次取到的</template>'
+     HTML, '<template v-if="viewErrors.viewpoints">条数没取到，表里是上一次取到的</template>'
            '<template v-else>共 {{ viewpointMeta.total }} 条</template>',
      '共 {{ viewpointMeta.total }} 条', False),
     # ---- 接线闸自己的两条：把第 34 轮的两种漏法现场复现一遍 ----
@@ -257,8 +261,47 @@ MUTATIONS = [
      _drop_isServiceDown, True),
     ('test_everything_the_page_destructures_is_actually_exported[createViewpointManager]',
      'manager_stops_exporting_insights_flag',
-     VP, 'viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, viewpointTask,',
-     'viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,', False),
+     VP, 'viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, insightsLoaded, insightsError, '
+        'summaryStatsLoaded, summaryStatsError, viewpointTask,',
+     'viewpoints, viewpointMeta, viewpointFilters, viewpointInsights, summaryStatsLoaded, viewpointTask,',
+     False),
+    # ---- 第 35 轮 A-M1/M2/M3：把"写成功却说失败""预览失败还留着可执行按钮"各造回去一遍 ----
+    ('test_a_write_that_succeeded_is_never_reported_as_a_failure', 'save_prediction_blames_the_write',
+     JS, _js('try { await fetchPredictions(); }',
+                       '                catch (refreshError) { alert(\'预测已保存，只是列表没刷新出来 —— 刷新页面即可\'); }'),
+     _js('                await fetchPredictions();'), False),
+    ('test_a_write_that_succeeded_is_never_reported_as_a_failure', 'cancel_job_blames_the_write',
+     POST, _js('try { await refreshRelated(); }',
+                       '                catch (refreshError) { alert(\'任务已取消，只是列表没刷新出来 —— 刷新页面即可\'); }'),
+     _js('                await refreshRelated();'), False),
+    ('test_a_write_that_succeeded_is_never_reported_as_a_failure', 'viewpoint_delete_blames_the_write',
+     VP, _js('                // 永久删除已经执行完了，刷新失败不能说「删除失败」（那会让老板再点一次删另一条）',
+             '                try {',
+             '                    await Promise.all([fetchViewpoints(), fetchInsights()]);',
+             '                    if (options.onStatsChanged) await options.onStatsChanged();',
+             '                } catch (refreshError) { alert(\'观点已删除，只是列表没刷新出来 —— 刷新页面即可\'); }'),
+     _js('                await Promise.all([fetchViewpoints(), fetchInsights()]);',
+         '                if (options.onStatsChanged) await options.onStatsChanged();'), False),
+    ('test_a_failed_preview_leaves_nothing_to_confirm', 'preview_refusal_still_arms_execute',
+     JS, _js('if (response.data && response.data.success === false) {',
+                       '                    maintenanceError.value = \'预览被拒绝：\' + (response.data.message || \'接口未给出原因\');',
+                       '                } else {',
+                       '                    maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };'),
+     _js('                maintenancePreview.value = { type, message: response.data.message, data: response.data.data || {} };'), False),
+    ('test_a_failed_preview_leaves_nothing_to_confirm', 'stale_preview_survives_the_retry',
+     JS, _js('maintenancePreview.value = null;',
+                       '            maintenanceError.value = \'\';'),
+     _js('            maintenanceError.value = \'\';'), False),
+    # ---- 第 35 轮 A 的 MINOR：翻页只回滚了抛错那一腿，软失败时页码还挂着 ----
+    ('test_a_button_must_not_claim_the_opposite_of_what_happened', 'post_pager_ignores_soft_failure',
+     POST, '            try { if (await fetchPosts() === false) postFilters.page = back; }',
+     '            try { await fetchPosts(); }', False),
+    ('test_a_button_must_not_claim_the_opposite_of_what_happened', 'prediction_pager_ignores_soft_failure',
+     JS, '            try { if (await fetchPredictions() === false) predictionFilters.page = back; }',
+     '            try { await fetchPredictions(); }', False),
+    ('test_a_button_must_not_claim_the_opposite_of_what_happened', 'viewpoint_pager_ignores_soft_failure',
+     VP, '            try { if (await fetchViewpoints() === false) viewpointFilters.page = back; }',
+     '            try { await fetchViewpoints(); }', False),
 ]
 
 

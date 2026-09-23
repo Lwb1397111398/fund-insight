@@ -108,7 +108,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 | --- | --- |
 | `src/api/main.py` | FastAPI 入口、中间件、路由注册、静态页面、危险的数据库导入接口 |
 | `src/api/routes/` | 按领域拆分的 REST API |
-| `src/models/database.py` | 30+ ORM 表模型，兼容 SQLite/PostgreSQL |
+| `src/models/database.py` | ORM 表模型（张数以 `python -c "from src.models.database import Base; print(len(Base.metadata.tables))"` 为准，今天 27），兼容 SQLite/PostgreSQL |
 | `src/services/prediction_verify_service.py` | 预测验证核心，涉及准确率和评分，改动需谨慎 |
 | `src/services/prediction_verify_task.py` | 批量验证后台状态对象，避免长请求卡死前端 |
 | `src/analyzer/llm_analyzer.py` | LLM 核心，包含模型选择、熔断、缓存、解析兜底、预测/建议/图像分析 |
@@ -195,16 +195,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 14:43（北京），第 34 轮返修（复评 74/78 驱动 + 我自己停服务实测）之后，
+最近一次核对（2026-09-23 17:01（北京），第 35 轮返修（复评 75/84 驱动）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **924 passed / 16 skipped / 0 failed**（170 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **933 passed / 16 skipped / 0 failed**（161 秒）。
+- `pytest tests/unit -q` → **929 passed / 16 skipped / 0 failed**（172 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **938 passed / 16 skipped / 0 failed**（180 秒）。
   报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  （上一基线 912/921 → 本批 924/933：+12 条 = `tests/unit/test_frontend_wiring.py` 7 条
-  （两条参数化 × 3 个 manager + 一条"闸自己不空转"）+ 五个已改文件里新增的 5 条
-  （洞察失败清空卡面、按钮不说反话、TOP 空榜门槛、接线闸两头都在、变异锁反向一条）。
+  （上一基线 924/933 → 本批 929/938：+5 条 = 创建路径"只允许基金不允许股票"3 条
+  （第 35 轮 B-MAJOR-1：今天之前整仓零覆盖，变异掉那 7 行判据后 49 条用例照样全绿）
+  + 维护预览因果判据 1 条 + 脚本守卫反退化 1 条。
   判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`。）
   （上一基线 885/894（红过一次：897/**1 failed**/16）→ 912/921：+14 条 =
   清理脚本离线往返 6、`/api/bloggers/top` 路由形状 3、互斥闸反向 2、失败态铺满 3。）
@@ -250,7 +250,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   逐行处理清单见任务 #38。
   这张表"管多少条预测 / 这一轮动了多少条"一律用 `python scripts/measure_static_table_reach.py`
   现量（2026-09-23 镜像：**活预测 1616 条，只被静态表覆盖 911 条 / 50 个板块**；
-  `--impact-against data/_old_map.py` 量影响面：**31 个板块（改码 18 / 删键 13）= 78 条 = 4.8%**）。
+  `--impact-against tests/fixtures/sector_map_before_round27.py` 量影响面（上一版表已钉进 fixtures —— 第 35 轮 B 抓到原来那条命令指向 `data/_old_map.py`，而 `data/` 整目录不入库，命令当场 FileNotFoundError）：**31 个板块（改码 18 / 删键 13）= 78 条 = 4.8%**）。
   以前文档里写过的"916 条""124 条 / 7.7%"都是手抄没绑口径，已撤回（同一个数被复现成 925/911）。
 - **能写数据的脚本必须说清"连的是哪个库"**（第 28 轮 F-MINOR-6 起有用例钉）：
   `tests/unit/test_script_db_guards.py` 扫 `scripts/*.py`，凡**带写开关**
@@ -296,7 +296,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   真正拦下来的是 `scripts/push_sector_mappings_to_prod.py`：`--confirm` 真写前先跑一次 dry-run 预检，
   剔掉不可服务的行（硬发要显式 `--allow-unservable`），预检不通则一行都不发（退码 3）。
   为什么必须这样：清单里那两列（`is_fetchable` / `fund_info_needed`）是**在镜像上**算的，
-  而镜像的档案我已补齐 ⇒ 清单说"缺 3 行"，生产实测缺 **31 行**（压着 249 条活预测）。
+  而镜像的档案我已补齐 ⇒ 清单说"缺 3 行"，生产实测多得多。**但"多得多"这个数跟着清单指纹走**：
+  09-21 那份（`1ed8e42a`）量出**无档案 31 行**，09-23 15:14 重导那份（`230767a8`）量出**29 行**，
+  两份都印"牵动 249 条活预测"（12 处标的变更里 5 个板块出桶、3 个进桶）。
+  ⇒ 报这个数必须同时给**你用的是哪份清单**，别再说成一个常数（检查单 §7 / §7.4 存了两份原始回执）。
   用例：`tests/unit/test_push_writeback_gate.py`（4 条）+ `test_sector_mapping_audit_import.py`（3 条）。
   生产侧全量预检可重跑：`python scripts/prod_writeback_preflight_readonly.py`（只读，退码 5=有不可服务行）。
 - **单测零网络现在是被强制的，不再靠自觉**：`tests/conftest.py::_block_real_http` 把
@@ -322,8 +325,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   2026-09-22 同一把尺子在两个库上的实测：
   - 本地镜像 `data/fund_insight.db`：已判 1110 / 判对 573 = **51.62%**，⚠ 197（17.7%），区间 43.96%~61.71%
   - 生产 Supabase：已判 1057 / 判对 591 = **55.91%**，⚠ 419（**39.6%**），区间 33.68%~73.32%
-  差这么远的根因是生产数据落后（`fund_history` 9541 行 / 末次验证 09-13；镜像 10600 行 / 09-22；
+  差这么远的根因是生产数据落后（那一时刻的数：`fund_history` 9541 行 / 末次验证 09-13；镜像 10600 行 / 09-22；
   映射 118 vs 145 行）。⇒ 说准确率之前先说哪个库；拿旧截图对数之前先看落后程度。
+  **落后程度今天重新量（2026-09-23 15:06，只读）**：生产末条净值仍是 **2026-09-13**（`fund_history` 9541 行，
+  十天零增长）、末次验证 2026-09-13 15:23、到期未判 **141** 条；镜像今天 **17543 行**（净值回补过），
+  上面那句"镜像 10600 行"是 09-22 的状态，别再拿来当今天的尺子。
+  复现：`python scripts/q.py --production "select max(nav_date), count(*) from fund_history"`
+  与 `python scripts/q.py "select count(*) from fund_history"`。
+  **另外一条今天要说白的边界**：`audit_verdict_evidence.py` 钉的是镜像 ⇒ 上面**生产那一行**的
+  ⚠ 419 / 区间 33.68%~73.32% 在仓库里**没有可跑命令**（第 35 轮 B 抓到，已列任务 #51）——
+  在那条命令补上之前，报生产准确率区间只能标"手写 SQL 复算过、非工具产出"。
   **准确率只能当区间报，而且区间要现算**：`python scripts/audit_verdict_evidence.py` 最后一行
   打印 `已判 1110 条 / 判对 573 条 = 51.62%`，以及把 197 条（17.7%）证据失效结论按
   "全判错/全判对"两个极端折算出的 **43.96% ~ 61.71%**（第 18 轮 MAJOR-3：我此前手算报出去
