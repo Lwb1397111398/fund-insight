@@ -10,10 +10,12 @@
         const editingPrediction = options.editingPrediction || ref(null);
         const predictionFilter = ref('all');
         const predictionMeta = reactive({
-            page: 1, page_size: 50, total: 0, has_more: false, sort: 'due_first',
+            // 初值 null 而不是 0：0 是"库里没有"的断言，而首屏/唤醒失败那一刻只知道"没取到"。
+            // 页面 8 个筛选按钮的括号数读的就是这张表（镜像真值 1616 条活预测）。
+            page: 1, page_size: 50, total: null, has_more: false, sort: 'due_first',
             facets: {
-                all: 0, pending: 0, verified: 0, correct: 0, wrong: 0, flat: 0, archived: 0,
-                due: 0, upcoming: 0, unverifiable: 0,
+                all: null, pending: null, verified: null, correct: null, wrong: null, flat: null,
+                archived: null, due: null, upcoming: null, unverifiable: null,
             },
         });
         const predictionFilters = reactive({

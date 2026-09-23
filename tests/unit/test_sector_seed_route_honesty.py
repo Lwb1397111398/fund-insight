@@ -7,7 +7,7 @@
    **每次都在说谎**（`test_the_route_actually_points_at_a_script_that_exists` 钉住这条）；
 2. 没有总开关、没有确认头 —— 一条 POST 就能动映射表；
 3. 脚本无条件 `reviewed=True` 并就地改已有行的 `fund_code`（绕开 `retag_prediction`）。
-   镜像上量过一次：`SEED-RECEIPT: dry-run 新增=128 已存在跳过=35 其中码不一致=21 老板行=0 内置计划=163`
+   镜像上量过一次：`SEED-RECEIPT: dry-run 新增=126 已存在跳过=35 其中码不一致=21 老板行=0 缺档案=2 内置计划=163`
    （2026-09-23 17:46，`python scripts/seed_sector_mappings.py --dry-run`）。
    现在语义是**只补缺、不覆盖**，且新行一律 `reviewed=False` + `match_source='seed_builtin'`。
 """
@@ -54,7 +54,7 @@ def test_the_seed_route_is_off_until_the_server_opens_it(monkeypatch, _no_subpro
     assert 'ENABLE_SECTOR_SEED_IMPORT' in res['message']
 
 
-RECEIPT = 'SEED-RECEIPT: 真写 新增=7 已存在跳过=35 其中码不一致=21 老板行=4 内置计划=163'
+RECEIPT = ('SEED-RECEIPT: 真写 新增=7 已存在跳过=35 其中码不一致=21 老板行=4 缺档案=2 内置计划=163')
 
 
 def _stub_run(monkeypatch, stdout=RECEIPT, returncode=0):
@@ -154,12 +154,45 @@ def test_true_success_carries_the_receipt_and_refreshes_the_cache(_open_switch, 
         {'X-Danger-Confirm': 'seed-sector-mappings'}), db=None)
     assert res['success'] is True
     assert res['data'] == {'returncode': 0, 'cache_refreshed': True, 'receipt': RECEIPT,
-                           'added': 7, 'existing_skipped': 35, 'code_mismatch': 21, 'owner_rows': 4}
+                           'added': 7, 'existing_skipped': 35, 'code_mismatch': 21,
+                           'owner_rows': 4, 'no_fund_info': 2, 'planned_rows': 163}
+    assert '另有 2 行因本库没有 fund_info 档案被跳过' in res['message'], \
+        '缺档案的行数没进人话 message（第 38 轮：调用方只看 message 就会以为"补了 7 行、万事大吉"）'
     assert refreshed == [1]
 
 
+def test_the_parsed_receipt_covers_every_column_the_script_prints():
+    """两端必须咬在**同一份格式**上：拿真脚本真输出喂真解析器。
+
+    第 38 轮两份复评共同抓到：`dd125cb` 给回执行加了 `缺档案=` / `内置计划=`，
+    而 `_parse_seed_receipt` 只认四个老键 ⇒ 新列被静默丢掉、10 条用例全绿。
+    手抄底本永远会漂，所以这条不抄字符串，直接跑脚本（dry-run，钉镜像、不写库）。
+    """
+    import re
+    from src.api.routes.config import _parse_seed_receipt
+
+    res = subprocess.run([sys.executable, SCRIPT, '--dry-run'], capture_output=True,
+                         text=True, encoding='utf-8', errors='replace',
+                         cwd=REPO_ROOT, env=_child_env())
+    assert res.returncode == 0, res.stdout[-400:] + res.stderr[-400:]
+    line = next((l for l in res.stdout.splitlines() if l.startswith('SEED-RECEIPT:')), '')
+    assert line, '脚本这次没打回执，本用例无从判定（先修脚本的回执，再谈解析）'
+    printed = dict(re.findall(r'(\w+)=(-?\d+)', line))
+    parsed = _parse_seed_receipt(res.stdout)
+    EN = {'新增': 'added', '已存在跳过': 'existing_skipped', '其中码不一致': 'code_mismatch',
+          '老板行': 'owner_rows', '缺档案': 'no_fund_info', '内置计划': 'planned_rows'}
+    missing = [c for c in printed if c not in parsed and EN.get(c, c) not in parsed]
+    assert not missing, ('解析器丢了脚本打的列：%s（两端各测各的 ⇒ 契约已在漂移）' % sorted(missing))
+    for col, val in printed.items():
+        key = col if col in parsed else EN[col]
+        assert parsed[key] == int(val), '%s 解析成 %s，脚本打的是 %s' % (key, parsed[key], val)
+    # 真正的防漂移：脚本**以后**再加列，也必须原样带出去，而不是只剩 `data.receipt` 那串原文
+    synth = _parse_seed_receipt('SEED-RECEIPT: 真写 新增=1 已存在跳过=0 将来新加的列=9')
+    assert synth.get('将来新加的列') == 9, '未知列又被静默丢掉了（%s）' % synth
+
+
 def test_a_dry_run_does_not_refresh_the_cache(_open_switch, monkeypatch):
-    _stub_run(monkeypatch, stdout='SEED-RECEIPT: dry-run 新增=128 已存在跳过=35 其中码不一致=21 老板行=0 内置计划=163')
+    _stub_run(monkeypatch, stdout='SEED-RECEIPT: dry-run 新增=126 已存在跳过=35 其中码不一致=21 老板行=0 缺档案=2 内置计划=163')
     import src.services.sector_fund_service as svc
 
     def boom(db):

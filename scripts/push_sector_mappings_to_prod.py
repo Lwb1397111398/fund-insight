@@ -32,6 +32,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20',
@@ -131,8 +132,10 @@ def main():
     print('[计划] 目标=%s 清单 %d 行（指纹 %s，生成于 %s）→ %s'
           % (args.base, len(rows), data.get('sha256'), data.get('generated_at'),
              '真写' if apply_write else 'dry-run'))
+    print('[目标] %s —— 经 HTTP 写**线上生产库**的写入口（不是本地镜像 `data/fund_insight.db`）'
+          % urlparse(args.base).netloc)
 
-    # 真写之前先问服务端"这些标的在你这儿定得了价吗"。
+    # 真写之前先问服务端"这些标的在你这儿定得了价"。
     # 为什么不能信清单：`is_fetchable` 是**在镜像上**算的，而第 27 轮生产实测有 31 行
     # 连 `fund_info` 档案都没有（压着 249 条活预测）—— 拿清单当闸门会把这 31 行全放成"可服务"。
     if apply_write:
@@ -142,8 +145,19 @@ def main():
             print('[abort] 预检没走通（HTTP %s），一行都不发：%s'
                   % (pre_status, str(pre_body)[:200]))
             return 3
+        items = pre_body['data'].get('items') or []
+        # 第 38 轮 B 席 MAJOR：判据原先只认 `nav_priced_here is False` ⇒
+        # 对端是"有 audit-import 但还没这一列"的旧版时，**每一行都算过了闸**，
+        # 于是这条预检在最需要它的时候是开着的。"没回答"与"回答不可服务"不是一回事，
+        # 但两者都不许真写：拒收要显式，不许静默放行。
+        unanswered = [i for i in items if 'nav_priced_here' not in i]
+        if unanswered or len(items) != len(rows):
+            print('[abort] 预检没答完：回执 %d 行 / 发出 %d 行，其中 %d 行没带 `nav_priced_here`。'
+                  '一行都不发 —— 对端多半是还没上"能不能定价"那一列的旧构建'
+                  % (len(items), len(rows), len(unanswered)))
+            return 3
         bad = [(i.get('sector_name'), i.get('fund_code'), i.get('nav_priced_here_note'))
-               for i in (pre_body['data'].get('items') or [])
+               for i in items
                if i.get('nav_priced_here') is False]
         if bad:
             print('[预检] 生产定不了价的 %d 行（发过去就是造出无法定价的映射）：' % len(bad))

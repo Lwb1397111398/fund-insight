@@ -90,3 +90,43 @@ def test_failed_preflight_sends_nothing(monkeypatch, tmp_path):
                        preflight_status=500)
     assert code == 3, code
     assert len(calls) == 1 and calls[0]['dry_run'] is True, '预检没走通就不该发真写请求'
+
+
+def test_an_old_server_that_never_answers_the_column_sends_nothing(monkeypatch, tmp_path):
+    """对端"有 audit-import、但回执里没有 `nav_priced_here` 这一列"的旧构建 ⇒ 预检必须拒。
+
+    第 38 轮 B 席 MAJOR：旧判据写的是 `nav_priced_here is False`，于是**字段缺失＝过了闸**，
+    这条预检在最需要它的时刻（服务端比代码旧）是开着的，159992 那种没档案的行会照发。
+    "没回答"与"回答不可服务"不是一回事，但两者都不许真写。
+    """
+    calls = _setup(monkeypatch, tmp_path)
+
+    def old_server(base, path, password, payload=None, method='GET', timeout=180):
+        calls.append(payload)
+        items = [{'sector_name': r['sector_name'], 'fund_code': r['fund_code'],
+                  'outcome': 'created'} for r in payload['mappings']]
+        return 200, {'message': 'ok', 'data': {'items': items}}
+
+    monkeypatch.setattr(push, 'request', old_server)
+    monkeypatch.setattr('sys.argv', ['push_sector_mappings_to_prod.py', '--confirm', push.CONFIRM])
+    code = push.main()
+    assert code == 3, '旧版服务端没回这一列，真写却放行了（退码 %s）' % code
+    assert calls[-1]['dry_run'] is True, '拒收之前就该停住，最后一个请求不许是真写'
+
+
+def test_a_preflight_that_answers_fewer_rows_sends_nothing(monkeypatch, tmp_path):
+    """预检只答了一半的行 ⇒ 剩下那些等于"没问过"，同样不许发。"""
+    calls = _setup(monkeypatch, tmp_path)
+
+    def short_server(base, path, password, payload=None, method='GET', timeout=180):
+        calls.append(payload)
+        first = payload['mappings'][0]
+        items = [{'sector_name': first['sector_name'], 'fund_code': first['fund_code'],
+                  'nav_priced_here': True, 'nav_priced_here_note': ''}]
+        return 200, {'message': 'ok', 'data': {'items': items}}
+
+    monkeypatch.setattr(push, 'request', short_server)
+    monkeypatch.setattr('sys.argv', ['push_sector_mappings_to_prod.py', '--confirm', push.CONFIRM])
+    code = push.main()
+    assert code == 3, '预检答了 1 行 / 发出 2 行，剩下那行等于没问过却仍要写（退码 %s）' % code
+    assert calls[-1]['dry_run'] is True

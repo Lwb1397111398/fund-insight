@@ -4,7 +4,9 @@
     window.createPostManager = function createPostManager(options) {
         const { axios, ref, reactive, localStorage, alert, confirm, analyzing } = options;
         const posts = ref([]);
-        const postMeta = reactive({ total: 0, skip: 0, limit: 20, has_more: false, status_counts: {} });
+        // total 初值是 null 而不是 0：0 是一个断言（"库里没有帖子"），
+        // 而首屏/唤醒失败那一刻我们只知道"没取到"（镜像真值 657 帖 / 1616 预测）。
+        const postMeta = reactive({ total: null, skip: 0, limit: 20, has_more: false, status_counts: null });
         const postFilters = reactive({
             keyword: '', blogger_id: '', analysis_status: '', start_date: '', end_date: '', quality: '', page: 1, limit: 20,
         });

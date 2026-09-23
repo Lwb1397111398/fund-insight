@@ -347,6 +347,21 @@ MUTATIONS = [
     ('test_the_top_modal_says_who_is_excluded', 'top_modal_hides_its_caliber',
      HTML, '<div v-else class="empty-state">没有博主上榜：这个榜只收<strong>至少 5 条已验证结论</strong>的博主（少于 5 条的命中率没有参考意义）</div>',
      '<div v-else class="empty-state">暂无数据</div>', False),
+    # 第 38 轮 A-MAJOR-1：帖子页 4 张迷你卡 / 预测页 8 个按钮括号数的 `—` 守卫与初值
+    ('test_the_two_list_pages_stop_reporting_zero_for_numbers_they_do_not_have',
+     'post_mini_cards_lose_their_guard', HTML, "viewErrors.posts ? '—' : ", '', False),
+    ('test_the_two_list_pages_stop_reporting_zero_for_numbers_they_do_not_have',
+     'prediction_facet_buttons_lose_their_guard', HTML, "viewErrors.predictions ? '—' : ", '', False),
+    ('test_the_two_list_pages_stop_reporting_zero_for_numbers_they_do_not_have',
+     'prediction_total_init_back_to_zero', JS, 'total: null, has_more', 'total: 0, has_more', False),
+    ('test_the_two_list_pages_stop_reporting_zero_for_numbers_they_do_not_have',
+     'prediction_facets_init_back_to_zero', JS, 'all: null,', 'all: 0,', False),
+    ('test_the_two_list_pages_stop_reporting_zero_for_numbers_they_do_not_have',
+     'post_total_init_back_to_zero', POST, 'total: null, skip', 'total: 0, skip', False),
+    # 判据自己的正则也被钉：把 span 卡改回 div 形状不会被抓，但**去掉 `class="value"`** 会
+    ('test_a_missing_number_is_not_rendered_as_zero',
+     'post_mini_card_stops_being_a_value_card', HTML,
+     '<span class="value">{{ viewErrors.posts', '<span class="metric">{{ viewErrors.posts', False),
 ]
 
 

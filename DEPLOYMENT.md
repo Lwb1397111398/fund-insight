@@ -147,7 +147,14 @@ python scripts/fetch_sector_flow.py
 
 现有数据库第一次纳入 Alembic 时，必须先完成备份和结构盘点，然后执行：
 
+⚠ 本仓库 `.env` 里的 `DATABASE_URL` 指向**线上生产库**。第 38 轮起 `alembic/env.py` 不再把
+这个值悄悄顶进 `alembic.ini`：裸 `alembic upgrade head` / `downgrade …` 在目标看起来是远程时
+**直接拒跑**（旧写法会让一句文档命令就对生产发 DDL，而 `downgrade prediction_schema_baseline`
+那支会 `drop_table("prediction_change_logs")`，即审计台账本体）。所以下面每条本地命令都要显式
+带 `ALEMBIC_DATABASE_URL`，指向**副本**而不是日常开发库：
+
 ```bash
+export ALEMBIC_DATABASE_URL="sqlite:///data/_migration_drill.db"   # 先复制一份再练
 alembic current
 alembic stamp prediction_schema_baseline
 alembic upgrade head
@@ -156,7 +163,7 @@ alembic current
 
 `stamp` 只登记版本，不创建旧业务表，因此只能用于已经具有 Fund Insight 既有表结构的数据库。全新本地数据库应先运行 `python -m src --init-db` 创建当前完整结构，再执行 `alembic stamp head`。
 
-迁移前可生成离线 SQL 供人工检查：
+迁移前可生成离线 SQL 供人工检查（`--sql` 不连库，但选哪个方言取决于解析出的目标，所以同样要带上面那个变量）：
 
 ```bash
 alembic upgrade head --sql
@@ -169,7 +176,11 @@ alembic downgrade prediction_schema_baseline
 alembic upgrade head
 ```
 
-生产环境只在完成 `pg_dump`、隔离恢复和迁移预检后，才在受控维护窗口显式设置 `ALEMBIC_DATABASE_URL`。本仓库的测试、启动命令和 Render Web 启动均不会自动执行 Alembic。
+生产环境只在完成 `pg_dump`、隔离恢复和迁移预检后，才在受控维护窗口显式设置 `ALEMBIC_DATABASE_URL`。
+**更正（第 38 轮）**：本段原先写"本仓库的测试、启动命令和 Render Web 启动均不会自动执行 Alembic"，
+这是假的 —— `render.yaml:11` 的 `startCommand` 每次启动都跑 `python scripts/run_migrations.py`
+（它先自报 `[库] …` 再 `upgrade head`；`tests/unit/test_prediction_migrations.py` 也会起它，
+但对的是临时副本库）。真正"不会自动执行"的是 `ENABLE_STARTUP_MIGRATIONS` 控制的那条应用内补列路径。
 
 ## 数据备份与恢复演练
 

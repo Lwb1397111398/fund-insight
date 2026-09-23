@@ -44,12 +44,21 @@ def main():
     try:
         from src.fund.fund_api import fund_api
 
+        skipped = []
         for sector, (code, reason) in DELIBERATE_PROXIES.items():
             # 官方名现取，不写死：我抄的名字可能就是下一个错配
-            name = (fund_api.verify_fund_fetchable(code).get('api_name') or '').strip()
+            probe = fund_api.verify_fund_fetchable(code)
+            name = (probe.get('api_name') or '').strip()
             row = db.query(SectorFundMapping).filter(
                 SectorFundMapping.sector_name == sector,
                 SectorFundMapping.fund_code == code).first()
+            # 第 38 轮 A 席 MAJOR-3：以前只取名字、**从不读探针的结论**，于是
+            # "查无此码"也照样落 `is_fetchable=True` + 空基金名 + 一行幻影 `fund_info`
+            # —— 那正是 S6 要清的垃圾码形状。探针说取不到 = 这一条不写。
+            if not probe.get('ok'):
+                skipped.append('%s→%s（%s）' % (sector, code, probe.get('message') or 'ok=False'))
+                print('%-10s -> %s   [跳过：探针说取不到] %s' % (sector, code, reason))
+                continue
             print('%-10s -> %s %s   %s' % (sector, code, name, reason))
             if args.dry_run:
                 continue
@@ -69,6 +78,12 @@ def main():
             row.is_fetchable = True
         db.commit()
         print('[ok] 有意代理已锁定（agent 不会覆盖 owner_locked 行）')
+        if skipped:
+            print('[回执] %d 条被跳过（探针说取不到，没盖豁免章、没造档案行）：' % len(skipped))
+            for line in skipped:
+                print('   ' + line)
+            print('[回执] 这些行需要人工确认：要么换成还在的标的，要么从豁免名单里去掉')
+            return 5
         return 0
     finally:
         db.close()

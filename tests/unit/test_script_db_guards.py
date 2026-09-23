@@ -83,14 +83,21 @@ def _scripts():
     return out
 
 
-def _issues_schema_ddl(f):
-    """`from alembic import command` + 真调用 `command.upgrade(...)` ⇒ 这脚本能改**表结构**。
+_SCHEMA_ddL_VERBS = {'upgrade', 'downgrade', 'stamp'}
 
-    第 37 轮 B 的 M-3：旧判据只认"CLI 上有写开关"或"session.commit/add/delete"，
-    而 `scripts/run_migrations.py` 两条都不沾 —— 于是它压根没进扫描集合，
-    每次 Render 启动往 `.env` 那个库（＝生产 Supabase）发 DDL 却无人要求它自报。
+
+def _issues_schema_ddl(f):
+    """alembic 的**任何**改结构动作都算，不只 `upgrade`。
+
+    第 38 轮 B 的 BLOCKER 附带项：上一版我只认 `command.upgrade`，于是
+    `command.downgrade(cfg, "base")`（`20260722_0002` 的 downgrade 是 `drop_table("prediction_change_logs")`，
+    即审计台账本体）与 `command.stamp(...)` 都判"不能改结构"、不进守卫集合；
+    拿 `subprocess` 起裸 `alembic` CLI 的那一路同样隐身。
     """
-    return bool(f.get('alembic')) and 'upgrade' in f['called']
+    via_api = bool(f.get('alembic')) and (f['called'] & _SCHEMA_ddL_VERBS)
+    via_cli = any('alembic' in c for c in f['consts']) and bool(
+        f['called'] & {'run', 'Popen', 'call', 'check_call', 'check_output'})
+    return bool(via_api or via_cli)
 
 
 def _write_capable(f):
@@ -106,7 +113,12 @@ def _write_capable(f):
         return True
     if any(WRITE_SWITCH.search(fl) for fl in f['flags']):
         return True
-    if '--confirm' in f['flags'] or f['called'] & {'confirm', 'execute'}:
+    if '--confirm' in f['flags']:
+        # 第 38 轮两份复评交叉核对抓到的漏网：`push_sector_mappings_to_prod.py` 是这仓库里
+        # **唯一往生产 POST 的写口**，而旧写法要求"文本里还得有硬删字样"才算受管 ⇒ 它整个不在集合里，
+        # 连"你正在往哪儿写"都不用自己说。要口令才动 = 就是写操作，与删不删无关。
+        return True
+    if f['called'] & {'confirm', 'execute'}:
         return bool(HARD_DELETE.search(f['text']))
     return bool(HARD_DELETE.search(f['text']) and f['direct_db'])
 
@@ -139,6 +151,13 @@ def _refuses_local_without_a_flag(f):
             and any('--production' in fl for fl in f['flags']))
 
 
+def _declares_http_target(f):
+    """走 HTTP 写生产的脚本（`push_sector_mappings_to_prod.py` 那一族）没有 ORM 会话，
+    `database_label` 对它没意义 —— 那它必须自己打一行 `[目标] …` 说清往哪台机器 POST。
+    要的是**代码里的字面量**（`_facts.consts` 只收 AST 常量），写在注释/docstring 里不算。"""
+    return any(isinstance(c, str) and c.startswith('[目标]') for c in f['consts'])
+
+
 def _guarded(name, f, schema_ddl=False):
     if name in PRODUCTION_ONLY:
         return _refuses_local_without_a_flag(f)
@@ -152,18 +171,30 @@ def _guarded(name, f, schema_ddl=False):
         return ('pin_local_sqlite' in f['called'] or 'database_label' in f['called']
                 or _refuses_remote_without_a_flag(f))
     return ('pin_local_sqlite' in f['called'] or f['env_written']
-            or 'database_label' in f['called'] or _refuses_remote_without_a_flag(f))
+            or 'database_label' in f['called'] or _declares_http_target(f)
+            or _refuses_remote_without_a_flag(f))
 
 
 def test_there_are_write_capable_scripts_left_to_guard():
     """用例不能变成空判：受管脚本的数量必须>0，否则这条扫描已经失效。"""
     n = sum(1 for f in _scripts().values() if _write_capable(f))
     assert n >= 5, '只找到 %d 个受管脚本 ⇒ 先确认这条扫描还有效，再放行' % n
-    # "直连 ORM"不是受管的前提了，所以这个数必须**不小于**旧口径看到的数：
-    # 若哪天扫描器退化到只认 import SessionLocal，这里会先响（旧版靠 `direct_db` 挡着，
-    # 一个走 service 层写的脚本被判为"不受管"，正是第 35 轮 B 指出的那条缝）。
-    direct = sum(1 for f in _scripts().values() if _write_capable(f) and f['direct_db'])
-    assert n >= direct, '受管集合比"直连 ORM"集合还小（%d < %d）⇒ 扫描器把非直连的写脚本漏了' % (n, direct)
+    # 第 38 轮两份复评都点到旧那条 `assert n >= direct`：**`direct` 是 `n` 的子集定义，恒真**
+    # （它的条件里已经含 `_write_capable`）⇒ 扫描器退化时两个数一起缩，永远不响。
+    # 换成一条**第二个证据源**的判据：正文里带着写开关/口令的脚本，至少得占一样
+    # （被认成能改数据、或自己声明了目标）。这条当场抓出过一个真漏网：
+    # `push_sector_mappings_to_prod.py` —— 全仓唯一往生产 POST 的写口，两头都不占。
+    scripts = _scripts()
+    text_switches = {name for name, f in scripts.items()
+                     if WRITE_SWITCH.search(f['text']) or '--confirm' in f['text']}
+    blind = sorted(name for name in text_switches
+                   if not _write_capable(scripts[name])
+                   and not _guarded(name, scripts[name],
+                                    schema_ddl=_issues_schema_ddl(scripts[name])))
+    assert not blind, ('这些脚本正文里就写着写开关，却既不被认成"能改数据"、也不自报目标：%s'
+                       % '、'.join(blind))
+    assert 'push_sector_mappings_to_prod.py' in text_switches, \
+        '文本证据源自己失效了（push 那条 HTTP 写口不见了）⇒ 上面那条交叉核对会变成空判'
     # 第 36 轮 B-MINOR-3：旧判据的前提是"CLI 上有写开关"，于是**没有开关、上来就 commit**
     # 的脚本永远进不了集合。这条把那种形状自己钉住：会 commit 的直连脚本必须全部受管。
     committing = {name for name, f in _scripts().items()
@@ -207,6 +238,27 @@ def test_renaming_the_database_url_env_is_not_a_guard():
     assert _write_capable(f)
     assert _guarded('run_migrations.py', f, schema_ddl=True), \
         'run_migrations.py 现在又只靠"赋值 DATABASE_URL"过关 ⇒ 发 DDL 的脚本必须钉镜像/自报库名/见远程拒跑'
+
+
+def test_every_way_of_changing_the_schema_counts_as_ddl():
+    """`downgrade` 与 `stamp` 也算"能改表结构"，起裸 `alembic` CLI 也算（第 38 轮 B 的附带项）。
+
+    上一版我只认 `command.upgrade`：而 `20260722_0002` 的 downgrade 是
+    `drop_table("prediction_change_logs")`（审计台账本体），`stamp` 会让"库里有什么"和
+    "记录说有什么"分家 —— 三个都能改结构，旧判据只盯其中一个。
+    """
+    def facts(called=(), consts=(), alembic=True, direct_db=True):
+        return {'text': '', 'called': set(called), 'flags': set(), 'raised': set(),
+                'consts': set(consts), 'env_written': False, 'direct_db': direct_db,
+                'alembic': alembic}
+
+    for verb in ('upgrade', 'downgrade', 'stamp'):
+        assert _issues_schema_ddl(facts(called={'command', verb})), \
+            '%s 不被算成改结构 ⇒ 动词集合又缩回只剩 upgrade 了' % verb
+    assert _issues_schema_ddl(facts(alembic=False, called={'run'}, consts={'alembic', 'upgrade'})), \
+        '拿 subprocess 起裸 alembic 的脚本不算能改结构（env.py 那条方向翻转就是被它绕过的）'
+    assert not _issues_schema_ddl(facts(called={'current', 'heads'})), \
+        '只读命令也算 DDL ⇒ 判据过宽会把信号淹掉'
 
 
 def test_a_production_flag_alone_is_not_a_guard():

@@ -1927,15 +1927,25 @@ def delete_sector_mapping(mapping_id: int, db: Session = Depends(get_db)):
 
 
 def _parse_seed_receipt(stdout: str) -> dict:
-    """把脚本打的 `SEED-RECEIPT:` 行读成回执；读不到就说明脚本没按约定报数。"""
+    """把脚本打的 `SEED-RECEIPT:` 行读成回执；读不到就说明脚本没按约定报数。
+
+    第 38 轮两份复评共同指出：脚本 `dd125cb` 加了 `缺档案=` / `内置计划=` 两列，而这里
+    只认四个老键 ⇒ **新列被静默丢掉**，10 条用例照样全绿（两端各测各的）。
+    现在改成：认得的键翻成英文名，**认不出的键原样带上**，一条都不许掉——
+    这样脚本以后再加列，接口调用方仍然看得见，而不是只剩 `data.receipt` 那串原文。
+    """
     import re as _re
 
     line = next((l for l in (stdout or '').splitlines() if l.startswith('SEED-RECEIPT:')), '')
     fields = dict(_re.findall(r'(\w+)=(-?\d+)', line))
-    return {'receipt': line, 'added': int(fields.get('新增', -1)),
-            'existing_skipped': int(fields.get('已存在跳过', -1)),
-            'code_mismatch': int(fields.get('其中码不一致', -1)),
-            'owner_rows': int(fields.get('老板行', -1))}
+    known = {'新增': 'added', '已存在跳过': 'existing_skipped', '其中码不一致': 'code_mismatch',
+             '老板行': 'owner_rows', '缺档案': 'no_fund_info', '内置计划': 'planned_rows'}
+    parsed = {'receipt': line}
+    for zh, en in known.items():
+        parsed[en] = int(fields.pop(zh, -1))
+    for zh, val in fields.items():
+        parsed[zh] = int(val)
+    return parsed
 
 
 @router.post("/sector-mappings/seed")
@@ -1995,8 +2005,10 @@ def seed_sector_mappings(request: Request, dry_run: bool = False, db: Session = 
     return {
         "success": True,
         "message": ("dry-run：未写库。%s" % receipt['receipt']) if dry_run
-        else ("已补 %d 行（reviewed=False 待审查）；已存在跳过 %d 行"
-              % (receipt['added'], receipt['existing_skipped'])),
+        else ("已补 %d 行（reviewed=False 待审查）；已存在跳过 %d 行%s"
+              % (receipt['added'], receipt['existing_skipped'],
+                 ('；另有 %d 行因本库没有 fund_info 档案被跳过（脚本逐行点了名）'
+                  % receipt['no_fund_info']) if receipt.get('no_fund_info', -1) > 0 else '')),
         "data": {"returncode": result.returncode, "cache_refreshed": changed, **receipt}
     }
 

@@ -659,15 +659,41 @@ def test_batch_review_route_forwards_the_owner_confirm(tmp_path, monkeypatch):
 
 def test_verify_fund_endpoint_reports_what_the_probe_said(tmp_path, monkeypatch):
     """`GET /api/config/verify-fund` 是页面上"这只基金能不能抓"的那支探针（①链）。
-    第 36 轮 B-MINOR-4：到今天 `grep -rn verify-fund tests/` = 0 ⇒ 它改形状没人知道。"""
+
+    第 38 轮 A 席 MAJOR-2 把我上一轮写的这条打回原形：桩当时发明了 `is_fetchable` / `status`
+    两个**真接口压根不返回**的键（真返回是 `ok` / `api_name` / `message` / `kind` / …），
+    而路由是纯 pass-through ⇒ "桩给什么、断言收到什么"＝同义反复，怎么改路由它都绿。
+    现在三件事分开钉：① 桩的键集合必须逐字等于真函数的返回键（AST 读，不靠我抄）；
+    ② 路由必须**原样**透传（改了形就红）；③ 页面读的到底是哪个键 —— 从 `web/index.html` 里取，
+    因为契约的另一端是页面，不是我的想象。
+    """
+    import ast
+    from pathlib import Path as _P
     from src.fund.fund_api import fund_api as instance
 
+    root = _P(__file__).resolve().parents[2]
+    src = (root / 'src' / 'fund' / 'fund_api.py').read_text(encoding='utf-8')
+    real_keys = None
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == 'verify_fund_fetchable':
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Dict):
+                    real_keys = {k.value for k in sub.value.keys if isinstance(k, ast.Constant)}
+    assert real_keys, '找不到真探针的返回形状 ⇒ 它变了，本用例要跟着重核，不许跳过'
+    assert 'is_fetchable' not in real_keys and 'status' not in real_keys, \
+        '真探针现在有 is_fetchable/status 了？那"页面读什么"这条得重新查，别再拿旧结论写桩'
+
+    web = (root / 'web' / 'index.html').read_text(encoding='utf-8')
+    assert 'd.ok' in web, '页面不再读 `d.ok` 了 ⇒ 探针的契约改了，这条用例与路由话术都要重写'
+
+    probe_return = {k: None for k in real_keys}
+    probe_return.update({'code': '513100', 'ok': False, 'api_name': '', 'message': '桩：数据源没这只',
+                         'kind': 'unknown', 'history_count': 0, 'is_strict_ok': False})
     seen = {}
 
     def fake(code, name=None, **kw):
         seen['code'] = code
-        return {'code': code, 'is_fetchable': False, 'api_name': '国泰纳斯达克100ETF',
-                'status': 'not_found', 'reason': '桩：数据源没这只'}
+        return dict(probe_return)
 
     monkeypatch.setattr(instance, 'verify_fund_fetchable', fake)
     app, client = _client(monkeypatch, _database(tmp_path))
@@ -677,5 +703,6 @@ def test_verify_fund_endpoint_reports_what_the_probe_said(tmp_path, monkeypatch)
     body = res.json()
     assert body['success'] is True
     assert seen['code'] == '513100', '代码没传进探针 ⇒ 页面报的是别只基金'
-    assert body['data']['is_fetchable'] is False and body['data']['status'] == 'not_found', \
-        '路由把探针结论改了形：页面读的是 is_fetchable / status 这两列'
+    assert set(body['data']) == real_keys, \
+        '路由改了形（少了/多了键）：页面按 `d.ok` 读，改形就等于把两个验证按钮永久变成"验证失败"'
+    assert body['data'] == probe_return, '路由不该加工探针的结论：%s' % body['data']

@@ -158,15 +158,68 @@ def test_a_missing_number_is_not_rendered_as_zero():
     assert 'const statVal = (v) => (statsError.value' in html, '统计卡没走 statVal：取不到时又会报 0'
     assert 'v === undefined' in _expr(html, 'const statVal'), \
         'statVal 只看 statsError：后端改字段名时它会报 0（第 31 轮 B-MINOR-1）'
-    cards = re.findall(r'<div class="value">\{\{(.*?)\}\}</div>', html, flags=re.S)
-    assert len(cards) >= 6, '统计卡只扫到 %d 张，正则或结构变了' % len(cards)
+    # 第 38 轮 A 席 MAJOR-1：上一版写死 `<div class="value">`，而帖子页那 4 张迷你卡用的是
+    # `<span class="value">` ⇒ 判据**结构上看不见它们**（同屏表体正在老实说"列表没取到"）。
+    cards = re.findall(r'<(?:div|span) class="value">\{\{((?:[^{}])*?)\}\}(?:</div>|</span>)',
+                       html, flags=re.S)
+    assert len(cards) >= 10, '数字卡只扫到 %d 张（div+span 两个形状），正则或结构变了' % len(cards)
     assert all('statVal(' in c for c in cards if 'stats.overall' in c), \
         ['还是 `|| 0` 形态的卡：%s' % c for c in cards if 'stats.overall' in c and 'statVal(' not in c]
     # 第 6 张"待清理"卡不读 `stats.overall`，上一版判据对它结构上不可能响（第 30 轮两份复评同点）。
     # 注意不能写成"'|| 0' 且没有 '?'"——`retentionPreview?.total || 0` 里的 `?.` 会把它糊过去。
-    unguarded = [c.strip() for c in cards if 'statVal(' not in c and "'—'" not in c]
+    # 只管**会报出一个数**的卡（读 stats/ meta / 预览计数）；历史建议那两张 `<span class="value">`
+    # 印的是日期与表情文本，它们由建议列表自己的空态/失败态守着，不归这条判据。
+    numeric = lambda c: ('stats.overall' in c or 'Meta.' in c or 'retentionPreview' in c
+                         or 'Count' in c or 'count' in c)
+    unguarded = [c.strip() for c in cards if numeric(c) and 'statVal(' not in c and "'—'" not in c]
     assert not unguarded, '这些卡把"没取到"报成 0：%s' % unguarded
+    assert sum(1 for c in cards if numeric(c)) >= 10, \
+        '带数的卡只剩 %d 张 ⇒ 扫描面又缩回去了（帖子页 4 张 span 卡曾被漏看，第 38 轮 A-MAJOR-1）' % (
+            sum(1 for c in cards if numeric(c)))
     assert 'statsError' in _body(html, 'fetchStats = async () =>'), 'fetchStats 不记失败原因'
+
+
+def test_the_three_prediction_queues_explain_themselves_without_hover():
+    """「待验证」与「待验证到期」是两个不同队列，区别必须能在正文里读到（第 38 轮 A-MINOR-6）。
+
+    规矩④/③说过"关键信息不许只活在 `title` 里 —— 手机没有 hover"，而 title 闸当时只扫 `<th>`
+    与 TOP 弹窗，按钮一个都不管：选中错的按钮＝今天白跑一批验证（那 141 条到期未判在后者）。
+    """
+    html = _html()
+    text = _visible_text(html)
+    assert '已到目标日、仍在验证窗口内' in text, '「待验证到期」的定义只在 title 里'
+    assert '别把它当成' in text, '「待验证」含观望/未到期这件事没写进正文'
+    assert 'class="filter-caliber-note"' in html, '这行说明没有自己的样式类（会被当成临时文案删掉）'
+    css = (PROJECT_ROOT / 'web' / 'common.css').read_text(encoding='utf-8')
+    assert '.filter-caliber-note' in css
+
+
+def test_the_two_list_pages_stop_reporting_zero_for_numbers_they_do_not_have():
+    """帖子页 4 张迷你卡 + 预测页 8 个筛选按钮的括号数：取不到 / 还没取到时报 `—`。
+
+    第 38 轮 A 席 MAJOR-1：这两页是老板最常用的两个列表，而它们把 `postMeta.total || 0`
+    直接印在卡上 —— 唤醒期进预测页就是"全部 (0) / 待验证到期 (0) / 回收站 (0)"（镜像真值
+    1616 条活预测），同屏表体却在老实说"列表没取到"。上一版判据看不见它们（见上一条的正则注释）。
+    """
+    html = _html()
+    minis = re.findall(r'<span class="value">\{\{((?:[^{}])*?)\}\}</span>', html, flags=re.S)
+    posts_cards = [c for c in minis if 'postMeta' in c]
+    assert len(posts_cards) >= 4, '帖子页迷你卡只扫到 %d 张' % len(posts_cards)
+    for c in posts_cards:
+        assert 'viewErrors.posts' in c and 'numOrDash(' in c, '帖子页这张卡还会报 0：%s' % c.strip()
+
+    buttons = re.findall(r'\(\{\{((?:[^{}])*?)\}\}\)', html, flags=re.S)
+    faceted = [b for b in buttons if 'predictionMeta.facets' in b]
+    assert len(faceted) >= 8, '预测页按钮括号数只扫到 %d 个（应为 8）' % len(faceted)
+    for b in faceted:
+        assert 'viewErrors.predictions' in b and 'numOrDash(' in b, \
+            '这个按钮把"没取到"报成 0：(%s)' % b.strip()
+
+    # 初值这一侧也要钉：模板守住了、初值退回 0 的话，首屏仍然是一片假的 0
+    post_js = (PROJECT_ROOT / 'web' / 'post-manager.js').read_text(encoding='utf-8')
+    pred_js = PREDICTION_JS.read_text(encoding='utf-8')
+    assert 'total: null' in post_js, 'postMeta.total 初值又退回 0 —— 首屏那一次渲染没人替它说话'
+    assert 'total: null' in pred_js and 'all: null' in pred_js and 'total: 0' not in pred_js
 
 
 def test_the_empty_state_cannot_lie_while_a_fetch_is_still_pending():

@@ -165,9 +165,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （12 列 + 5 索引，只加列/建索引、不动任何数据），并把 `alembic_version` 记成 head
   `add_sector_mapping_keywords` ⇒ 后续 0010+ 可以正常 `alembic upgrade head`。
   复核：`sector_fund_mapping` 19 列、映射 118 行、未删预测 1616 行、fund_info 162 行（与补列前一致）。
-- **为什么不用 `scripts/run_migrations.py`**：它从 base 跑，会去重复建已存在的表；
-  直接 stamp 又是在没核对前置对象的前提下撒谎。`sync_db_columns.py` 的唯一真值是
+- **当时为什么没直接用 `scripts/run_migrations.py`**：生产库里**压根没有 `alembic_version` 表**，
+  任何 `upgrade head` 都会从 base 开始重跑 ⇒ 撞上已存在的表就报错（或直接改到既有对象）。
+  这不是"它天生要从 base 全量跑"：`command.upgrade(config, 'head')` 本身是按 `alembic_version`
+  增量走的 —— **现在已经 stamp 到 head，后续 0010+ 就该用它**（Render 每次启动也在跑它，见 `render.yaml:11`）。
+  直接 stamp 又是在没核对前置对象的前提下撒谎，所以那次用 `sync_db_columns.py`：它的唯一真值是
   `src/models/database.py` 的元数据（库里缺整表会被**说出来**并且拒绝 stamp）。
+  ⚠ 用之前知道两件事：① 它没有 dry-run，② 裸 `alembic` CLI（`upgrade head` / `downgrade …`）
+  在 `.env` 指向生产时**会被 `alembic/env.py` 当场拒跑**（第 38 轮 B 的 BLOCKER：旧写法把
+  `DATABASE_URL` 悄悄顶进 ini，等于给生产发 DDL；要动远程得显式 `ALEMBIC_DATABASE_URL`）。
 
 - Render Web Service：`uvicorn src.api.main:app --host 0.0.0.0 --port $PORT`。
 - Render Cron：每天 10:30 运行 `python scripts/run_scheduled_tasks.py daily`。
@@ -195,14 +201,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-23 20:15（北京），第 37 轮 B 席 M-3（迁移脚本对生产发 DDL 却不被守卫看见）
-修完之后，最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
+最近一次核对（2026-09-23 22:18（北京），第 38 轮两份复评（A 78 / B 76，取低分 76 未过线）返修完之后，
+最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **955 passed / 16 skipped / 0 failed**（220.47 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **964 passed / 16 skipped / 0 failed**（197.08 秒）。
-  报数时要写清是哪个口径，两个数都对但常被人当成回归。
-  这一批另外抓到两条**关于"怎么跑"**的坑：
+- `pytest tests/unit -q` → **967 passed / 16 skipped / 0 failed**（232.13 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **976 passed / 16 skipped / 0 failed**（234.38 秒）。
+  （上一基线 955/964 → 本批 967/976：+12 条 = `test_alembic_target_direction.py` 4 条
+  （远程 + 裸 CLI 必须拒跑 / 本地 sqlite 仍继承 / 显式 `ALEMBIC_DATABASE_URL` 覆盖 / 已交连接的启动路径不受影响）、
+  `test_seed_owner_proxies_gate.py` +2（探针说取不到 ⇒ 0 行 0 档案；"桩的键 == 真返回的键"）、
+  `test_sector_seed_route_honesty.py` +1（拿真脚本真 stdout 喂真解析器，未知列不许被静默丢掉）、
+  `test_push_writeback_gate.py` +2（旧版服务端不回 `nav_priced_here` / 只答一半行数 ⇒ 一行都不发）、
+  `test_script_db_guards.py` +1（DDL 动词集：`downgrade`/`stamp`/裸 CLI 也算）、
+  `test_frontend_cold_start.py` +2（两个列表页的 12 个数不许报 0；三个预测队列的口径不许只活在 title）。）
+  本批新增的 6 处前端变异各自 RED：`python scripts/mutation_proof_frontend.py --only lose_their_guard`
+  ／ `--only init_back_to_zero` ／ `--only stops_being_a_value_card`（条数一律看 `--list` 末行，别抄文档）。
+  上一批（948/957 → 955/964）另外抓到两条**关于"怎么跑"**的坑：
   ① 断言子进程的中文输出时，父进程不设 `PYTHONIOENCODING` ⇒ 子进程按 cp936 写、测试按 utf-8 读，
   那行明明印了却解成一串替换符 ⇒ **假红**（`test_prediction_migrations.py` 的
   `_run_the_migration_script` 现在 `setdefault` 了 utf-8；这条坑以前只写在文档里，没有机器闸）。
@@ -521,7 +535,18 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   落地的 18 行测试数据见任务 #42。现在的两道样：① conftest 在赋值后立刻
   `assert 'src' not in sys.modules`（把原因说清），② `test_database_url_routing.py` 断言 engine 是 sqlite。
   推论：**任何在 conftest 顶层加的 import，先问它会不会拉起应用配置**。
-- CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。
+- **裸 `alembic` CLI 在 `.env` 指向生产时被 `alembic/env.py` 拒跑**（第 38 轮 B 的 BLOCKER）：
+  旧写法是"没给 `ALEMBIC_DATABASE_URL` 就拿 `DATABASE_URL` 顶上"，而 env.py 第 7 行
+  `from src.models.database import Base` 已经把 `.env` 灌进进程 ⇒ 文档推荐的
+  `alembic upgrade head` / `downgrade prediction_schema_baseline` 本地一跑就是**对生产发 DDL**
+  （那支 downgrade 会 `drop_table("prediction_change_logs")`＝审计台账本体）。
+  现在只有三种走法：目标本身是 sqlite、显式给 `ALEMBIC_DATABASE_URL`、或调用方已把连接交进来
+  （`scripts/run_migrations.py` = Render `startCommand` 走的就是这条，不受影响）。
+  四条形状都由 `tests/unit/test_alembic_target_direction.py` 钉着（含"拒跑消息不许泄露口令"）。
+  **推论（写给判据自己）**：桩/夹具里用的键名必须来自**真函数返回值**（AST 读），
+  不许我抄一份 —— 上一轮我写的 `/verify-fund` 用例给探针发明了 `is_fetchable`/`status` 两个键，
+  而路由是纯 pass-through，于是那条判据结构上不可能红（页面读的其实是 `d.ok`）。
+- **CodeGraph 为本地索引产物，改完代码跑 `codegraph sync .`。**
 
 常用重点测试：
 
