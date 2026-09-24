@@ -187,7 +187,8 @@ def main():
         if not url.lower().startswith(('postgres', 'postgresql')):
             print('[abort] --production 要求 .env 的 DATABASE_URL 指向 PostgreSQL')
             return 4
-        print('[target] 线上生产库（只读）：%s' % url.split('@')[-1])
+        from _db_guard import db_kind
+        print('[target] %s（只读）' % db_kind(url))
     else:
         from _db_guard import pin_local_sqlite
         if args.db:

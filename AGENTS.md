@@ -201,13 +201,31 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-24 13:2x（北京），第 42 轮返修（A 82 / B 78，取低分 78）之后，
+最近一次核对（2026-09-24 15:4x（北京），第 43 轮返修（A 81 / B 66，取低分 66）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1019 passed / 16 skipped / 0 failed**（262.94 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1028 passed / 16 skipped / 0 failed**（260.19 秒）。
-  （上一基线 1000/1009 → 本批 1019/1028：净 +19（新增 20 条、把一条已被替换的
+- `pytest tests/unit -q` → **1029 passed / 16 skipped / 0 failed**（380.75 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1038 passed / 16 skipped / 0 failed**（386.81 秒）。
+  （上一基线 1019/1028 → 本批 1029/1038：+10 条，分布在 `test_drop_probe_residue.py` 新增 4 条
+  （探针残渣工具：报告模式不改库 / 没口令不删 / 有行的表让整批不删、改完名才删且不动别的表 /
+  模型声明过的名字绝不许当残渣删）、`test_script_db_guards.py` 新增 3 条
+  （说明文与样板句买不到守卫信号（含两个真护栏对照组）/ 落笔能力逐类有牙（含"只读不许被判成能写"的
+  过宽对照）/ 解析失败兜底 dict 的键集合不许与 `_facts` 漂开）、
+  `test_database_label_targets.py` 新增 1 条（手写剥口令的**只许变短**棘轮，自带"现造一处违规"控制）、
+  `test_doc_claims.py` 新增 1 条（"指向收不到的文件"必须算进退码 + 同一形状收得到时必须退 0）、
+  `test_push_writeback_gate.py` 新增 1 条（`--base` 指到非生产域名时不许出现"线上生产库"那四个字）。
+  **本批没动 `web/`**，所以前端 104 处变异不需要重跑（上一批的原始日志已改成随仓库走：
+  `docs/迭代计划/run-20260924-mutation/round43-frontend-mutations.txt`）。
+  **两条自己被抓出来的判据缺陷（记下来，因为它们正是这一族的标准死法）**：
+  ① 那道棘轮的第一版按文本 grep ⇒ 我被"解释这句的 docstring"自己点红；改成判 AST 后第二版仍然**恒空**
+  —— `x[-1]` 的 slice 既不是 `ast.Slice` 也不是 `Constant(-1)`，而是 `UnaryOp(USub, Constant(1))`；
+  两次都是同一条"现造一处违规必须被点名"的控制断言抓出来的 ⇒ **没有控制断言的判据等于没有判据**。
+  ② 上一轮我在 `scripts/_db_guard.py` 与文档里手抄的"一律 abort 会打死 8 条正经用例"，
+  数是对的（当场实测 8 条）但**归错了文件**（我把它们记成了 `test_seed_owner_proxies_gate.py` 那 8 条，
+  实为 `test_audit_fund_info_identity.py` ×4 + `test_sector_seed_route_honesty.py` ×2 +
+  `test_snapshot_prod_mappings.py` ×2）⇒ 已在两处更正并写明复核方式。）
+  （再上一基线 1000/1009 → 本批 1019/1028：净 +19（新增 20 条、把一条已被替换的
   `test_delete_blogger_tells_four_different_endings_apart` 删掉），分布在
   `test_script_db_guards.py` +3（钉库来得太晚必须 abort / 已建在 SQLite 只许警告并说清写的哪个文件 /
   受检集合由 `git ls-files` 定义，本机 `_tmp_*` 草稿不许改变"全绿"的含义）、
@@ -290,7 +308,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   + `test_sector_mapping_api.py` +2（`batch-review` 路由级转发 `owner_confirm`、`/verify-fund` 探针形状）
   + `test_frontend_cold_start.py` +2（汇总统计三种失败形状、模板祖先链「确认执行」）。
   判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`
-  —— 本次实测 `共 89 处变异，覆盖 35 条判据`，全量逐条 RED（其中两条先报 GREEN/ANCHOR-MISS、
+  （末行印"共 N 处变异，覆盖 M 条判据"；文档里不抄这个数），全量逐条 RED（其中两条先报 GREEN/ANCHOR-MISS、
   修完判据与锚点后各自复跑为 RED）。）
   （上一基线 885/894（红过一次：897/**1 failed**/16）→ 912/921：+14 条 =
   清理脚本离线往返 6、`/api/bloggers/top` 路由形状 3、互斥闸反向 2、失败态铺满 3。）
@@ -354,6 +372,45 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `from src.models.database import Prediction`，导入它的那一刻全局 `engine` 就按当时的
   `DATABASE_URL` 建好了，之后再 `pin_local_sqlite` 只是改环境变量、救不回那个 engine；
   这与 `tests/conftest.py` 那条第 33 轮的规矩同源）。
+- **守卫信号必须是"代码在做这件事"，说明文与样板句不算**（第 43 轮 A-MAJOR-1）：
+  上一版 `_facts()` 用 `ast.walk` 把所有字符串常量收走，而 **docstring 就是一个 `Constant` 节点**；
+  `raised` 又只看异常名，于是"在 docstring 里写 `postgres` / `[目标]` / `postgresql_readonly`
+  + 保留入口那句 `raise SystemExit(main())`"就能让三个识别器一起点头 —— 而其中一个识别器的
+  docstring 逐字写着"写在注释或 docstring 里不算"。现在：docstring 整段剔除
+  （`_docstring_consts`），"会拒跑"必须是**条件分支里**"印了 `[abort]` 并且停下来"
+  （raise 或 `return 4` 都算，只认 raise 会误伤 `sync_db_columns.py` 这一类真护栏）。
+  判据：`test_prose_cannot_buy_a_guard_signal`（三个"只有说明文"的样品 + 两个"真护栏"的对照组）。
+- **落笔的能力要按类别枚举，不按名字匹配**（第 43 轮 B 的"能力×判据"表）：两份评审独立指出
+  守卫只认"SQLAlchemy + 顶层 import + 字面量旗子"这一种形状。`_facts()` 现在有一张
+  `capabilities` 表：`create_all` / 裸 SQL DML / DB-API 直连（`sqlite3.connect`、`psycopg2.connect`）/
+  `df.to_sql(if_exists='replace')` / 覆盖 `.db`·`.env` 的文件操作 / 子进程借道 alembic·run_migrations /
+  `requests.request('DELETE')` 这种通用入口，外加"函数体内 `from src.models.database import SessionLocal`
+  的**纯读**脚本"（B-MAJOR-2：读侧触发以前只看 `engine_from_env`，ORM 会话这条路三道判据一条不响，
+  而 `.env` 默认就是生产）。每类一个合成样品，由
+  `test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names` 逐类钉"会被抓"，
+  并配一个"只读查询不许被判成能写"的过宽对照。**别名也是同一族**（B-MAJOR-1）：
+  `from sqlalchemy import create_engine as ce` 以前一个词就隐身。
+- **`run_migrations.py` 现在有 argparse**（第 43 轮 B-BLOCKER，是同一个缺陷类的第三次）：
+  评审员为了"看这脚本有什么参数"跑了 `python scripts/run_migrations.py --help`，
+  当时没有参数层 ⇒ 两句都直接执行 `command.upgrade(head)`，而 `.env` 就是生产。
+  **当场只读核对生产**：`alembic_version = add_sector_mapping_keywords`（＝仓库唯一 head）
+  ⇒ 那两次是 no-op、没有 DDL 落地（`python scripts/q.py --production "select version_num from alembic_version"`），
+  但它确实取放了一次 advisory lock —— 这笔账记在 `docs/迭代计划/S6-上线前检查单.md` §0。
+  现在：`--help`/坏旗子在连线前就退出，`--dry-run` 只报目标（退 2），**无参数仍然照旧迁移**
+  （`render.yaml:11` 的 startCommand 就是无参数那一支；把默认改成要确认要动部署配置 = 任务 #57，老板决定）。
+- **自报行必须排在动手前面**（B-MAJOR-4）：`_db_guard` 导入时把 stdout/stderr 改成
+  `line_buffering=True` —— stdout 进管道（Render 日志、`> log`、cron）时是块缓冲，而 alembic 走
+  stderr，"我要动哪个库"那一行会排到它承诺领先的那件事后面，进程被杀时一个字都看不见。
+- **`数据源` / 残渣 / 报告日期三处小账**（B-MINOR-2/6、A-MINOR-7/8）：
+  ① 两份 L3 报告的"日期"以前是模板字面量（重跑一遍数字全变了、日期还盖着两个月前）⇒ `_today_beijing()`；
+  ② 真镜像里躺着第 41 轮旧探针留下的 `_db_guard_probe2`（0 行、全仓 0 处引用），
+  新增 `python scripts/drop_probe_residue.py`（默认只报告退 3；`--apply --confirm DROP-PROBE` 才删；
+  只碰 SQLite、只删"0 行 + 模型没声明"的探针名字），2026-09-24 已用它清掉镜像那张；
+  ③ 104 处变异的原始日志以前只在 `.gitignore` 的 `data/` 里 ⇒ 干净克隆上没人能复核，
+  现在随仓库走：`docs/迭代计划/run-20260924-mutation/round43-frontend-mutations.txt`。
+  （**第一版我把它存成 `.log` 就直接写进文档了** —— `.gitignore:47` 有一条全局 `*.log`，
+  那句"随仓库走"当场是假的；改名之后用 `git ls-files` 核过才算。教训：**说"入库了"要拿
+  `git ls-files` 核，不是看文件在不在磁盘上**。）
 - **文档里"`test_x.py` N 条"这类当场账，有脚本对表**：`python scripts/audit_doc_claims.py`
   拿 `pytest tests --collect-only -q` 当场收集的条数去对 `AGENTS.md` / `DEPLOYMENT.md` /
   `docs/模块总览/*.md` 里的每个"N 条"承诺，不符就退码 3（`--fix` 就地改）。
@@ -389,9 +446,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `data/fund_insight.db`（真镜像）、`data/copy_*.db`（回放副本）、`:memory:`（夹具）以前共用
   一句"本地镜像库"，而"拿副本的数当镜像的数"正是第 23 轮那次错最省事的复现方式。
   现在标签后面跟着文件或主机（`本地镜像库（data/fund_insight.db）` / `本地 sqlite 文件（不是镜像库）：…`）。
-  它与 `scripts/_db_guard.machine_name()` 是同一件事的两份实现（src 不能 import scripts，
-  `_db_guard` 也不能 import src），两者逐条相等由 `tests/unit/test_database_label_targets.py`
-  钉住（条数看 `grep -c '^def test_' tests/unit/test_database_label_targets.py`）。
+  它与 `scripts/_db_guard.machine_name()/db_kind()` 是同一件事的两份实现（src 不能 import scripts，
+  `_db_guard` 也不能 import src），两者**逐条相等**由 `tests/unit/test_database_label_targets.py` 钉住：
+  样品自第 43 轮起不再手抄，而是 scheme × 斜杠数 × 路径形状 × 口令/query **笛卡尔积生成**
+  （手抄 10 条时，样品外当场量到分叉：`sqlite:////E:x.db` 两边剥不剥斜杠不一致）。
+  同轮还查出**手写剥口令**（`url.split('@')[-1]`）散落多处 —— 那是同一把尺子的第 N 份分身，
+  而且串里没有 `@` 时它把整串原样印出来。三把要动生产的工具（`q.py` /
+  `prod_writeback_preflight_readonly.py` / `purge_test_rows_from_prod.py`）与 `src/__main__.py`
+  已换成尺子，剩下的（4 个报错分支）钉在一道**棘轮**里：
+  `test_no_new_hand_rolled_credential_stripping_appears` 只许名单变短，不许变长。
   **第 42 轮 B-MAJOR-4：钉库的顺序改由守卫自己在运行期管**。AST 只能可靠地比**顶层** import
   与门调用的行号，而仓库里 100 多处 `from src.…` 写在函数体里（定义处在前、执行处在后，
   按行号比大小要么冤枉一片要么干脆漏掉）。现在 `pin_local_sqlite()` 一进来就问一句

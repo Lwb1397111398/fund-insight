@@ -33,6 +33,21 @@ def start_server(host="0.0.0.0", port=None):
     
     uvicorn.run("src.api.main:app", host=host, port=port, reload=False)
 
+def _safe_target(url: str) -> str:
+    """把连接串变成"认得出是哪台"的名字，**口令一个字符都不出现**。
+
+    以前这里写 `url.split("@")[-1]` —— 那是 `_db_guard.machine_name()` 的第 N 份手抄，
+    而且串里没有 `@` 时它把整串原样印出来（第 43 轮 A-MINOR-2）。
+    src 侧不能用 scripts 下那把（`_db_guard` 与 src 是两个方向都不能 import 的关系），
+    所以这里走 `verdict_evidence.target_name`，两份实现由用例逐条钉相等。
+    """
+    try:
+        from src.services.verdict_evidence import target_name
+        return target_name(url)
+    except Exception:      # noqa: BLE001  报错那一行本身不许再把口令带出来
+        return "(读不出目标，见 ALLOW_REMOTE_INIT_DB 那条说明)"
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="Fund Insight - 基金博主分析系统")
@@ -55,7 +70,7 @@ def main():
                 and os.getenv("ALLOW_REMOTE_INIT_DB") != "1":
             print("[abort] DATABASE_URL 指向非 SQLite（%s）：--init-db 只允许本地镜像库。"
                   "确实要在远端库上初始化，设 ALLOW_REMOTE_INIT_DB=1 再跑一次。"
-                  % url.split("@")[-1])
+                  % _safe_target(url))
             sys.exit(2)
         init_database()
     else:

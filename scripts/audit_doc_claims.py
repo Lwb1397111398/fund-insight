@@ -249,9 +249,11 @@ def main():
         for c in delta:
             print('[增量账-跳过] %-43s %s:%s 说 %d 条' % (c['test'], c['file'], c['line'], c['stated']))
         for c in unbound:
-            print('[看得见但不判] %-40s %s:%s 说 %d 条（编号列表实际到 %s）'
-                  % (c['test'] or '编号列表账', c['file'], c['line'], c['stated'],
-                     c.get('listed', '?')))
+            # 这一行以前印"编号列表实际到 N" —— 第 43 轮 A 席量到那个 N 是错的：
+            # 本仓库正文把 ①~⑥ 在一条长 bullet 链上反复续用，计数器把两句承诺数成了一句。
+            # 既然数不准，就不许印一个数（印错的尺子会逼人把对的数改错）。
+            print('[看得见但不判] %-40s %s:%s 说 %d 条（这一族的计数本脚本自认数不准，请改写成当场账写法）'
+                  % (c['test'] or '编号列表账', c['file'], c['line'], c['stated']))
         print('[数据源账] 认出 %d 行 `数据源：…`，其中 %d 行认不出是哪个库' % (source_total, len(sources)))
         for c in sources:
             print('   [%s:%s] %s ← %s' % (c['file'], c['line'], c['why'], c['text']))

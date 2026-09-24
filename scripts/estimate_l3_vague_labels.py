@@ -201,6 +201,16 @@ def adjudicate(stats: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
     }
 
 
+def _today_beijing():
+    """报告上那个日期＝**跑这份报告的那一天**（北京时间）。
+
+    第 43 轮 B-MINOR-2：这里以前是模板字面量 "2026-07-29" —— 重跑一遍数字全变了，
+    日期还盖着两个月前，与同一条改动里刚修好的"数据源必须说清是哪个库"配成一对谎。
+    """
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+
+
 def fmt_pct(x: Optional[float]) -> str:
     if x is None:
         return "n/a"
@@ -263,9 +273,10 @@ def main(argv=None):
             f"{fmt_pct(s['avg_return'])} | {fmt_pct(s['return_coverage'])} |"
         )
 
+    report_date = _today_beijing().isoformat()
     report = f"""# L3 模糊硬标占比估计（只读）
 
-- 日期：2026-07-29
+- 日期：{report_date}
 - 数据源：`{db_label}`
 - 范围：未删除且 prediction_type 为 up/down/bullish/bearish
 - **不改**抽取/验证代码；**不部署**本轮新功能

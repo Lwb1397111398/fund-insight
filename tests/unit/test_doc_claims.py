@@ -166,6 +166,27 @@ def test_a_script_name_that_happens_to_contain_test_is_not_a_claim(tmp_path, mon
     assert [c['test'] for c in now2] == ['test_real_gate.py'] and now2[0]['stated'] == 7, now2
 
 
+def test_a_claim_that_cannot_be_resolved_makes_the_run_fail_not_just_print(tmp_path, monkeypatch):
+    """"指向收不到的文件"这一类必须**算进退码**（第 43 轮 A-MINOR-5：这条分支零判据覆盖）。
+
+    上一版我只测到 `_claims()` 认得出这条承诺，没测 `main()` 拿它怎么办 ——
+    把 `main()` 里 `if bad or missing or sources:` 的 `missing` 删掉，不会有任何用例变红，
+    于是"文档引用了一个已经不存在的测试文件"可以一边打印一边退 0。
+    """
+    mod = _load()
+    claim = {'file': 'X.md', 'line': 1, 'test': 'test_gone_away.py', 'stated': 4,
+             'span': (0, 1), 'text': 'test_gone_away.py 4 条'}
+    monkeypatch.setattr(mod, '_claims', lambda: ([claim], [], []))
+    monkeypatch.setattr(mod, '_source_lines', lambda: ([], 3))
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_other.py': 3})
+    monkeypatch.setattr(sys, 'argv', ['audit_doc_claims.py'])
+    assert mod.main() == 3, '指向收不到文件的承诺被打印了却没算进失败 ⇒ 这句"对上了"是假的'
+
+    # 控制：同一形状，但文件收得到且条数相等 ⇒ 必须退 0（否则上面那条只是恒红）
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_gone_away.py': 4})
+    assert mod.main() == 0
+
+
 def test_the_repository_data_source_lines_are_auditable():
     """真文档过账：`docs/*.md` 里每一行 `数据源：` 都得认得出是哪个库（或承认未记录 + 复现命令）。
 

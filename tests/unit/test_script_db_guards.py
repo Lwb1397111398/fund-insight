@@ -16,6 +16,10 @@ import re
 import sys
 from pathlib import Path
 
+import pytest    # 第 43 轮 A-MINOR-3：`test_the_scanned_set…` 走 `pytest.skip`，
+                  # 而这个文件以前只在某个函数里 `import pytest as _pt` ⇒
+                  # 真到"拿不到 git 名单"那一步时，先炸的是 `NameError` 不是 skip。
+
 SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
 
 WRITE_SWITCH = re.compile(r'--(apply|execute|hard-delete|import)\b')
@@ -47,38 +51,117 @@ def _target_is_hardcoded_local(call_node):
     return False
 
 
+def _docstring_consts(tree):
+    """模块/类/函数体第一句字符串常量 —— 那是**说明文**，不是代码在做的事。
+
+    第 43 轮 A-MAJOR-1 复现出来的洞：`_facts` 以前用 `ast.walk` 把所有 `ast.Constant`
+    收进 `consts`，而 docstring **就是**一个 `Expr(Constant(str))` 节点。于是
+    "在 docstring 里写一句 `postgres…` + 在 docstring 里写一句 `[目标] …`"
+    就能让三个识别器（`_refuses_remote_without_a_flag` / `_declares_http_target` /
+    读侧第④档）一起点头。而 `_refuses_remote_without_a_flag` 自己的 docstring 写着
+    "写在注释或 docstring 里不算" —— 那句话当场是假的。
+    """
+    nodes = set()
+    holders = [tree] + [n for n in ast.walk(tree)
+                        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    for h in holders:
+        body = getattr(h, 'body', [])
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            nodes.add(id(body[0].value))
+    return nodes
+
+
+DML_WORDS = re.compile(r'^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|MERGE)\b',
+                       re.I)
+DBAPI_MODULES = ('psycopg2', 'psycopg', 'sqlite3', 'pymysql', 'MySQLdb', 'cx_Oracle', 'oracledb')
+FILE_WRITERS = {'copyfile', 'copy', 'copy2', 'copytree', 'move', 'rename', 'remove', 'unlink',
+                'rmtree', 'write_text', 'write_bytes', 'truncate'}
+PROC_WRAPPERS = {'run', 'Popen', 'call', 'check_call', 'check_output', 'system', 'popen',
+                 'execv', 'execve', 'spawn', 'spawnl'}
+GENERIC_HTTP = {'request'}      # `requests.request("DELETE", url)` / `httpx.request(...)`
+# 所有"能把状态落到某个库/文件上"的能力类别（第 43 轮 B 的盲区清单逐类补）。
+# `engine_from_env` / `orm_session` / `own_engine` **不在这里** —— 它们是"读侧那道闸"的触发条件
+# （见 `test_read_side_scripts_also_say_which_database_they_read`），把它们算成"能写"会
+# 把三个纯读脚本推进写侧的受管集合，而 `_guarded` 认的信号里没有 `read_only_connect`。
+WRITE_CAPABILITIES = {'raw_sql_write', 'schema_ddl_call', 'ddl_via_subprocess', 'bulk_replace',
+                      'dbapi_direct', 'file_overwrite', 'http_write'}
+ALL_CAPABILITIES = WRITE_CAPABILITIES | {'engine_from_env', 'orm_session', 'own_engine',
+                                         'alembic_import'}
+
+
 def _facts(py):
-    """从 AST 里取"代码真正做了什么"，不是"文件里出现过哪些字"。"""
+    """从 AST 里取"代码真正做了什么"，不是"文件里出现过哪些字"。
+
+    第 43 轮把两件东西补进来了：
+    ① **docstring 不算**（见 `_docstring_consts`），且"拒跑"必须是**条件分支里**的 raise
+      —— `raise SystemExit(main())` 那句入口样板以前被当成"这脚本会主动拒跑"；
+    ② **能力按类别枚举**（`capabilities`）：第 42/43 轮两份评审各自独立指出，
+      判据只认"SQLAlchemy + 顶层 import + 字面量旗子"这一种形状，而落笔的路还有
+      `create_all` / 裸 SQL DML / DB-API 直连 / `to_sql(if_exists='replace')` /
+      覆盖 db 文件或 `.env` 的文件操作 / 子进程借道 alembic / `requests.request('DELETE')`。
+      漏一类 ＝ 那一类永远免检（第 37 轮 B 就这么教过我一次）。
+    """
     text = py.read_text(encoding='utf-8', errors='replace')
     tree = ast.parse(text, filename=str(py))
+    prose = _docstring_consts(tree)
     called, flags, raised, consts, direct_db = set(), set(), set(), set(), False
     env_written = False
     alembic = False      # `from alembic import command` / `import alembic...`
     reads_url_env = False    # 读 `DATABASE_URL` / `ALEMBIC_DATABASE_URL` 这两个名字
     builds_engine = False    # 自己 `create_engine(...)` / `sessionmaker(...)`
     builds_external_engine = False    # …且目标不是代码里写死的本地 sqlite 路径
+    capabilities = set()
     alias = {}          # `from _db_guard import pin_local_sqlite as _pin_x` 也要认得出来
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == '_db_guard':
+        if isinstance(node, ast.ImportFrom) and node.module in ('_db_guard', 'sqlalchemy'):
+            # sqlalchemy 那一支是第 43 轮 B-MAJOR-1：`from sqlalchemy import create_engine as ce`
+            # 一个别名就让 `engine_from_env` 变 False（上一版只对 `_db_guard` 的名字做还原）。
             for a in node.names:
                 alias[a.asname or a.name] = a.name
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
             name = getattr(func, 'id', None) or getattr(func, 'attr', None)
-            if name:
-                called.add(alias.get(name, name))
-                if name in ('create_engine', 'sessionmaker'):
+            resolved = alias.get(name or '', name or '')
+            if resolved:
+                called.add(resolved)
+                if resolved in ('create_engine', 'sessionmaker'):
                     builds_engine = True
                     if not _target_is_hardcoded_local(node):
                         builds_external_engine = True       # 含 `create_engine(settings.database_url)`
+                        capabilities.add('engine_from_env')
             if name == 'add_argument':
                 flags.update(a.value for a in node.args
                              if isinstance(a, ast.Constant) and isinstance(a.value, str))
+            strs = [c.value for a in node.args for c in ast.walk(a)
+                    if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+            # 参数里的字符串要**走进去找**：`subprocess.run([sys.executable, 'scripts/run_migrations.py'])`
+            # 的第二个参数是 List 而不是常量，只看直接常量就会漏掉"借道子进程发 DDL"这一类。
+            if resolved == 'create_all':
+                capabilities.add('schema_ddl_call')          # `Base.metadata.create_all(engine)`
+            if resolved in ('execute', 'exec_driver_sql', 'text') \
+                    and any(DML_WORDS.search(s) for s in strs):
+                capabilities.add('raw_sql_write')            # 裸 SQL 写：串里有 DML/DDL 动词
+            if resolved == 'to_sql':
+                capabilities.add('bulk_replace')             # df.to_sql(if_exists='replace')
+            if resolved in DBAPI_MODULES and name == 'connect':
+                capabilities.add('dbapi_direct')             # sqlite3.connect / psycopg2.connect
+            if resolved in FILE_WRITERS or (resolved == 'open'
+                                            and any('w' in s or 'a' in s for s in strs)):
+                if any('.db' in s or '.env' in s for s in strs):
+                    capabilities.add('file_overwrite')       # 覆盖 db 文件 / 重写 .env
+            if resolved in PROC_WRAPPERS and any(
+                    re.search(r'\balembic\b|run_migrations|sync_db_columns', s) for s in strs):
+                capabilities.add('ddl_via_subprocess')       # 借道自己人发 DDL
+            if resolved in GENERIC_HTTP and any(s.upper() in HTTP_METHODS for s in strs):
+                capabilities.add('http_write')               # requests.request('DELETE', …)
         elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
             exc = node.exc.func
             raised.add(getattr(exc, 'id', None) or getattr(exc, 'name', '') or '')
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in prose:
+                continue        # docstring 里的字**不算**证据
             consts.add(node.value)
             if node.value in ('DATABASE_URL', 'ALEMBIC_DATABASE_URL'):
                 reads_url_env = True
@@ -91,14 +174,54 @@ def _facts(py):
                     direct_db = True
                 if (al.name or '').split('.')[0] == 'alembic' or mod.split('.')[0] == 'alembic':
                     alembic = True
-        elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Subscript):
+        elif isinstance(node, ast.Assign) and node.targets and isinstance(node.targets[0], ast.Subscript):
             t = node.targets[0]
             if isinstance(t.value, ast.Attribute) and t.value.attr == 'environ':
                 key = t.slice
                 if isinstance(key, ast.Constant) and key.value in ('DATABASE_URL', 'LOCAL_DB_URL'):
                     env_written = True
+    # "见某种目标就拒跑"只有在**条件分支里**才算数：入口那句 `raise SystemExit(main())`
+    # 每个脚本都有，把它当护栏 = 一句护栏都没写也判"有守卫"（第 43 轮 A-MAJOR-1）。
+    # 判据的形状是"**这个分支里既印了 `[abort]`，又停下来了**"——停下来可以是 raise，
+    # 也可以是 `return 4`（`sync_db_columns.py` 用的就是后一种，A 席指出上一版只认前一种
+    # 会把一个真有护栏的脚本判成没护栏，那是误报方向，一样要修）。
+    refusals = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.If, ast.ExceptHandler, ast.For, ast.While)):
+            continue
+        subs = list(ast.walk(node))
+
+        def _says_no(s):
+            """这个子节点是不是"把拒绝的原因说出来"：`print('[abort] …' % x)` 的第一参数
+            常常是 BinOp/JoinedStr 而不是常量（`purge_test_rows_from_prod.py:57` 就是），
+            所以要看**这个调用里**有没有任何以 `[abort]` 开头的字符串常量。"""
+            if not isinstance(s, (ast.Call, ast.Raise)):
+                return False
+            return any(isinstance(c, ast.Constant) and isinstance(c.value, str)
+                       and c.value.startswith(('[abort]', '[拒')) for c in ast.walk(s))
+
+        def _is_print_or_raise(s):
+            if isinstance(s, ast.Raise):
+                return True
+            return (isinstance(s, ast.Call)
+                    and (getattr(s.func, 'id', None) or getattr(s.func, 'attr', None)) == 'print')
+        says_abort = any(_is_print_or_raise(s) and _says_no(s) for s in subs)
+        stops = any((isinstance(s, ast.Raise) and isinstance(s.exc, ast.Call))
+                    or (isinstance(s, ast.Return) and isinstance(s.value, ast.Constant)
+                        and isinstance(s.value.value, int) and s.value.value != 0)
+                    for s in subs)
+        if says_abort and stops:
+            refusals += 1
+    if direct_db:
+        capabilities.add('orm_session')
+    if builds_engine or builds_external_engine:
+        capabilities.add('own_engine')
+    if alembic:
+        capabilities.add('alembic_import')
     return {'text': text, 'called': called, 'flags': flags, 'raised': raised,
-            'consts': consts, 'env_written': env_written, 'direct_db': direct_db,
+            'refusals': refusals, 'consts': consts,
+            'env_written': env_written, 'direct_db': direct_db,
+            'capabilities': capabilities,
             'alembic': alembic,
             # 第 41 轮 B-MAJOR-1 立了"读侧也要问连哪儿"，但上一版的触发条件是
             # "文件里出现过 `DATABASE_URL` 这个字面量" —— 第 42 轮 B-MAJOR-3 指出那**一次间接就隐身**：
@@ -151,9 +274,15 @@ def _scripts():
             # 兜底 dict 必须与 `_facts` 返回的键**完全一致**，否则"标成未受管让下面变红"
             # 这句承诺是假的：扫描器会先 KeyError 崩掉（第 39 轮 A-MINOR-7 实测）。
             out[py.name] = {'text': py.read_text(encoding='utf-8', errors='replace'),
-                            'called': set(), 'flags': set(), 'raised': set(), 'consts': set(),
+                            'called': set(), 'flags': set(), 'raised': set(),
+                            'refusals': 9, 'consts': set(),
                             'env_written': False, 'direct_db': True, 'alembic': False,
                             'engine_from_env': True,     # 解析不了＝无法证明它不读环境
+                            # 解析不了＝无法证明它不能写 ⇒ 把所有落笔能力**全点一遍**。
+                            # 键集合与 `_facts` 的返回值必须一致，由
+                            # `test_the_fallback_dict_cannot_lag_behind_the_facts_it_stands_in_for`
+                            # 钉住（这一族漂过一次：兜底 dict 少一个键，判据 KeyError 崩掉扫描器）。
+                            'capabilities': set(ALL_CAPABILITIES),
                             'broken': True}
     return out
 
@@ -172,7 +301,10 @@ def _issues_schema_ddl(f):
     via_api = bool(f.get('alembic')) and (f['called'] & _SCHEMA_ddL_VERBS)
     via_cli = any('alembic' in c for c in f['consts']) and bool(
         f['called'] & ({'run', 'Popen', 'call', 'check_call', 'check_output'} | OS_SHELL))
-    return bool(via_api or via_cli)
+    # 第 43 轮 B 的盲区清单里两条最贵的：`Base.metadata.create_all(engine)`（不走 alembic 的建表）
+    # 与"子进程借道 `run_migrations.py`/裸 alembic"（`via_cli` 只认字面量里有 `alembic` 字样）。
+    via_caps = bool(f.get('capabilities', set()) & {'schema_ddl_call', 'ddl_via_subprocess'})
+    return bool(via_api or via_cli or via_caps)
 
 
 def _write_capable(f):
@@ -184,6 +316,11 @@ def _write_capable(f):
         # （这条是我自己新写的判据当场抓出来的，第 39 轮 A-MINOR-7 的第二半）。
         return True
     if _issues_schema_ddl(f):
+        return True
+    if f.get('capabilities', set()) & WRITE_CAPABILITIES:
+        # 第 43 轮 B 的"能力×判据"表：裸 SQL DML、DB-API 直连（psycopg2/sqlite3）、
+        # `df.to_sql(if_exists='replace')`、覆盖 `.db`/`.env` 的文件操作、
+        # `requests.request('DELETE', …)` 这种通用入口 —— 每一类都曾经"三道判据一条不响"。
         return True
     if f['direct_db'] and f['called'] & {'commit', 'add', 'delete'}:
         # 第 36 轮 B-MINOR-3：**什么写开关都没有、上来就 commit** 的脚本以前落在扫描集合外
@@ -211,14 +348,33 @@ def _write_capable(f):
     return bool(HARD_DELETE.search(f['text']) and f['direct_db'])
 
 
+def _refuses_something(f):
+    """"会主动拒跑"必须是**条件分支里**的 raise（第 43 轮 A-MAJOR-1）。
+
+    以前判的是 `'SystemExit' in f['raised']`，而 `raised` 是全文件收集 ——
+    仓库里几乎每个脚本末尾都有那句入口样板 `raise SystemExit(main())`，
+    于是"一句护栏都没写"的脚本也被判成立（A 席用三个样品复现）。
+    """
+    return f.get('refusals', 0) > 0
+
+
+# 两种拼法都认（第 43 轮 A-MINOR-6：`[目标]` 与 `[target]` 一边管一条识别器，
+# 照着 `push_…` 的中文写法新加一个只读预检工具会被莫名判"没走门"）。
+TARGET_WORDS = ('[目标]', '[target]', '[TARGET]', '[Target]')
+
+
+def _says_target(f):
+    return any(str(c).startswith(w) for c in f['consts'] for w in TARGET_WORDS)
+
+
 def _refuses_remote_without_a_flag(f):
     """`sync_db_columns.py` 那一类：不 pin，但**默认见到远程就拒跑**，要远程必须显式加旗。
 
-    这一条要的是真代码：常量里出现 `postgres` _scheme 判断 + 主动 `raise SystemExit`，
-    写在注释或 docstring 里不算（`_facts` 只收 AST 节点）。
+    这一条要的是真代码：常量里出现 `postgres` _scheme 判断 + **条件分支里**主动 raise，
+    写在注释或 docstring 里不算（`_docstring_consts` 把说明文整段剔掉了）。
     """
     return (any(c.startswith('postgres') for c in f['consts'])
-            and 'SystemExit' in f['raised']
+            and _refuses_something(f)
             and any(PROD_FLAG.search(fl) for fl in f['flags']))
 
 
@@ -235,7 +391,7 @@ def _refuses_local_without_a_flag(f):
     """与 `_refuses_remote_without_a_flag` 对称：常量里判 `sqlite` + 主动 `raise SystemExit`
     + CLI 上有 `--production` 旗子，三者齐了才算"靶子声明清楚了"。"""
     return (any(c.startswith('sqlite') for c in f['consts'])
-            and 'SystemExit' in f['raised']
+            and _refuses_something(f)
             and any('--production' in fl for fl in f['flags']))
 
 
@@ -243,7 +399,7 @@ def _declares_http_target(f):
     """走 HTTP 写生产的脚本（`push_sector_mappings_to_prod.py` 那一族）没有 ORM 会话，
     `database_label` 对它没意义 —— 那它必须自己打一行 `[目标] …` 说清往哪台机器 POST。
     要的是**代码里的字面量**（`_facts.consts` 只收 AST 常量），写在注释/docstring 里不算。"""
-    return any(isinstance(c, str) and c.startswith('[目标]') for c in f['consts'])
+    return _says_target(f)
 
 
 # 读侧的"受管的门"：走这三把之一，目标就已经说清楚了（默认钉镜像 / 显式 --production）
@@ -267,8 +423,8 @@ def _read_side_guarded(name, f):
         return True
     consts = f['consts']
     return ('postgresql_readonly' in consts
-            and any(c.startswith('[target]') for c in consts)
-            and 'SystemExit' in f['raised'])
+            and _says_target(f)
+            and _refuses_something(f))
 
 
 def _guarded(name, f, schema_ddl=False):
@@ -518,6 +674,18 @@ def test_the_production_only_allow_list_is_not_a_backdoor():
             '%s 挂着"生产入口"的名字却没自报库名' % name
 
 
+def _touches_a_database(f):
+    """读侧那道闸的**触发条件**：只要"碰到过一个活的数据库连接"就得问连哪儿。
+
+    第 43 轮 B-MAJOR-2：上一版触发只看 `engine_from_env`（自建 engine 那一族），
+    于是"函数体里 `from src.models.database import SessionLocal` + `db.query(...)`、
+    一句不写"的脚本三道判据一条都不响 —— 而 `.env` 指生产 ⇒ 它默认就在读线上库。
+    这一族在本仓不是假想：`direct_db` 为真的脚本有 30 个，其中 9 个既不受写侧管
+    也不被旧读侧触发命中（今天它们各自走了门或被 `env_written` 覆盖，所以是**下一个脚本**的洞）。
+    """
+    return bool(f['engine_from_env'] or f['direct_db'])
+
+
 def test_read_side_scripts_also_say_which_database_they_read():
     """只读脚本也要答"连的是哪个库"（第 41 轮 B-MAJOR-1：读侧不是攻击面 = 这整族的根因）。
 
@@ -526,8 +694,9 @@ def test_read_side_scripts_also_say_which_database_they_read():
     `"DATABASE_URL"` 的标签落进 `docs/`。守卫扫描只看"能不能写"，所以它们一路绿灯。
     """
     naked = [name for name, f in _scripts().items()
-             if f['engine_from_env'] and not _read_side_guarded(name, f)]
-    assert naked == [], '这些脚本自己按环境变量建 engine，却没走任何受管的门：%s' % '、'.join(naked)
+             if _touches_a_database(f) and not _read_side_guarded(name, f)
+             and name not in PRODUCTION_ENTRY]
+    assert naked == [], '这些脚本碰得到一个活的数据库连接，却没走任何受管的门：%s' % '、'.join(naked)
 
 
 def test_the_read_side_trigger_fires_on_the_shape_that_broke_and_not_on_a_fixed_path(tmp_path,
@@ -551,15 +720,155 @@ def test_the_read_side_trigger_fires_on_the_shape_that_broke_and_not_on_a_fixed_
         '_x_via_settings.py': 'from sqlalchemy import create_engine\n'
                               'from src.core.config import settings\n'
                               'e = create_engine(settings.database_url)\n',
+        # 一个别名就隐身（第 43 轮 B-MAJOR-1）：`as ce` 换掉函数名，语义一个字没变
+        '_x_aliased_engine.py': 'import os\nfrom sqlalchemy import create_engine as ce\n'
+                                'c = ce(os.environ["DATABASE_URL"])\n',
+        # 纯读、不写、不自建 engine，只在函数体里拿 ORM 会话（第 43 轮 B-MAJOR-2 的主形状）
+        '_x_orm_read_in_a_body.py': 'def main():\n'
+                                    '    from src.models.database import SessionLocal\n'
+                                    '    db = SessionLocal()\n'
+                                    '    try:\n        return db.query(1).all()\n'
+                                    '    finally:\n        db.close()\n',
+        # 同一个形状的对照组：走门之后就该放行
+        '_x_orm_read_through_the_door.py': 'import _db_guard\n'
+                                           'def main():\n'
+                                           '    e, db, label = _db_guard.read_only_connect()\n'
+                                           '    return db.query(1).all()\n',
     }, monkeypatch)
     hits = {n: f['engine_from_env'] for n, f in scripts.items()}
     assert hits['_x_env_engine.py'] is True, '环境变量 + 自建 engine 没被认出来 ⇒ 触发器是死的'
     assert hits['_x_fixed_path.py'] is False, '写死路径的副本 engine 被误伤 ⇒ 判据过宽'
     assert hits['_x_via_settings.py'] is True, \
         '把 `os.getenv("DATABASE_URL")` 换成 `settings.database_url` 就隐身 ⇒ 触发器仍可绕过'
+    assert hits['_x_aliased_engine.py'] is True, \
+        '`from sqlalchemy import create_engine as ce` 一个别名就隐身 ⇒ 触发器认的是名字不是意思'
+    touched = {n: _touches_a_database(f) for n, f in scripts.items()}
+    assert touched['_x_orm_read_in_a_body.py'] is True, \
+        '函数体里 `from src.models.database import SessionLocal` 的纯读脚本没被碰库触发 ⇒ B-MAJOR-2 没修'
     assert not _read_side_guarded('_x_env_engine.py', scripts['_x_env_engine.py']), \
         '旧写法被判"已经有守卫"'
+    assert not _read_side_guarded('_x_orm_read_in_a_body.py', scripts['_x_orm_read_in_a_body.py']), \
+        '只读的 ORM 会话没走门却被判"已经有守卫"'
     assert _read_side_guarded('_x_through_the_door.py', scripts['_x_through_the_door.py'])
+    assert _read_side_guarded('_x_orm_read_through_the_door.py',
+                              scripts['_x_orm_read_through_the_door.py'])
+
+
+def _fallback_keys():
+    """`_scripts()` 里那个"解析失败兜底 dict"的键集合（AST 里抠出来，不手抄）。"""
+    import inspect
+    src = inspect.getsource(_scripts)
+    start = src.index("'text': py.read_text")
+    body = src[start - 20:src.index('return out', start)]
+    return set(re.findall(r"'([a-z_]+)':", body))
+
+
+def test_the_fallback_dict_cannot_lag_behind_the_facts_it_stands_in_for():
+    """解析失败时那份兜底 dict 必须与 `_facts` 返回的键**完全一致**。
+
+    为什么单独立一条（第 43 轮 A/B 都提到"两处靠注释维持一致"）：兜底 dict 少一个键，
+    下一个读 `f['新键']` 的判据就 KeyError 崩掉整个扫描器；多一个键则没人发现它已经没人读了。
+    注释里写"必须与 `_facts` 完全一致"没有用 —— 这句承诺现在就由这条用例代持。
+    """
+    probe = SCRIPTS / '_db_guard.py'          # 任何一个真脚本都行：只为拿一次键集合
+    real = set(_facts(probe))
+    fallback = _fallback_keys()
+    assert real - fallback == set(), (
+        '兜底 dict 缺了这些键 ⇒ 解析失败的文件会在判据里 KeyError：%s' % sorted(real - fallback))
+    assert fallback - real == {'broken'}, (
+        '兜底 dict 多出这些键（`broken` 是它独有的标记，别的一律说明两边漂了）：%s'
+        % sorted(fallback - real))
+
+
+def test_prose_cannot_buy_a_guard_signal(tmp_path, monkeypatch):
+    """**说明文与入口样板句买不到守卫**（第 43 轮 A-MAJOR-1，我自己复现过才修的）。
+
+    上一版 `_facts` 用 `ast.walk` 收所有字符串常量 ⇒ docstring 也是常量，而每个脚本末尾都有
+    `raise SystemExit(main())`。于是"在 docstring 里写 postgres / `[目标]` / `postgresql_readonly`
+    + 保留那句样板"就能让三个识别器一起点头 —— 而 `_refuses_remote_without_a_flag` 自己的
+    docstring 写着"写在注释或 docstring 里不算"，那句话当场是假的。
+    这一条把 A 席那三个样品钉成用例：每个都配一个"把说明文换成护栏代码"的对照，
+    否则它可能只是恒红或恒绿。
+    """
+    scripts = _scan_into(tmp_path, {
+        # ① 发 DDL 的脚本：`postgres` 只在 docstring 里，"拒跑"只是入口样板句
+        '_x_prose_ddl.py': '"""同步工具。\n\n本脚本见 postgres 目标就拒跑，要动线上加 --against-production。\n"""\n'
+                           'import argparse\nfrom alembic import command\n'
+                           'p = argparse.ArgumentParser()\np.add_argument("--against-production")\n'
+                           'a = p.parse_args([])\ncommand.upgrade(a, "head")\n'
+                           'raise SystemExit(main())\n',
+        # ① 的对照组：同一件事，但护栏是真代码（条件分支里印 [abort] 并停下来）
+        '_x_real_ddl_guard.py': 'import argparse\nfrom alembic import command\n'
+                                'p = argparse.ArgumentParser()\np.add_argument("--against-production")\n'
+                                'a = p.parse_args([])\nurl = "x"\n'
+                                'if url.startswith("postgres") and not a.against_production:\n'
+                                "    print('[abort] 目标是远程库，加 --against-production 再来')\n"
+                                '    raise SystemExit(4)\n'
+                                'command.upgrade(a, "head")\n',
+        # ② HTTP 写：`[目标]` 只在 docstring 里
+        '_x_prose_http.py': '"""推送。\n\n[目标] 线上生产库\n"""\n'
+                            'import urllib.request\nurllib.request.urlopen('
+                            'urllib.request.Request("http://x", method="POST"))\n',
+        # ② 的对照组：`[目标]` 是一句真 print
+        '_x_real_http_target.py': 'import urllib.request\n'
+                                  "print('[目标] http://x —— 经 HTTP 写线上')\n"
+                                  'urllib.request.urlopen(urllib.request.Request("http://x", method="POST"))\n',
+        # ③ 读侧第④档：三个信号全在 docstring / 样板句里
+        '_x_prose_readonly.py': '"""只读预检。\n\npostgresql_readonly + [target] 线上生产库\n"""\n'
+                                'from sqlalchemy import create_engine\n'
+                                'create_engine("postgresql://u@h/db")\n'
+                                'raise SystemExit(main())\n',
+    }, monkeypatch)
+    prose = {n: (_write_capable(f), _refuses_remote_without_a_flag(f),
+                 _declares_http_target(f), _read_side_guarded(n, f)) for n, f in scripts.items()}
+    assert prose['_x_prose_ddl.py'][1] is False, 'docstring 里的 postgres + 入口样板句被判"见远程就拒跑"'
+    assert prose['_x_prose_http.py'][2] is False, 'docstring 里的 `[目标]` 被判"声明了 HTTP 写目标"'
+    assert prose['_x_prose_readonly.py'][3] is False, '说明文凑齐三个词就被判"读过侧的门"'
+    assert prose['_x_real_ddl_guard.py'][1] is True, \
+        '真护栏（条件分支里 print [abort] + 停下来）反被判没守卫 ⇒ 这条判据在误伤'
+    assert prose['_x_real_http_target.py'][2] is True, '真 print 一行 `[目标] …` 必须算声明'
+
+
+def test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names(tmp_path, monkeypatch):
+    """落笔的**能力**分类要逐类有牙（第 43 轮 B 的"能力×判据"盲区清单）。
+
+    B 席量到 12 类里 10 类三道判据一条不响；这一条把其中最能改数据的六类各做一个样品：
+    每一个都必须被判"能改数据"，且都必须**因为没声明库名**而被受管集合抓到。
+    对照组 `_x_只读查询.py` 不许被判成能写（否则这条闸会退化成"所有脚本都受管"，
+    而误报的闸最后没人信）。
+    """
+    scripts = _scan_into(tmp_path, {
+        '_x_create_all.py': 'from src.models.database import Base, engine\n'
+                            'Base.metadata.create_all(engine)\n',
+        '_x_raw_sql.py': 'from src.models.database import engine\n'
+                         'def go(conn):\n'
+                         '    with engine.begin() as c:\n'
+                         '        c.execute("DELETE FROM predictions WHERE id = 7")\n',
+        '_x_dbapi.py': 'import sqlite3\n'
+                       'c = sqlite3.connect("data/fund_insight.db")\n'
+                       'c.execute("delete from bloggers"); c.commit()\n',
+        '_x_tosql.py': 'import pandas as pd\n'
+                       "def go(df):\n    return df.to_sql('predictions', engine, if_exists='replace')\n",
+        '_x_file_over.py': 'import shutil\n'
+                           "shutil.copyfile('data/copy.db', 'data/fund_insight.db')\n",
+        '_x_subproc_ddl.py': 'import subprocess, sys\n'
+                             "subprocess.run([sys.executable, 'scripts/run_migrations.py'])\n",
+        '_x_http_generic.py': 'import requests\n'
+                              "def go(url):\n    return requests.request('DELETE', url)\n",
+        # 对照：只读、走门、且没有任何写能力
+        '_x_read_only_query.py': 'import _db_guard\n'
+                                 'e, s, label = _db_guard.read_only_connect()\n'
+                                 'rows = s.execute("select 1")\n',
+    }, monkeypatch)
+    capable = {n: _write_capable(f) for n, f in scripts.items()}
+    for name in ('_x_create_all.py', '_x_raw_sql.py', '_x_dbapi.py', '_x_tosql.py',
+                 '_x_file_over.py', '_x_subproc_ddl.py', '_x_http_generic.py'):
+        assert capable[name] is True, '%s 这类落笔能力仍然隐身' % name
+    assert capable['_x_read_only_query.py'] is False, '只读查询被判成能写 ⇒ 判据过宽，会误伤'
+    naked = [n for n, f in scripts.items() if _write_capable(f) and not _guarded(n, f)]
+    assert '_x_read_only_query.py' not in naked
+    assert set(naked) == set(capable) - {'_x_read_only_query.py'}, \
+        '这些"能改数据"的样品没被抓进受管集合：%s' % sorted(set(capable) - set(naked) - {'_x_read_only_query.py'})
 
 
 def test_the_scanned_set_is_the_repository_s_not_this_disk_s():

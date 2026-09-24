@@ -17,6 +17,7 @@
   - `nav_row_missing`            端点那一天该标的没有净值行：周末目标日的老数据、镜像缺行、基金停更都在这一桶。
   - `nav_rewritten`              同一天有行，数值不同 ⇒ 净值被就地改写或覆盖过。
 """
+import os
 from datetime import date, datetime
 from typing import Dict, Iterable, List, Optional
 
@@ -209,11 +210,56 @@ def target_name(url: str) -> str:
         body = body.split('?', 1)[0]
         if body.startswith('//'):
             body = body.lstrip('/')
-        if len(body) > 2 and body[0] == '/' and body[2] in ':\\' and body[1].isalpha():
+        if len(body) > 3 and body[0] == '/' and body[2] == ':' and body[3] in '/\\' and body[1].isalpha():
             body = body[1:]                    # 四斜杠 Windows 绝对路径：/E:/… → E:/…
         return body or '(当前目录里的 sqlite 文件)'
     where = rest.split('@')[-1].split('?', 1)[0]
     return '%s://%s' % (scheme, where)
+
+
+MIRROR_SUFFIX = os.path.join('data', 'fund_insight.db')
+
+
+def is_the_mirror(name: str) -> bool:
+    """这个 sqlite 目标**是不是**真镜像 —— 比的是同一个 inode/规范路径，不是后缀。
+
+    为什么不能用后缀（第 43 轮 B-MINOR-1）：`sqlite:///C:/backup/2026-09/data/fund_insight.db`
+    （某次备份）与 `sqlite:///…/data/_tmp/data/fund_insight.db` 都以 `data/fund_insight.db` 结尾，
+    用 `endswith` 会把它们印成和真镜像一字不差的"本地镜像库（data/fund_insight.db）" ——
+    而这正是第 23 轮那次错（拿别的库的数当系统的数）最需要被标签看穿的情形。
+    """
+    if not name or name == ':memory:':
+        return False
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    mirror = os.path.realpath(os.path.join(root, MIRROR_SUFFIX))
+    candidate = name.replace('\\', '/')
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(root, candidate)
+    try:
+        return os.path.realpath(candidate) == mirror
+    except OSError:
+        return False
+
+
+def describe_url(url: str) -> str:
+    """连接串 → 一句"这是哪个库"。与 `scripts/_db_guard.db_kind()` 同一套词（两份实现，用例钉相等）。
+
+    scheme 一律**先转小写再判**：守卫侧判的是 `url.lower()`，两边判的对象必须同一个，
+    否则 `SQLITE:///x.db` 这种写法会得到两句不同的自报（第 43 轮笛卡尔积样品逼出来的）。
+    """
+    name = target_name(url)
+    low = url.lower()
+    if low.startswith('sqlite'):
+        if name == ':memory:':
+            return '内存 sqlite（不落盘，通常是测试夹具）'
+        if is_the_mirror(name):
+            return '本地镜像库（data/fund_insight.db）'
+        return '本地 sqlite 文件（不是镜像库）：%s' % name
+    if low.startswith(('postgres', 'postgresql')):
+        return '线上生产库（%s）' % name
+    if low.startswith('mysql'):
+        return 'MySQL 库（%s）' % name
+    return '%s 库（%s）' % (low.split('://')[0], name)
 
 
 def database_label(db) -> str:
@@ -236,16 +282,4 @@ def database_label(db) -> str:
             continue
     if url is None:
         return '未知库'
-    name = target_name(url)
-    if url.startswith('sqlite'):
-        flat = name.replace('\\', '/')
-        if flat.endswith('data/fund_insight.db'):
-            return '本地镜像库（data/fund_insight.db）'
-        if name == ':memory:':
-            return '内存 sqlite（不落盘，通常是测试夹具）'
-        return '本地 sqlite 文件（不是镜像库）：%s' % name
-    if url.startswith(('postgres', 'postgresql')):
-        return '线上生产库（%s）' % name
-    if url.startswith('mysql'):
-        return 'MySQL 库（%s）' % name
-    return url.split('://')[0] + ' 库（%s）' % name
+    return describe_url(url)

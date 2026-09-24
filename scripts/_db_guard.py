@@ -11,9 +11,12 @@ import sys
 
 # 本机控制台默认 GBK，中文/符号（如 ✗）会直接抛 UnicodeEncodeError。
 # 所有脚本统一在导入本模块时把 stdout/stderr 切成 UTF-8 + 替换模式。
+# `line_buffering=True` 是第 43 轮 B-M4 补的：stdout 进管道（Render 日志、`> log 2>&1`、cron）
+# 时是**块缓冲**，而 alembic / logging 走 stderr ⇒ "[库] 我要动谁"会排到它承诺领先的那件事后面，
+# 进程被杀时那一行一个字都看不见。一句改成行缓冲，19 个自报点一起生效。
 for _stream in (sys.stdout, sys.stderr):
     try:
-        _stream.reconfigure(encoding='utf-8', errors='replace')
+        _stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
     except Exception:
         pass
 
@@ -67,7 +70,12 @@ def _refuse_to_pin_a_dead_engine(who):
     要么冤枉一片、要么干脆漏掉（第 42 轮 B-MAJOR-4）。运行期问一句 `sys.modules` 才是真顺序。
 
     为什么"已经建好"还分两档：`tests/conftest.py` 把全局 engine 建在一个临时 SQLite 上，
-    那种情形写进去的是测试库而不是生产 —— 一律 abort 会把 8 条正经用例一起打死，
+    那种情形写进去的是测试库而不是生产 —— 一律 abort 会把 pytest 会话里
+    "先导入 ORM、再 in-process 跑脚本 `main()`"的用例一起打死（第一版实测：**8 条**，
+    分布是 `test_audit_fund_info_identity.py` ×4 + `test_sector_seed_route_honesty.py` ×2
+    + `test_snapshot_prod_mappings.py` ×2 —— 注意我上一版把这 8 条记成了
+    `test_seed_owner_proxies_gate.py` 那 8 条，那是**归错文件的数**（第 43 轮 A 席抓到
+    "8"是手抄的）；复核命令：把那两档合成一档后 `pytest tests/unit -q` 看失败清单），
     而那些用例测的恰恰是"脚本只写它说的那个库"。所以：
       · 已建在**非 SQLite**（或判不出来）⇒ `[abort]` 退 4：这条路上钉库救不了任何东西；
       · 已建在 SQLite ⇒ 印一条 `[警告]` 说清"接下来写的就是这个文件，改环境变量改不动它"，
@@ -167,6 +175,49 @@ def machine_name(url):
         return body or "(当前目录里的 sqlite 文件)"
     where = rest.split("@")[-1].split("?", 1)[0]
     return "%s://%s" % (scheme, where)
+
+
+def is_the_mirror(name):
+    """这个 sqlite 目标**是不是**真镜像：比规范路径（同一个文件），不比后缀。
+
+    第 43 轮 B-MINOR-1：`sqlite:///C:/backup/2026-09/data/fund_insight.db`（某次备份）
+    以 `data/fund_insight.db` 结尾，用 `endswith` 会被印成和真镜像一字不差的"本地镜像库" ——
+    而"拿别的库的数当系统的数"正是这个项目代价最大的那次错。
+    """
+    if not name or name == ':memory:':
+        return False
+    candidate = name.replace('\\', '/')
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(ROOT, candidate)
+    try:
+        return os.path.realpath(candidate) == os.path.realpath(DEFAULT_DB)
+    except OSError:
+        return False
+
+
+def db_kind(url):
+    """连接串 → "这是哪个库"那半句话。与 `src/services/verdict_evidence.describe_url()` 同一套词。
+
+    两份实现是没法合并的（src 不能去 import scripts，而 `_db_guard` 必须能在
+    "连哪个库还没定"之前被导入 ⇒ 它也不能 import src），所以由
+    `tests/unit/test_database_label_targets.py` 拿一批**样品笛卡尔积**逐条钉相等
+    （第 42 轮只钉了 10 个样品，第 43 轮 B-MINOR-1 就在样品外量到分叉 ⇒ 样品要成批生成）。
+    """
+    name = machine_name(url)
+    if url.lower().startswith('sqlite'):
+        if name == ':memory:':
+            return '内存 sqlite（不落盘，通常是测试夹具）'
+        if is_the_mirror(name):
+            return '本地镜像库（data/fund_insight.db）'
+        return '本地 sqlite 文件（不是镜像库）：%s' % name
+    low = url.lower()
+    if low.startswith(('postgres', 'postgresql')):
+        return '线上生产库（%s）' % name
+    if low.startswith('mysql'):
+        return 'MySQL 库（%s）' % name
+    # 认不出的 scheme：两边都必须走同一条 fallback（第 43 轮笛卡尔积样品 `''`/`'://x'`
+    # 一喂下去就量到分叉：src 印 `" 库（(空)）"`、守卫印 `"远端库（(空)）"`）。
+    return '%s 库（%s）' % (low.split('://')[0], name)
 
 
 def production_requested(argv=None):
@@ -285,35 +336,41 @@ def read_only_connect(argv=None):
     url, is_production = resolve_read_target(argv)
     engine = None
     if is_production:
-        print("[库] 准备以引擎级只读连 线上生产库 %s" % machine_name(url))
+        print("[库] 准备以引擎级只读连 %s" % db_kind(url))
         try:
             engine = sa.create_engine(url, pool_pre_ping=True,
                                       execution_options={"postgresql_readonly": True})
             why = _write_probe(engine, ["CREATE TEMP TABLE _db_guard_probe(x int)",
                                         "DROP TABLE _db_guard_probe"])
         except Exception as exc:                      # noqa: BLE001  连不上也要说清是谁
-            print("[abort] 连不上线上库 %s：%s" % (machine_name(url), str(exc)[:160]))
+            print("[abort] 连不上 %s：%s" % (db_kind(url), str(exc)[:160]))
             raise SystemExit(4)
         if why:
             print("[abort] %s" % why)
             raise SystemExit(4)
-        label = "线上生产库 %s（引擎级只读，写探针已被数据库拒绝）" % machine_name(url)
+        label = "%s（引擎级只读，写探针已被数据库拒绝）" % db_kind(url)
     else:
         # 不再调第二次 `pin_local_sqlite`（第 41 轮 B-MINOR-1：上一版这里再 pin 一次，
         # 与 `resolve_read_target` 的 memo 注释"别再印两行 [env]"自相矛盾，实测 stdout 真有两行）
-        print("[库] 准备以引擎级只读连 本地镜像库 %s" % machine_name(url))
+        #
+        # 第 43 轮 B-MAJOR-3：这一句以前无条件印"本地镜像库 <路径>" —— 于是拿
+        # `LOCAL_DB_URL=一份 8 月备份` 跑分析时，屏幕上、以及被 `estimate_l3_vague_labels.py`
+        # 原样写进 `docs/L3_VAGUE_LABEL_ESTIMATE.md` 的"数据源"那一行，都写着"本地镜像库"。
+        # 类别词换成 `db_kind()` 之后，副本/夹具会说自己是副本/夹具；`LOCAL_DB_URL` 仍然有效，
+        # 只是不再被叫错名字。
+        print("[库] 准备以引擎级只读连 %s" % db_kind(url))
         try:
             engine = sa.create_engine(_sqlite_ro_url(url), connect_args={"uri": True})
             why = _write_probe(engine, ["CREATE TABLE _db_guard_probe(x int)",
                                         "DROP TABLE _db_guard_probe"])
         except Exception as exc:                      # noqa: BLE001  连不上也要说清是谁
-            print("[abort] 连不上本地镜像 %s：%s" % (machine_name(url), str(exc)[:160]))
+            print("[abort] 连不上 %s：%s" % (db_kind(url), str(exc)[:160]))
             raise SystemExit(4)
         if why:
             print("[abort] %s" % why)
             raise SystemExit(4)
-        label = ("本地镜像库 %s（引擎级只读；要分析线上数据得显式 --production，"
-                 "等价命令 scripts/q.py --production）" % machine_name(url))
+        label = ("%s（引擎级只读；要分析线上数据得显式 --production，"
+                 "等价命令 scripts/q.py --production）" % db_kind(url))
     print("[库] %s" % label)
     sys.stdout.flush()
     return engine, sessionmaker(bind=engine)(), label

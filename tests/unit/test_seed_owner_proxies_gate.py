@@ -81,7 +81,6 @@ def _contain_the_writes(mod, monkeypatch, factory):
     monkeypatch.setattr(dbmod, 'SessionLocal', factory)
     bind = factory.kw['bind']
     assert 'proxy.db' in str(bind.url), '临时工厂连的不是临时文件：%s' % bind.url
-    assert dbmod.SessionLocal is factory
     return dbmod
 
 

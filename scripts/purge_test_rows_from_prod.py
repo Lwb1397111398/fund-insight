@@ -217,7 +217,8 @@ def main():
     db = SessionLocal()
     try:
         p = plan(db, engine)
-        print('[target] %s' % str(engine.url).split('@')[-1])
+        import _db_guard
+        print('[target] %s' % _db_guard.db_kind(str(engine.url)))
         print('[预检] 谓词=夹具名/键，且 bloggers/posts/system_config 三条都带 `created_at >= %s`'
               '（在 SQL 里，不是打印给人看）；`fund_info` 没有 created_at，只能按 code+名字精确匹配'
               % SINCE)

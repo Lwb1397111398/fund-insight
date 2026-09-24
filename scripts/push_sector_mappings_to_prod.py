@@ -38,6 +38,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20',
                         'prod-writeback-sector-mappings.json')
 DEFAULT_BASE = 'https://fund-insight.onrender.com'
+# 已知生产域名的判据（第 43 轮 B-MAJOR-5）：`--base` 是可以随手指的，
+# 而那一行自报以前**无条件**写"经 HTTP 写线上生产库"。B 席实测：
+# `--base http://127.0.0.1:9/` ⇒ 屏幕上出现"[目标] 127.0.0.1:9 —— 经 HTTP 写**线上生产库**"，
+# 与上一行"目标=http://127.0.0.1:9/"自相矛盾。这句话是操作者决定要不要按 `--confirm` 的依据，
+# 它说错方向比不说更坏。
+PROD_HOST_MARKS = ('onrender.com',)
+
+
+def _target_line(base):
+    host = urlparse(base).netloc
+    known = host == urlparse(DEFAULT_BASE).netloc or any(m in host for m in PROD_HOST_MARKS)
+    if known:
+        return ('[目标] %s —— 经 HTTP 写**线上生产库**的写入口'
+                '（不是本地镜像 `data/fund_insight.db`）' % host)
+    return ('[目标] %s —— ⚠ **这不是已知的生产域名**（已知的只有 %s）。'
+            '所以这一行不敢自称"动的是线上库"：HTTP 写的落点是**那个后端自己连的库**'
+            '（本机 `serve_mirror.py` 就是镜像）。要写生产请把 --base 指回 %s。'
+            % (host, urlparse(DEFAULT_BASE).netloc, DEFAULT_BASE))
 ENDPOINT = '/api/config/sector-mappings/-/audit-import'
 CONFIRM = 'WRITE-TO-PROD'
 
@@ -132,8 +150,7 @@ def main():
     print('[计划] 目标=%s 清单 %d 行（指纹 %s，生成于 %s）→ %s'
           % (args.base, len(rows), data.get('sha256'), data.get('generated_at'),
              '真写' if apply_write else 'dry-run'))
-    print('[目标] %s —— 经 HTTP 写**线上生产库**的写入口（不是本地镜像 `data/fund_insight.db`）'
-          % urlparse(args.base).netloc)
+    print(_target_line(args.base))
 
     # 真写之前先问服务端"这些标的在你这儿定得了价"。
     # 为什么不能信清单：`is_fetchable` 是**在镜像上**算的，而第 27 轮生产实测有 31 行

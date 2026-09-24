@@ -319,6 +319,12 @@ def cross_table(
     return out
 
 
+def _today_beijing():
+    """报告上那个日期＝跑它的那天（北京时间）。见 `main()` 里 `report_date` 那条注释。"""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+
+
 def fmt_pct(x: Optional[float]) -> str:
     if x is None:
         return "n/a"
@@ -420,11 +426,13 @@ def main(argv=None):
         )
 
     reason_lines = ", ".join(f"{k}:{v}" for k, v in sorted(reason_counter.items(), key=lambda x: -x[1])) or "无"
+    # 日期是"跑这份附录的那一天"，不是模板里抄来的字面量（第 43 轮 B-MINOR-2）
+    report_date = _today_beijing().isoformat()
 
     appendix = f"""
 ## 附录 C：clear 桶标签审计 + bucket×tier 交叉表（只读）
 
-- 日期：2026-07-30
+- 日期：{report_date}
 - 数据源：`{db_label}`
 - **不改生产、不 push**
 - 复读方法：对 clear 桶随机 {len(sample)} 条（seed={SEED}）做**否定/条件句敏感**规则复读（非金标准人工，可复现）

@@ -216,3 +216,19 @@ def test_a_preflight_that_answers_fewer_rows_sends_nothing(monkeypatch, tmp_path
     code = push.main()
     assert code == 3, '预检答了 1 行 / 发出 2 行，剩下那行等于没问过却仍要写（退码 %s）' % code
     assert calls[-1]['dry_run'] is True
+
+
+def test_the_target_line_only_claims_production_for_the_production_host(capsys):
+    """`--base` 指到别处时，那一行不许再说"线上生产库"（第 43 轮 B-MAJOR-5）。
+
+    B 席实测：`--base http://127.0.0.1:9/` 打出的是
+    `[目标] 127.0.0.1:9 —— 经 HTTP 写**线上生产库**的写入口` ——
+    与它上一行"目标=http://127.0.0.1:9/"自相矛盾。这一行是操作者按不按 `--confirm` 的依据，
+    方向说反比不说更糟：它会把"往本机镜像试写"读成"已经在动线上"。
+    """
+    prod = push._target_line('https://fund-insight.onrender.com')
+    assert '线上生产库' in prod, prod
+    for base in ('http://127.0.0.1:9/', 'http://localhost:8098/', 'https://evil.example/'):
+        line = push._target_line(base)
+        assert '这不是已知的生产域名' in line, line
+        assert '线上生产库' not in line, '%s 仍被说成生产：%s' % (base, line)

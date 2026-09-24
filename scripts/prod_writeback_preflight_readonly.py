@@ -37,7 +37,8 @@ def prod_conn():
     if not url.lower().startswith(('postgres', 'postgresql')):
         raise SystemExit('[abort] .env 的 DATABASE_URL 不是 PostgreSQL，拒绝继续')
     import sqlalchemy as sa
-    print('[target] 线上生产库（只读）：%s' % url.split('@')[-1])
+    import _db_guard
+    print('[target] %s（只读）' % _db_guard.db_kind(url))
     engine = sa.create_engine(url, execution_options={'postgresql_readonly': True})
     conn = engine.connect()
     why = q._pg_read_only_probe(conn)
