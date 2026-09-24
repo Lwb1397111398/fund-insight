@@ -8,7 +8,8 @@
 在本地一跑就是**对生产 Supabase 发 DDL**（`20260722_0002` 的 downgrade 是 `drop_table("prediction_change_logs")`，
 即审计台账本体），全程没有 `[库]` 自报、没有确认头。
 
-四种形状都在这里钉住；第 4 种是**反向护栏** —— 修这个 bug 不许把 `render.yaml:11` 的启动路径弄坏。
+每种形状都在这里钉住；最后一种是**反向护栏** —— 修这个 bug 不许把 `render.yaml:11` 的启动路径弄坏。
+条数不抄文字版：`pytest tests/unit/test_alembic_target_direction.py --collect-only -q`。
 """
 import os
 import subprocess
@@ -62,6 +63,7 @@ def test_a_local_database_url_is_still_inherited():
     # 第 40 轮 A-M4：以前"每条往下走的分支都报名"只用 `src.count('[库]') >= 2` 撑着，
     # 而 abort 文案里也有一句 `[库]` ⇒ 把本地这条自报整段删掉，计数仍然 >= 2、用例全绿。
     assert '[库]' in blob, '本地这条分支没自报库名 ⇒ "每条路都报名"是假话'
+    assert 'alembic 目标是本地 sqlite 文件' in blob, '本地分支报的不是库名：%s' % blob[-300:]
 
 
 def test_the_second_flag_alone_does_not_unlock_an_inherited_remote():
@@ -117,6 +119,15 @@ def test_a_supplied_connection_still_runs(tmp_path):
         capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
     assert 'BOOT-PATH-OK' in result.stdout, \
         '交了连接还被拒 ⇒ 生产启动会被这条闸门挡住（stderr 尾部：%s）' % result.stderr[-600:]
+    # 第 41 轮 A-M1：这条路放行 DDL 的依据是"连接由调用方交进来"，而两道旗子一面都没立。
+    # 上一版自报行不分叉，在这里照样印"由 ALEMBIC_DATABASE_URL 说出 + ALEMBIC_ALLOW_REMOTE=1 放行"
+    # ⇒ 终端上凭空多出一次从没发生过的授权。现在报的内容必须与放行依据一致。
+    line = [ln for ln in result.stderr.splitlines() if '[库]' in ln]
+    assert line, '交了连接这条分支没自报（"每条路都报名"是假话）'
+    assert '调用方交进来的连接' in line[0], '自报没说 DDL 其实走的是那条连接：%s' % line[0]
+    assert 'ALEMBIC_ALLOW_REMOTE=1 放行' not in line[0], \
+        '自报行伪造了一次从没发生过的旗子授权：%s' % line[0]
+    assert 'S3cr3tPW' not in result.stderr
 
 
 def _second_ini(tmp_path, url):
@@ -175,11 +186,27 @@ def test_the_unlocked_remote_path_says_so_out_loud(tmp_path):
     assert '[库]' in result.stderr, '放行远程却没自报（第 39 轮 B：这条路以前一声不吭）'
     assert '[库]' not in result.stdout, '自报混进了 stdout —— `--sql` 的产物被解释行脏了'
     assert 'S3cr3tPW' not in result.stdout + result.stderr
+    # 反向对照（第 41 轮 A-m1：整批判据没有一条做过"把条件反过来"的变异）：
+    # 旗子放行这条路的措辞不许漂到"连接交进来"那一支去，否则两支自报就成了同一句废话。
+    line = [ln for ln in result.stderr.splitlines() if '[库]' in ln][0]
+    assert 'ALEMBIC_ALLOW_REMOTE=1 放行' in line, '旗子放行这条路没说是两道旗子放开的：%s' % line
+    assert '调用方交进来的连接' not in line, '把两条放行依据混成一句：%s' % line
 
 
-def test_every_path_that_gets_here_names_its_target():
+def test_every_self_report_branch_is_a_real_print_statement():
     """仓库规矩（第 37 轮立的）："能动结构的东西必须第一行说清连哪个库"。
-    拒跑与放行两条分支都得有 `[库]` 或 `[abort]`，不许静默。"""
+    三条往下走的分支（交连接 / 旗子放行 / 本地 sqlite）各要有一条真的 `print("[库] …")`。
+
+    第 41 轮 A-M3：上一版这条写的是 `src.count('[库]') >= 2`，而 `[库]` 这个字面串也出现在
+    abort 文案（"…动手前先自报 [库]"）里 ⇒ 删掉一整条自报分支，计数照样 >= 2、用例全绿。
+    现在只数**语句**：`print("[库]` 少一条就红，并且逐条按内容点名，防止三句合成一句。
+    """
     src = (ROOT / 'alembic' / 'env.py').read_text(encoding='utf-8')
-    assert 'file=sys.stderr' in src and src.count('[库]') >= 2, \
-        'env.py 的自报分支少了（sqlite 与远程各一条）'
+    assert 'file=sys.stderr' in src
+    assert src.count('print("[库]') >= 3, \
+        'env.py 的自报语句少于 3 条（交连接 / 旗子放行 / 本地 sqlite 各一条），' \
+        '实测 %s 条' % src.count('print("[库]')
+    for marker in ('print("[库] alembic 本次 DDL 走**调用方交进来的连接**',
+                   'print("[库] alembic 目标 %s（远程；由 ALEMBIC_DATABASE_URL 说出',
+                   'print("[库] alembic 目标是本地 sqlite 文件'):
+        assert marker in src, '少了这一条自报：%s' % marker

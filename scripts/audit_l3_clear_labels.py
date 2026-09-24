@@ -18,13 +18,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import _db_guard    # noqa: E402  只读连库口：默认钉本地镜像，要读线上得显式 --production
+from sqlalchemy import text
 
 # 与 estimate_l3_vague_labels 同一套桶启发式
 CLEAR_BULL = re.compile(
@@ -194,14 +195,13 @@ def audit_clear_label(content: str, ptype: str) -> Dict[str, Any]:
 
 
 def connect():
-    url = os.getenv("DATABASE_URL", "").strip()
-    if url:
-        eng = create_engine(url, pool_pre_ping=True)
-        label = "DATABASE_URL"
-    else:
-        eng = create_engine(f"sqlite:///{ROOT / 'data' / 'fund_insight.db'}")
-        label = "local sqlite"
-    return eng, sessionmaker(bind=eng)(), label
+    """走 `_db_guard.read_only_connect()`（第 41 轮 B-MAJOR-1）。
+
+    旧写法 `if url: create_engine(url)` 在本地 = 直连生产 Supabase，而这份审计的结果会
+    写进 `docs/L3_VAGUE_LABEL_ESTIMATE.md`，数据源那一栏只写 "DATABASE_URL" ⇒ 报告里
+    的数字看不出出自哪个库。现在 label 带机器名，且两条路都是引擎级只读 + 真写探针。
+    """
+    return _db_guard.read_only_connect()
 
 
 def fetch(session) -> List[Dict[str, Any]]:

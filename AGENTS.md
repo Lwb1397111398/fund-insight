@@ -201,12 +201,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-24 00:0x（北京），第 40 轮返修（A 78 / B 79，取低分 78）之后，
+最近一次核对（2026-09-24 10:2x（北京），第 41 轮返修（A 77 / B 79，取低分 77）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **984 passed / 16 skipped / 0 failed**（205.72 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **993 passed / 16 skipped / 0 failed**（196.44 秒）。
+- `pytest tests/unit -q` → **1000 passed / 16 skipped / 0 failed**（223.34 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1009 passed / 16 skipped / 0 failed**（221.09 秒）。
+  （上一基线 984/993 → 本批 1000/1009：+16 条，分布在 `test_read_only_door.py` 新增 5 条
+  （**只读**连库口：没给旗子必须钉镜像 / 给了 `--production` 才走线上 / `mode=ro` 的引擎写不进去
+  而普通 URL 写得进（对照组）/ 探针在可写连接上必须报警 / 三个 L3·L1 脚本真走了这把门）、
+  `test_script_db_guards.py` 新增 3 条（读侧触发器 + 触发器正反两侧现造样品 +
+  "`import src.*` 必须排在定库之后"）、`test_doc_claims.py` 新增 4 条（文档条数账的尺子本身）、
+  `test_frontend_cold_start.py` 新增 3 条（失败提示在**列表非空**那条分支可达 /
+  `fetchBloggers` 数得出表上挂着几位 / `deleteBlogger` 四种结局各说各话）、
+  `test_sector_mapping_audit_import.py` 新增 1 条（写失败的行不许同时进"定不了价"桶）、
+  `test_alembic_target_direction.py` 拆出新增 1 条（自报措辞按放行依据分叉，且每条都得是真的
+  `print("[库]` 语句）。）
   （上一基线 976/985 → 本批 984/993：+8 条，分布在 `test_alembic_target_direction.py`
   （"只给一道远程旗子、目标来自 `.env`"必须仍拒跑）、`test_script_db_guards.py`
   （三条**机器无关**的重写：临时目录现造 `_x.py` 验前缀豁免 / 现造语法坏的文件验 fail-closed /
@@ -233,7 +243,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （第 39 轮另修掉一处证据机器自身的洞：`--only` 打错字以前是"0 处变异、CONTROL 全绿、退码 0"
   ＝**满分通过一次什么都没测的体检**；现在匹配不到就失败，且 CLI 换成真 argparse——
   它顶部曾 `import argparse` 却从不调用，`--help` 会让它整套开跑就地改写 `web/`）。
-  （上一基线 955/964 → 本批 967/976：+12 条 = `test_alembic_target_direction.py` 4 条
+  （上一基线 955/964 → 本批 967/976：+12 条 = `test_alembic_target_direction.py` 新增 4 条
   （远程 + 裸 CLI 必须拒跑 / 本地 sqlite 仍继承 / 显式 `ALEMBIC_DATABASE_URL` 覆盖 / 已交连接的启动路径不受影响）、
   `test_seed_owner_proxies_gate.py` +2（探针说取不到 ⇒ 0 行 0 档案；"桩的键 == 真返回的键"）、
   `test_sector_seed_route_honesty.py` +1（拿真脚本真 stdout 喂真解析器，未知列不许被静默丢掉）、
@@ -250,13 +260,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   stdout/stderr 全空）。A/B 证明与本次改动无关（把那两行删掉，3 次仍崩 1 次）；
   现在的处理是**只对这种"被系统打死"的退码重跑**，脚本自己返回 1 的失败一次都不许多试。
   （上一基线 948/957 → 本批 955/964：+7 条 =
-  `test_database_label_targets.py` 4 条（Session / Engine / Connection / 认不出的一族）、
+  `test_database_label_targets.py` 新增 4 条（Session / Engine / Connection / 认不出的一族）、
   `test_script_db_guards.py` +1 条（"赋值过 `DATABASE_URL`"不等于守卫，发 DDL 的脚本不认它）、
   `test_prediction_migrations.py` +2 条（只重试被系统打死的退码 / 崩溃退码怎么认）。）
   （上一基线 929/938 → 948/957：+19 条 =
-  `tests/unit/test_sector_seed_route_honesty.py` 10 条（seed 后门：默认关 / 确认头 / 看退码 /
+  `tests/unit/test_sector_seed_route_honesty.py` 新增 10 条（seed 后门：默认关 / 确认头 / 看退码 /
   无回执算失败 / cwd 指得到真脚本 / 成功要刷缓存 / 脚本拒写 / 只补缺不覆盖 / dry-run 不写）
-  + `test_seed_owner_proxies_gate.py` 5 条（`--owner-confirm SEED-PROXY` 闸，含"闸排在钉库之前"；今天该文件 8 条，数一律 `grep -c '^def test_' <文件>`）
+  + `test_seed_owner_proxies_gate.py` 新增 5 条（`--owner-confirm SEED-PROXY` 闸，含"闸排在钉库之前"；今天该文件 8 条，数一律 `grep -c '^def test_' <文件>`）
   + `test_sector_mapping_api.py` +2（`batch-review` 路由级转发 `owner_confirm`、`/verify-fund` 探针形状）
   + `test_frontend_cold_start.py` +2（汇总统计三种失败形状、模板祖先链「确认执行」）。
   判据与变异数**一律跑命令看末行**：`python scripts/mutation_proof_frontend.py --list`
@@ -308,6 +318,30 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   现量（2026-09-23 镜像：**活预测 1616 条，只被静态表覆盖 911 条 / 50 个板块**；
   `--impact-against tests/fixtures/sector_map_before_round27.py` 量影响面（上一版表已钉进 fixtures —— 第 35 轮 B 抓到原来那条命令指向 `data/_old_map.py`，而 `data/` 整目录不入库，命令当场 FileNotFoundError）：**31 个板块（改码 18 / 删键 13）= 78 条 = 4.8%**）。
   以前文档里写过的"916 条""124 条 / 7.7%"都是手抄没绑口径，已撤回（同一个数被复现成 925/911）。
+- **只读脚本也要答"连的是哪个库"，而且要走同一把门**（第 41 轮 B-MAJOR-1：读侧以前不算攻击面）：
+  `scripts/_db_guard.py` 现在有两件东西 —— `resolve_read_target()`（**定库但不建连接**，
+  默认钉本地镜像、命令行出现 `--production` 才用 `.env` 那条）与 `read_only_connect()`
+  （在它上面建**引擎级只读**连接：pg 走 `postgresql_readonly` 执行选项 + 真试一次写临时表的探针，
+  sqlite 走 `file:…?mode=ro&uri=true`；探针不通就 abort），并且第一行自报**机器名**
+  （`machine_name()`：sqlite 给文件路径、远程给 `scheme://host/db`，口令一个字符都不出现）。
+  为什么必须有这把门：`audit_l3_clear_labels.py` / `estimate_l3_vague_labels.py` /
+  `backtest_l1_weighting.py` 以前都写 `create_engine(os.getenv("DATABASE_URL"))`，
+  而 `.env` 里那条**就是生产 Supabase** ⇒ "跑一下 L3 估算"默认读线上，
+  还把结论连同一个只写着 `"DATABASE_URL"` 的标签落进 `docs/` 报告（变量名不告诉你连的是哪台）。
+  同一条改动里另外两件事：① 守卫扫描新增 `engine_from_env` 触发器（"读了 `DATABASE_URL` 又自己
+  `create_engine`"＝受管，四选一守卫信号才算过；`create_engine('sqlite:///固定路径')` 那种副本不算）；
+  ② `import src.*` **必须排在定库之后** —— 判据走可达性（`src/services/l1_weighting.py:16` 写着
+  `from src.models.database import Prediction`，导入它的那一刻全局 `engine` 就按当时的
+  `DATABASE_URL` 建好了，之后再 `pin_local_sqlite` 只是改环境变量、救不回那个 engine；
+  这与 `tests/conftest.py` 那条第 33 轮的规矩同源）。
+- **文档里"`test_x.py` N 条"这类当场账，有脚本对表**：`python scripts/audit_doc_claims.py`
+  拿 `pytest tests --collect-only -q` 当场收集的条数去对 `AGENTS.md` / `DEPLOYMENT.md` /
+  `docs/模块总览/*.md` 里的每个"N 条"承诺，不符就退码 3（`--fix` 就地改）。
+  **两种数必须用两种写法**：说"这个文件现在有几条"就直接写 `N 条`（会被对账）；
+  说"那一批加了几条"必须写成 `+N 条` / `新增 N 条`（脚本按写法跳过 —— 拿当场数去对增量数
+  本身就是错的）。闸门：`tests/unit/test_doc_claims.py`（含"样品故意写错 ⇒ 必须判不符"的反空判）。
+  本轮实测抓到两处漂掉的数：seed 那道闸文档写的数与当场数差了 3（当场以 `--collect-only` 为准），
+  模块总览写的前者只有实际判据的一个零头 —— 两处都已改成绑命令的写法。
 - **能写数据的脚本必须说清"连的是哪个库"**（第 28 轮 F-MINOR-6 起有用例钉）：
   `tests/unit/test_script_db_guards.py` 扫 `scripts/*.py`，判"能不能改数据"**只看 AST**（注释与
   docstring 不算）：① 直连 ORM 且代码里真 `commit/add/delete`；② CLI 带写开关
@@ -441,10 +475,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   **还有第四条来源，别把上面那句念成"只有三条"**（第 36 轮 B-MAJOR-3 抓到）：
   `scripts/seed_owner_proxies.py:62-64` 直接写 `reviewed_by='owner' + owner_locked=True`，
   它靠的是**脚本级**旗子 `--owner-confirm SEED-PROXY`（同文件 33-37 行，第 20 轮 MAJOR-1 加的），
-  不是页面上的 `owner_confirm`。这条闸**现在有用例钉着**了（第 36 轮返修补的
-  `tests/unit/test_seed_owner_proxies_gate.py` 5 条：不给令牌退 4、给错令牌退 4、`--dry-run` 不写、
-  给了令牌才落 `owner` 署名、以及"闸排在 `pin_local_sqlite` 之前"的源码顺序判据）；
-  但**别说成"豁免只有三个入口"**——第四条来源仍然在，只是它现在需要显式令牌。
+  不是页面上的 `owner_confirm`。**第 41 轮 B-MINOR-2 又数出第五条**：
+  `scripts/purge_junk_funds.py --restore-owner-immunity`（`restore()` 的参数，149-174 行）
+  在还原备份时可以把 `reviewed_by='owner' + owner_locked=True` 一起还原回去 ——
+  它要的也是显式旗子，但以前文档只说"第四条来源"，等于承诺了一个不存在的封闭名单。
+  **现在把话说全：豁免共五条来源**（页面逐行审查 / 页面批量审查 / 页面编辑保存 /
+  seed 脚本的 `--owner-confirm SEED-PROXY` / 还原备份的 `--restore-owner-immunity`），
+  每一条都要显式令牌，且**都有用例钉着**：前三条在
+  `tests/unit/test_review_ownership_and_matching.py`（逐行审查那条）与
+  `tests/unit/test_sector_mapping_api.py`（批量审查、编辑保存两条），
+  第四条在 `tests/unit/test_seed_owner_proxies_gate.py`（当场 8 条判据，数看
+  `pytest tests/unit/test_seed_owner_proxies_gate.py --collect-only -q`：
+  不给令牌退 4 / 给错令牌退 4 / `--dry-run` 不写 / 给了令牌才落 `owner` 署名 /
+  "闸排在 `pin_local_sqlite` 之前"的源码顺序 / 探针说取不到 ⇒ 不写 / 探针说可抓但没官方名 ⇒ 不写 /
+  桩的键必须等于真返回的键）；第五条在
+  `tests/unit/test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity`）。
+  但**别说成"豁免只有三个入口"**，也别再说成"只有四条"——数要跟着命令跑。
   换了基金代码又没重新确认时，**旧标的上继承来的锁定会被一并撤掉**（`row_unservable()` 的
   owner 例外只认老板这次确认过的那只基金）。页面上区分三种状态：待审查 / 已审查（只是看过）/
   老板已确认（免疫）。
@@ -575,7 +621,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `startCommand` 走这条，实测不受影响）；或**同时**给 `ALEMBIC_DATABASE_URL` 与
   `ALEMBIC_ALLOW_REMOTE=1`（两道旗子——一个环境变量就放行太松），且这条分支必须自报
   `[库] …` 到 **stderr**（`--sql` 的 stdout 是要存成脚本文件的）。
-  八条形状都由 `tests/unit/test_alembic_target_direction.py` 钉着（含"拒跑与放行都不许泄露口令"）。
+  `tests/unit/test_alembic_target_direction.py` 钉着（当场条数看 `pytest tests/unit/test_alembic_target_direction.py --collect-only -q`；含"拒跑与放行都不许泄露口令"、"三条自报分支各是一条真的 `print("[库] …")`"）。
   **推论（写给判据自己）**：桩/夹具里用的键名必须来自**真函数返回值**（AST 读），
   不许我抄一份 —— 上一轮我写的 `/verify-fund` 用例给探针发明了 `is_fetchable`/`status` 两个键，
   而路由是纯 pass-through，于是那条判据结构上不可能红（页面读的其实是 `d.ok`）。

@@ -805,3 +805,40 @@ def test_a_dry_run_plan_says_when_the_switch_is_closed(tmp_path, monkeypatch):
         assert '没开' not in ok['message'], '开关开了还警告 ⇒ 这句红字会变成噪音'
     finally:
         db.close()
+
+
+def test_a_row_that_was_never_written_is_not_counted_as_written_anyway(monkeypatch, tmp_path):
+    """写失败的行**不许**同时进"定不了价"那个桶（第 41 轮 B-MINOR-3）。
+
+    上一版 `unservable += 1` 排在 `_audit_apply_row` **之前**，于是"本库定不了价 +
+    服务端又拒了"这一族行同时落进 `refused` 和 `no_nav_priced_in_this_db`，
+    而回执那句话是"其中 N 行……**本次已照样写入**"—— 把没写进去的行说成了写了。
+    老板照那句话判断"生产已经有这三行了"，就会跳过去查生产。
+    """
+    session_factory = _database(tmp_path)
+    _seed(session_factory, sector_name="__定不了价又被拒__", fund_code="600519",
+          fund_name="贵州茅台", reviewed=False, is_active=True)
+    app, client = _client(monkeypatch, session_factory)
+    # 基金域自证说"这是股票" ⇒ 写入必被拒；本库又没有这只的档案 ⇒ 同时是"定不了价"
+    monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                        lambda c, n, s: ('基金域查无此码：这是股票/已清盘', None))
+    row = dict(AUDIT_ROW)
+    row['sector_name'] = '__定不了价又被拒__'
+    row['fund_code'] = '600519'
+    row['fund_name'] = '贵州茅台'
+    try:
+        body = _import(client, [row], dry_run=False, confirm=CONFIRM).json()
+        data = body['data']
+        assert data['counts']['refused'] == 1, data['counts']
+        assert data['no_nav_priced_in_this_db'] == 0, \
+            '一行都没写进去，却被计进"本次已照样写入"的定不了价行数：%s' % data
+        assert '本次已照样写入' not in body['message'], body['message']
+        # 反向对照：把服务端那道拒拿掉 ⇒ 同一行真的写进去了，这时**必须**报出定不了价
+        monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                            lambda c, n, s: (None, None))
+        again = _import(client, [dict(row, sector_name='__定不了价但写成了__')],
+                        dry_run=False, confirm=CONFIRM).json()
+        assert again['data']['no_nav_priced_in_this_db'] == 1, again['data']
+        assert '本次已照样写入' in again['message'], again['message']
+    finally:
+        app.dependency_overrides.pop(get_db, None)

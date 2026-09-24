@@ -1586,8 +1586,6 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
         changed = sorted(f for f, v in values.items()
                          if row is None or getattr(row, f, None) != v)
         outcome = 'created' if row is None else ('unchanged' if not changed else 'updated')
-        if outcome != 'refused' and not servable_ok:
-            unservable += 1
         if not dry_run and outcome != 'unchanged':
             apply_err = _audit_apply_row(db, service, row, sector, values)
             if apply_err:
@@ -1595,6 +1593,11 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
                 entry['reason'] = apply_err
             else:
                 written += 1
+        # 这个计数排在写入**之后**（第 41 轮 B-MINOR-3）：上一版先加再写，于是
+        # "标的定不了价 + 写入又被拒"的行同时落进 `refused` 和 `unservable` 两个桶，
+        # 而回执那句话是"其中 N 行……本次已照样写入"——把没写进去的行报成了写了。
+        if outcome != 'refused' and not servable_ok:
+            unservable += 1
         entry['outcome'] = outcome
         entry['changed_fields'] = changed
         counts[outcome] += 1

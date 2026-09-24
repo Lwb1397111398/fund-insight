@@ -32,6 +32,8 @@ def _facts(py):
     called, flags, raised, consts, direct_db = set(), set(), set(), set(), False
     env_written = False
     alembic = False      # `from alembic import command` / `import alembic...`
+    reads_url_env = False    # 读 `DATABASE_URL` / `ALEMBIC_DATABASE_URL` 这两个名字
+    builds_engine = False    # 自己 `create_engine(...)` / `sessionmaker(...)`
     alias = {}          # `from _db_guard import pin_local_sqlite as _pin_x` 也要认得出来
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == '_db_guard':
@@ -43,6 +45,8 @@ def _facts(py):
             name = getattr(func, 'id', None) or getattr(func, 'attr', None)
             if name:
                 called.add(alias.get(name, name))
+                if name in ('create_engine', 'sessionmaker'):
+                    builds_engine = True
             if name == 'add_argument':
                 flags.update(a.value for a in node.args
                              if isinstance(a, ast.Constant) and isinstance(a.value, str))
@@ -51,6 +55,8 @@ def _facts(py):
             raised.add(getattr(exc, 'id', None) or getattr(exc, 'name', '') or '')
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             consts.add(node.value)
+            if node.value in ('DATABASE_URL', 'ALEMBIC_DATABASE_URL'):
+                reads_url_env = True
         elif isinstance(node, (ast.ImportFrom, ast.Import)):
             mod = getattr(node, 'module', None) or ''
             if mod.startswith('src.models'):
@@ -68,7 +74,11 @@ def _facts(py):
                     env_written = True
     return {'text': text, 'called': called, 'flags': flags, 'raised': raised,
             'consts': consts, 'env_written': env_written, 'direct_db': direct_db,
-            'alembic': alembic}
+            'alembic': alembic,
+            # 第 41 轮 B-MAJOR-1：读侧也要问连哪儿。"自己建 engine" 且 "读了那个环境变量"
+            # 才是命中 —— `create_engine('sqlite:///固定路径')` 那种（副本回放脚本）不算，
+            # 它的目标写在代码里，看不见也不会翻。
+            'engine_from_env': bool(reads_url_env and builds_engine)}
 
 
 def _scripts():
@@ -88,6 +98,7 @@ def _scripts():
             out[py.name] = {'text': py.read_text(encoding='utf-8', errors='replace'),
                             'called': set(), 'flags': set(), 'raised': set(), 'consts': set(),
                             'env_written': False, 'direct_db': True, 'alembic': False,
+                            'engine_from_env': True,     # 解析不了＝无法证明它不读环境
                             'broken': True}
     return out
 
@@ -178,6 +189,31 @@ def _declares_http_target(f):
     `database_label` 对它没意义 —— 那它必须自己打一行 `[目标] …` 说清往哪台机器 POST。
     要的是**代码里的字面量**（`_facts.consts` 只收 AST 常量），写在注释/docstring 里不算。"""
     return any(isinstance(c, str) and c.startswith('[目标]') for c in f['consts'])
+
+
+# 读侧的"受管的门"：走这三把之一，目标就已经说清楚了（默认钉镜像 / 显式 --production）
+READ_DOORS = {'read_only_connect', 'pin_local_sqlite', 'resolve_read_target'}
+
+
+def _read_side_guarded(name, f):
+    """**只读**脚本也要答"连的是哪个库"（第 41 轮 B-MAJOR-1）。
+
+    以前整份扫描只判"能不能写"，于是三个纯读的分析脚本（`audit_l3_clear_labels.py` 等）
+    带着 `create_engine(os.getenv("DATABASE_URL"))` 过了每一道闸 —— 而 `.env` 里那条
+    就是生产串。命中形状（`engine_from_env`）后，四选一才算过：
+    ① 走统一的门（`read_only_connect` / `pin_local_sqlite` / `resolve_read_target`）；
+    ② 自己把 `DATABASE_URL` 钉成 SQLite（`import_export.py` 那一族，`env_written`）；
+    ③ "见远程就拒跑 + 显式旗子"或"见 SQLite 就拒跑 + `--production`"（两个方向都要有旗子）；
+    ④ 只面向生产的预检工具：引擎级 `postgresql_readonly` + 自报 `[目标]` + 见非 PG 就 `SystemExit`。
+    """
+    if set(f['called']) & READ_DOORS or f['env_written']:
+        return True
+    if _refuses_remote_without_a_flag(f) or _refuses_local_without_a_flag(f):
+        return True
+    consts = f['consts']
+    return ('postgresql_readonly' in consts
+            and any(c.startswith('[target]') for c in consts)
+            and 'SystemExit' in f['raised'])
 
 
 def _guarded(name, f, schema_ddl=False):
@@ -425,3 +461,136 @@ def test_the_production_only_allow_list_is_not_a_backdoor():
         assert name in scripts, 'PRODUCTION_ENTRY 里的 %s 不存在（拼错的名字=闸门静默放行）' % name
         assert 'database_label' in scripts[name]['called'], \
             '%s 挂着"生产入口"的名字却没自报库名' % name
+
+
+def test_read_side_scripts_also_say_which_database_they_read():
+    """只读脚本也要答"连的是哪个库"（第 41 轮 B-MAJOR-1：读侧不是攻击面 = 这整族的根因）。
+
+    三个 L3/L1 分析脚本以前都写着 `create_engine(os.getenv("DATABASE_URL"))` —— 本地 `.env`
+    里那条就是生产 Supabase，于是"跑一下估算"默认读线上，还把结果连同一个只写着
+    `"DATABASE_URL"` 的标签落进 `docs/`。守卫扫描只看"能不能写"，所以它们一路绿灯。
+    """
+    naked = [name for name, f in _scripts().items()
+             if f['engine_from_env'] and not _read_side_guarded(name, f)]
+    assert naked == [], '这些脚本自己按环境变量建 engine，却没走任何受管的门：%s' % '、'.join(naked)
+
+
+def test_the_read_side_trigger_fires_on_the_shape_that_broke_and_not_on_a_fixed_path(tmp_path,
+                                                                                     monkeypatch):
+    """触发器本身要能红：现造一个"照旧写法"的脚本，它必须命中且被判裸奔。
+
+    为什么不只测仓库现状：那三个脚本已经改好了 ⇒ `engine_from_env` 若永远False，
+    上一条就退化成空判（第 40 轮 A 席 M2 同一条教训：判据不许依赖"我机器上恰好有什么"）。
+    """
+    scripts = _scan_into(tmp_path, {
+        # 肇事形状：读了 DATABASE_URL，又自己 create_engine
+        '_x_env_engine.py': 'import os\nfrom sqlalchemy import create_engine\n'
+                            'e = create_engine(os.getenv("DATABASE_URL"))\n',
+        # 已改好的形状：走统一的门
+        '_x_through_the_door.py': 'import _db_guard\n'
+                                  'e, s, label = _db_guard.read_only_connect()\n',
+        # 目标写死在代码里（副本回放）：不算命中，也不该被这条管
+        '_x_fixed_path.py': 'from sqlalchemy import create_engine\n'
+                            'e = create_engine("sqlite:///data/copy.db")\n',
+    }, monkeypatch)
+    hits = {n: f['engine_from_env'] for n, f in scripts.items()}
+    assert hits['_x_env_engine.py'] is True, '环境变量 + 自建 engine 没被认出来 ⇒ 触发器是死的'
+    assert hits['_x_fixed_path.py'] is False, '写死路径的副本 engine 被误伤 ⇒ 判据过宽'
+    assert not _read_side_guarded('_x_env_engine.py', scripts['_x_env_engine.py']), \
+        '旧写法被判"已经有守卫"'
+    assert _read_side_guarded('_x_through_the_door.py', scripts['_x_through_the_door.py'])
+
+
+def _src_import_graph():
+    """src 包的**顶层** import 图：模块名 → 它 import 时就会执行的模块集合。
+
+    `SCRIPTS` 已经指向 `<repo>/scripts`，所以仓库根是它的 `.parent` 一层
+    （上一版我写成 `.parent.parent`，图直接空了 ⇒ 这条判据本来会**恒真**，
+    是下面那对控制断言把它抓出来的）。
+    """
+    root = SCRIPTS.parent
+    src = root / 'src'
+    graph = {}
+    for py in sorted(src.rglob('*.py')):
+        mod = py.relative_to(root).with_suffix('').as_posix()
+        mod = mod.replace('/__init__', '').strip('/').replace('/', '.')
+        try:
+            tree = ast.parse(py.read_text(encoding='utf-8', errors='replace'), filename=str(py))
+        except SyntaxError:
+            graph[mod] = set()
+            continue
+        out = set()
+        for node in tree.body:        # 只看顶层：函数体里的 import 在调用时才跑
+            if isinstance(node, ast.ImportFrom):
+                base = (node.module or '')
+                out.add(base)
+                for a in node.names:
+                    out.add((base + '.' + a.name) if base else a.name)
+            elif isinstance(node, ast.Import):
+                out.update(a.name for a in node.names)
+        graph[mod] = {m for m in out if m}
+    return graph
+
+
+def _reaches_orm(module, graph):
+    """`import module` 会不会**顺带**把 `src.models.database` 拉起来（建全局 engine）。"""
+    seen, stack = set(), [module]
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        if cur == 'src.models.database':
+            return True
+        stack.extend(m for m in graph.get(cur, ()) if m.startswith('src'))
+    return False
+
+
+def test_an_orm_import_must_come_after_the_database_is_decided():
+    """`import src.*` 排在"定库"之前 = 守卫形同虚设（第 41 轮 B-MINOR-1）。
+
+    为什么判"可达"而不是"名字里有没有 models"：`scripts/backtest_l1_weighting.py` 导入的是
+    `src.services.l1_weighting`，而它第 16 行写着 `from src.models.database import Prediction`
+    ⇒ 导入的那一刻 `src/models/database.py` 顶层的 `engine = create_engine(DATABASE_URL)`
+    已经按 `.env` 那串**生产**地址建好了；之后再 `pin_local_sqlite()` 只是改环境变量，
+    救不回那个 engine。这与第 33 轮 `tests/conftest.py` 那次生产误连同源。
+    """
+    graph = _src_import_graph()
+    # 先钉住"可达"这件事本身：一条真会、一条真不会，否则这判据是我编的
+    assert _reaches_orm('src.services.l1_weighting', graph), \
+        '可达性判据连 l1_weighting→models.database 都走不通 ⇒ 下面的用例是空判'
+    assert not _reaches_orm('src.utils.mutation_lock', graph), \
+        'mutation_lock 被判"会拉起 ORM" ⇒ 可达性太宽，会把无辜脚本一起拦下'
+
+    doors = {'pin_local_sqlite', 'resolve_read_target', 'read_only_connect'}
+    offenders = []
+    for name, f in sorted(_scripts().items()):
+        if name in PRODUCTION_ENTRY:      # Render Cron 入口：就该连生产，护栏是 `database_label`
+            continue
+        tree = ast.parse(f['text'], filename=name)
+        alias = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == '_db_guard':
+                for a in node.names:
+                    alias[a.asname or a.name] = a.name
+
+        def _is_door(node):
+            if not isinstance(node, ast.Call):
+                return False
+            raw = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)
+            return raw in doors or alias.get(raw or '') in doors
+
+        door_lines = [node.lineno for node in ast.walk(tree) if _is_door(node)]
+        first_door = min(door_lines) if door_lines else 10 ** 9
+        for node in tree.body:            # 顶层顺序
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            mod = getattr(node, 'module', None) or ''
+            targets = {a.name for a in node.names} | ({mod} if mod else set())
+            targets |= {(mod + '.' + a.name) for a in node.names} if mod else set()
+            bad = sorted(t for t in targets if t.startswith('src') and _reaches_orm(t, graph))
+            if bad and node.lineno < first_door:
+                offenders.append('%s 第 %s 行 import %s（定库调用排在它%s）'
+                                 % (name, node.lineno, bad[0],
+                                    '后面' if first_door < 10 ** 9 else '从来没有'))
+    assert offenders == [], '这些脚本在决定连哪个库**之前**就把全局 engine 建好了：%s' % '；'.join(offenders)

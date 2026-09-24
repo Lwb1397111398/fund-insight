@@ -116,9 +116,14 @@ def _bulk_write_hits(node, column):
 
     第 40 轮 B 的 M-5：两版收集器都只认字符串 key（`{'is_correct': v}`）与关键字
     （`values(is_correct=v)`），而 SQLAlchemy 的地道批量写法是**把列对象当 key**
-    （`update({Prediction.is_correct: True})`）—— 仓库里今天就有 3 处这么写
-    （`routes/viewpoints.py:473`、`retention_cleanup_service.py:907`、
-    `retention_three_buckets.py:1108`），说明这条路团队真的会走。
+    （`update({Prediction.is_correct: True})`）—— 仓库里这种写法有 **7 处**
+    （尺子：`python -c "import ast,pathlib;n=0
+     for p in pathlib.Path('src').rglob('*.py'):
+      t=ast.parse(p.read_text(encoding='utf-8'))
+      n+=sum(1 for x in ast.walk(t) if isinstance(x,ast.Call) and
+             getattr(x.func,'attr','')=='update' and any(isinstance(a,ast.Dict) and
+             any(isinstance(k,ast.Attribute) for k in a.keys) for a in x.args))
+     print(n)"`；第 41 轮 A-m2 更正：这里以前手抄的是"3 处"，口径数错了）。
 
     只认参数位（我第一版扫整棵子树，当场误伤 6 处只读代码：
     `filter(Prediction.fund_code == x).update({'status': ...})` 里的 `fund_code` 是筛选条件，
@@ -143,6 +148,22 @@ def _bulk_write_hits(node, column):
     for kw in node.keywords:
         if kw.arg == column:
             return True
+    return False
+
+
+def _assign_write_hits(node, column):
+    """`X.<column> = ...` / `X.<column>: T = ...` —— 赋值**目标位**上是不是这一列。
+
+    为什么单独抽出来：第 41 轮 A-m2 抓到样品里那条"读它不算写"（`x = Prediction.is_correct`）
+    根本没有 Call 节点，于是判据取到 `None`、`_bulk_write_hits(None, …)` 恒 False ——
+    那条样品**结构上不可能红**。赋值这一族走的是另一个形状，得有另一个函数，
+    样品才有东西可测（第 2/3 项的 `want=True` 就是它）。
+    """
+    import ast
+    if isinstance(node, ast.Assign):
+        return any(isinstance(t, ast.Attribute) and t.attr == column for t in node.targets)
+    if isinstance(node, ast.AnnAssign):
+        return isinstance(node.target, ast.Attribute) and node.target.attr == column
     return False
 
 
@@ -274,13 +295,12 @@ def test_is_correct_is_only_written_by_the_verify_service():
             self.rel = rel
 
         def visit_Assign(self, node):
-            for target in node.targets:
-                if isinstance(target, ast.Attribute) and target.attr == 'is_correct':
-                    writers.add(self.rel)
+            if _assign_write_hits(node, 'is_correct'):
+                writers.add(self.rel)
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node):
-            if isinstance(node.target, ast.Attribute) and node.target.attr == 'is_correct':
+            if _assign_write_hits(node, 'is_correct'):
                 writers.add(self.rel)
             self.generic_visit(node)
 
@@ -362,22 +382,55 @@ def test_export_snapshot_carries_the_badge_too(test_db):
     assert row['evidence_status'] == 'nav_rewritten'
     assert exported['predictions_evidence']['stale_evidence'] == 1
 
-def test_the_bulk_write_detector_recognises_all_five_spellings():
-    """收集器自己的样品：参数位上的三种写法都要认，非参数位的两处不许误伤，用的就是仓库里真有的那种形状。
+def _shape_hits(src, column):
+    """一段源码里有没有"写这一列"的形状（赋值目标位 + 批量写参数位，两条都算）。
 
-    没有这条，'已扩展到批量写'又是一次"加了参数不等于加了护栏"（第 17/27/39 轮同一族）。
+    单点真源：仓库级扫描（`_C` 那两个 visitor）与下面的样品共用它，
+    免得"样品绿、扫描器瞎"或反过来。
     """
     import ast
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and _assign_write_hits(node, column):
+            return True
+        if isinstance(node, ast.Call):
+            fname = getattr(node.func, 'attr', None) or getattr(node.func, 'id', None)
+            if fname == 'setattr' and len(node.args) >= 2 \
+                    and isinstance(node.args[1], ast.Constant) and node.args[1].value == column:
+                return True
+            if _bulk_write_hits(node, column):
+                return True
+    return False
+
+
+def test_the_bulk_write_detector_recognises_every_spelling_we_claim():
+    """收集器自己的样品：两种"写"的位置（赋值目标位 / 批量写参数位）都要认，
+    三种"看着像但不是"的形状不许误伤 —— 用的就是仓库里真有的那种写法。
+
+    没有这条，"已扩展到批量写"又是一次"加了参数不等于加了护栏"（第 17/27/39 轮同一族）。
+    第 41 轮 A-m2 修掉的假样品：原来那条 `x = Prediction.is_correct` 走的是
+    `_bulk_write_hits(call, …)`，而那行源码**根本没有 Call 节点** ⇒ 取到 `None`、恒 False，
+    结构上不可能红。现在样品按"整段源码"判，正反两侧各有真能红的样本。
+    """
     shapes = [
         ('dict 的 key 是列对象，必须认', 'q.update({Prediction.is_correct: True})', 'is_correct', True),
         ('dict 的 key 是字符串，以前就认', 'q.update({"is_correct": True})', 'is_correct', True),
         ('values 的关键字，以前就认', 'q.values(is_correct=True)', 'is_correct', True),
-        ('列名只出现在筛选条件里，不许误伤只读代码', 'q.filter(Prediction.fund_code == x).update({"status": 1})', 'fund_code', False),
-        ('读它不算写', 'x = Prediction.is_correct', 'is_correct', False),
+        ('属性赋值就是写（仓库里唯一的真写法）', 'prediction.is_correct = True', 'is_correct', True),
+        ('带注解的赋值也算', 'prediction.is_correct: bool = False', 'is_correct', True),
+        ('setattr 用字符串列名也算', "setattr(p, 'is_correct', True)", 'is_correct', True),
+        ('列名只出现在筛选条件里，不许误伤只读代码',
+         'q.filter(Prediction.fund_code == x).update({"status": 1})', 'fund_code', False),
+        ('放在**值**的位置上是读它，不是写它',
+         'q.update({"status": Prediction.fund_code})', 'fund_code', False),
+        ('裸读取：赋值目标是别人', 'x = Prediction.is_correct', 'is_correct', False),
         ('写别的列不算写这一列', 'q.update({Prediction.sector: y})', 'is_correct', False),
     ]
     for name, src, col, want in shapes:
-        tree = ast.parse(src)
-        call = next((n for n in ast.walk(tree) if isinstance(n, ast.Call)), None)
-        got = _bulk_write_hits(call, col)
-        assert got == want, '%s：判成 %s，应为 %s（源码：%s）' % (name, got, want, src)
+        assert _shape_hits(src, col) is want, '%s：判成 %s，应为 %s（源码：%s）' % (
+            name, not want, want, src)
+    # 反向护栏：仓库级的 visitor 与本判据必须是同一把尺（改了 visitor 忘了改样品 ⇒ 红）
+    import ast
+    tree = ast.parse('prediction.is_correct = True')
+    assign = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)][0]
+    assert _assign_write_hits(assign, 'is_correct'), '赋值那一族整个失效：样品在骗人'

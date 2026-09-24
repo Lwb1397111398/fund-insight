@@ -1438,3 +1438,164 @@ def test_the_audit_counters_hang_up_when_the_list_was_not_fetched():
     assert len(buttons) == 4, '体检按钮只扫到 %d 个（应为 4）⇒ 结构变了，这条要重核' % len(buttons)
     for cond in buttons:
         assert 'viewErrors.mappings' in cond, '这个按钮还在摆上一轮的计数：%s' % cond
+
+
+def _element_spans(tpl):
+    """模板里每个元素的 (attrs, start, end)。
+
+    属性正则必须是 `(?:"[^"]*"|[^>"])*` —— 用 `[^>]*` 会在 `v-if="a.length > 0"` 的
+    引号内被 `>` 截断，整段区间就塌了（第一版我踩了这个坑，探针当场全报 NO-HOST）。
+    """
+    void = {'br', 'input', 'img', 'hr', 'meta', 'link', 'area', 'base', 'col'}
+    spans, stack = [], []
+    for m in re.finditer(r'<(/?)([a-zA-Z][\w-]*)((?:"[^"]*"|[^>"])*?)(/?)>', tpl):
+        closing, tag, attrs, self_close = m.group(1), m.group(2), m.group(3), m.group(4)
+        if closing:
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i][0] == tag:
+                    _t, _s, a = stack.pop(i)
+                    spans.append((a, _s, m.end()))
+                    break
+            continue
+        if tag not in void and not self_close:
+            stack.append((tag, m.start(), attrs))
+        else:
+            spans.append((attrs, m.start(), m.end()))
+    return spans
+
+
+def test_an_error_notice_must_be_reachable_while_its_list_is_still_on_screen():
+    """`XError` 与 `X.length` 同名的那一对，红字必须写在**列表非空那条分支里**。
+
+    第 41 轮 A-M2：博主榜失败时 `bloggers.value` 留着上一轮那 27 位，于是渲染走的是
+    `v-if="bloggers.length > 0"` 那条；而那句 `bloggersError` 只写在配对的 `v-else`
+    空状态里 ⇒ **结构上永远到不了**，老板看到的是一份没有任何标记的旧榜。
+    这与第 34 轮 `fetchEvidence` 那一族同一个形状，只是这次是"文案放对了变量、放错了分支"。
+
+    范围要说清（不许念成"全页失败态都钉住了"）：这条只覆盖**同名的一对**
+    （`bloggersError`↔`bloggers`、将来的 `postsError`↔`posts`…）。
+    `adviceError`/`statsError` 这些没有同名列表的，由 `viewErrors` 与空状态那几条判据管。
+    """
+    html = _html()
+    tpl = html[html.index('<div id="app"'):html.index('<script src="/web/post-manager.js">')]
+    tpl = re.sub(r'<!--.*?-->', '', tpl, flags=re.S)
+    spans = _element_spans(tpl)
+    checked = []
+    for m in re.finditer(r'v-if="([A-Za-z][\w]*)\.length[^"]*"', tpl):
+        name = m.group(1)
+        err = name + 'Error'
+        if not re.search(r'const %s = ref\(' % err, html):
+            continue                        # 没有配对的错误态名字，不归这条管
+        host = [(a, s, e) for a, s, e in spans
+                if ('v-if="%s.length' % name) in a.replace(' ', '') or ('v-if="%s.length' % name) in a]
+        assert host, '模板里读得到 %s.length，却找不到承载它的元素' % name
+        inside = any(err in tpl[s:e] for _a, s, e in host)
+        checked.append((name, inside))
+        assert inside, ('%s 只在列表为空的 `v-else` 里出现 ⇒ 列表非空（挂着上一轮数据）时'
+                        '这句失败说明永不渲染' % err)
+    assert checked, '一条同名对都没查到 ⇒ 这条判据已经空转（列表改名了要同步改这条）'
+
+
+
+def test_fetch_bloggers_counts_the_rows_it_leaves_on_screen():
+    """`fetchBloggers` 失败时必须**数出**表上还挂着几位 —— 跑页面里那份真源码。
+
+    第 41 轮 A-M2 的另一半：文案已经写在正确的分支里了，但它插的是 `{{ bloggersStale }}`；
+    这个数到底有没有被赋值、成功后有没有清零，只有把函数执行一遍才知道（文本判据测不到）。
+    四种形状：抛错 / 200+success:false / 成功清零 / 一开始就是空表（反向对照）。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    body = _decl(_html(), 'fetchBloggers = async () =>').replace(
+        'const fetchBloggers =', 'const fetchBloggersUnderTest =', 1)   # prelude 里有个同名桩
+    out = _run_page_js(
+        body + """
+const run = async () => {
+    const shapes = {};
+    bloggers.value = [{id:1},{id:2},{id:3}];
+    impl = async () => { const e = new Error('boom'); e.response = {status: 503}; throw e; };
+    await fetchBloggersUnderTest();
+    shapes.throw_ = {err: !!bloggersError.value, stale: bloggersStale.value, kept: bloggers.value.length};
+    impl = async () => ({ data: { success: false, message: '接口拒绝' } });
+    await fetchBloggersUnderTest();
+    shapes.soft_ = {err: !!bloggersError.value, stale: bloggersStale.value};
+    impl = async () => ({ data: { success: true, data: [{id:9}] } });
+    await fetchBloggersUnderTest();
+    shapes.ok_ = {err: !!bloggersError.value, stale: bloggersStale.value, kept: bloggers.value.length};
+    // 反向对照：空表 + 失败 ⇒ 不许说"上一次取到的 3 位"（那是真的没数据，走另一条分支）
+    bloggers.value = []; bloggersError.value = ''; bloggersStale.value = 0;
+    impl = async () => { const e = new Error('boom'); e.response = {status: 503}; throw e; };
+    await fetchBloggersUnderTest();
+    shapes.empty_ = {err: !!bloggersError.value, stale: bloggersStale.value};
+    return shapes;
+};
+run().then((r) => console.log(JSON.stringify(r)));
+""",
+        helpers=["const bloggersStale = ref(0);",
+                 "const withWakeRetry = async (fn) => fn();",
+                 # 失败原因那一档走的是页面里那份真 `isServiceDown`，不是我照抄的副本
+                 _expr(_html(), 'const isServiceDown')])
+    assert out['throw_'] == {'err': True, 'stale': 3, 'kept': 3}, out['throw_']
+    assert out['soft_'] == {'err': True, 'stale': 3}, out['soft_']
+    assert out['ok_'] == {'err': False, 'stale': 0, 'kept': 1}, out['ok_']
+    assert out['empty_'] == {'err': True, 'stale': 0}, out['empty_']
+
+
+def test_delete_blogger_tells_four_different_endings_apart():
+    """删除博主的四种结局必须分开 —— 第 41 轮 A-M2 说这条路径此前零覆盖。
+
+    旧写法把"删成功 + 刷新炸"和"没删掉"合并成一句 `删除失败: <err>`：
+    老板照那句去重删，就会把同一条记录删两次（或以为没删成又点一遍）。
+    现在跑页面里那份真源码，看每种服务端形状各弹出哪句话、有没有去刷新。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    body = _decl(_html(), 'deleteBlogger = async (id) =>')
+    # prelude 里 `fetchBloggers`/`fetchStats` 是死的桩（const，换不掉），
+    # 所以把"刷新那一组调用"整体换成一个可观察的替身；被替换的三行本身不在这条判据里，
+    # 这条判的是**刷新抛错时函数说哪句话** —— 那半截仍是页面源码。
+    old_refresh = 'await fetchBloggers(); await fetchStats();'
+    assert old_refresh in body, '刷新那一行换了写法，这条判据要跟着改（不能默默空转）'
+    body = body.replace(old_refresh, 'await probeRefresh();')
+    out = _run_page_js(
+        body + """
+const probe = async (mode) => {
+    alerts.length = 0; refreshes.length = 0;
+    deleteBloggerMode = mode;
+    await deleteBlogger(7);
+    return {alerts: alerts.slice(), refreshes: refreshes.slice()};
+};
+const main = async () => JSON.stringify({
+    ok:           await probe('ok'),
+    soft:         await probe('soft'),
+    thrown:       await probe('thrown'),
+    staleRefresh: await probe('refresh-throws'),
+});
+main().then((s) => console.log(s));
+""",
+        helpers=[
+            "let deleteBloggerMode = 'ok';",
+            "const alerts = []; const refreshes = [];",
+            "const alert = (m) => alerts.push(m);",
+            "const confirm = () => true;",
+            "const currentView = ref('bloggers');",
+            "const fetchCleanupPreview = async () => { refreshes.push('cleanup'); };",
+            "const probeRefresh = async () => {",
+            "    if (deleteBloggerMode === 'refresh-throws') throw new Error('刷新时连不上');",
+            "    refreshes.push('bloggers');",
+            "};",
+            "axios.delete = async (url) => {",
+            "    if (deleteBloggerMode === 'soft')"
+            " return { data: { success: false, message: '还有 3 条帖子' } };",
+            "    if (deleteBloggerMode === 'thrown') {"
+            " const e = new Error('500'); e.response = { data: { detail: '内部错误' } }; throw e; }",
+            "    return { data: { success: true } };",
+            "};",
+        ])
+    assert out['ok']['alerts'] == ['删除成功'], out['ok']
+    assert out['ok']['refreshes'] == ['bloggers'], out['ok']
+    assert out['soft']['alerts'] == ['没删掉：还有 3 条帖子'], out['soft']
+    assert out['soft']['refreshes'] == [], '200+success:false 也去刷新 ⇒ 把没删成的行从榜上抹了'
+    assert out['thrown']['alerts'] == ['删除失败: 内部错误'], out['thrown']
+    assert out['thrown']['refreshes'] == []
+    assert out['staleRefresh']['alerts'] == ['博主已删除，只是列表没刷新出来 —— 刷新页面即可'],         out['staleRefresh']

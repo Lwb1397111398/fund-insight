@@ -385,6 +385,18 @@ MUTATIONS = [
     ('test_the_three_prediction_queues_explain_themselves_without_hover',
      'caliber_note_loses_its_style_class', HTML,
      'class="filter-caliber-note"', 'class="caliber-note"', False),
+    ('test_an_error_notice_must_be_reachable_while_its_list_is_still_on_screen',
+     'bloggers_notice_moves_back_into_the_empty_branch', HTML,
+     r'<div v-if="bloggersError" class="notice-inline error"[^\n]*\n(?:[^\n]*\n){2}[^\n]*</div>\n',
+     '', True),
+    ('test_fetch_bloggers_counts_the_rows_it_leaves_on_screen',
+     'stale_rows_never_counted', HTML,
+     'bloggersStale.value = bloggers.value.length;', 'bloggersStale.value = 0;', False),
+    ('test_delete_blogger_tells_four_different_endings_apart',
+     'refresh_death_blamed_on_the_delete', HTML,
+     r'// 博主已经删掉了，刷新失败不能说「删除失败」（addBlogger 第 34 轮就有这条腿）\n'
+     r'(?:[^\n]*\n){6}[^\n]*\n',
+     'await fetchBloggers(); await fetchStats();\n', True),
 ]
 
 

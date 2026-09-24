@@ -88,3 +88,123 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
     print("[env] DATABASE_URL = %s" % url)
     sys.stdout.flush()
     return url
+
+
+def machine_name(url):
+    """自报"连的是哪台"用的名字：sqlite 给文件路径，远程给 `scheme://host/db`。
+
+    为什么不印 `DATABASE_URL` 这五个字（第 41 轮 B-MAJOR-1）：变量名不告诉你任何事 ——
+    本地 `.env` 里它指生产，Render 上它指生产，CI 里可能指测试库。
+    口令一个字符都不出现：只取 `@` 后面那一段。
+    """
+    if not url or "://" not in url:
+        return url or "(空)"
+    scheme, rest = url.split("://", 1)
+    where = rest.split("@")[-1].split("?", 1)[0]
+    if scheme.startswith("sqlite"):
+        return where
+    return "%s://%s" % (scheme, where)
+
+
+def production_requested(argv=None):
+    return "--production" in (sys.argv[1:] if argv is None else list(argv))
+
+
+_READ_TARGET = []   # [(url, is_production)]：一次进程只定一次库，第二次直接复用（别再印两行 [env]）
+
+
+def resolve_read_target(argv=None):
+    """**定库**（并把镜像钉进环境），但不建连接。返回 `(url, is_production)`。
+
+    为什么单独有这个函数（第 41 轮 B-MINOR-1）：`src/services/l1_weighting.py:16` 写着
+    `from src.models.database import Prediction` —— 只要顶层 import 了它，全局 `engine`
+    就在那一刻按**当时的** `DATABASE_URL` 建出来，而 `.env` 里那条指生产（实测：
+    设成 `postgresql://…invalid.invalid/nope` 后导入，`src.models.database.engine.url`
+    就是那串远程地址）。所以"先决定连哪儿"必须排在"先 import 任何 src.*"**之前**，
+    和 `tests/conftest.py` 那条规矩同源。
+    """
+    if _READ_TARGET:
+        return _READ_TARGET[0]
+    if production_requested(argv):
+        url = (os.environ.get("DATABASE_URL", "") or _dotenv_database_url()).strip()
+        if not url.lower().startswith(("postgres", "postgresql")):
+            print("[abort] --production 要求 DATABASE_URL 指向 PostgreSQL，当前解析到的是 %s"
+                  % machine_name(url))
+            raise SystemExit(4)
+        _READ_TARGET.append((url, True))
+    else:
+        _READ_TARGET.append((pin_local_sqlite(use_mirror_default=True), False))
+    return _READ_TARGET[0]
+
+
+def _sqlite_ro_url(url):
+    """把 `sqlite:///路径` 改写成 `file:…?mode=ro&uri=true`，让**引擎**去挡写。
+
+    为什么要自己拼：实测 `create_engine("sqlite:///C:/…/x.db", connect_args={'uri': True})`
+    并没有被当成只读 URI（写照样成功），而 `sqlite:///file:…?mode=ro&uri=true` 才会
+    报 `attempt to write a readonly database`。正则挡不住写，引擎挡得住。
+    """
+    body = url[len("sqlite:///"):] if url.lower().startswith("sqlite:///") else url
+    body = body.split("?", 1)[0]
+    import urllib.parse
+    quoted = urllib.parse.quote(body.replace("\\", "/"), safe="/:@")
+    return "sqlite:///file:%s?mode=ro&nolookup=1&uri=true" % quoted
+
+
+def _write_probe(engine, ddl):
+    """真试一次写，只有数据库自己说"不许写"才算只读成立（返回 None）。
+
+    第 25/26 轮在 `scripts/q.py` 上翻过两次车的教训沿用：读一个刚设进去的会话变量是
+    恒真核对，`isolation_level='READ ONLY'` 根本不是 psycopg2 方言的合法值。
+    """
+    with engine.connect() as conn:
+        try:
+            conn.exec_driver_sql(ddl)
+        except Exception as exc:                      # noqa: BLE001  报错正是我们要的
+            msg = str(exc).lower()
+            if "readonly" in msg or "read-only" in msg or "read only" in msg:
+                return None
+            return '只读探针报错但不是"只读"错：%s' % str(exc)[:160]
+        finally:
+            conn.rollback()
+        return "探针写入竟然成功 ⇒ 这条连接不是只读，拒绝继续"
+
+
+def read_only_connect(argv=None):
+    """只读分析脚本的统一连库口。返回 `(engine, session, label)`。
+
+    三件事是硬的（起因：第 41 轮 B-MAJOR-1 —— `audit_l3_clear_labels.py` /
+    `estimate_l3_vague_labels.py` / `backtest_l1_weighting.py` 都写着
+    "`os.getenv("DATABASE_URL")` 一有值就连它"，而 `.env` 默认就是生产 Supabase；
+    守卫扫描只盯"能不能写"，于是这三个**读侧**脚本从没被问过连哪儿。
+    它们还会把结果写进 `docs/L3_*.md` 报告，标签只是 "DATABASE_URL" ⇒ 一份不知道出自
+    哪个库的数字进了文档）：
+
+    1) 默认连**本地镜像**（`pin_local_sqlite(use_mirror_default=True)`）。
+       要读线上必须命令行显式出现 `--production`：`.env` 里躺着生产串不算"人说过要连"。
+    2) 两条路都是**引擎级只读 + 真写探针**，探针不通直接 abort。
+    3) 第一行自报**机器名**（`[库] …`），并且这个 label 要进报告正文。
+    """
+    import sqlalchemy as sa
+    from sqlalchemy.orm import sessionmaker
+    url, is_production = resolve_read_target(argv)
+    if is_production:
+        engine = sa.create_engine(url, pool_pre_ping=True,
+                                  execution_options={"postgresql_readonly": True})
+        why = _write_probe(engine, "CREATE TEMP TABLE _db_guard_probe(x int)")
+        if why:
+            print("[abort] %s" % why)
+            raise SystemExit(4)
+        label = "线上生产库 %s（引擎级只读，写探针已被数据库拒绝）" % machine_name(url)
+    else:
+        url = pin_local_sqlite(use_mirror_default=True)
+        engine = sa.create_engine(_sqlite_ro_url(url), connect_args={"uri": True})
+        why = _write_probe(engine, "CREATE TABLE _db_guard_probe(x int)")
+        if why:
+            print("[abort] %s" % why)
+            raise SystemExit(4)
+        label = ("本地镜像库 %s（引擎级只读；要分析线上数据得显式 --production，"
+                 "等价命令 scripts/q.py --production）" % machine_name(url))
+    print("[库] %s" % label)
+    sys.stdout.flush()
+    return engine, sessionmaker(bind=engine)(), label

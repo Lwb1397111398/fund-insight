@@ -184,10 +184,15 @@ def main():
                 print('   ...其余 %d 行省略' % (len(bad) - 40))
             if not args.allow_unservable:
                 drop = {s for s, _c, _n in bad}
-                dropped += len(drop)   # 第 40 轮 B：以前是覆盖，两路同时剔时少报（注释承诺的是"计进总数"）
+                # 两路剔除用**同一把尺**（第 41 轮 A-m3 / B-MINOR-4）：上面那路量的是
+                # `before - len(rows)`（行数），这一路以前量 `len(drop)`（去重后的板块名）。
+                # 今天 145 行=145 板块所以两个数相等，一旦出现"同板块两行"就会少报剔除数。
+                before = len(rows)
                 rows = [r for r in rows if r.get('sector_name') not in drop]
-                print('[预检] 已剔除 %d 行，剩 %d 行待发；确实要把不可服务的行也发上去，'
-                      '加 --allow-unservable' % (len(drop), len(rows)))
+                dropped += before - len(rows)
+                print('[预检] 已剔除 %d 行（涉及 %d 个板块），剩 %d 行待发；'
+                      '确实要把不可服务的行也发上去，加 --allow-unservable'
+                      % (before - len(rows), len(drop), len(rows)))
                 if not rows:
                     print('[abort] 剔除后没有可发的行了')
                     return 5

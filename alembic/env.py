@@ -39,11 +39,11 @@ env_url = os.getenv("DATABASE_URL") or ""
 # 且 `ALEMBIC_ALLOW_REMOTE=1`；从 `.env` 继承来的远程一律拒（要动生产走 run_migrations.py）。
 inheriting = (not explicit_url) and ini_url == "sqlite:///data/fund_insight.db" and bool(env_url)
 target_url = explicit_url or (env_url if inheriting else "")
-resolved = target_url or ini_url          # alembic 真正拿去选方言/建连的就是它
+resolved = target_url or ini_url          # alembic 配置文件里解析到的那个目标
+supplied = config.attributes.get("connection") is not None
 if resolved and not resolved.startswith("sqlite"):
     stated = bool(explicit_url) and not explicit_url.startswith("sqlite")
-    if config.attributes.get("connection") is None and not (
-            stated and os.getenv("ALEMBIC_ALLOW_REMOTE") == "1"):
+    if not supplied and not (stated and os.getenv("ALEMBIC_ALLOW_REMOTE") == "1"):
         raise SystemExit(
             "[abort] alembic 这次解析出的目标是远程库（%s），不许由命令行直接发 DDL。"
             " 这个目标来自 %s。真要动远程库：把那条连接串**亲口交给** ALEMBIC_DATABASE_URL，"
@@ -53,8 +53,18 @@ if resolved and not resolved.startswith("sqlite"):
             % (_redact(resolved), 'ALEMBIC_DATABASE_URL' if explicit_url else '.env 的 DATABASE_URL')
         )
     # 自报走 stderr：`--sql` 的 stdout 是要人存成脚本文件的，不许混进解释行。
-    print("[库] alembic 目标 %s（远程；由 ALEMBIC_DATABASE_URL 说出 + ALEMBIC_ALLOW_REMOTE=1 放行）"
-          % _redact(resolved), file=sys.stderr)
+    # 第 41 轮 A-M1：这一句以前不分叉 —— 走"调用方交进来的连接"那条（= Render startCommand）
+    # 时照样印"由 ALEMBIC_DATABASE_URL 说出 + ALEMBIC_ALLOW_REMOTE=1 放行"，可那条路上
+    # 两道旗子**一面都没立**（放行依据是连接，不是旗子）。于是自报行凭空替人伪造了一次授权，
+    # 而旧用例只看 stdout 里的 BOOT-PATH-OK，从不读这行的内容 ⇒ 说谎没人管。
+    if supplied:
+        print("[库] alembic 本次 DDL 走**调用方交进来的连接**（放行依据=那条连接，"
+              "与 ALEMBIC_DATABASE_URL / ALEMBIC_ALLOW_REMOTE 两道旗子无关）；"
+              "配置文件里解析到的目标是 %s —— 两者可以不是同一个库，以连接为准"
+              % _redact(resolved), file=sys.stderr)
+    else:
+        print("[库] alembic 目标 %s（远程；由 ALEMBIC_DATABASE_URL 说出"
+              "+ ALEMBIC_ALLOW_REMOTE=1 放行）" % _redact(resolved), file=sys.stderr)
 elif resolved:
     print("[库] alembic 目标是本地 sqlite 文件：%s" % resolved.split(":///", 1)[-1],
           file=sys.stderr)

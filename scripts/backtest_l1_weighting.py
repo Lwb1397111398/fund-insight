@@ -22,25 +22,30 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import _db_guard    # noqa: E402  只读连库口：默认钉本地镜像，线上要显式 --production
+from sqlalchemy import text
 
-from src.services import l1_weighting as l1
+# 这一句必须排在任何 `src.*` 导入**之前**定好库（第 41 轮 B-MINOR-1）：
+# `src/services/l1_weighting.py:16` 自己写着 `from src.models.database import Prediction`，
+# 所以 import 它的那一刻全局 `engine` 就按**当时的** DATABASE_URL 建出来了 ——
+# 而 `.env` 里那条是生产 Supabase（实测：把 DATABASE_URL 设成 invalid 的远程串再导入，
+# `src.models.database.engine.url` 就是那串远程地址）。同一条规矩在 `tests/conftest.py`
+# 那里是第 33 轮用生产误连换来的。
+_db_guard.resolve_read_target()
+from src.services import l1_weighting as l1    # noqa: E402
 
 
-def _connect():
-    url = os.getenv("DATABASE_URL", "").strip()
-    if url:
-        eng = create_engine(url, pool_pre_ping=True)
-    else:
-        db_path = ROOT / "data" / "fund_insight.db"
-        eng = create_engine(f"sqlite:///{db_path}")
-    return eng, sessionmaker(bind=eng)()
+def _connect(argv=None):
+    """只读连库口收进 `_db_guard.read_only_connect()`（第 41 轮 B-MAJOR-1）：
+    旧写法 `os.getenv("DATABASE_URL")` 一有值就连它，而 `.env` 那条指生产。"""
+    engine, session, label = _db_guard.read_only_connect(argv)
+    return engine, session, label
 
 
 def _as_date(v) -> Optional[date]:
@@ -415,10 +420,12 @@ def main():
     )
     parser.add_argument("--p0", type=float, default=float(os.getenv("L1_P0", "0.609")))
     parser.add_argument("--alpha", type=float, default=float(os.getenv("L1_ALPHA", "15")))
+    # 读生产得亲口说：`.env` 默认就是生产串，"没设参数"不等于"没打算连线上"
+    parser.add_argument("--production", action="store_true",
+                        help="回测读线上库（默认只读本地镜像）")
     args = parser.parse_args()
 
-    eng, session = _connect()
-    db_label = "DATABASE_URL" if os.getenv("DATABASE_URL") else "local sqlite"
+    eng, session, db_label = _connect(['--production'] if args.production else [])
     try:
         rows = load_rows(session)
     finally:

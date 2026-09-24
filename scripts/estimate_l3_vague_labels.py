@@ -18,13 +18,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
+
+import _db_guard    # noqa: E402  只读连库口（默认钉本地镜像，见 read_only_connect）
 
 CLEAR_BULL = re.compile(
     r"(看多|看涨|看升|上涨|上行|加仓|增持|布局多|做多|突破|新高|乐观|强势|反弹|翻倍|大涨|暴涨|买入|抄底)",
@@ -67,12 +69,12 @@ def classify_text(text: str, ptype: str) -> str:
 
 
 def connect():
-    url = os.getenv("DATABASE_URL", "").strip()
-    if url:
-        eng = create_engine(url, pool_pre_ping=True)
-        return eng, sessionmaker(bind=eng)(), "DATABASE_URL"
-    eng = create_engine(f"sqlite:///{ROOT / 'data' / 'fund_insight.db'}")
-    return eng, sessionmaker(bind=eng)(), "local sqlite"
+    """只读连库口收进 `_db_guard.read_only_connect()`（第 41 轮 B-MAJOR-1）。
+
+    旧写法是 `url = os.getenv("DATABASE_URL")` 一有值就连它 —— 而 `.env` 里那条指的就是
+    **生产 Supabase**，于是"跑一下 L3 估算"默认就在读线上库，label 还只印变量名。
+    """
+    return _db_guard.read_only_connect()
 
 
 def fetch_rows(session) -> List[Dict[str, Any]]:

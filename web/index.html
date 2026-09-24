@@ -102,6 +102,13 @@
                         <template v-else>结论证据体检数据加载中…</template>
                     </div>
                     <div class="data-table" v-if="bloggers.length > 0">
+                        <!-- 第 41 轮 A-M2：表已经渲染出来了，失败的那句红字却只写在 `v-else`
+                             的空状态里 ⇒ 结构上永远到不了，老板看到的是一份**没有任何标记**的旧榜。
+                             失败必须在这条分支里也说得出话（同 `fetchEvidence` 那一族）。 -->
+                        <div v-if="bloggersError" class="notice-inline error" style="margin: 0 0 8px 0;">
+                            {{ bloggersError }} ⇒ 下面是<strong>上一次取到的 {{ bloggersStale }} 位</strong>，
+                            不是现在的数。<button class="action-btn small" @click="fetchBloggers">重试</button>
+                        </div>
                         <!-- 两个口径必须写在正文里（手机没有 hover，title 等于没写）：
                              左边是"现算命中率"，右边是"含归档的加权评分"，两者不必相等也不算打脸。 -->
                         <div class="text-xs" style="color:#8c8c8c; margin: 0 0 6px 0;">
@@ -2118,6 +2125,8 @@
                 const serviceWaited = ref(false);
                 const statsError = ref('');
                 const bloggersError = ref('');
+                // 失败时表上还挂着几位 —— 数字要跟着那句红字一起说（第 41 轮 A-M2）
+                const bloggersStale = ref(0);
                 // 多个取数点同时失败时只排一次队。以前每个调用各起一个 90 秒轮询：
                 // health 探针被放大十几倍，而且谁先退出就把共享的 serviceWaking 置 false，
                 // 别的还在等的调用顶着一句已经消失的提示继续转。
@@ -2450,13 +2459,18 @@ const fetchWeChatBatch = async () => {
                             // 后端已按 hit_rate 排序；兼容旧字段
                             bloggers.value = res.data.data;
                             bloggersError.value = '';
+                            bloggersStale.value = 0;
                         } else {
                             bloggersError.value = '博主榜返回失败：' + (res.data.message || '接口未给出原因');
+                            // 200 + success:false 也是一次失败：表上还挂着上一轮那 N 位，
+                            // 不清计数就等于让老板拿旧榜当新的用（第 41 轮 A-M2）
+                            bloggersStale.value = bloggers.value.length;
                         }
                     } catch (e) {
                         // 以前没有 catch ⇒ 唤醒失败是一条未处理拒绝，页面空白且一句原因都没有。
                         // 错误只在失败时写、成功时才清：否则等待唤醒的那几十秒会显示成"暂无博主数据"
                         bloggersError.value = '博主榜拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错');
+                        bloggersStale.value = bloggers.value.length;
                     }
                 };
                 const fetchFunds = async () => {
@@ -2617,7 +2631,29 @@ const fetchWeChatBatch = async () => {
                         newFundVerifying.value = false;
                     }
                 };
-                const deleteBlogger = async (id) => { if (!confirm('确定删除该博主？')) return; try { await axios.delete(`/api/bloggers/${id}`); await fetchBloggers(); await fetchStats(); if (currentView.value === 'cleanup') await fetchCleanupPreview(); alert('删除成功'); } catch (e) { alert('删除失败: ' + (e.response?.data?.detail || e.message)); } };
+                const deleteBlogger = async (id) => {
+                    if (!confirm('确定删除该博主？')) return;
+                    try {
+                        const res = await axios.delete(`/api/bloggers/${id}`);
+                        // 200 + success:false 是这个后端常见的拒绝形状，只写 catch 等于漏掉一半失败
+                        if (!res.data.success) {
+                            alert('没删掉：' + (res.data.message || res.data.error || '接口未给出原因'));
+                            return;
+                        }
+                    } catch (e) {
+                        alert('删除失败: ' + (e.response?.data?.detail || e.message));
+                        return;
+                    }
+                    // 博主已经删掉了，刷新失败不能说「删除失败」（addBlogger 第 34 轮就有这条腿）
+                    try {
+                        await fetchBloggers(); await fetchStats();
+                        if (currentView.value === 'cleanup') await fetchCleanupPreview();
+                    } catch (refreshError) {
+                        alert('博主已删除，只是列表没刷新出来 —— 刷新页面即可');
+                        return;
+                    }
+                    alert('删除成功');
+                };
                 const viewFundDetail = async (fundCode) => { try { const res = await axios.get(`/api/funds/${fundCode}`); if (res.data.success) { fundDetail.value = res.data.data; showFundDetail.value = true; } else { alert('这只基金的详情没取到：' + (res.data.message || '接口未给出原因')); } } catch (e) { alert('获取详情失败'); } };
                 const deleteFund = async (fundCode, fundName) => {
                     if (!confirm(`确定要删除基金 ${fundName}（${fundCode}）吗？\n\n注意：如果有预测关联此基金，删除可能失败。`)) return;
@@ -3209,7 +3245,7 @@ const fetchWeChatBatch = async () => {
                 return {
                     theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
                     serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,
-                    bloggersError, statsError, statVal, numOrDash, viewErrors, emptyText,
+                    bloggersError, bloggersStale, statsError, statVal, numOrDash, viewErrors, emptyText,
                     taskStalled, stallText, adviceError, aliasError, configError, testDataError, topNote,
                     fetchStats, spanText, fetchEvidence,
                     bloggers,
