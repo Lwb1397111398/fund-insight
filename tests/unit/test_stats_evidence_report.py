@@ -95,7 +95,10 @@ def test_span_report_numbers_and_labels_the_database(env):
     assert rep['by_kind'] == {'nav_row_missing': 1}
     # 失效那批按"全判错 / 全判对"两端折算；这批里判对的有 0 条 ⇒ 下界就等于现在的 50%
     assert rep['span_low_pct'] == 50.0 and rep['span_high_pct'] == 100.0
-    assert rep['database'].endswith('库') and rep['as_of']
+    # 库名必须认得出**是哪一个文件**（第 42 轮 B-c）：只写"本地镜像库"这种分类词，
+    # 副本回放与临时夹具就会共用同一句标签，而"报数带库名"的全部前提是可分辨。
+    assert '本地 sqlite' in rep['database'] and 'evidence.db' in rep['database'], rep['database']
+    assert rep['as_of']
 
 
 def test_stats_evidence_endpoint_returns_the_same_report(env):

@@ -284,11 +284,13 @@ def main():
         if not url.lower().startswith(('postgres', 'postgresql')):
             print('[abort] --production 要求 .env 指向 PostgreSQL')
             return 4
-        print('[target] 线上生产库')
+        # 分类词不算出处（第 42 轮 B-c）：这是一把**硬删**的闸，屏幕上那行必须答得出
+        # "删的是哪台"。`DATABASE_URL` 在本地与 Render 上都指生产，写变量名同理不够。
+        from _db_guard import machine_name
+        print('[target] 线上生产库：%s' % machine_name(url))
     else:
-        from _db_guard import pin_local_sqlite
-        pin_local_sqlite(use_mirror_default=True)
-        print('[target] 本地镜像库')
+        from _db_guard import machine_name, pin_local_sqlite
+        print('[target] 本地镜像库：%s' % machine_name(pin_local_sqlite(use_mirror_default=True)))
 
     from src.models.database import FundInfo, SectorFundMapping, SessionLocal
 

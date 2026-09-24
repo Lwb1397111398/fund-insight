@@ -1,7 +1,9 @@
 # 校准表：clear 桶 50 条（seed=20260729）
 
 - 日期：2026-07-30
-- 数据源：`DATABASE_URL`
+- 数据源：⚠ **未记录**——这份表是手抄出来的，抄的时候只写了变量名 `DATABASE_URL`
+  （本地与 Render 都指生产）⇒ 这 50 条**出自哪个库无法从文档判定**（第 42 轮 B-MINOR-6）。
+  重出：`python scripts/export_calib_sample.py`（seed=20260729，默认读镜像并印机器名）
 - 抽样脚本：`scripts/export_calib_sample.py`（seed=20260729，n=50）
 - 规则复读：`scripts/audit_l3_clear_labels.py`（否定/条件句敏感）
 - AI 盲标：独立模型仅看原文，未看生产标签/规则结果

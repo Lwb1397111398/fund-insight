@@ -193,12 +193,39 @@ def span_report(db) -> Dict:
     }
 
 
+def target_name(url: str) -> str:
+    """连接串 → **打得开的那个目标**：sqlite 给文件路径，远程给 `scheme://host/db`（不含口令）。
+
+    与 `scripts/_db_guard.machine_name()` 是同一把尺子的两份实现（src 不能去 import scripts，
+    而 `_db_guard` 必须能在"还没决定连哪个库"之前被导入 ⇒ 它也不能 import src）。
+    两份实现不许各说各话：`tests/unit/test_database_label_targets.py` 拿一批同样的样品
+    逐一比对两者的输出。
+    """
+    if not url or '://' not in url:
+        return url or '(空)'
+    scheme, rest = url.split('://', 1)
+    if scheme.startswith('sqlite'):
+        body = url[len('sqlite:///'):] if url.lower().startswith('sqlite:///') else rest
+        body = body.split('?', 1)[0]
+        if body.startswith('//'):
+            body = body.lstrip('/')
+        if len(body) > 2 and body[0] == '/' and body[2] in ':\\' and body[1].isalpha():
+            body = body[1:]                    # 四斜杠 Windows 绝对路径：/E:/… → E:/…
+        return body or '(当前目录里的 sqlite 文件)'
+    where = rest.split('@')[-1].split('?', 1)[0]
+    return '%s://%s' % (scheme, where)
+
+
 def database_label(db) -> str:
     """给老板看的库名：本地镜像 / 线上生产，别说"数据库"这种没信息量的词。
 
     Session / Engine / Connection 三种都得认得：SQLAlchemy 2.0 起 `Connection` 已经没有
     `get_bind()`，只认 Session 的话传引擎进来会被下面那个 except 吞掉、静默降级成"未知库"
     ——而"报出是哪个库"这件事的全部意义就是不许说 Unknown。
+
+    光给"本地镜像库"这五个字仍然不够（第 42 轮 B-c）：`sqlite:///data/copy_x.db`、
+    测试用的 `:memory:` 也都会被报成"本地镜像库"，而这三者的后果完全不同
+    （副本回放 / 夹具 / 真镜像）。所以名字后面必须跟着**那个文件**或**那台主机**。
     """
     url = None
     for pick in (lambda: db.get_bind().url, lambda: db.url, lambda: db.engine.url):
@@ -209,10 +236,16 @@ def database_label(db) -> str:
             continue
     if url is None:
         return '未知库'
+    name = target_name(url)
     if url.startswith('sqlite'):
-        return '本地镜像库'
+        flat = name.replace('\\', '/')
+        if flat.endswith('data/fund_insight.db'):
+            return '本地镜像库（data/fund_insight.db）'
+        if name == ':memory:':
+            return '内存 sqlite（不落盘，通常是测试夹具）'
+        return '本地 sqlite 文件（不是镜像库）：%s' % name
     if url.startswith(('postgres', 'postgresql')):
-        return '线上生产库'
+        return '线上生产库（%s）' % name
     if url.startswith('mysql'):
-        return 'MySQL 库'
-    return url.split('://')[0] + ' 库'
+        return 'MySQL 库（%s）' % name
+    return url.split('://')[0] + ' 库（%s）' % name

@@ -67,6 +67,24 @@ def _db(tmp_path):
     return sessionmaker(bind=engine)
 
 
+def _contain_the_writes(mod, monkeypatch, factory):
+    """把脚本的写全部关进临时文件，并且**当场核对**这一点。
+
+    为什么本测试进程里 `pin_local_sqlite()` 只会警告不会 abort（第 42 轮 B-MAJOR-4 的
+    两档判据）：`src.models.database` 在文件顶部就导入了，全局 engine 已经建在
+    conftest 那个临时 SQLite 上 —— 守卫此时报的是"改不动它"，而本测试**根本不用**它：
+    下面三行把脚本唯一的取会话方式（`SessionLocal`）整个换成临时文件上的工厂。
+    反证就写在这里：一旦 `SessionLocal` 不是那个临时工厂、或 bind 不含 proxy.db，
+    这条 helper 就地失败 ⇒ 想继续测就得改成跑子进程，而不是把核对删掉。
+    """
+    import src.models.database as dbmod
+    monkeypatch.setattr(dbmod, 'SessionLocal', factory)
+    bind = factory.kw['bind']
+    assert 'proxy.db' in str(bind.url), '临时工厂连的不是临时文件：%s' % bind.url
+    assert dbmod.SessionLocal is factory
+    return dbmod
+
+
 def test_it_refuses_to_run_without_the_token(mod, monkeypatch, capsys):
     """没 `--dry-run` 也没口令 ⇒ 退码 4；这一条跑在**任何库操作之前**（没有 SessionLocal 也不需要）。"""
     monkeypatch.setattr(sys, 'argv', ['seed_owner_proxies.py'])
@@ -83,11 +101,10 @@ def test_a_wrong_token_is_not_a_token(mod, monkeypatch, capsys):
 
 def test_dry_run_writes_nothing(mod, monkeypatch, tmp_path, capsys):
     factory = _db(tmp_path)
-    import src.models.database as dbmod
     import src.services.sector_fund_agent as agent
     from src.fund.fund_api import fund_api as instance
 
-    monkeypatch.setattr(dbmod, 'SessionLocal', factory)
+    _contain_the_writes(mod, monkeypatch, factory)
     monkeypatch.setattr(agent, 'DELIBERATE_PROXIES', {'测试代理板块': ('512480', '桩：无对口基金')})
     monkeypatch.setattr(instance, 'verify_fund_fetchable',
                         lambda code, name=None, **kw: _probe_stub(code=code))
@@ -104,11 +121,10 @@ def test_dry_run_writes_nothing(mod, monkeypatch, tmp_path, capsys):
 def test_the_owner_stamp_only_lands_with_the_explicit_token(mod, monkeypatch, tmp_path, capsys):
     """给对口令 ⇒ 才写；写出来的就是"老板署名 + 体检锁定"，所以这条路径必须显式才可走。"""
     factory = _db(tmp_path)
-    import src.models.database as dbmod
     import src.services.sector_fund_agent as agent
     from src.fund.fund_api import fund_api as instance
 
-    monkeypatch.setattr(dbmod, 'SessionLocal', factory)
+    _contain_the_writes(mod, monkeypatch, factory)
     monkeypatch.setattr(agent, 'DELIBERATE_PROXIES', {'测试代理板块': ('512480', '桩：无对口基金')})
     monkeypatch.setattr(instance, 'verify_fund_fetchable',
                         lambda code, name=None, **kw: _probe_stub(code=code))
@@ -145,11 +161,10 @@ def test_a_probe_that_says_not_fetchable_writes_nothing(mod, monkeypatch, tmp_pa
     里造出一行空名档案 —— 正是 S6 要清的垃圾码形状。
     """
     factory = _db(tmp_path)
-    import src.models.database as dbmod
     import src.services.sector_fund_agent as agent
     from src.fund.fund_api import fund_api as instance
 
-    monkeypatch.setattr(dbmod, 'SessionLocal', factory)
+    _contain_the_writes(mod, monkeypatch, factory)
     monkeypatch.setattr(agent, 'DELIBERATE_PROXIES', {'测试代理板块': ('999999', '桩：码已下架')})
     monkeypatch.setattr(instance, 'verify_fund_fetchable',
                         lambda code, name=None, **kw: _probe_stub(ok=False, code=code, api_name=''))
@@ -175,11 +190,10 @@ def test_a_probe_that_returns_nav_but_no_name_writes_nothing(mod, monkeypatch, t
     而服务端 HTTP 写路径本来就把这种行拒收（`fund_name_wiped` / `row_has_no_fund_name`）。
     """
     factory = _db(tmp_path)
-    import src.models.database as dbmod
     import src.services.sector_fund_agent as agent
     from src.fund.fund_api import fund_api as instance
 
-    monkeypatch.setattr(dbmod, 'SessionLocal', factory)
+    _contain_the_writes(mod, monkeypatch, factory)
     monkeypatch.setattr(agent, 'DELIBERATE_PROXIES', {'测试代理板块': ('512480', '桩：拿不到名字')})
     monkeypatch.setattr(instance, 'verify_fund_fetchable',
                         lambda code, name=None, **kw: _probe_stub(ok=True, code=code, api_name=''))

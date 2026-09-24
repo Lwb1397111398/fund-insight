@@ -34,7 +34,7 @@ def run_migrations() -> None:
     with engine.connect() as connection:
         # 这脚本没有 dry-run：下面每一句 DDL 都直接落在连接串指的那个库上，
         # 而本地 `.env` 默认指向生产（Render 每次启动也跑它）⇒ 动手前先把库名说清楚。
-        print("[库] %s（%s）—— alembic upgrade head 会向它发 DDL"
+        print("[库] %s —— alembic upgrade head 会向它发 DDL（方言 %s）"
               % (database_label(connection), DB_TYPE))
         locked = False
         try:

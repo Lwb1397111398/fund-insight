@@ -39,7 +39,7 @@ def test_the_auditor_catches_a_stale_count_and_accepts_a_live_one(tmp_path, monk
     monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
     monkeypatch.setattr(mod, '_collected_counts',
                         lambda: {'test_x.py': 9, 'test_y.py': 1})
-    now, delta = mod._claims()
+    now, delta, unbound = mod._claims()
     assert [c['test'] for c in now] == ['test_x.py'], now
     assert [c['test'] for c in delta] == ['test_y.py'], delta      # `+7 条` 走增量账
     counts = mod._collected_counts()
@@ -53,7 +53,7 @@ def test_a_claim_that_cannot_be_resolved_to_a_collected_file_is_reported(tmp_pat
     doc.write_text(u'用例：`tests/unit/test_gone_away.py`（4 条）。\n', encoding='utf-8')
     monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
     monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_other.py': 3})
-    now, _delta = mod._claims()
+    now, _delta, _unbound = mod._claims()
     assert len(now) == 1
     assert now[0]['test'] not in mod._collected_counts()
 
@@ -81,3 +81,99 @@ def test_the_repository_has_no_stale_doc_counts():
         import pytest
         pytest.skip('变异体检持有互斥锁，本次拿不到条数尺子')
     assert result.returncode == 0, blob[-1200:]
+
+
+def test_chinese_numerals_are_audited_too(tmp_path, monkeypatch):
+    """中文数字必须同样对账（第 41 轮 B-MINOR-4：只认 ASCII ⇒ "三条钉着"这类看不见）。
+
+    这一条同时是**尺子自己的**覆盖面判据：把 `_to_int` 退回 `int()`，中文那条就漏收 ⇒ 红。
+    """
+    mod = _load()
+    doc = tmp_path / 'C.md'
+    doc.write_text(u'判据：`tests/unit/test_a.py` 三条钉着。\n'
+                   u'另一处：`tests/unit/test_b.py` 9 条钉着。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_a.py': 7, 'test_b.py': 9})
+    now, _delta, _unbound = mod._claims()
+    assert sorted(c['test'] for c in now) == ['test_a.py', 'test_b.py'], now
+    assert {c['test']: c['stated'] for c in now} == {'test_a.py': 3, 'test_b.py': 9}, now
+
+
+def test_the_two_shapes_it_cannot_judge_are_reported_but_never_failed(tmp_path, monkeypatch):
+    """管不到的两种形状要**打出来**，但不许判红（误报的尺子会逼人把对的数改错）。"""
+    mod = _load()
+    doc = tmp_path / 'D.md'
+    doc.write_text(u'当场照出 14 条漏桩用例（`tests/unit/test_far.py` 整个文件的补拉腿）。\n'
+                   u'五条硬规矩：① 甲；② 乙；③ 丙；④ 丁；⑤ 戊。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_far.py': 3})
+    now, _delta, unbound = mod._claims()
+    assert now == [], '数字在名字之前的历史账被判成当场账了（会误报）：%s' % now
+    assert len(unbound) == 2, unbound
+
+
+def _sources_of(tmp_path, monkeypatch, text):
+    mod = _load()
+    doc = tmp_path / 'R.md'
+    doc.write_text(text, encoding='utf-8')
+    monkeypatch.setattr(mod, '_report_docs', lambda: [doc])
+    return mod._source_lines()
+
+
+def test_a_data_source_line_that_only_names_a_variable_is_red(tmp_path, monkeypatch):
+    """`数据源：`DATABASE_URL`` 不是出处，是**没出处**（第 42 轮 B-MINOR-6）。
+
+    这一族不是"文档不好看"：第 23 轮我把**镜像库**的准确率当"系统的数"报了十几轮，
+    而当时那行字如果写的是机器名，第一眼就能看出来连的是哪个库。
+    """
+    bad, seen = _sources_of(tmp_path, monkeypatch,
+                            u'# 报告\n\n- 日期：2026-07-29\n- 数据源：`DATABASE_URL`\n')
+    assert seen == 1, '一行 `数据源：` 都没认出来 ⇒ 这条判据是空判'
+    assert len(bad) == 1 and '变量名' in bad[0]['why'], bad
+
+
+def test_a_data_source_line_must_name_a_target_or_admit_it_was_never_recorded(tmp_path, monkeypatch):
+    """放行两种：具体目标；或明写"未记录"**并且**给复现命令。只说"未记录"不算。"""
+    good, _ = _sources_of(tmp_path, monkeypatch,
+                          u'- 数据源：`本地镜像库（data/fund_insight.db）`\n'
+                          u'- 数据源：⚠ **未记录**（旧脚本只写变量名）。'
+                          u'复现：`python scripts/backtest_l1_weighting.py`\n')
+    assert good == [], good
+    vague, seen = _sources_of(tmp_path, monkeypatch, u'- 数据源：未记录\n')
+    assert seen == 1 and len(vague) == 1, '承认"未记录"却不给复现命令 ⇒ 不该放行'
+
+
+def test_a_script_name_that_happens_to_contain_test_is_not_a_claim(tmp_path, monkeypatch):
+    """`backtest_l1_weighting.py` 里含着 `test_l1_weighting.py` ⇒ 不算一条测试承诺。
+
+    第 42 轮实测的误报：模块总览写"三个只读分析脚本改走只读门"，尺子把
+    `backtest_l1_weighting.py` 切成 `test_l1_weighting.py` + "3 条"，报成"收集不到这个文件"。
+    误报的尺子比没有尺子更坏 —— 它会逼人为了变绿去改一句本来对的话。
+    """
+    mod = _load()
+    doc = tmp_path / 'E.md'
+    doc.write_text(u'三个只读分析脚本：`audit_l3_clear_labels.py` / `estimate_l3_vague_labels.py` / '
+                   u'`backtest_l1_weighting.py` 三个都改走统一门（3 条路径）。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {})
+    now, delta, _unbound = mod._claims()
+    assert now == [] and delta == [], '脚本名被切成测试文件名了：%s / %s' % (now, delta)
+    # 控制：真承诺必须仍然认得出来（否则上面那条只是正则坏了）
+    doc2 = tmp_path / 'F.md'
+    doc2.write_text(u'判据：`tests/unit/test_real_gate.py` 7 条钉着。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc2])
+    now2, _d, _u = mod._claims()
+    assert [c['test'] for c in now2] == ['test_real_gate.py'] and now2[0]['stated'] == 7, now2
+
+
+def test_the_repository_data_source_lines_are_auditable():
+    """真文档过账：`docs/*.md` 里每一行 `数据源：` 都得认得出是哪个库（或承认未记录 + 复现命令）。
+
+    控制断言：仓库里必须**真的**有这种行（≥1）。0 行的话上面两条判据永远为真，
+    这条也会永远绿 —— 那正是第 40 轮 A 席 M2 数过的空判形状。
+    """
+    mod = _load()
+    bad, seen = mod._source_lines()
+    assert seen >= 1, '一行 `数据源：` 都没认出来 ⇒ 尺子与文档写法脱节了'
+    assert bad == [], '这些报告没说自己出自哪个库：%s' % [
+        '%s:%s %s' % (c['file'], c['line'], c['text']) for c in bad]

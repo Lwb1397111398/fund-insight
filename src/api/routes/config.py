@@ -1596,7 +1596,9 @@ def import_sector_mapping_audit(payload: AuditImportRequest, request: Request,
         # 这个计数排在写入**之后**（第 41 轮 B-MINOR-3）：上一版先加再写，于是
         # "标的定不了价 + 写入又被拒"的行同时落进 `refused` 和 `unservable` 两个桶，
         # 而回执那句话是"其中 N 行……本次已照样写入"——把没写进去的行报成了写了。
-        if outcome != 'refused' and not servable_ok:
+        # 第 41 轮 B-(a) 的残格：`unchanged`（库里本来就是这个值）一个字都没写，
+        # 同样不许进这个桶 ⇒ 判据从"没被拒"收紧成"这一次真的写了 / 计划要写"。
+        if outcome in ('created', 'updated') and not servable_ok:
             unservable += 1
         entry['outcome'] = outcome
         entry['changed_fields'] = changed

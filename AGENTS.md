@@ -201,13 +201,33 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-24 10:2x（北京），第 41 轮返修（A 77 / B 79，取低分 77）之后，
+最近一次核对（2026-09-24 13:2x（北京），第 42 轮返修（A 82 / B 78，取低分 78）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1000 passed / 16 skipped / 0 failed**（223.34 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1009 passed / 16 skipped / 0 failed**（221.09 秒）。
-  （上一基线 984/993 → 本批 1000/1009：+16 条，分布在 `test_read_only_door.py` 新增 5 条
+- `pytest tests/unit -q` → **1019 passed / 16 skipped / 0 failed**（262.94 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1028 passed / 16 skipped / 0 failed**（260.19 秒）。
+  （上一基线 1000/1009 → 本批 1019/1028：净 +19（新增 20 条、把一条已被替换的
+  `test_delete_blogger_tells_four_different_endings_apart` 删掉），分布在
+  `test_script_db_guards.py` +3（钉库来得太晚必须 abort / 已建在 SQLite 只许警告并说清写的哪个文件 /
+  受检集合由 `git ls-files` 定义，本机 `_tmp_*` 草稿不许改变"全绿"的含义）、
+  `test_database_label_targets.py` +2（副本与夹具不许被报成"本地镜像库" / src 侧与守卫侧两份
+  `machine_name` 逐条相等）、`test_doc_claims.py` +6（`数据源：`那一行认不出库要红 /
+  承认"未记录"却不给复现命令也要红 / `backtest_l1_weighting.py` 这种脚本名不许被切成
+  `test_l1_weighting.py` 误报）、`test_read_only_door.py` +6（`--help` 与坏旗子跑完 `docs/`
+  一个字节都不许变 / 先定镜像后又要求 `--production` 必须说破 / 探针残渣与自报顺序那几条）、
+  `test_frontend_cold_start.py` +2（失败横幅必须在"列表非空"那一支可达 / 删除博主的四种结局
+  由真实状态驱动，且先证明那条分支可达）、`test_sector_mapping_audit_import.py` +1
+  （`unchanged` 行一个字都没写，不许进"本次已照样写入"那个桶）。
+  本批前端 4 处变异全 RED：`python scripts/mutation_proof_frontend.py --only bloggers_notice_` /
+  `--only stale_rows_never_counted` / `--only refresh_death_blamed_on_the_delete`；
+  **全套 104 处本轮逐条跑过**（`data/_mutation_round43.log` 是这一批的原始输出：
+  CONTROL-GREEN + 101 RED + 3 处 ANCHOR-MISS），那 3 处 ANCHOR-MISS 已修锚点并各自复跑为 RED
+  —— 修的是锚点不是判据：`pagination_reports_zero_on_failure` /
+  `predictions_pager_claims_fresh_rows` 的锚点还停在"翻页条直接印 `total || 0`"的旧形状，
+  `unexport_numOrDash` 停在加 `bloggersStale` 之前的导出名单 ⇒ **ANCHOR-MISS 必须当失败处理**，
+  它意味着"这一条判据有没有效"当场没答上来（条数一律看 `--list` 末行）。）
+  （上一基线 984/993 → 1000/1009：+16 条，分布在 `test_read_only_door.py` 新增 5 条
   （**只读**连库口：没给旗子必须钉镜像 / 给了 `--production` 才走线上 / `mode=ro` 的引擎写不进去
   而普通 URL 写得进（对照组）/ 探针在可写连接上必须报警 / 三个 L3·L1 脚本真走了这把门）、
   `test_script_db_guards.py` 新增 3 条（读侧触发器 + 触发器正反两侧现造样品 +
@@ -302,7 +322,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   用例两侧都钉：既测"长名字绕不过"，也测"109 个表键一个都不许被误挡"；
   ③ 表里的 `name` 必须逐字等于名册官方名（`--fix-labels` 可代改；该脚本现在有跳过就退码 5，
   不再"报着跳过却算成功"）。
-  两根轴上还有两处**别再说满话**的地方（第 27 轮两份复评各抓到一处）：
+  两根轴上还有三处**别再说满话**的地方（第 27 轮两份复评各抓到一处，第 41 轮 A 席又数出第三条）：
   ④ "官方名与板块字面相关"里混着**只共用一个汉字**的弱命中（2026-09-23 实测字面过关 99 条里
   **13 条**，如 `建材→基建ETF`、`家居→家电ETF`；`relevance_kind()` 分 `core`/`char`，
   报告与 CSV 单列，条数钉在 `test_weak_literal_hits_are_labeled_as_weak`）⇒ 别说成"全部已核对"；
@@ -344,7 +364,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   模块总览写的前者只有实际判据的一个零头 —— 两处都已改成绑命令的写法。
 - **能写数据的脚本必须说清"连的是哪个库"**（第 28 轮 F-MINOR-6 起有用例钉）：
   `tests/unit/test_script_db_guards.py` 扫 `scripts/*.py`，判"能不能改数据"**只看 AST**（注释与
-  docstring 不算）：① 直连 ORM 且代码里真 `commit/add/delete`；② CLI 带写开关
+  docstring 不算；**边界**：AST 看得见的只有"形状"与**顶层** import 的顺序，函数体里的执行顺序
+  它判不了 —— 那一半由守卫在运行期回答，见下面 B-MAJOR-4 那条。受检集合同样由 `git ls-files`
+  定义，不跟着本机未入库的 `_tmp_*.py` 草稿变，第 42 轮 A-MINOR-3）：
+  ① 直连 ORM 且代码里真 `commit/add/delete`；② CLI 带写开关
   （`--apply` / `--execute` / `--confirm …`）；③ **`from alembic import command` + 真调
   `command.upgrade(...)`（＝能改表结构，第 37 轮 B 的 M-3）**。命中任一条就必须出现
   `pin_local_sqlite` / 自设 `DATABASE_URL` / 显式 `--against-production` 且见远程就拒跑 / `database_label` 之一。
@@ -361,8 +384,21 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `[库] 本地镜像库（sqlite）—— alembic upgrade head 会向它发 DDL`（副本库实测；
   **它仍然没有 dry-run，也没有"见远程就拒跑"**——要加得改 `render.yaml`，那是老板的决定项）。
   ② `database_label()` 以前只认 Session：SQLAlchemy 2.0 起 `Connection` 没有 `get_bind()`，
-  那个 `except` 把异常吞成"未知库" ⇒ 自报行自己说谎。现在 Session / Engine / Connection 三种都认，
-  用例 `tests/unit/test_database_label_targets.py`（4 条）钉着。
+  那个 `except` 把异常吞成"未知库" ⇒ 自报行自己说谎。现在 Session / Engine / Connection 三种都认。
+  **第 42 轮 B-(c) 又补了第二半**：认出"是 sqlite"不等于报出"是哪个库"——
+  `data/fund_insight.db`（真镜像）、`data/copy_*.db`（回放副本）、`:memory:`（夹具）以前共用
+  一句"本地镜像库"，而"拿副本的数当镜像的数"正是第 23 轮那次错最省事的复现方式。
+  现在标签后面跟着文件或主机（`本地镜像库（data/fund_insight.db）` / `本地 sqlite 文件（不是镜像库）：…`）。
+  它与 `scripts/_db_guard.machine_name()` 是同一件事的两份实现（src 不能 import scripts，
+  `_db_guard` 也不能 import src），两者逐条相等由 `tests/unit/test_database_label_targets.py`
+  钉住（条数看 `grep -c '^def test_' tests/unit/test_database_label_targets.py`）。
+  **第 42 轮 B-MAJOR-4：钉库的顺序改由守卫自己在运行期管**。AST 只能可靠地比**顶层** import
+  与门调用的行号，而仓库里 100 多处 `from src.…` 写在函数体里（定义处在前、执行处在后，
+  按行号比大小要么冤枉一片要么干脆漏掉）。现在 `pin_local_sqlite()` 一进来就问一句
+  `sys.modules`：`src.models.database` 已经导过 ⇒ 全局 engine 已按**当时**那串地址焊死，
+  改环境变量救不回来，当场 `[abort]`（退码 4）并印出那个目标（口令不泄露）。
+  判据 `test_the_door_refuses_to_pin_when_the_engine_is_already_built` 两路都跑真子进程：
+  先导入必红、先钉库必放行（没有控制断言的判据等于没判据）。
 - **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：
   `tests/unit/test_blogger_hit_rate_map.py` 三条钉 `src/api/routes/bloggers.py:_hit_rate_map`。
   此前全仓对它零覆盖：把判据 `Prediction.is_deleted == False` 反向改成 `== True`
@@ -483,7 +519,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   seed 脚本的 `--owner-confirm SEED-PROXY` / 还原备份的 `--restore-owner-immunity`），
   每一条都要显式令牌，且**都有用例钉着**：前三条在
   `tests/unit/test_review_ownership_and_matching.py`（逐行审查那条）与
-  `tests/unit/test_sector_mapping_api.py`（批量审查、编辑保存两条），
+  `tests/unit/test_sector_mapping_api.py`（批量审查与编辑保存各有一条），
   第四条在 `tests/unit/test_seed_owner_proxies_gate.py`（当场 8 条判据，数看
   `pytest tests/unit/test_seed_owner_proxies_gate.py --collect-only -q`：
   不给令牌退 4 / 给错令牌退 4 / `--dry-run` 不写 / 给了令牌才落 `owner` 署名 /
@@ -538,7 +574,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （`fetchInsights` 失败分支只改旗标、不清 `viewpointInsights`，注释却写着"不许再摆上一轮的数"）。
   现在失败三种形状（`success:false` / `success:true` 但 `data:null` / 抛错）都会把四张卡一起放下，
   判据 `test_a_failed_insights_call_takes_the_four_cards_down_with_it` 跑的是 `loadViewpoints` 真实调用路径。
-  五条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
+  六条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
   predictions+verify-all+status 四笔，**进视图才打的**（funds、sector-mappings、posts/predictions/
   viewpoints 的列表）也要过 `withWakeRetry()` —— **这条承诺今天只兑现了一半**（第 40 轮 A-m7 实测：
   `post-manager.js` 与 `viewpoint-manager.js` 里 `withWakeRetry` **0 处**，`prediction-manager.js` 只有 2 处
@@ -602,7 +638,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。
   **本机没有 Chromium**：`tests/unit/test_layout_browser_probe.py` 那 16 条常年是 skipped，
   所以"浏览器看过"目前只是我每次的手工动作 + 记录，**不是机器闸**。机器闸是
-  `test_frontend_cold_start.py` 里那两条 node 行为判据（执行页面源码本身）。
+  `test_frontend_cold_start.py` 里那几跑 node 的行为判据（执行页面源码本身；
+  有几条别抄这里：`grep -c "_run_page_js\|_run_chain_js" tests/unit/test_frontend_cold_start.py`）。
 - **`tests/conftest.py` 里"钉 `DATABASE_URL` 到临时 SQLite"之前不许导入任何 `src.*`**（第 33 轮我自己踩的）：
   `src/__init__.py` 会拉起 `src.core.config`，而 `.env` 指向生产 ⇒ engine 一旦在那之前被创建就绑死生产，
   后面第 49 行的赋值救不回来（模块已在 `sys.modules` 里）。当时 `tests/unit` 里 4 条夹具把

@@ -152,7 +152,10 @@ MUTATIONS = [
      '<template v-if="true">暂无数据</template>', True),
     # ---- 第 32 轮：五处"报 0 / 报没有"的假事实，和轮询耗尽后的那把锁 ----
     ('test_every_list_page_shares_the_same_honesty_rule', 'pagination_reports_zero_on_failure',
-     HTML, '<template v-if="viewErrors.posts">条数没取到，表里是上一次取到的</template><template v-else>共 {{ postMeta.total || 0 }} 条</template>',
+     # 锚点是**当前形状**（第 42 轮体检两条 ANCHOR-MISS 照出来的）：翻页条后来从
+     # `postMeta.total || 0` 换成了 `numOrDash(...)`，锚点不跟着换就等于什么都没打进去。
+     HTML, '<template v-if="viewErrors.posts">条数没取到，表里是上一次取到的</template>'
+           "<template v-else>共 {{ viewErrors.posts ? '—' : numOrDash(postMeta.total) }} 条</template>",
      '共 {{ postMeta.total || 0 }} 条', False),
     ('test_no_page_claims_a_number_it_never_measured', 'insight_card_back_to_zero',
      HTML, '{{ numOrDash(viewpointInsights.direction_total) }}',
@@ -187,8 +190,9 @@ MUTATIONS = [
          "                    ? '服务连不上（可能在唤醒）' : '接口报错'));",
      '                void 0;', False),
     ('test_everything_the_template_reads_is_actually_exported', 'unexport_numOrDash',
-     HTML, 'bloggersError, statsError, statVal, numOrDash, viewErrors, emptyText,',
-     'bloggersError, statsError, statVal, viewErrors, emptyText,', False),
+     # 锚点跟着 `setup()` 的导出名单走：第 42 轮加了 `bloggersStale`，锚点不换就永远 ANCHOR-MISS
+     HTML, 'bloggersError, bloggersStale, statsError, statVal, numOrDash, viewErrors, emptyText,',
+     'bloggersError, bloggersStale, statsError, statVal, viewErrors, emptyText,', False),
     # ---- 第 33 轮：200 + success:false 的剩余盲区、删除按钮的预览前提、TOP 弹窗口径 ----
     ('test_the_fund_view_says_so_when_the_api_says_no', 'funds_success_false_silent_again',
      HTML, "                            fundError.value = '基金列表没取到：' + (res.data.message || '接口未给出原因');",
@@ -250,7 +254,7 @@ MUTATIONS = [
     # （帖子那一腿已有 `pagination_reports_zero_on_failure`，这里补预测与观点两条）
     ('test_every_list_page_shares_the_same_honesty_rule', 'predictions_pager_claims_fresh_rows',
      HTML, '<template v-if="viewErrors.predictions">条数没取到，表里是上一次取到的</template>'
-           '<template v-else>共 {{ predictionMeta.total || 0 }} 条</template>',
+           '<template v-else>共 {{ numOrDash(predictionMeta.total) }} 条</template>',
      '共 {{ predictionMeta.total || 0 }} 条', False),
     ('test_every_list_page_shares_the_same_honesty_rule', 'viewpoints_pager_has_no_failure_branch',
      HTML, '<template v-if="viewErrors.viewpoints">条数没取到，表里是上一次取到的</template>'
@@ -387,16 +391,20 @@ MUTATIONS = [
      'class="filter-caliber-note"', 'class="caliber-note"', False),
     ('test_an_error_notice_must_be_reachable_while_its_list_is_still_on_screen',
      'bloggers_notice_moves_back_into_the_empty_branch', HTML,
-     r'<div v-if="bloggersError" class="notice-inline error"[^\n]*\n(?:[^\n]*\n){2}[^\n]*</div>\n',
+     r'<div v-if="bloggersError" class="text-xs"[^\n]*\n(?:[^\n]*\n){3}[^\n]*</div>\n',
      '', True),
     ('test_fetch_bloggers_counts_the_rows_it_leaves_on_screen',
      'stale_rows_never_counted', HTML,
      'bloggersStale.value = bloggers.value.length;', 'bloggersStale.value = 0;', False),
-    ('test_delete_blogger_tells_four_different_endings_apart',
+    ('test_delete_blogger_endings_are_driven_by_state_that_is_reachable',
      'refresh_death_blamed_on_the_delete', HTML,
-     r'// 博主已经删掉了，刷新失败不能说「删除失败」（addBlogger 第 34 轮就有这条腿）\n'
-     r'(?:[^\n]*\n){6}[^\n]*\n',
-     'await fetchBloggers(); await fetchStats();\n', True),
+     r"const notRefreshed = \[bloggersError\.value, statsError\.value,\n"
+     r"[^\n]*\n[^\n]*\.filter\(Boolean\)\.join\('；'\);\n",
+     "const notRefreshed = '';\n", True),
+    ('test_no_new_class_name_is_used_without_being_defined',
+     'bloggers_notice_class_stops_being_defined', HTML,
+     '<div v-if="bloggersError" class="text-xs"',
+     '<div v-if="bloggersError" class="notice-inline error"', False),
 ]
 
 

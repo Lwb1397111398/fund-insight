@@ -13,6 +13,7 @@
 """
 import ast
 import re
+import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
@@ -25,6 +26,27 @@ HTTP_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}   # urllib 那一族：方法�
 OS_SHELL = {'system', 'popen', 'execv', 'execve', 'spawn', 'spawnl'}
 
 
+def _target_is_hardcoded_local(call_node):
+    """`create_engine(...)` / `sessionmaker(...)` 的目标**是不是代码里写死的本地文件**。
+
+    第 42 轮 B-MAJOR-3：上一版认的是"文件里出现过 `DATABASE_URL` 这个字面量"，
+    于是 `create_engine(settings.database_url)`（值仍来自那个环境变量）一次间接就隐身。
+    写死在本地的两种形状放过：字面量 `sqlite:…`，以及 `'sqlite:///' + 副本路径` 这种拼接
+    （`replay_verifications_on_copy.py` 用，目标不可能是生产库）。除此之外一律算"来自代码之外"。
+    """
+    first = call_node.args[0] if call_node.args else None
+    if first is None:
+        for kw in call_node.keywords:
+            if kw.arg in ('bind', 'url', 'database'):
+                first = kw.value
+    if isinstance(first, ast.Constant):
+        return isinstance(first.value, str) and first.value.startswith('sqlite')
+    if isinstance(first, ast.BinOp):
+        return any(isinstance(c, ast.Constant) and isinstance(c.value, str)
+                   and c.value.startswith('sqlite') for c in ast.walk(first))
+    return False
+
+
 def _facts(py):
     """从 AST 里取"代码真正做了什么"，不是"文件里出现过哪些字"。"""
     text = py.read_text(encoding='utf-8', errors='replace')
@@ -34,6 +56,7 @@ def _facts(py):
     alembic = False      # `from alembic import command` / `import alembic...`
     reads_url_env = False    # 读 `DATABASE_URL` / `ALEMBIC_DATABASE_URL` 这两个名字
     builds_engine = False    # 自己 `create_engine(...)` / `sessionmaker(...)`
+    builds_external_engine = False    # …且目标不是代码里写死的本地 sqlite 路径
     alias = {}          # `from _db_guard import pin_local_sqlite as _pin_x` 也要认得出来
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == '_db_guard':
@@ -47,6 +70,8 @@ def _facts(py):
                 called.add(alias.get(name, name))
                 if name in ('create_engine', 'sessionmaker'):
                     builds_engine = True
+                    if not _target_is_hardcoded_local(node):
+                        builds_external_engine = True       # 含 `create_engine(settings.database_url)`
             if name == 'add_argument':
                 flags.update(a.value for a in node.args
                              if isinstance(a, ast.Constant) and isinstance(a.value, str))
@@ -75,15 +100,45 @@ def _facts(py):
     return {'text': text, 'called': called, 'flags': flags, 'raised': raised,
             'consts': consts, 'env_written': env_written, 'direct_db': direct_db,
             'alembic': alembic,
-            # 第 41 轮 B-MAJOR-1：读侧也要问连哪儿。"自己建 engine" 且 "读了那个环境变量"
-            # 才是命中 —— `create_engine('sqlite:///固定路径')` 那种（副本回放脚本）不算，
-            # 它的目标写在代码里，看不见也不会翻。
-            'engine_from_env': bool(reads_url_env and builds_engine)}
+            # 第 41 轮 B-MAJOR-1 立了"读侧也要问连哪儿"，但上一版的触发条件是
+            # "文件里出现过 `DATABASE_URL` 这个字面量" —— 第 42 轮 B-MAJOR-3 指出那**一次间接就隐身**：
+            # `create_engine(settings.database_url)` 里压根没出现过那个字面量，值却仍是同一个环境变量。
+            # 所以现在两路都算命中：① 读了那个环境变量并且建了 engine；② 直接看参数形状 ——
+            # `create_engine` / `sessionmaker` 的目标**不是代码里写死的本地 sqlite 路径**。
+            'engine_from_env': bool(builds_external_engine or (reads_url_env and builds_engine))}
+
+
+def _tracked_scripts():
+    """**受检集合必须由仓库定义，不由我这台机器的磁盘定义**（第 41 轮 A 席 M2 的续账）。
+
+    上一版把这条修成"临时目录现造文件"验形状，但 `_scripts()` 仍然 `SCRIPTS.glob('*.py')`
+    ⇒ 本机 53 个文件里有 7 个是被 `.gitignore` 掉的 `_tmp_*.py` 草稿，干净克隆只有 46 个
+    —— 受管集合跟着磁盘变，"我这台机器全绿"与"这个仓库全绿"就不是同一句话（第 42 轮 A-MINOR-3）。
+    现在以 `git ls-files` 为准；git 不可用时退回磁盘扫描并**明说**（宁可退让，不要静默换范围）。
+    """
+    import subprocess
+    try:
+        out = subprocess.run(['git', 'ls-files', '--', 'scripts'], cwd=str(SCRIPTS.parent),
+                             capture_output=True, text=True, timeout=60)
+        names = {Path(ln).name for ln in (out.stdout or '').splitlines()
+                 if ln.endswith('.py') and Path(ln).parent.name == 'scripts'}
+        if names:
+            return names, 'git'
+    except Exception:                                  # noqa: BLE001  没 git / 超时 / 不是仓库
+        pass
+    return {p.name for p in SCRIPTS.glob('*.py')}, '磁盘（git 不可用）'
 
 
 def _scripts():
+    tracked, source = _tracked_scripts()
+    # 只有扫**真**目录时才按 git 过滤；`_scan_into` 会把 SCRIPTS 指到临时目录（那里的文件
+    # 当然不在 git 里），那一类"现造文件验形状"的用例不能被这道过滤掉。
+    real_dir = SCRIPTS.resolve() == (Path(__file__).resolve().parents[2] / 'scripts').resolve()
+    _scripts.scope = (len(tracked), source, real_dir)
     out = {}
     for py in sorted(SCRIPTS.glob('*.py')):
+        if real_dir and source == 'git' and py.name not in tracked:
+            continue        # 未入库的 `_tmp_*.py` 草稿：本机有、干净克隆没有
         # 只放过 `_db_guard.py` 本身（它就是被大家调用的那把钉库守卫）。
         # 第 39 轮 B 说得对：以前 `startswith('_')` 是**整族豁免**，新写一个 `_x.py`
         # 的生产写脚本可以永远不进扫描 —— 豁免名单必须是"一个文件"，不是"一个前缀"。
@@ -492,13 +547,45 @@ def test_the_read_side_trigger_fires_on_the_shape_that_broke_and_not_on_a_fixed_
         # 目标写死在代码里（副本回放）：不算命中，也不该被这条管
         '_x_fixed_path.py': 'from sqlalchemy import create_engine\n'
                             'e = create_engine("sqlite:///data/copy.db")\n',
+        # 一次间接：文件里根本没有 `DATABASE_URL` 这个字面量，值却仍来自配置（第 42 轮 B-MAJOR-3）
+        '_x_via_settings.py': 'from sqlalchemy import create_engine\n'
+                              'from src.core.config import settings\n'
+                              'e = create_engine(settings.database_url)\n',
     }, monkeypatch)
     hits = {n: f['engine_from_env'] for n, f in scripts.items()}
     assert hits['_x_env_engine.py'] is True, '环境变量 + 自建 engine 没被认出来 ⇒ 触发器是死的'
     assert hits['_x_fixed_path.py'] is False, '写死路径的副本 engine 被误伤 ⇒ 判据过宽'
+    assert hits['_x_via_settings.py'] is True, \
+        '把 `os.getenv("DATABASE_URL")` 换成 `settings.database_url` 就隐身 ⇒ 触发器仍可绕过'
     assert not _read_side_guarded('_x_env_engine.py', scripts['_x_env_engine.py']), \
         '旧写法被判"已经有守卫"'
     assert _read_side_guarded('_x_through_the_door.py', scripts['_x_through_the_door.py'])
+
+
+def test_the_scanned_set_is_the_repository_s_not_this_disk_s():
+    """受管集合必须由 git 定义，不跟着本机那些未入库的 `_tmp_*.py` 草稿变。
+
+    第 41 轮 A 席 M2 把两条判据改成"临时目录现造文件"，可**扫描入口**仍是
+    `SCRIPTS.glob('*.py')`：本机 53 个、干净克隆 46 个（差额是 7 个被 `.gitignore` 的草稿）
+    ⇒ "我这台机器全绿"与"这个仓库全绿"依然不是同一句话（第 42 轮 A-MINOR-3）。
+    """
+    import subprocess
+    listed = subprocess.run(['git', 'ls-files', '--', 'scripts'], cwd=str(SCRIPTS.parent),
+                            capture_output=True, text=True, timeout=60)
+    names = {ln.rsplit('/', 1)[-1] for ln in (listed.stdout or '').splitlines()
+             if ln.endswith('.py')}
+    if not names:
+        pytest.skip('这台机器拿不到 git 名单（扫描已退回磁盘范围，并会在 scope 里注明）')
+    scanned = set(_scripts())
+    assert scanned == names - {'_db_guard.py'}, (
+        '受检集合与 git 名单不一致：多 %s、少 %s' % (
+            sorted(scanned - names), sorted((names - scanned) - {'_db_guard.py'})))
+    on_disk = {p.name for p in SCRIPTS.glob('*.py')}
+    extras = sorted(on_disk - scanned)
+    # 不在受检集合里的文件必须**叫得出名字**：`_db_guard.py` 是大家调用的守卫本体（不是使用者），
+    # 剩下只许是被 `.gitignore` 掉的本机草稿。新来一个"没入库又不是草稿"的脚本 ⇒ 这条变红。
+    assert all(e == '_db_guard.py' or e.startswith(('_tmp', '__')) for e in extras), \
+        '被排除在受检集合之外的竟然不全是草稿/守卫本体：%s' % extras
 
 
 def _src_import_graph():
@@ -594,3 +681,78 @@ def test_an_orm_import_must_come_after_the_database_is_decided():
                                  % (name, node.lineno, bad[0],
                                     '后面' if first_door < 10 ** 9 else '从来没有'))
     assert offenders == [], '这些脚本在决定连哪个库**之前**就把全局 engine 建好了：%s' % '；'.join(offenders)
+
+
+def _run_guard_child(code, env):
+    """在**子进程**里跑一段真代码（父进程的 sys.modules 已经被 src 占满，钉不了这个洞）。"""
+    import os
+    import subprocess
+    e = dict(os.environ)
+    e.update(env)
+    e['PYTHONIOENCODING'] = 'utf-8'
+    return subprocess.run([sys.executable, '-c', code], cwd=str(SCRIPTS.parent), env=e,
+                          capture_output=True, text=True, timeout=180,
+                          encoding='utf-8', errors='replace')
+
+
+# 假得连不上的远程串，只用来验"报错不许泄露口令"（create_engine 不连线，永不碰它）
+_FAKE_REMOTE = 'postgresql://someone:SECRETPASS@db.invalid.example/never'
+
+
+def test_the_door_refuses_to_pin_when_the_engine_is_already_built(tmp_path):
+    """`src.models.database` 已经导过 ⇒ 钉库必须当场响，不许"改了环境变量"当成成功。
+
+    为什么上面那条静态判据不够（第 42 轮 B-MAJOR-4）：AST 只能可靠地比**顶层** import
+    与门调用的行号。仓库里 100 多处 `from src.…` 写在函数体里（`main()` 才调用），
+    按行号比大小要么冤枉一片、要么干脆漏掉——函数体里的顺序**在定义处看不出来**。
+    运行期问一句 `sys.modules` 才是真正的执行顺序，且对所有脚本一次性生效。
+    """
+    mirror = tmp_path / 'mirror.db'
+    code = ('import sys, os;'
+            "sys.path.insert(0, 'scripts');"
+            'import src.models.database as orm;'
+            'import _db_guard;'
+            '_db_guard.pin_local_sqlite(use_mirror_default=True);'
+            "print('AFTER-THE-DOOR', os.environ.get('DATABASE_URL', ''))")
+    out = _run_guard_child(code, {'DATABASE_URL': _FAKE_REMOTE, 'LOCAL_DB_URL': str(mirror)})
+    assert out.returncode == 4, 'engine 已经按远程串建好了，钉库却"成功" ⇒ 守卫在自证清白：%s' % out.stdout
+    assert '来得太晚' in out.stdout, out.stdout
+    assert 'SECRETPASS' not in out.stdout + out.stderr, 'abort 信息把口令原样印出来了'
+    assert 'src.models.database' in out.stdout
+    # 报的是**当时那个**目标（引擎已经焊死的地方），不是我想去的镜像
+    assert 'db.invalid.example' in out.stdout, out.stdout
+
+    # 控制：顺序反过来（先钉库再导入）必须**放行**，否则这条判据恒真
+    ok = _run_guard_child(
+        'import sys;'
+        "sys.path.insert(0, 'scripts');"
+        'import _db_guard;'
+        '_db_guard.pin_local_sqlite(use_mirror_default=True);'
+        'import src.models.database as orm;'
+        "print('ENGINE', orm.engine.url)",
+        {'DATABASE_URL': _FAKE_REMOTE, 'LOCAL_DB_URL': str(mirror)})
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert 'sqlite' in str(ok.stdout).lower() and 'mirror.db' in ok.stdout, \
+        '先钉库再导入，engine 却没落在镜像上 ⇒ 这条控制没在放行正确的路：%s' % ok.stdout
+
+
+def test_an_engine_already_built_on_sqlite_warns_instead_of_aborting(tmp_path):
+    """分档：已建在**非 SQLite** 才 abort；已建在 SQLite 只警告并说清写的是哪个文件。
+
+    为什么要这一档：`tests/conftest.py` 就是把全局 engine 建在临时 SQLite 上的，
+    一律 abort 会把 8 条"脚本只写它说的那个库"的用例一起打死（那是把闸门建成墙）。
+    但静默放行同样是撒谎 —— 所以这里必须**看得见**那句警告，且它报的是真文件名。
+    """
+    first = tmp_path / 'first.db'
+    out = _run_guard_child(
+        'import sys;'
+        "sys.path.insert(0, 'scripts');"
+        'import src.models.database as orm;'
+        'import _db_guard;'
+        '_db_guard.pin_local_sqlite(use_mirror_default=True);'
+        "print('CONTINUED', orm.engine.url)",
+        {'DATABASE_URL': 'sqlite:///%s' % first.as_posix(), 'LOCAL_DB_URL': ''})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert '[警告]' in out.stdout and 'first.db' in out.stdout, out.stdout
+    assert 'CONTINUED' in out.stdout and 'first.db' in out.stdout.split('CONTINUED')[-1], \
+        '警告之后脚本继续跑了，但它写的还是原来那个文件 —— 这句话必须说得住：%s' % out.stdout

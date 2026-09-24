@@ -104,8 +104,12 @@
                     <div class="data-table" v-if="bloggers.length > 0">
                         <!-- 第 41 轮 A-M2：表已经渲染出来了，失败的那句红字却只写在 `v-else`
                              的空状态里 ⇒ 结构上永远到不了，老板看到的是一份**没有任何标记**的旧榜。
-                             失败必须在这条分支里也说得出话（同 `fetchEvidence` 那一族）。 -->
-                        <div v-if="bloggersError" class="notice-inline error" style="margin: 0 0 8px 0;">
+                             失败必须在这条分支里也说得出话（同 `fetchEvidence` 那一族）。
+                             样式沿用本页既有失败态写法（`text-xs` + 橙色）—— 上一版这里写的
+                             `class="notice-inline error"` 在 `common.css` 里**压根没有定义**，
+                             等于一句话以正文颜色渲染，"看得见是错误"这件事根本没成立。 -->
+                        <div v-if="bloggersError" class="text-xs"
+                             style="color:#d46b08; margin: 0 0 8px 0;">
                             {{ bloggersError }} ⇒ 下面是<strong>上一次取到的 {{ bloggersStale }} 位</strong>，
                             不是现在的数。<button class="action-btn small" @click="fetchBloggers">重试</button>
                         </div>
@@ -2644,12 +2648,18 @@ const fetchWeChatBatch = async () => {
                         alert('删除失败: ' + (e.response?.data?.detail || e.message));
                         return;
                     }
-                    // 博主已经删掉了，刷新失败不能说「删除失败」（addBlogger 第 34 轮就有这条腿）
-                    try {
-                        await fetchBloggers(); await fetchStats();
-                        if (currentView.value === 'cleanup') await fetchCleanupPreview();
-                    } catch (refreshError) {
-                        alert('博主已删除，只是列表没刷新出来 —— 刷新页面即可');
+                    // 博主已经删掉了，刷新失败不能说「删除失败」（addBlogger 第 34 轮就有这条腿）。
+                    // 但**不能靠 `catch (refreshError)`** —— 三个取数点自己吞错、不重新抛出，
+                    // 那条 catch 在真页面上到不了（第 41 轮 A/B 共同抓到，是我又犯了第 36 轮
+                    // 自己写下的"别只看形状，要问到不到得了"）。所以读它们**写下的错误状态**。
+                    bloggersError.value = ''; statsError.value = '';
+                    await fetchBloggers(); await fetchStats();
+                    if (currentView.value === 'cleanup') await fetchCleanupPreview();
+                    const notRefreshed = [bloggersError.value, statsError.value,
+                        currentView.value === 'cleanup' ? cleanupPreviewError.value : '']
+                        .filter(Boolean).join('；');
+                    if (notRefreshed) {
+                        alert('博主已删除，但列表没刷新出来：' + notRefreshed + ' —— 刷新页面即可');
                         return;
                     }
                     alert('删除成功');

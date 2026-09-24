@@ -117,8 +117,9 @@ def test_migration_runner_upgrades_explicit_sqlite_database(tmp_path):
 
     assert result.returncode == 0, '退码 %s｜stdout=%s｜stderr=%s' % (
         result.returncode, result.stdout, result.stderr)
-    assert '[库] 本地镜像库' in result.stdout, \
-        '动手前没自报"往哪个库发 DDL"（.env 默认指向生产 ⇒ 这行是唯一的方向提示）'
+    assert '[库]' in result.stdout and 'runner.db' in result.stdout, \
+        '动手前没自报"往哪个文件发 DDL"（.env 默认指向生产 ⇒ 这行是唯一的方向提示；' \
+        '而只说"本地库"不够 —— 镜像、副本、临时库都得认得出是哪一个）'
     columns = {column["name"] for column in inspect(engine).get_columns("bloggers")}
     assert "archived_verified_count" in columns
 

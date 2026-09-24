@@ -1,7 +1,9 @@
 # L1 加权 Walk-forward 回测报告
 
 - 生成日：2026-07-29
-- 数据源：`DATABASE_URL`
+- 数据源：⚠ **未记录**——当时那版脚本只往这一行写变量名 `DATABASE_URL`（本地与 Render 都指生产），
+  所以这份回测的数**出自哪个库无法从文档判定**（第 42 轮 B-MINOR-6 撤回旧写法）。
+  复现：`python scripts/backtest_l1_weighting.py`（默认读镜像，机器名会写进这一行）
 - 切片：时序对半（方案 A）；cut=`2026-07-09`
 - 样本：全量已结论 220；train 110；test 110
 - p0=0.609；α 默认 15；min_n=10（权重用全 train c/n+Beta，不因 min_n 丢弃）

@@ -1541,61 +1541,141 @@ run().then((r) => console.log(JSON.stringify(r)));
     assert out['empty_'] == {'err': True, 'stale': 0}, out['empty_']
 
 
-def test_delete_blogger_tells_four_different_endings_apart():
-    """删除博主的四种结局必须分开 —— 第 41 轮 A-M2 说这条路径此前零覆盖。
+def _run_chain_js(snippet, prelude_js):
+    """比 `_run_page_js` 更窄的一个跑法：让用例自己指定桩，好把**真实的那条调用链**装进来。
 
-    旧写法把"删成功 + 刷新炸"和"没删掉"合并成一句 `删除失败: <err>`：
-    老板照那句去重删，就会把同一条记录删两次（或以为没删成又点一遍）。
-    现在跑页面里那份真源码，看每种服务端形状各弹出哪句话、有没有去刷新。
+    为什么需要它（第 41 轮 A/B 共同抓到）：`deleteBlogger` 那句"刷新没成功"原先写在
+    `catch (refreshError)` 里，而页面 `_run_page_js` 的 prelude 里 `fetchBloggers` 是**死桩**
+    —— 拿死桩测出来的"会抛错"是替身的性质，不是真页面的性质。
+    这条判据必须跑**真的 `fetchBloggers`**（它会吞掉错误并写 `bloggersError`），
+    只有这样才能问出"那句话到底到不到得了"。
     """
     if not NODE:
         pytest.skip('本机没有 node')
-    body = _decl(_html(), 'deleteBlogger = async (id) =>')
-    # prelude 里 `fetchBloggers`/`fetchStats` 是死的桩（const，换不掉），
-    # 所以把"刷新那一组调用"整体换成一个可观察的替身；被替换的三行本身不在这条判据里，
-    # 这条判的是**刷新抛错时函数说哪句话** —— 那半截仍是页面源码。
-    old_refresh = 'await fetchBloggers(); await fetchStats();'
-    assert old_refresh in body, '刷新那一行换了写法，这条判据要跟着改（不能默默空转）'
-    body = body.replace(old_refresh, 'await probeRefresh();')
-    out = _run_page_js(
-        body + """
+    src = prelude_js + '\n' + snippet
+    with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as f:
+        f.write(src)
+        path = f.name
+    try:
+        r = subprocess.run([NODE, path], capture_output=True, text=True,
+                           encoding='utf-8', errors='replace', timeout=120)
+        assert r.returncode == 0, 'node 跑挂：%s' % (r.stderr or r.stdout)[-500:]
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_delete_blogger_endings_are_driven_by_state_that_is_reachable():
+    """删除博主的结局必须由**到得了的**证据决定（第 41 轮 A-m1/B-MAJOR-1 的那一条）。
+
+    我上一轮把这条写成"四种结局各说各话"，其中"刷新时抛错 ⇒ 说没刷新出来"那一种
+    **在真页面上到不了**：`fetchBloggers`/`fetchStats`/`fetchCleanupPreview` 三个取数点
+    各自 `try/catch` 且不重新抛出（先证实这一点，再判函数）。所以判据改成两件事：
+    ① 结构事实：那个 `catch (refreshError)` 不许再当作结局的依据；
+    ② 行为：把**真的 `fetchBloggers`** 装进来跑，让 GET 失败 ⇒ 它吞错并写 `bloggersError`
+      ⇒ `deleteBlogger` 必须读那个状态说"已删除，但列表没刷新出来"。
+    """
+    html = _html()
+    # ① 先量"被调函数会不会 reject"——这是第 36 轮立过的规矩，不能只看形状
+    for fname in ('fetchBloggers', 'fetchStats', 'fetchCleanupPreview'):
+        body = _decl(html, '%s = async () =>' % fname)
+        assert 'catch' in body, '%s 没有失败分支' % fname
+        assert not re.search(r'catch\s*\([^)]*\)\s*\{[^}]*\bthrow\b', body, re.S), \
+            '%s 现在会重新抛出了 ⇒ 下面那条"靠 catch"的老判据要重新讨论' % fname
+
+    real_fetch = _decl(html, 'fetchBloggers = async () =>')
+    out = _run_chain_js(
+        real_fetch + "\n" + _decl(html, 'deleteBlogger = async (id) =>') + """
 const probe = async (mode) => {
-    alerts.length = 0; refreshes.length = 0;
-    deleteBloggerMode = mode;
+    alerts.length = 0; calls.length = 0; mode_ = mode;
+    bloggersError.value = '上一轮遗留的错（必须先清掉，否则这句是假话）';
+    statsError.value = '上一轮遗留的错';
     await deleteBlogger(7);
-    return {alerts: alerts.slice(), refreshes: refreshes.slice()};
+    return {alerts: alerts.slice(), calls: calls.slice(),
+            stale: bloggersStale.value, err: bloggersError.value.slice(0, 12)};
 };
-const main = async () => JSON.stringify({
-    ok:           await probe('ok'),
-    soft:         await probe('soft'),
-    thrown:       await probe('thrown'),
-    staleRefresh: await probe('refresh-throws'),
-});
-main().then((s) => console.log(s));
+(async () => {
+    const r = { ok: await probe('ok'), soft: await probe('soft'), http: await probe('http'),
+                refreshFails: await probe('refresh-fails') };
+    console.log(JSON.stringify(r));
+})();
 """,
-        helpers=[
-            "let deleteBloggerMode = 'ok';",
-            "const alerts = []; const refreshes = [];",
-            "const alert = (m) => alerts.push(m);",
-            "const confirm = () => true;",
-            "const currentView = ref('bloggers');",
-            "const fetchCleanupPreview = async () => { refreshes.push('cleanup'); };",
-            "const probeRefresh = async () => {",
-            "    if (deleteBloggerMode === 'refresh-throws') throw new Error('刷新时连不上');",
-            "    refreshes.push('bloggers');",
-            "};",
-            "axios.delete = async (url) => {",
-            "    if (deleteBloggerMode === 'soft')"
-            " return { data: { success: false, message: '还有 3 条帖子' } };",
-            "    if (deleteBloggerMode === 'thrown') {"
-            " const e = new Error('500'); e.response = { data: { detail: '内部错误' } }; throw e; }",
-            "    return { data: { success: true } };",
-            "};",
-        ])
+        prelude_js="""
+const ref = (v) => ({ value: v });
+let mode_ = 'ok';
+const alerts = []; const calls = [];
+const alert = (m) => alerts.push(m);
+const confirm = () => true;
+const currentView = ref('bloggers');
+const bloggers = ref([{id:1},{id:2}]); const bloggersError = ref(''); const bloggersStale = ref(0);
+const statsError = ref(''); const stats = ref(null); const evidenceReport = ref(null);
+const cleanupPreviewError = ref('');
+const fetchStats = async () => { calls.push('stats'); statsError.value = ''; };
+const fetchCleanupPreview = async () => { calls.push('cleanup'); };
+const withWakeRetry = async (fn) => fn();
+const isServiceDown = (e) => !!(e && e.response && [502, 503, 504].includes(e.response.status));
+const axios = {
+  get: async (u) => { calls.push('GET ' + u);
+      if (mode_ === 'refresh-fails' && u === '/api/bloggers') {
+          const e = new Error('500'); e.response = { status: 500 }; throw e; }
+      return { data: { success: true, data: [{id:9}] } }; },
+  delete: async (u) => { calls.push('DELETE ' + u);
+      if (mode_ === 'soft') return { data: { success: false, message: '还有 3 条帖子' } };
+      if (mode_ === 'http') { const e = new Error('x'); e.response = { data: { detail: '内部错误' } }; throw e; }
+      return { data: { success: true } }; },
+};
+""")
     assert out['ok']['alerts'] == ['删除成功'], out['ok']
-    assert out['ok']['refreshes'] == ['bloggers'], out['ok']
+    assert out['ok']['calls'] == ['DELETE /api/bloggers/7', 'GET /api/bloggers', 'stats'], out['ok']
     assert out['soft']['alerts'] == ['没删掉：还有 3 条帖子'], out['soft']
-    assert out['soft']['refreshes'] == [], '200+success:false 也去刷新 ⇒ 把没删成的行从榜上抹了'
-    assert out['thrown']['alerts'] == ['删除失败: 内部错误'], out['thrown']
-    assert out['thrown']['refreshes'] == []
-    assert out['staleRefresh']['alerts'] == ['博主已删除，只是列表没刷新出来 —— 刷新页面即可'],         out['staleRefresh']
+    assert out['soft']['calls'] == ['DELETE /api/bloggers/7'], '200+success:false 也去刷新 ⇒ 抹掉了没删成的行'
+    assert out['http']['alerts'] == ['删除失败: 内部错误'], out['http']
+    # 到得了的那一种：取数点自己吞了错，函数读它写下的状态说话（上一版是靠 catch ⇒ 到不了）
+    assert out['refreshFails']['alerts'] == [
+        '博主已删除，但列表没刷新出来：博主榜拉取失败：接口报错 —— 刷新页面即可'], out['refreshFails']
+    assert out['refreshFails']['stale'] == 1, \
+        '失败时表上挂着的是**上一轮那 1 位**（`ok` 那一跑把列表换成了 1 行），' \
+        '`bloggersStale` 必须跟着数出来 —— 横幅那句"上一次取到的 N 位"靠它'
+
+
+# 模板里静态 class 在 css / 页面 style 块里查无定义的（第 42 轮自己踩出来后量的）
+DEAD_CLASSES_ALLOWED = {
+    'ap-stat', 'count', 'meta-sub', 'mt-10', 'task-running', 'test-data-summary',
+}
+# ↑ 这 6 个**早于本轮**就在页面里，属"写了类名却没人定义"的存量脏（样式静默缺失）。
+#   这里不是给它们发免检牌：名单由下面第一条断言逐名核过"确实还在用"，
+#   谁把它们清掉，名单里少一名就会红；新增一个没定义的类名同样直接红。
+
+
+def test_no_new_class_name_is_used_without_being_defined():
+    """模板里写的每个静态 class 都必须真有人定义（第 42 轮我自己犯的：`notice-inline`）。
+
+    一句"失败提示"如果类名查无定义，它就只是**一段正文颜色的字** ——
+    "看得见是错误"这件事根本没成立。文本判据看得见这种错，所以配一条闸。
+    范围：静态 `class="…"`；排除 `ri-*`（图标类在 CDN 那份 `remixicon.css` 里）与
+    含 `{}` 的动态片段（`:class="{...}"` 归 `v-bind:class` 那条判据管）。
+    """
+    html = _html()
+    css = (PROJECT_ROOT / 'web' / 'common.css').read_text(encoding='utf-8')
+    inline = '\n'.join(re.findall(r'<style[^>]*>(.*?)</style>', html, flags=re.S))
+    defined = set(re.findall(r'\.([a-zA-Z][\w-]*)', css + '\n' + inline))
+    tpl = html[html.index('<div id="app"'):html.index('<script src="/web/post-manager.js">')]
+    tpl = re.sub(r'<!--.*?-->', '', tpl, flags=re.S)
+    used = set()
+    for m in re.finditer(r'(?<![:\-\w])class="([^"]*)"', tpl):
+        for token in m.group(1).split():
+            if token.startswith('ri-') or any(ch in token for ch in '{}\''):
+                continue
+            used.add(token)
+    undefined = sorted(used - defined)
+    assert undefined == sorted(DEAD_CLASSES_ALLOWED), \
+        '页面里"写了类名却没人定义"的集合变了：多出 %s，少了 %s' % (
+            sorted(set(undefined) - DEAD_CLASSES_ALLOWED),
+            sorted(DEAD_CLASSES_ALLOWED - set(undefined)))
+    # 反向护栏：这条判据不许因为"整页一个类都没有"而空转
+    assert len(used) > 100, '只扫到 %d 个静态 class ⇒ 选择器或模板形状变了' % len(used)
+    # 我自己那一条失败横幅必须用**有定义**的写法（钉住具体那一句，不只钉集合）
+    banner = re.search(r'<div v-if="bloggersError"[^>]*class="([^"]*)"', tpl)
+    assert banner, '博主榜那条失败横幅不见了（那 A-M2 就没修）'
+    assert all(tok in defined for tok in banner.group(1).split()), \
+        '博主榜失败横幅用的类名查无定义：%s' % banner.group(1)

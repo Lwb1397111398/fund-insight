@@ -1,7 +1,9 @@
 # L3 模糊硬标占比估计（只读）
 
 - 日期：2026-07-30
-- 数据源：`DATABASE_URL`
+- 数据源：⚠ **未记录**——当时那版脚本只往这一行写变量名 `DATABASE_URL`，而它本地指生产、
+  Render 上也指生产 ⇒ 本节这些数**出自哪个库无法从文档判定**（第 42 轮 B-MINOR-6 撤回旧写法）。
+  复现：`python scripts/estimate_l3_vague_labels.py`（默认读镜像，现在会把机器名写进这一行）
 - 范围：未删除且 prediction_type 为 up/down/bullish/bearish
 - **不改**抽取/验证代码；**不部署**；**不 push**
 
@@ -97,7 +99,8 @@
 ## 附录 C：clear 桶标签审计 + bucket×tier 交叉表（只读）
 
 - 日期：2026-07-30
-- 数据源：`DATABASE_URL`
+- 数据源：⚠ **未记录**（同上：旧脚本只写变量名 ⇒ 出自哪个库判不了）。
+  复现：`python scripts/audit_l3_clear_labels.py`（默认读镜像，机器名会写进这一行）
 - **不改生产、不 push**
 - 复读方法：对 clear 桶随机 50 条（seed=20260729）做**否定/条件句敏感**规则复读（非金标准人工，可复现）
 - 博主 tier：存活已结论 n≥10 → empirical；1–9 → prior；0 → neutral

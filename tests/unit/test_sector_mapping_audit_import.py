@@ -842,3 +842,32 @@ def test_a_row_that_was_never_written_is_not_counted_as_written_anyway(monkeypat
         assert '本次已照样写入' in again['message'], again['message']
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+def test_an_unchanged_row_is_not_reported_as_written_anyway(monkeypatch, tmp_path):
+    """库里本来就是这个值（`unchanged`）的行不许进"定不了价且照样写入"那个桶。
+
+    第 41 轮 B-(a) 的残格：上一版把条件写成"只要没被拒就算"，于是**幂等重放**
+    （第二次回写同一份清单，145 行全是 unchanged）会报"其中 N 行本次已照样写入"，
+    而那一次连一个字节都没改。判据收紧成"这一次真的写了 / 计划要写"。
+    """
+    session_factory = _database(tmp_path)
+    app, client = _client(monkeypatch, session_factory)
+    try:
+        first = _import(client, [dict(AUDIT_ROW)], dry_run=False, confirm=CONFIRM).json()
+        assert first["data"]["counts"]["created"] == 1, first["data"]
+        assert first["data"]["no_nav_priced_in_this_db"] == 1, \
+            "新建 + 本库定不了价 ⇒ 这一格必须报出来（反向对照）：%s" % first["data"]
+        assert "本次已照样写入" in first["message"], first["message"]
+
+        again = _import(client, [dict(AUDIT_ROW)], dry_run=False, confirm=CONFIRM).json()
+        assert again["data"]["counts"]["unchanged"] == 1, again["data"]["counts"]
+        assert again["data"]["no_nav_priced_in_this_db"] == 0, \
+            "一个字都没写的幂等重放，被说成「本次已照样写入」：%s" % again["data"]
+        assert "本次已照样写入" not in again["message"], again["message"]
+
+        plan = _import(client, [dict(AUDIT_ROW, sector_name="__计划里新板块__")]).json()
+        assert plan["data"]["counts"]["created"] == 1 and plan["data"]["no_nav_priced_in_this_db"] == 1, \
+            "dry-run 计划里「要新建且定不了价」的行仍要报出来（否则闸又变成只会说没有）：%s" % plan["data"]
+    finally:
+        app.dependency_overrides.pop(get_db, None)

@@ -9,6 +9,7 @@ L3 只读：
 """
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
@@ -68,13 +69,23 @@ def classify_text(text: str, ptype: str) -> str:
     return "other_type"
 
 
-def connect():
+def connect(argv=None):
     """只读连库口收进 `_db_guard.read_only_connect()`（第 41 轮 B-MAJOR-1）。
 
     旧写法是 `url = os.getenv("DATABASE_URL")` 一有值就连它 —— 而 `.env` 里那条指的就是
     **生产 Supabase**，于是"跑一下 L3 估算"默认就在读线上库，label 还只印变量名。
     """
-    return _db_guard.read_only_connect()
+    return _db_guard.read_only_connect(argv)
+
+
+def _parser():
+    """`--help` 不许把整份估算跑一遍并覆写 `docs/`（第 42 轮 B-MINOR-5，同源第 39 轮那条）。"""
+    ap = argparse.ArgumentParser(
+        description='L3 模糊硬标占比估计（只读；结果覆写 docs/L3_VAGUE_LABEL_ESTIMATE.md 的第一节）',
+        epilog='默认读本地镜像库。要读线上库得显式 --production，两档都是引擎级只读。')
+    ap.add_argument('--production', action='store_true',
+                    help='改读线上生产库（默认读本地镜像 data/fund_insight.db）')
+    return ap
 
 
 def fetch_rows(session) -> List[Dict[str, Any]]:
@@ -196,8 +207,10 @@ def fmt_pct(x: Optional[float]) -> str:
     return f"{x * 100:.1f}%"
 
 
-def main():
-    eng, session, db_label = connect()
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    _parser().parse_args(argv)        # 打错的开关、--help 都在这一行就把进程停掉
+    eng, session, db_label = connect(argv)
     try:
         rows = fetch_rows(session)
     finally:

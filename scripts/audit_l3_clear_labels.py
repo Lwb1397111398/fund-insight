@@ -8,6 +8,7 @@ L3 附录 C 只读：
 """
 from __future__ import annotations
 
+import argparse
 import os
 import random
 import re
@@ -194,14 +195,29 @@ def audit_clear_label(content: str, ptype: str) -> Dict[str, Any]:
     }
 
 
-def connect():
+def connect(argv=None):
     """走 `_db_guard.read_only_connect()`（第 41 轮 B-MAJOR-1）。
 
     旧写法 `if url: create_engine(url)` 在本地 = 直连生产 Supabase，而这份审计的结果会
     写进 `docs/L3_VAGUE_LABEL_ESTIMATE.md`，数据源那一栏只写 "DATABASE_URL" ⇒ 报告里
     的数字看不出出自哪个库。现在 label 带机器名，且两条路都是引擎级只读 + 真写探针。
     """
-    return _db_guard.read_only_connect()
+    return _db_guard.read_only_connect(argv)
+
+
+def _parser():
+    """`--help` 与打错的开关必须**一笔都不跑**就把话说完（第 42 轮 B-MINOR-5）。
+
+    第 39 轮在 `scripts/mutation_proof_frontend.py` 上栽过同一件事：顶部 `import argparse`
+    却从不调用 ⇒ `--help` 会让它整套跑一遍并就地改写 `web/`。这个脚本更狠：它会往 `docs/`
+    追加一节报告，"看一眼帮助"就生产出一份新文档。
+    """
+    ap = argparse.ArgumentParser(
+        description='L3「clear」标签一致性抽查（只读；结果追加进 docs/L3_VAGUE_LABEL_ESTIMATE.md）',
+        epilog='默认读本地镜像库。要读线上库得显式 --production，两档都是引擎级只读。')
+    ap.add_argument('--production', action='store_true',
+                    help='改读线上生产库（默认读本地镜像 data/fund_insight.db）')
+    return ap
 
 
 def fetch(session) -> List[Dict[str, Any]]:
@@ -309,8 +325,10 @@ def fmt_pct(x: Optional[float]) -> str:
     return f"{x * 100:.1f}%"
 
 
-def main():
-    eng, session, db_label = connect()
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    _parser().parse_args(argv)        # 打错的开关、--help 都在这一行就把进程停掉
+    eng, session, db_label = connect(argv)
     try:
         rows = fetch(session)
     finally:
