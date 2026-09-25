@@ -44,7 +44,10 @@ _QUERIES = ['', '?mode=ro', '?sslmode=require&foo=1']
 _REMOTE_HOSTS = ['', 'h', 'localhost', 'LOCALHOST', '127.0.0.1', '8.8.8.8', '::1', '[::1]',
                  '192.168.1.20', '10.0.0.7', '172.16.0.5', '172.32.0.5', '169.254.1.1',
                  'db.example.com', 'db.example.com:6543', 'u@db.example.com', 'u:p@db.example.com',
-                 'x.supabase.co', 'AWS-0-X.POOLER.SUPABASE.COM', 'notsupabase.evil.example']
+                 'x.supabase.co', 'AWS-0-X.POOLER.SUPABASE.COM', 'notsupabase.evil.example',
+                 # 第 46 轮 A-m1 / B-M6：多主机列表与"主机只写在 `?host=` 里"
+                 'a.supabase.co,b.backup', 'x.supabase.co.', '0.0.0.0', '[::ffff:0.0.0.2]',
+                 'mysupabase.internal']
 
 
 def _all_samples():
@@ -72,6 +75,15 @@ def _all_samples():
         for host in _REMOTE_HOSTS:
             out.append('%s://%s/db' % (sch, host))
             out.append('%s://u:S3cr3tPW@%s:5432/db?sslmode=require' % (sch, host))
+    # 主机**不在 netloc 里**的那些写法（第 46 轮 B-M6）：`postgresql:///db?host=…` 是
+    # SQLAlchemy 的正规形状之一，旧尺子在这里解析出空主机 ⇒ 把真生产说成"本机"。
+    for q in ('host=aws-0-x.pooler.supabase.co', 'host=x.supabase.co&port=5432',
+              'host=a.supabase.co,b.backup', 'host=localhost', 'host=127.0.0.1',
+              'dbname=d', 'password=S3cr3tPW'):
+        out.append('postgresql:///postgres?%s' % q)
+        out.append('postgres:///%s' % q.replace('=', '='))
+    out.append('host=aws-0-x.pooler.supabase.co port=5432 dbname=postgres user=u password=S3cr3tPW')
+    out.append('sqlite:///u:S3cr3tPW@/tmp/x.db')            # sqlite 这一支的口令（B-minor-4）
     return sorted(set(out))
 
 
@@ -128,11 +140,58 @@ def test_a_postgres_url_is_not_automatically_the_production_database():
                  'mysupabase.internal'):
         assert kind('postgresql://u@%s/db' % fake).startswith('远程 PostgreSQL'), \
             '%s 靠子串混成了线上生产库' % fake
-    # 控制：三档必须**真的**是三档 —— 如果实现退化成"一律远程"或"一律生产"，上面会一起响；
+    # 控制：四档必须**真的**互不相同 —— 如果实现退化成"一律远程"或"一律生产"，上面会一起响；
     # 这一条保证我没有只是把标签全删（那等于把这条闸拆了）。
-    assert len({kind('postgresql://u@127.0.0.1/db').split('（')[0],
-                kind('postgresql://u:p@x.supabase.co/db').split('（')[0],
-                kind('postgresql://u:p@db.example.com/db').split('（')[0]}) == 3
+    tiers = {kind('postgresql://u@127.0.0.1/db').split('（')[0],
+             kind('postgresql://u:p@x.supabase.co/db').split('（')[0],
+             kind('postgresql://u:p@db.example.com/db').split('（')[0],
+             kind('postgresql:///var/run/postgresql/mydb').split('（')[0]}
+    assert len(tiers) == 4, '几档糊在一起了：%s' % tiers
+    assert kind('postgresql:///postgres?host=x.supabase.co').startswith('线上生产库'), \
+        '主机只写在 query 里 ⇒ 应当仍认出生产档（它与"认不出主机"不是同一档）'
+
+
+def test_a_host_written_only_in_the_query_is_never_reported_as_local():
+    """主机只出现在 `?host=` 里时，旧尺子解析出**空主机**并把真生产说成"本机"（第 46 轮 B-M6）。
+
+    `postgresql:///db?host=…` 是 SQLAlchemy 的正规写法之一（Unix socket / PgBouncer），
+    而 `q.py --production` 与 `read_only_connect --production` 只看 scheme ⇒
+    读的是线上、屏幕上写"本机，不是线上生产库"。
+    三档都要各自钉：命中生产域 ⇒ 生产；`host=localhost` ⇒ 本机；完全认不出 ⇒ 明说认不出。
+    多主机列表（`host=a.supabase.co,b.backup`，驱动自己做故障转移）里任一候选命中生产域
+    就算生产（第 46 轮 A-m1：整串当一个主机名 ⇒ 真生产被说成"不是那台"）。
+    """
+    sys.path.insert(0, str(ROOT / 'scripts'))
+    try:
+        import _db_guard
+    finally:
+        sys.path.remove(str(ROOT / 'scripts'))
+
+    def kind(url):
+        return _db_guard.db_kind(url)
+
+    prod_in_query = 'postgresql:///postgres?host=aws-0-x.pooler.supabase.co&port=5432'
+    assert kind(prod_in_query).startswith('线上生产库'), kind(prod_in_query)
+    assert kind('postgresql:///postgres?host=localhost').startswith('本机 PostgreSQL')
+    assert kind('postgresql:///db?host=a.supabase.co,b.backup').startswith('线上生产库'), \
+        '多主机列表被整串当成一个名字 ⇒ 真生产混进"不是那台"那一档：%s' % kind(
+            'postgresql:///db?host=a.supabase.co,b.backup')
+    unknown = kind('postgresql:///var/run/postgresql/mydb')
+    # 判"属于哪一档"要判这一句的**开头**，不能判整串里出没出现过"本机"两个字 ——
+    # 这一档的尾巴正是"不敢说它是本机还是线上生产库"，用子串判会把对的话读成谎话
+    # （同一条坑今天两个席位各踩一次，我自己写这条时又踩第三次）。
+    assert unknown.startswith('PostgreSQL（') and '认不出主机' in unknown, unknown
+    # 键值写法（没有 `://`）走同一条判据
+    assert kind('host=aws-0-x.pooler.supabase.co port=5432 dbname=postgres').startswith(
+        '线上生产库'), kind('host=aws-0-x.pooler.supabase.co port=5432 dbname=postgres')
+    assert 'S3cr3tPW' not in kind('host=h port=5432 user=u password=S3cr3tPW dbname=d')
+    # sqlite 那一支的口令（B-minor-4）
+    assert 'S3cr3tPW' not in kind('sqlite:///u:S3cr3tPW@/tmp/x.db'), \
+        kind('sqlite:///u:S3cr3tPW@/tmp/x.db')
+    # 控制：合法文件名里带 `@` 的相对路径不许被剥坏
+    assert kind('sqlite:///data/mail@copy.db').endswith('data/mail@copy.db') or \
+        'data/mail@copy.db' in kind('sqlite:///data/mail@copy.db'), \
+        '剥口令剥过头，把真文件名改了 ⇒ 自报错对象：%s' % kind('sqlite:///data/mail@copy.db')
 
 
 def test_a_raw_connection_tells_which_database_it_points_at():

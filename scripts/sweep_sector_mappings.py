@@ -6,7 +6,9 @@
 fundsuggest 的 CATEGORYDESC），不碰股票域接口（本机 ProxyError），也不依赖 LLM。
 
 默认 dry-run，只出 CSV 与分桶报告；`--apply` 才写库，且写之前自动备份 + 生成
-before-image 清单，`--restore-from` 可逐字段还原。
+before-image 清单。`--restore-from` 同样**默认 dry-run**，真还原要
+`--restore-from <清单> --apply --confirm RESTORE-SWEEP`（第 46 轮 B-M8：以前这条支路
+绕过了 `--apply`，一句"手滑的旗子"就能改映射表并删净值历史）。
 
 用法：
     python scripts/sweep_sector_mappings.py                        # 只体检，不写
@@ -43,6 +45,10 @@ MANIFEST_FIELDS = ('sector_name', 'fund_code', 'fund_name', 'reviewed', 'reviewe
                    'confidence', 'verified_at', 'verify_message', 'evidence',
                    # realign 会连带复位这几列，缺一项就是"回滚之后字段对不上"
                    'updated_at', 'is_active', 'keywords', 'llm_reason')
+# 还原也是写库（还会删净值），门槛与 `purge_junk_funds.py` 同一套：`--apply` + 这句令牌。
+# 第 46 轮 B-M8：以前 `--restore-from` 直接 return restore(...)，绕过了 `--apply` 那一支，
+# 而文件头第 8 行写的正是"默认 dry-run，`--apply` 才写库" ⇒ 那句话对还原这条路当场是假的。
+RESTORE_CONFIRM_TOKEN = 'RESTORE-SWEEP'
 
 # 已知一定可服务的好码：整轮请求里周期性重探，用来区分"这只基金有问题"与
 # "站点/网络此刻不可用"。后者绝不允许变成批量降级。
@@ -476,7 +482,10 @@ def main():
     ap.add_argument('--limit', type=int, default=None, help='只体检前 N 行（调试用）')
     # 带时分秒：同一天二次 --apply 不能覆盖唯一的还原清单（覆盖=丢掉回滚能力）
     ap.add_argument('--tag', default=datetime.now().strftime('%Y%m%d-%H%M%S'))
-    ap.add_argument('--restore-from', default=None, help='按 manifest 逐字段还原')
+    ap.add_argument('--restore-from', default=None,
+                    help='按 manifest 逐字段还原（默认 dry-run；真写要 --apply --confirm %s）'
+                         % RESTORE_CONFIRM_TOKEN)
+    ap.add_argument('--confirm', help='还原写库时必须等于 %s' % RESTORE_CONFIRM_TOKEN)
     ap.add_argument('--restore-owner-immunity', action='store_true',
                     help='还原时连 `reviewed_by="owner"` / `owner_locked` 一起还回去'
                          '（默认不还原：体检豁免只能由老板在页面上盖）')
@@ -489,6 +498,15 @@ def main():
     ap.add_argument('--max-upgrade', type=int, default=8, help='允许场内 ETF 升级的条数上限')
     args = ap.parse_args()
 
+    if args.restore_from and args.apply and args.confirm != RESTORE_CONFIRM_TOKEN:
+        # 第 46 轮 B-M8：这条路以前**没有门**（`--restore-from` 直接 return restore(...)，
+        # 既不看 `--apply` 也不要确认词，而文件头写着"默认 dry-run，`--apply` 才写库"）。
+        # 顺序也是有意的：这句排在 `pin_local_sqlite` 与 `SessionLocal()` 之前 ——
+        # 用法错不该先连一次库（第 20 轮 seed 那条闸同一姿势）。
+        print('[abort] --restore-from --apply 会改映射表并删净值历史，需要 --confirm %s'
+              % RESTORE_CONFIRM_TOKEN)
+        return 4
+
     db_url = _db_guard.pin_local_sqlite(use_mirror_default=True)
     db_path = db_url.split('sqlite:///')[-1].replace('\\', '/')
     from src.models.database import SessionLocal, SectorFundMapping
@@ -499,7 +517,7 @@ def main():
     db = SessionLocal()
     try:
         if args.restore_from:
-            return restore(db, args.restore_from,
+            return restore(db, args.restore_from, apply=args.apply,
                            restore_owner_immunity=args.restore_owner_immunity)
 
         rows = db.query(SectorFundMapping).order_by(SectorFundMapping.id).all()
@@ -1041,58 +1059,109 @@ def _coerce(field, value):
     return value
 
 
-def restore(db, manifest_path, restore_owner_immunity=False):
-    """按 manifest 逐字段还原：体检写坏任何东西都能退回原样。
+def restore(db, manifest_path, apply=False, restore_owner_immunity=False):
+    """按 manifest 逐字段还原：体检写坏任何东西都能退回原样。**默认 dry-run。**
 
     ⚠ 清单里带着 `reviewed_by='owner'` / `owner_locked=True` 的行**默认不还原这两列**
     （第 45 轮：升级"谁能盖老板已确认"的棘轮抓出来的第六条来源 —— 还原动作会**凭一份文件**
     把体检免疫与老板署名发回库里，而这两样按规矩只能由老板在页面上逐行盖）。
     要连它们一起还原，得显式 `--restore-owner-immunity`；回执里报剔掉了几行。
+
+    第 46 轮 B-M8/M-9 补的三件事（都是"以前这条路没有门"）：
+    ① `apply=False` 时一个字都不写（含 `db.commit()`），只报"将要写几行、将要删几行"；
+    ② 能删的净值**必须有日期下界**：清单缺 `created_at`（或被截断）时**拒绝删**，
+      而不是把"看不见日期"翻译成"不限日期" —— 那等于删掉这只基金的全部历史，
+      而净值是不可再生数据（每日同步只回补最近 30 天）；
+    ③ 字段名要过白名单：清单是外部输入，以前 `data.get('fields', …)` 里写什么就
+      `setattr` 什么（含 `id`）⇒ 一份文件能改任意 ORM 属性。
     """
     from src.models.database import SectorFundMapping, FundInfo, FundHistory
-    data = json.load(io.open(manifest_path, encoding='utf-8'))
-    restored = 0
-    held_back = 0
-    for item in data['rows']:
+    try:
+        data = json.load(io.open(manifest_path, encoding='utf-8'))
+    except ValueError as exc:
+        print('[abort] 清单不是合法 JSON：%s' % str(exc)[:120])
+        return 4
+    rows = data.get('rows')
+    if not isinstance(rows, list):
+        print('[abort] 清单里没有 `rows` 列表（键：%s）⇒ 这不是本脚本写的 manifest，不动库'
+              % (','.join(sorted(data))[:80] or '空'))
+        return 4
+    allowed = set(MANIFEST_FIELDS)
+    wanted = list(data.get('fields') or MANIFEST_FIELDS)
+    fields = [f for f in wanted if f in allowed]
+    refused_fields = [f for f in wanted if f not in allowed]
+    if refused_fields:
+        print('[skip] 清单要求还原这些字段，但白名单里没有 ⇒ 不写：%s'
+              % '、'.join(str(f) for f in refused_fields))
+    if not fields:
+        print('[abort] 过完白名单一个字段都不剩 ⇒ 还原动作等于什么都不做，先看清清单')
+        return 4
+
+    def _grants(item, field):
+        """清单里这一行是不是在**发**老板免疫（而不是把 `agent`/False 搬回去）。"""
+        if field == 'owner_locked':
+            return bool(item.get('owner_locked'))
+        return str(item.get('reviewed_by') or '').lower() == 'owner'
+
+    plan, held_back = [], 0
+    for item in rows:
         row = db.query(SectorFundMapping).filter(
-            SectorFundMapping.id == item['id']).first()
+            SectorFundMapping.id == item.get('id')).first()
         if not row:
             continue
-        fields = list(data.get('fields', MANIFEST_FIELDS))
-        if not restore_owner_immunity:
-            dropping = [f for f in fields
-                        if f in ('owner_locked', 'reviewed_by')
-                        and ((f == 'owner_locked' and item.get('owner_locked'))
-                             or (f == 'reviewed_by'
-                                 and str(item.get('reviewed_by') or '').lower() == 'owner'))]
-            if dropping:
-                fields = [f for f in fields if f not in dropping]
-                held_back += 1
-        for field in fields:
-            if field not in item:
-                continue
-            setattr(row, field, _coerce(field, item[field]))
-        restored += 1
-    removed = 0
+        dropping = [f for f in fields
+                    if not restore_owner_immunity and f in ('owner_locked', 'reviewed_by')
+                    and _grants(item, f)]
+        if dropping:
+            held_back += 1
+        writes = [(f, _coerce(f, item[f])) for f in fields
+                  if f not in dropping and f in item]
+        plan.append((row, writes))
+
     # 只清"清单生成之后"同步回来的净值：本地库现存 **32 只 / 209 行**是"有净值、没档案"
     # 的历史孤儿，`ensure_fund_info_exists` 对它们回报"新建"，无条件 delete 会把老板
     # 本来就有的净值一起吞掉（那是不可再生数据，同步任务不会补历史全量）。
     since_raw = (data.get('created_at') or '')[:10]
     since = datetime.strptime(since_raw, '%Y-%m-%d').date() if since_raw else None
-    for code in data.get('created_fund_codes') or []:
-        hist = db.query(FundHistory).filter(FundHistory.fund_code == code)
-        if since is not None:
-            hist = hist.filter(FundHistory.nav_date >= since)
-        hist.delete(synchronize_session=False)
+    codes = list(data.get('created_fund_codes') or [])
+    refused = len(codes) if (codes and since is None) else 0
+    if refused:
+        print('[abort] 清单要清 %d 只基金档案，却没有（或截断了）`created_at` ⇒ '
+              '无法界定"本轮新建"的净值。**本次一行净值都不清**'
+              '（清错＝删掉不可再生的历史）；要还原映射行本身，把 `created_fund_codes` 置空后重跑'
+              % refused)
+        codes = []
+    nav_rows = sum(db.query(FundHistory).filter(FundHistory.fund_code == code,
+                                                FundHistory.nav_date >= since).count()
+                   for code in codes) if codes else 0
+
+    if not apply:
+        print('[dry-run] 未写库。将按 %s 还原 %d 行映射；将清掉 %d 只新建基金的 %d 行净值'
+              % (manifest_path, len(plan), len(codes), nav_rows))
+        if held_back:
+            print('[免疫] 其中 %d 行带着老板署名/锁定，默认**不还原**'
+                  '（要连它一起还原：加 --restore-owner-immunity）' % held_back)
+        print('真还原：%s --restore-from %s --apply --confirm %s'
+              % (os.path.basename(__file__), manifest_path, RESTORE_CONFIRM_TOKEN))
+        return 0
+
+    for row, writes in plan:
+        for field, value in writes:
+            setattr(row, field, value)
+    cleared = 0
+    for code in codes:
+        db.query(FundHistory).filter(FundHistory.fund_code == code,
+                                     FundHistory.nav_date >= since).delete(
+            synchronize_session=False)
         db.query(FundInfo).filter(FundInfo.fund_code == code).delete(synchronize_session=False)
-        removed += 1
+        cleared += 1
     db.commit()
     from src.services.sector_fund_service import get_sector_fund_service
     get_sector_fund_service(db).refresh_cache()
     from src.services.sector_identity_audit import invalidate_denied_cache
     invalidate_denied_cache()
-    print('[还原] %d 行已按 %s 恢复；清掉本轮新建基金档案 %d 只'
-          % (restored, manifest_path, removed))
+    print('[还原] %d 行已按 %s 恢复；清掉本轮新建基金 %d 只（%d 行净值，均不早于 %s）'
+          % (len(plan), manifest_path, cleared, nav_rows, since))
     if held_back:
         print('[免疫] %d 行带着老板署名/锁定，**默认不还原**（免疫只能由老板在页面上逐行盖）。'
               '确实要连它一起还原：加 --restore-owner-immunity' % held_back)

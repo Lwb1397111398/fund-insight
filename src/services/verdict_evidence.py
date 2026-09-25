@@ -236,6 +236,15 @@ def _conninfo_target(text: str) -> str:
     return out or '(DSN：只留下非凭据字段，其余已隐去)'
 
 
+_SECRET_IN_TEXT = re.compile(r"([?;&/]|^)(password|passwd|pwd|secret|token|apikey|api_key)"
+                             r"\s*=\s*[^;&/\s]*", re.I)
+
+
+def _redact_secrets(text: str) -> str:
+    """任何 `key=值` 形状的涉密段换成 `[隐去]`（与守卫侧 `_redact_secrets` 同文）。"""
+    return _SECRET_IN_TEXT.sub(lambda m: '%s%s=[隐去]' % (m.group(1), m.group(2).lower()), text)
+
+
 def target_name(url: str) -> str:
     """连接串 → **打得开的那个目标**：sqlite 给文件路径，远程给 `scheme://host/db`（不含口令）。
 
@@ -252,6 +261,9 @@ def target_name(url: str) -> str:
     if scheme.lower().startswith('sqlite'):
         body = url[len('sqlite:///'):] if url.lower().startswith('sqlite:///') else rest
         body = body.split('?', 1)[0]
+        # 与守卫侧同一条：`user:pass@` 这种形状只有"吃原始串"时才见得到，
+        # 而"口令一个字符都不出现"这条不变式不分方言（第 46 轮 B-minor-4）。
+        body = re.sub(r'^[^/]*:[^/]*@', '', body)
         if body.startswith('//'):
             body = body.lstrip('/')
         if re.match(r'^/[A-Za-z]:[\\/]', body):
@@ -260,6 +272,8 @@ def target_name(url: str) -> str:
     # 剪掉 query / fragment / `;` 参数：`postgresql://h/db?password=X` 里最涉密的那一段
     # 不能跟着"这是哪个库"进日志（第 45 轮 A-m2 / B-m1，与守卫侧同一条改动）
     where = re.split(r'[?;&#]', rest.split('@')[-1], 1)[0]
+    # 没有分隔符的整段也要过涉密键：`postgres:///password=X` 把口令藏在路径位（第 46 轮）
+    where = _redact_secrets(where)
     return '%s://%s' % (scheme, where)
 
 
@@ -290,30 +304,37 @@ def is_the_mirror(name: str) -> bool:
         return False
 
 
-def _db_host(url: str) -> str:
-    """连接串里的**主机名**（小写、去端口、不含口令）—— 判"这台是不是本机"用。
+def _db_hosts(url: str) -> list:
+    """连接串里能找到的**所有**候选主机（小写、去端口、不含口令）。
 
-    与 `scripts/_db_guard._db_host()` 同形（两份实现，逐条相等由
-    `tests/unit/test_database_label_targets.py` 钉住）。
+    与 `scripts/_db_guard._db_hosts()` 同形（两份实现，逐条相等由
+    `tests/unit/test_database_label_targets.py` 钉住）。第 46 轮 B-M6 / A-m1：
+    主机可以只写在 `?host=` 里（SQLAlchemy/PgBouncer 的正规写法），也可以是逗号分隔的
+    多主机列表 —— 只看 netloc 会解析出**空主机**，而空主机以前被当成"本机"，
+    于是真生产被两把尺子**一致地**报成 `本机 PostgreSQL（…，不是线上生产库）`。
     """
+    hosts = []
     if '://' in url:
         rest = url.split('://', 1)[1]
         where = re.split(r'[?;&#]', rest.split('@')[-1], 1)[0]
         netloc = where.split('/')[0]
         if netloc.startswith('['):
-            # 带方括号的 IPv6：端口在 `]` 之后，按 `:` 切会把主机切成一个 `[`
-            end = netloc.find(']')
-            return netloc[:end + 1].lower() if end > 0 else netloc.lower()
-        return netloc.split(':')[0].lower()
-    m = re.search(r'(?:^|[\s;,])hosts?\s*=\s*(?:\'([^\']*)\'|"([^"]*)"|([^\s\'",;=&]*))',
-                  url, re.I)
-    if m:
-        return (m.group(1) or m.group(2) or m.group(3) or '').lower()
-    return ''
+            head = netloc[:netloc.find(']') + 1] if ']' in netloc else netloc
+        else:
+            head = netloc.split(':')[0]
+            if not head and netloc:
+                # 不带方括号的 IPv6：按 `:` 一切就剩空串（与守卫侧同一条修法）
+                head = netloc
+        hosts += [h.lower() for h in re.split(r'[,\s]+', head) if h]
+    for m in re.finditer(r'(?:^|[?&;\s,])hosts?\s*=\s*(?:\'([^\']*)\'|"([^"]*)"|([^&;\s"\']+))',
+                         url, re.I):
+        value = m.group(1) or m.group(2) or m.group(3) or ''
+        hosts += [h.lower().strip('[]') for h in re.split(r'[,\s]+', value) if h]
+    return hosts
 
 
 def _is_a_local_host(host: str) -> bool:
-    """空主机 / localhost / 回环 / 私网 ⇒ 这台**不可能**是线上生产库（第 45 轮 B-m5）。"""
+    """localhost / 回环 / 私网 ⇒ 这台**不可能**是线上生产库（第 45 轮 B-m5）。"""
     if not host or host in ('localhost', '::1', '[::1]'):
         return True
     try:
@@ -335,16 +356,18 @@ def _is_the_production_host(host: str) -> bool:
 
 
 def _postgres_words(url: str, name: str) -> str:
-    """"这是一个 PostgreSQL"要说到的三档，不许一档糊过去（与守卫侧 `_postgres_words` 同文）。
+    """"这是一个 PostgreSQL"要说到的四档（与守卫侧 `_postgres_words` 同文）。
 
-    旧写法看见 `postgres*://` 就印"线上生产库" ⇒ `postgresql://u@127.0.0.1/db`（本机起的
-    一个 Postgres）也被说成线上，而这句自报正是操作员决定"要不要按确认"的依据。
+    本机 / 本项目 Supabase / 别的远程 / **认不出主机**。最后一档是第 46 轮 B-M6 补的：
+    看不见主机时旧写法落进"本机"，把线上库说成本机库 —— 认不出就只能承认认不出。
     """
-    host = _db_host(url)
-    if _is_a_local_host(host):
-        return '本机 PostgreSQL（%s，不是线上生产库）' % name
-    if _is_the_production_host(host):
+    hosts = _db_hosts(url)
+    if any(_is_the_production_host(h) for h in hosts):
         return '线上生产库（%s）' % name
+    if hosts and all(_is_a_local_host(h) for h in hosts):
+        return '本机 PostgreSQL（%s，不是线上生产库）' % name
+    if not hosts:
+        return 'PostgreSQL（%s）—— 认不出主机，不敢说它是本机还是线上生产库' % name
     return '远程 PostgreSQL（%s）—— 不是本项目那台 Supabase 生产库' % name
 
 
@@ -363,6 +386,11 @@ def describe_url(url: str) -> str:
             return '本地镜像库（data/fund_insight.db）'
         return '本地 sqlite 文件（不是镜像库）：%s' % name
     if low.startswith(('postgres', 'postgresql')):
+        return _postgres_words(url, name)
+    if '://' not in url and '=' in url and _db_hosts(url):
+        # libpq 的 conninfo 写法（`host=… dbname=…`）按定义就是 PostgreSQL，只是没有 scheme。
+        # 第 46 轮 B-M2/A-m2：这一族以前只会落到"认不出 scheme"，于是"这是不是那台线上库"
+        # 在 q.py / 预检工具的自报行里没有答案 —— 而主机名明明写在串里。
         return _postgres_words(url, name)
     if low.startswith('mysql'):
         return 'MySQL 库（%s）' % name

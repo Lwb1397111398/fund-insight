@@ -363,9 +363,11 @@ def test_evidence_only_keeps_reviewed(test_db):
     assert row.is_fetchable is False
 
 
-def test_restore_from_manifest_roundtrip(test_db):
+def test_restore_from_manifest_roundtrip(test_db, monkeypatch, tmp_path):
+    import scripts.sweep_sector_mappings as sweep
     from scripts.sweep_sector_mappings import MANIFEST_FIELDS, write_manifest
 
+    monkeypatch.setattr(sweep, 'OUT_DIR', str(tmp_path))
     row = _mapping('T-测试回滚', '002273', '水晶光电', reviewed=True,
                    match_source='agent', confidence=0.91)
     test_db.add(row)
@@ -379,11 +381,10 @@ def test_restore_from_manifest_roundtrip(test_db):
     test_db.commit()
 
     from scripts.sweep_sector_mappings import restore
-    restore(test_db, path)
+    restore(test_db, path, apply=True)   # 第 46 轮 B-M8：还原默认 dry-run，真写要 apply
     test_db.refresh(row)
     assert row.reviewed is True and row.is_fetchable is None
     assert row.confidence == 0.91 and row.match_source == 'agent'
-    os.remove(path)
 
 
 def test_writer_mirrors_verdict_into_the_column(test_db):
@@ -934,12 +935,18 @@ def test_realign_refuses_generic_owner_and_stock(test_db, monkeypatch, kw, verdi
     assert pick(test_db, row, verdict_row, used=set(), cores=CORES_FIXTURE) is None
 
 
-def test_realign_restore_removes_created_fund(test_db, monkeypatch):
+def test_realign_restore_removes_created_fund(test_db, monkeypatch, tmp_path):
     u"""回滚要把"本轮为映射新建的基金档案"一并删掉，否则它永久挂在基金列表里。"""
+    import scripts.sweep_sector_mappings as sweep
     from scripts.sweep_sector_mappings import (apply_realign, finalize_manifest,
                                                restore, write_manifest)
     pick, row = _realign_setup(monkeypatch, test_db)
+    # 清单是 `docs/.../sweep-manifest-*.json` 那份**真实回滚依据**的同名产物：用例产物
+    # 一律钉到 tmp_path（上一版写进 docs/ 且断言中途失败就不清，本机留下两份假清单）
+    monkeypatch.setattr(sweep, 'OUT_DIR', str(tmp_path))
     path = write_manifest(u'pytest-realign', test_db)
+    assert os.path.normcase(os.path.dirname(path)) == os.path.normcase(str(tmp_path)), \
+        '清单没落进临时目录 ⇒ 用例产物又堆进 docs/ 了：%s' % path
     plan = pick(test_db, row, {u'verdict': u'ok', u'relevance_low': True},
                 used=set(), cores=CORES_FIXTURE)
     created = []
@@ -947,11 +954,10 @@ def test_realign_restore_removes_created_fund(test_db, monkeypatch):
     assert finalize_manifest(path, created) == ['159537']
     assert test_db.query(FundInfo).filter(FundInfo.fund_code == '159537').first()
 
-    restore(test_db, path)
+    restore(test_db, path, apply=True)   # 第 46 轮 B-M8：还原默认 dry-run
     test_db.refresh(row)
     assert row.fund_code == '516810' and row.reviewed is True
     assert test_db.query(FundInfo).filter(FundInfo.fund_code == '159537').first() is None
-    os.remove(path)
 
 
 def test_realign_fixes_a_demoted_row(test_db, monkeypatch):
@@ -1405,3 +1411,27 @@ def test_denied_map_uses_the_single_unservable_judge(test_db):
     denied = denied_code_map(db=test_db)
     assert '999001' in denied.get('拒绝集尺子', set()), \
         '拒绝集漏掉了"只有 verdict 否定"的行 ⇒ 第 4 步会把不可服务的代码再交出去'
+
+
+def test_a_manifest_test_leaves_no_copy_in_the_repo():
+    u"""用例产物不许堆进 `docs/`（本机实测漏过两份 `sweep-manifest-pytest-realign*.json`）。
+
+    只认带 `pytest` 的 tag ⇒ 真实演练留下的回滚依据（`sweep-manifest-20260921-*.json`）不误伤。
+    排在两处 `write_manifest` 之后（同文件按定义顺序跑），所以"漏在磁盘上"当场看得见。
+    """
+    docs = os.path.join(u'docs', u'迭代计划', u'run-2026-09-20')
+
+    def leaked():
+        return sorted(f for f in os.listdir(docs)
+                      if f.startswith(u'sweep-manifest-') and u'pytest' in f)
+
+    control = os.path.join(docs, u'sweep-manifest-pytest-control.json')
+    try:
+        with io.open(control, u'w', encoding=u'utf-8') as f:
+            f.write(u'{}')
+        assert u'sweep-manifest-pytest-control.json' in leaked(), \
+            u'现造一份泄漏它也看不见 ⇒ 这把尺子恒空'
+    finally:
+        os.remove(control)
+    assert not leaked(), \
+        u'清单用例把产物写进了仓库的 docs/：%s ⇒ 把 `OUT_DIR` 钉到 tmp_path' % leaked()

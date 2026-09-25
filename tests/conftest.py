@@ -32,6 +32,14 @@ def pytest_configure(config):
     global _SESSION_LOCK
     if mutation_lock.current_session_pid() is None:
         _SESSION_LOCK = mutation_lock.acquire_session_lock(project_root)
+        if _SESSION_LOCK is None:
+            # 第 46 轮 A-m7：pytest 与 pytest **不互斥**（这把锁只用来挡体检），
+            # 而两个人同时在同一棵树上跑会给出**不同的数** —— 那一轮 A 席并发时段读到
+            # 1064 passed、干净复跑 1063，`--collect-only` 两次都是 1079。
+            # "跑不动"与"跑不绿"必须分得开，所以这里当场印一行：基线数字要串行测。
+            print('\n[警告] 已经有一个 pytest 会话握着 %s ⇒ 本次是**并发**跑的：'
+                  '通过条数可能与串行结果不同（实测差 1 条）。基线数字请串行重跑后再抄。'
+                  % mutation_lock.session_lock_path(project_root), flush=True)
 
 
 class BlockedRealHttp(BaseException):

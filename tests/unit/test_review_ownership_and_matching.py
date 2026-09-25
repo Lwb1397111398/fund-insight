@@ -9,6 +9,9 @@
    而同一函数后面三条分支都过 ⇒ 已被判不可服务的代码仍会驱动验证，结论挂到错标的上
    （MAJOR-2 / 与 `scripts/audit_verdict_evidence.py` 的 `verdict_under_other_fund` 同族）。
 """
+import ast
+import re
+
 import pytest
 from pathlib import Path
 
@@ -537,6 +540,28 @@ IMMUNITY_GRANT_SITES = {
 }
 _IMMUNITY_FIELDS = {'owner_locked': (True,), 'reviewed_by': ('owner',)}
 
+
+def _looks_like_grant(field, node):
+    """一个 AST 表达式**本身**是不是"写死的授予值"（真值语义，不是字面量 `True` 一种写法）。
+
+    第 46 轮 A-M6 / B-M10：库里读的是 `if getattr(row, 'owner_locked', None)` ——
+    **真值即免疫**，而登记表以前只认 `True` 字面量。于是 `= 2`、`= not False`、
+    `= x or True`、`def grant(row, lock=True)` 都能静默新增一条豁免来源。
+    反过来，"把已有的值搬过来"（`bool(other.owner_locked)`、`payload.get(...)`）
+    仍然**不算**授予 —— 那是备份/序列化，误伤它等于把这条闸变成全仓噪声。
+    """
+    import ast
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if field == 'owner_locked':
+            return value is True or (isinstance(value, int) and not isinstance(value, bool)
+                                     and value != 0)
+        return isinstance(value, str) and value.lower() == 'owner'
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = node.operand
+        return isinstance(inner, ast.Constant) and inner.value in (False, 0, '', None)
+    return False
+
 # 字段名是变量、从 AST 看不见"写的是哪一列"的站点。这张表**不是免检名单**：
 # 每条都要写明凭什么被相信，而且依据要能被别的用例复核（括号里点了文件名）。
 # 新增一条而没有依据 ⇒ `test_only_the_registered_places_can_grant_owner_immunity` 变红。
@@ -553,16 +578,24 @@ IMMUNITY_OPAQUE_SITES = {
 def _grants_immunity(root):
     """AST 扫"把老板署名/锁定**写成授予值**"的代码点：`{(文件, 函数): 条数}` + 看不清的集合。
 
-    认的写法（第 45 轮 A-M7 一次补全，每一种都有现造样品钉着）：
+    认的写法（**完整清单就是用例里那个 `shapes` 字典**——加一种拼写就去那儿加一个样品，
+    别在这里抄条数：上一轮写"三种"、这轮写"七种"，两种都没跟上代码本身）：
       ① `row.owner_locked = True`；② `{'reviewed_by': 'owner'}`（字典字面量）；
       ③ `setattr(row, 'owner_locked', True)` **以及** `object.__setattr__(row, …)`；
       ④ `stmt.values(owner_locked=True)` / `update(reviewed_by='owner')` —— **关键字参数**，
          这正是本仓在用的 SQLAlchemy 批量写法（`src/api/main.py:528 sa_insert(...).values(**…)`)；
       ⑤ 值来自模块常量（`OWNER = True` 然后 `row.owner_locked = OWNER`）；
-      ⑥ 值是三目（`row.reviewed_by = 'owner' if ok else None`）—— 有一条臂给授予值就算。
+      ⑥ 值是三目 / `x or True` / `bool(True)` —— 有一臂写死授予值就算；
+      ⑦ 带类型标注的赋值、下标赋值（`row['reviewed_by'] = 'owner'`）、`setdefault`；
+      ⑧ 裸 SQL：`UPDATE sector_fund_mapping SET owner_locked = true`（列名与值都在字符串里）；
+      ⑨ **真值语义**：库里读的是 `if getattr(row, 'owner_locked', None)` ⇒ 真值即免疫，
+         所以 `= 2`、`= not False`、`def grant(row, lock=True)` 都算写死授予（第 46 轮 A-M6/B-M10）。
     只认"看得见的授予值"：`payload.get('owner_locked')`、`bool(m.owner_locked)` 这类
     **搬运已有值**的写法不算授予（那条腿由
     `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉）。
+    值来路看不见（跨模块常量、外层变量、`{**payload}`）⇒ **也不算"写死授予"**，
+    这一档归载荷驱动（`_clean_row` 剔列 + 行为判据），这里不另开登记通道 —— 第一版开了，
+    当场把 5 处正常代码变成"待解释"，那张表就从"要依据"退化成"盖章"，正是要防的事。
     字段名本身是变量时（`setattr(row, k, v)`）看不见写的是哪一列 ⇒ 不猜"没事"，
     落进第二个返回值 `opaque`，由用例要求它要么消失、要么写明去向。
     """
@@ -594,15 +627,56 @@ def _grants_immunity(root):
                             if st.value.value in vals:
                                 granted_by_name.setdefault(t.id, set()).add(field)
 
-        def _literal_grant(field, node):
-            """这个表达式里有没有**看得见**的授予值（常量 / 三目的某一臂 / 模块常量）。"""
-            if isinstance(node, ast.Constant):
-                return node.value in _IMMUNITY_FIELDS[field]
-            if isinstance(node, ast.IfExp):
-                return (_literal_grant(field, node.body)
-                        or _literal_grant(field, node.orelse))
+        # 参数默认值也算"写死的授予值"：`def grant(row, lock=True): row.owner_locked = lock`
+        # 与 `row.owner_locked = True` 是同一件事，只是隔了一个名字（第 46 轮 B-M10）。
+        param_defaults = set()
+        for fn in [n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            positional = list(fn.args.args)[len(fn.args.args) - len(fn.args.defaults):]
+            for name, default in zip(positional, fn.args.defaults):
+                for field in _IMMUNITY_FIELDS:
+                    if _looks_like_grant(field, default):
+                        param_defaults.add(name.arg)
+            for kw, default in zip(fn.args.kwonlyargs, fn.args.kw_defaults):
+                for field in _IMMUNITY_FIELDS:
+                    if default is not None and _looks_like_grant(field, default):
+                        param_defaults.add(kw.arg)
+        # 裸 SQL 的授予：`UPDATE sector_fund_mapping SET owner_locked = true`
+        # 列名与值都在一条字符串里，AST 的"赋值/字典/关键字参数"三条都看不见（B-M10 第 6 条）
+        _RAW_SQL_GRANT = re.compile(
+            r"(owner_locked\s*=\s*(?:true|1|'1'|\"1\"))|(reviewed_by\s*=\s*'owner')", re.I)
+
+        def _literal_grant(field, node, nested=False):
+            """这个表达式里有没有**看得见**的授予值（常量 / 三目的某一臂 / 模块常量）。
+
+            第 46 轮 A-M6 / B-M10 把"看得见"扩到真值语义：`row.owner_locked = 2`、
+            `= not False`、`= x or True` 都是**写死要授予**，只认 `True` 字面量等于给
+            "换个真值写法"留门；反过来，值来路看不见（跨模块常量、别的文件的配置）时
+            不猜"没事"，落进 `opaque` 让用例问一句。
+            """
+            if isinstance(node, (ast.Constant, ast.UnaryOp)):
+                return _looks_like_grant(field, node)
+            if isinstance(node, ast.IfExp):           # 有一臂写死授予值就算（另一臂可以是 None）
+                return (_literal_grant(field, node.body, True)
+                        or _literal_grant(field, node.orelse, True))
+            if isinstance(node, ast.BoolOp):          # `x or True` 的右臂就是写死的授予
+                return any(_literal_grant(field, v, True) for v in node.values)
+            if isinstance(node, ast.Call):            # `bool(True)`：包一层不改变"写死"这件事
+                fn = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)
+                if fn in ('bool', 'int') and node.args:
+                    return _literal_grant(field, node.args[0], True)
             if isinstance(node, ast.Name):
-                return field in granted_by_name.get(node.id, ())
+                if field in granted_by_name.get(node.id, ()):
+                    return True
+                if node.id in param_defaults:         # `def grant(row, lock=True)`
+                    return True
+                # 名字来路看不见（跨模块常量、外层变量）⇒ **不算"写死授予值"**，也不新开一条
+                # opaque 通道：本仓库里这样的写法今天就有五处（`row.owner_locked = 某布尔`），
+                # 把它们登记进 `IMMUNITY_OPAQUE_SITES` 等于给这张表盖章——而"盖章"正是这张表
+                # 存在的理由要防的事（第 46 轮我自己第一版就是这么把 5 处正常代码变成"待解释"）。
+                # 这一档的真实归属是**载荷驱动**那条路：值从清单/请求体来 ⇒
+                # 由 `_clean_row` 剔列 + `test_sector_mapping_audit_import.py` 的行为判据管，
+                # 与 purge/sweep 的还原腿同一档。
             return False
 
         def _enclosing(lineno):
@@ -625,13 +699,29 @@ def _grants_immunity(root):
                                 for c in ast.walk(tree))
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for tgt in node.targets:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):     # 带类型标注的赋值同一条路
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for tgt in targets:
                     if isinstance(tgt, ast.Attribute) and tgt.attr in _IMMUNITY_FIELDS \
                             and _literal_grant(tgt.attr, node.value):
                         _hit(node.lineno)
+                    elif isinstance(tgt, ast.Subscript) and node.value is not None:
+                        # `row['reviewed_by'] = 'owner'`：列名是**下标的键**，不是被索引的对象
+                        key = tgt.slice
+                        if isinstance(key, ast.Constant) and key.value in _IMMUNITY_FIELDS \
+                                and _literal_grant(key.value, node.value):
+                            _hit(node.lineno)
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                # 裸 SQL 的授予（列名和值都在一条字符串里，赋值/字典/关键字参数三条都看不见）
+                strs = [c.value for c in ast.walk(node.value) if isinstance(c, ast.Constant)
+                        and isinstance(c.value, str)]
+                if any(_RAW_SQL_GRANT.search(s or '') for s in strs):
+                    _hit(node.lineno)
             elif isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values):
+                    if key is None or not isinstance(key, ast.Constant):
+                        continue        # `{**payload}` 的散开键看不见列名 ⇒ 归载荷驱动那一档
+                                        # （这里不新开 opaque 通道，理由见 `_literal_grant` 上面）
                     if isinstance(key, ast.Constant) and key.value in _IMMUNITY_FIELDS \
                             and _literal_grant(key.value, value):
                         _hit(node.lineno)
@@ -646,6 +736,15 @@ def _grants_immunity(root):
                         # 字段名是变量（`[setattr(row, k, v) for k, v in pairs]`）：
                         # 看不见写的是哪一列 ⇒ 不猜"没事"，也不硬算成授予，交给用例问一句
                         opaque.add((rel, _enclosing(node.lineno)))
+                if fname in ('setdefault', '__setitem__') and len(node.args) >= 2:
+                    # `payload.setdefault('owner_locked', True)` / `row['owner_locked'] = True`
+                    # 走的都是"字典式写入"，与 `setattr` 同一件事（第 46 轮 A-M6 第 4 条）。
+                    # 列名是变量的那一种**不另开 opaque 通道**——全仓的 `setdefault(k, v)`
+                    # 都会被卷进来（第一版就抓到 3 处正常代码），理由见 `_literal_grant` 上面。
+                    field = node.args[0]
+                    if isinstance(field, ast.Constant) and field.value in _IMMUNITY_FIELDS \
+                            and _literal_grant(field.value, node.args[1]):
+                        _hit(node.lineno)
                 for kw in (node.keywords or []):
                     # `.values(owner_locked=True)` / `update(reviewed_by='owner')` 这一族
                     if kw.arg in _IMMUNITY_FIELDS and _literal_grant(kw.arg, kw.value):
@@ -722,6 +821,18 @@ def test_only_the_registered_places_can_grant_owner_immunity(tmp_path):
         '_i_dynamic_field.py': 'PAIRS = (("owner_locked", True),)\n\n'
                                'def grant(row):\n'
                                '    return [setattr(row, k, v) for k, v in PAIRS]\n',
+        # ↓ 第 46 轮 A-M6 / B-M10：真值语义与"隔着一次写入"的四种日常写法
+        '_k_truthy_int.py': 'def grant(row):\n    row.owner_locked = 2\n',
+        '_l_not_false.py': 'def grant(row):\n    row.owner_locked = not False\n',
+        '_m_or_arm.py': 'def grant(row, lock):\n    row.owner_locked = lock or True\n',
+        '_n_annassign.py': 'def grant(row):\n    row.owner_locked: bool = True\n',
+        '_o_default_arg.py': 'def grant(row, lock=True):\n    row.owner_locked = lock\n',
+        '_p_setdefault.py': 'def grant(payload):\n    payload.setdefault("owner_locked", True)\n',
+        '_q_subscript.py': 'def grant(row):\n    row["reviewed_by"] = "owner"\n',
+        '_r_raw_sql.py': 'import sqlalchemy as sa\n\n'
+                         'def grant(db):\n'
+                         '    db.execute(sa.text("UPDATE sector_fund_mapping '
+                         'SET owner_locked = true WHERE id = 7"))\n',
         # 反向对照：与豁免无关的文件里，`setattr(obj, name, value)` 不该被问一句
         '_j_unrelated_setattr.py': 'def shape(obj, name, value):\n'
                                    '    return setattr(obj, name, value)\n',
@@ -734,9 +845,11 @@ def test_only_the_registered_places_can_grant_owner_immunity(tmp_path):
         (pkg / name).write_text(body, encoding='utf-8')
     made, made_opaque = _grants_immunity(pkg)
     for name in ('_a_attr.py', '_b_dict.py', '_c_setattr.py', '_d_object_setattr.py',
-                 '_e_values_kw.py', '_f_module_const.py', '_g_ternary.py'):
+                 '_e_values_kw.py', '_f_module_const.py', '_g_ternary.py',
+                 '_k_truthy_int.py', '_l_not_false.py', '_m_or_arm.py', '_n_annassign.py',
+                 '_o_default_arg.py', '_p_setdefault.py', '_q_subscript.py', '_r_raw_sql.py'):
         assert any(name in f for f, _n in made), \
-            '六种写法认不出 %s ⇒ 换这种拼写就能绕过这道棘轮' % name
+            '这些写法认不出 %s ⇒ 换这种拼写就能绕过这道棘轮' % name
     assert made.get(('sample/__init__.py', 'grant')) == 1, \
         '`__init__.py` 整族被豁免 ⇒ 而本仓的包 `__init__` 是真放代码的地方（A-M6）：%s' % sorted(made)
     assert not any('_h_moves_values.py' in f for f, _n in made), \

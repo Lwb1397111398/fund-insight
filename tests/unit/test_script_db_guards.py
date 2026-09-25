@@ -155,7 +155,15 @@ def _scheme_words(strings):
 
 
 def _own_returns(fn):
-    """这个函数**自己**的出口（不钻嵌套函数 —— 那是别人的 return）。"""
+    """这个函数**自己**的出口（不钻嵌套函数 —— 那是别人的 return）。
+
+    `try` 的 `handlers` 与 `orelse` **算出口**（第 46 轮 A-M2）：
+    `try: return "sqlite:///a.db" / except Exception: return os.environ["DATABASE_URL"]`
+    兜底那条也是这条 helper 会交出去的值 —— 出事才走的那条路恰恰最可能给出生产串。
+    注意这与 `_guard_stmts`（"护栏不许只挂在 except 里"）不矛盾：那边问的是
+    "正常路径会不会停下来"，这边问的是"这个 helper 可能返回什么"。两个问题
+    共用一个"走不走 except"的开关才是 bug，所以各自写清自己判的是什么。
+    """
     out = []
 
     def walk(body):
@@ -166,27 +174,65 @@ def _own_returns(fn):
                 out.append(st)
             for field in ('body', 'orelse', 'finalbody'):
                 walk(getattr(st, field, None) or [])
+            if isinstance(st, ast.Try):
+                for handler in st.handlers:
+                    walk(handler.body)
 
     walk(fn.body)
     return out
 
 
-def _returns_sqlite(fn):
+def _literal_sqlite(node):
+    """这个表达式**本身**是不是一个 sqlite 串（或以它开头的拼接片段）。
+
+    判的是"值长什么样"，不是"值里出没出现过 `sqlite` 这六个字"（第 46 轮 A-M1 / B-M3）：
+    旧写法 `'sqlite' in ' '.join(_strings_of(v)).lower()` 会被
+    `"sqlite:///data/copy.db" if a.local else os.environ["PROD_DB_URL"]`
+    这种"本地/生产开关"白送 —— 屏幕上跑出来的可以是生产串，判据却说方向已证明。
+    """
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str) and node.value.lower().startswith('sqlite')
+    if isinstance(node, ast.JoinedStr):                       # f"sqlite:///{path}"
+        first = next((v for v in node.values if isinstance(v, ast.Constant)
+                      and isinstance(v.value, str)), None)
+        return first is not None and first.value.lower().startswith('sqlite')
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _literal_sqlite(node.left)                     # "sqlite:///" + 路径
+    if isinstance(node, ast.Call):                            # os.path.join('sqlite:///', …)
+        first = node.args[0] if node.args else None
+        return first is not None and _literal_sqlite(first)
+    return False
+
+
+def _reads_runtime_state(node):
+    """表达式里有没有"到运行时才决定"的子式：环境、配置对象、函数参数、外部调用。
+
+    有 ⇒ 这条赋值指向哪儿我说了不算，一律按"方向不明"处理（不再因为字面里带 sqlite 就放行）。
+    `os.environ[...]`、`os.getenv(...)`、`.get(k, 默认)`、`settings.X`、`request.args[...]` 都算。
+    """
+    for n in ast.walk(node):
+        if isinstance(n, ast.Attribute) and n.attr in ('environ', 'env', 'config', 'settings'):
+            return True
+        if isinstance(n, ast.Call):
+            fn = getattr(n.func, 'attr', None) or getattr(n.func, 'id', None)
+            if fn in ('getenv', 'get', 'read_env', 'popdefault'):
+                return True
+    return False
+
+
+def _returns_sqlite(fn, tree=None):
     """这个 helper 的**每一条出口**都返回 sqlite 串吗？
 
     第 45 轮两席同点（A-M2 / B-M1⑨）：上一版问的是"函数体里任何地方出现过 `sqlite` 字样"，
-    于是**函数 docstring 写一句**"这只库是 sqlite 镜像"就能买到"方向能证明"——
-    那正是第 43 轮 A-MAJOR-1 刚堵掉的那一族，而我在新加的 helper 上把它重新打开了。
-    现在只看 `return` 出来的表达式，且要求**所有**出口都是 sqlite：
-    有一条出口不是（或函数压根没 return）＝ 它返回什么取决于走到哪条分支 ⇒ 不证明。
+    于是**函数 docstring 写一句**"这只库是 sqlite 镜像"就能买到"方向能证明"。
+    第 46 轮 A-M1/B-M3 再收一格：以前"这条 return 的表达式里含 sqlite 字样"就算，
+    一条 return 里写两臂（三目）也能过 ⇒ 现在**每一臂都得单独证明**（`_proves_sqlite`）。
     """
     rets = _own_returns(fn)
     if not rets:
         return False
     for r in rets:
-        if r.value is None:
-            return False
-        if not any('sqlite' in (s or '').lower() for s in _strings_of(r.value)):
+        if r.value is None or not _proves_sqlite(r.value, tree if tree is not None else fn):
             return False
     return True
 
@@ -216,59 +262,109 @@ def _guard_stmts(body):
     return out
 
 
-def _is_dead_test(test):
-    """`if X and False:` / `if False:` —— 条件**永不成立**（第 45 轮 B-M1①）。
+def _try_const(node):
+    """能整体求成常量就返回值，否则 None（**不 eval**，只认字面量与简单组合）。"""
+    try:
+        return ast.literal_eval(node)
+    except Exception:                                       # noqa: BLE001 求不动就当看不见
+        return None
 
-    上一版只排掉字面量 `if False:`，于是把方向判断 `and False` 一下就变成
-    "话说了、人也拒了、但永远不挡任何事"的假护栏。
+
+def _is_dead_test(test):
+    """这条分支会不会被走到？—— 条件恒假就是**死路**，死路里的 `[abort]` 不挡任何事。
+
+    第 45 轮 B-M1① 立的是"`and False` 也算死"，第 46 轮 A-M3 指出实现退化成两种拼写：
+    现在按**求值**判（见 `_const_false`），`while 0:` / `if ():` / `if 1 == 0:` 一起收口。
     """
     if test is None:
         return True
-    if isinstance(test, ast.Constant):
-        return not test.value
     if isinstance(test, ast.Name):
-        return test.id == 'False'
+        return test.id in ('False', 'None')
+    folded = _try_const(test)
+    if folded is not None:
+        return not folded
+    if isinstance(test, ast.Compare):
+        left, right = _try_const(test.left), [_try_const(c) for c in test.comparators]
+        if len(right) == 1 and right[0] is not None and left is not None:
+            op = type(test.ops[0])
+            try:
+                same = left == right[0]
+            except Exception:                               # noqa: BLE001
+                return False
+            if op is ast.Eq:
+                return not same
+            if op is ast.NotEq:
+                return same
+            if op is ast.Is:
+                return left is not right[0]
+            if op is ast.IsNot:
+                return left is right[0]
+            try:
+                if op is ast.Lt:
+                    return not (left < right[0])
+                if op is ast.Gt:
+                    return not (left > right[0])
+                if op is ast.LtE:
+                    return not (left <= right[0])
+                if op is ast.GtE:
+                    return not (left >= right[0])
+            except TypeError:
+                return False
+        return False
     if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
         return any(_is_dead_test(v) for v in test.values)
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _try_const(test.operand)
+        return inner is not None and bool(inner)
     return False
 
 
-def _proves_sqlite(value_node, tree):
+def _proves_sqlite(value_node, tree, _seen=None):
     """`os.environ['DATABASE_URL'] = <这个表达式>` 的结果**能不能证明是 sqlite**。
 
-    第 44 轮 B-M4 把"赋过值就算守卫"打掉了（`os.environ[...] = os.environ['MAINT_DB_URL']`
-    赋的可以是生产串）。但也不能矫枉过正到"只有字面量才算" —— 仓库里两个诚实脚本走的是
-    一跳：`to_url(db_path)` 里 `return "sqlite:///" + abspath(...)`（`import_export.py`）、
-    `url = "sqlite:///" + 副本路径` 再 `os.environ[...] = url`（`verify_realign_chain.py`）。
-    所以这里**只多走一跳**，并且只认"那一跳**返回出来**的是 sqlite 串"（`_returns_sqlite`）：
-    两跳以上/跨文件就不认了 —— 那种情况让脚本自己去印 `[库]` 或调 `pin_local_sqlite()`。
+    第 44 轮 B-M4 把"赋过值就算守卫"打掉了；第 45 轮 A-M1 又打掉"按变量名猜方向"；
+    第 46 轮 A-M1 / B-M3 打掉最后一条宽松："表达式里**出现过** sqlite 字样"。
+    现在只认三种形状，且**每一臂都要单独证明**：
+      ① 字面量本身以 `sqlite` 开头（含 `"sqlite:///" + 路径` 这种拼接、f-string）；
+      ② 名字：本文件里**每一次**赋值都能证明（有一次赋成别的东西 ⇒ 取决于跑到哪一行）；
+      ③ 一跳之内的本文件 helper：它的**每条 return** 都能证明（含 except 里那条）。
+    三目 / `or` / `and` 这类多臂表达式 ⇒ 要求**所有臂**都能证明；
+    只要表达式里出现"到运行时才决定"的子式（环境、配置、`.get(k, 默认)`）就整体不算证明。
+    两跳以上、跨文件也不认 —— 那种情况让脚本自己去印 `[库]` 或调 `pin_local_sqlite()`。
 
-    ⚠ 第 45 轮 A-M1 撤掉的正是"按**变量名**猜方向"那一支：上一版还允许
-    `'DEFAULT_DB' in val or 'MIRROR' in val`，于是
-    `os.environ["DATABASE_URL"] = os.environ["SUPABASE_MIRROR_URL"]`（那台可以是生产）
-    被判"方向能证明"。名字里带什么字样从此一律不算，只看值本身。
+    顺序也是判据的一部分（第 46 轮我自己第一版搞反过）：**先解析 helper 的出口，再看有没有
+    运行时子式**。反过来先问"这坨里有没有 `os.environ`"，会把
+    `url(bool(os.environ.get("L")))` 这种"参数来自环境、但每一条出口都返回 sqlite"的诚实写法
+    一起打死 —— 那等于把闸门建成墙，下一步就是有人去把它拆了。
     """
-    names, fn_calls = set(), set()
-    for n in ast.walk(value_node):
-        if isinstance(n, ast.Name):
-            names.add(n.id)
-        elif isinstance(n, ast.Call):
-            fn = getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
-            if fn:
-                fn_calls.add(fn)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in fn_calls:
-            if _returns_sqlite(node):
-                return True
-    for name in names:
-        # **每一次**赋值都得是 sqlite：`url = "sqlite:///…"` 之后又
-        # `if a.production: url = os.environ["DATABASE_URL"]`，那这个 `url` 指向哪儿
-        # 取决于运行到哪一行（第 45 轮 A-M2 的第二个复现）。只看过一遍赋值＝按"存在一条好路"下结论。
+    seen = _seen or frozenset()
+    if value_node is None:
+        return False
+    if isinstance(value_node, ast.Call):
+        fn_name = getattr(value_node.func, 'id', None) or getattr(value_node.func, 'attr', None)
+        if fn_name and fn_name not in seen:
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and node.name == fn_name \
+                        and _returns_sqlite(node, tree):
+                    return True
+    if _literal_sqlite(value_node):
+        return True
+    if isinstance(value_node, ast.IfExp):
+        return _proves_sqlite(value_node.body, tree, seen) and \
+            _proves_sqlite(value_node.orelse, tree, seen)
+    if isinstance(value_node, ast.BoolOp):
+        return all(_proves_sqlite(v, tree, seen) for v in value_node.values)
+    if _reads_runtime_state(value_node):
+        return False                                  # 环境/配置说了算 ⇒ 我不猜
+    if isinstance(value_node, ast.Name):
+        if value_node.id in seen:
+            return False                              # 自引用（`u = u or …`）⇒ 不证明
         assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
-                   and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)]
-        if assigns and all(any('sqlite' in (s or '').lower() for s in _strings_of(a.value))
-                           for a in assigns):
-            return True
+                   and any(isinstance(t, ast.Name) and t.id == value_node.id for t in n.targets)]
+        if not assigns:
+            return False                              # 名字来自参数/外层 ⇒ 值我不知道
+        return all(_proves_sqlite(a.value, tree, seen | {value_node.id}) for a in assigns)
     return False
 
 
@@ -524,27 +620,61 @@ def _facts(py):
                     # "自设 DATABASE_URL"只有**方向能证明**才算守卫（第 44 轮 B-M4）：
                     # `os.environ['DATABASE_URL'] = os.environ['MAINT_DB_URL']` 赋的可以是生产串，
                     # 旧判据把"赋过值"当"有守卫"。方向不明的赋值仍然记录，但不计分。
-                    # 第 45 轮 A-M1 再收一格：以前还认"值里带 `MIRROR` / `DEFAULT_DB` 这几个字"，
-                    # 于是 `os.environ["DATABASE_URL"] = os.environ["SUPABASE_MIRROR_URL"]`
-                    # （那台完全可以是生产）被判"方向能证明"——那是**按变量名猜方向**，
-                    # 与本轮被扣分的"按字样算证据"同族。现在只看值本身。
-                    val = ' '.join(_strings_of(node.value))
-                    if 'sqlite' in val.lower() or 'pin_local_sqlite' in val:
-                        env_written = True
-                    elif _proves_sqlite(node.value, tree):
+                    # 第 46 轮 A-M1 / B-M3 收的最后一格：以前这里先问一句
+                    # `'sqlite' in 表达式里的字符串`，于是
+                    # `= "sqlite:///data/copy.db" if a.local else os.environ["PROD_DB_URL"]`
+                    # 与 `= os.environ.get("X", "sqlite:///x.db")` 都能白买到"方向已证明"——
+                    # 屏幕上跑出来的完全可以是生产串。现在**只走 `_proves_sqlite`**：
+                    # 表达式里凡有"到运行时才决定"的子式（环境 / 配置 / `.get(k, 默认)`），
+                    # 多臂表达式里有一臂证明不了，就一律算方向不明。
+                    # `pin_local_sqlite()` 仍然算，但那是"它自己调了钉库函数"这件事实，
+                    # 不是"字符串里出现过这几个字"。
+                    calls = {getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
+                             for n in ast.walk(node.value) if isinstance(n, ast.Call)}
+                    if 'pin_local_sqlite' in calls or _proves_sqlite(node.value, tree):
                         env_written = True
                     else:
                         env_written_unknown = True
     # 护栏 = **同一条分支**里做到四件事，而且这条分支**真的挡在危险动作前面**：
     #   ① 判断条件看的是库的方向（不是 help 文案、不是说明文、不是恒假条件）；
     #   ② 分支体的正常路径上印了 `[abort]`；③ 同一条正常路径上停下来；
-    #   ④ 这条分支会被走到（在模块顶层，或所在函数在本文件里被调用过）。
-    # 第 44 轮把①②③收到"同一条分支"，第 45 轮两席各自复现出"这条分支会不会跑到"仍是上一格：
-    # `if X and False:`、**先执行 DDL 再写拒跑**、分支里放一个从不调用的 `def _unused(): return 4`、
-    # `[abort]` 只挂在 except 里 —— 四种写法当时都判"有守卫"。
+    #   ④ 这条分支**可达**（从模块顶层真能走到它，不是待在一个没人调用的函数里）；
+    #   ⑤ 它的执行时刻**早于**任何一处危险动作 —— 而且这条比较要走**调用图**，
+    #     不能只比"同一个最内层函数里的行号"（第 46 轮 A-M4：把 `command.upgrade(cfg)`
+    #     抽成一个 helper、主流程先调用它、再判方向，当时仍判"有守卫"；
+    #     另一半：护栏只被一个从不被调用的函数调用，也算"可达"）。
     refusals = []
     scopes = _scope_map(tree)
     danger = _dangerous_lines(tree, scopes, alias)
+    sites = {}                                    # 函数名 → [(调用发生处的作用域, 行号)]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = getattr(node.func, 'id', None)
+            if fn:
+                sites.setdefault(fn, []).append((scopes.get(id(node), '<module>'),
+                                                 getattr(node, 'lineno', 0)))
+
+    def exec_paths(scope, line, seen=()):
+        """这一行**什么时候被执行**：一条从模块顶层走到它的调用路径，写成行号元组。
+        模块顶层就是 `(line,)`；函数里的第 L 行 = 调用它的那条路径再接上 `L`。
+        比较用字典序 —— 不能用"累加小数"，那样 `main:165` 会被算得比
+        `main:133 → prod_conn:37` 更早（第 46 轮我自己第一版就是这么把一条真护栏弄红的）。
+        空集 ＝ 这条路从模块顶层走不到。"""
+        if scope == '<module>':
+            return {(float(line),)}
+        if scope in seen:
+            return set()
+        out = set()
+        for caller_scope, caller_line in sites.get(scope, ()):
+            for prefix in exec_paths(caller_scope, caller_line, seen + (scope,)):
+                out.add(prefix + (float(line),))
+        return out
+
+    def first(a, b):
+        """a 是否**保证**排在 b 前面（两条路径的字典序比较；取最早的那条）。"""
+        pa, pb = a and min(a), b and min(b)
+        return pa is not None and pb is not None and pa < pb
+
     for node in ast.walk(tree):
         if not isinstance(node, (ast.If, ast.ExceptHandler, ast.For, ast.While)):
             continue
@@ -562,10 +692,11 @@ def _facts(py):
         if not (says_abort and stops):
             continue
         scope = scopes.get(id(node), '<module>')
-        if scope != '<module>' and scope not in called:
-            continue             # 定义了却没人调用的"护栏"＝没有护栏
         line = getattr(node, 'lineno', 0)
-        if any(s == scope and dl < line for s, dl in danger):
+        at = exec_paths(scope, line)
+        if not at:
+            continue             # 走不到这里的"护栏"＝没有护栏（含"只被死函数调用"那一族）
+        if any(first(exec_paths(s, dl), at) for s, dl in danger):
             continue             # 危险动作排在护栏前面 ⇒ 这句话protect不了任何东西
         words = set(_scheme_words(_strings_of(test) if test is not None else []))
         if isinstance(test, ast.Name):
@@ -1363,6 +1494,60 @@ if url.startswith("postgres") and not a.against_production and False:
     raise SystemExit(4)
 command.upgrade(Config("alembic.ini"), "head")
 ''', False, '`and False` 让条件永不成立：话说满了，一步都没挡（第 45 轮 B-M1①）'),
+    # ↓ 第 46 轮 A-M3：上一版只认 `False` / `and False` 两种拼写，这三条当时都判"有守卫"
+    ('_x_dead_eq.py', _GUARD_HEADER + '''
+if url.startswith("postgres") and not a.against_production and 1 == 0:
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+command.upgrade(Config("alembic.ini"), "head")
+''', False, '`and 1 == 0` 与 `and False` 是同一件事：恒假。死路要**求值**判，不能按拼写列'),
+    ('_x_dead_not_true.py', _GUARD_HEADER + '''
+if not True and url.startswith("postgres"):
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+command.upgrade(Config("alembic.ini"), "head")
+''', False, '`if not True and …` 同样永不成立（取反的常量也要折叠）'),
+    ('_x_dead_empty_tuple.py', _GUARD_HEADER + '''
+if () and url.startswith("postgres"):
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+command.upgrade(Config("alembic.ini"), "head")
+''', False, '空容器作合取首项 ⇒ 整条恒假；这一族以前只认 `False` 字样'),
+    # ↓ 第 46 轮 A-M4：顺序与可达都要走到**调用图**上（以前只比"同一最内层函数里的行号"）
+    ('_x_ddl_via_helper_first.py', _GUARD_HEADER + '''
+def apply_it():
+    command.upgrade(Config("alembic.ini"), "head")
+
+
+apply_it()
+if url.startswith("postgres") and not a.against_production:
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+''', False, 'DDL 抽进 helper、主流程先调用它再判方向 ⇒ 换个函数名就绕过"谁在前面"这条判据'),
+    ('_x_guard_only_from_dead_helper.py', _GUARD_HEADER + '''
+def check(u):
+    if u.startswith("postgres") and not a.against_production:
+        print("[abort] 目标是远程库，加 --against-production 再来")
+        raise SystemExit(4)
+
+
+def nobody_calls_me():
+    check(url)
+
+
+command.upgrade(Config("alembic.ini"), "head")
+''', False, '护栏待在一个**只被死函数调用**的函数里 ⇒ 从模块顶层走不到它（以前"名字被写过"就算可达）'),
+    ('_x_helper_guard_called_first.py', _GUARD_HEADER + '''
+def check(u):
+    if u.startswith("postgres") and not a.against_production:
+        print("[abort] 目标是远程库，加 --against-production 再来")
+        raise SystemExit(4)
+
+
+check(url)
+command.upgrade(Config("alembic.ini"), "head")
+''', True, '控制：抽成 helper 的**真**护栏（调用点排在 DDL 前面）必须仍然算守卫 —— '
+            '否则上面两条只是把闸门改成"凡在函数里都不算"'),
     ('_x_ddl_first.py', _GUARD_HEADER + '''
 command.upgrade(Config("alembic.ini"), "head")
 if url.startswith("postgres") and not a.against_production:
@@ -1493,6 +1678,19 @@ def test_a_direction_comes_from_a_value_not_from_a_name_or_a_sentence(tmp_path, 
                               'if os.environ.get("PROD"):\n'
                               '    url = os.environ["MAINT_DB_URL"]\n'
                               'os.environ["DATABASE_URL"] = url\n',
+        # ↓ 第 46 轮 A-M1 / B-M3：以前只问"表达式里**出没出现过** sqlite 字样"，这三条都能过
+        '_x_ternary_switch.py': 'import os\n'
+                                'os.environ["DATABASE_URL"] = "sqlite:///data/copy.db"'
+                                ' if a.local else os.environ["PROD_DB_URL"]\n',
+        '_x_env_default.py': 'import os\n'
+                             'os.environ["DATABASE_URL"] = os.environ.get('
+                             '"ANY_DB", "sqlite:///data/copy.db")\n',
+        # ↓ 第 46 轮 A-M2：helper 的正常出口是 sqlite，出事那条出口返回环境变量
+        '_x_except_exit.py': 'import os\n\n'
+                             'def local_url():\n'
+                             '    try:\n        return "sqlite:///data/mirror.db"\n'
+                             '    except Exception:\n        return os.environ["DATABASE_URL"]\n\n'
+                             'os.environ["DATABASE_URL"] = local_url()\n',
         '_x_dead_label.py': 'LABEL = "[目标] 线上生产库（引擎级只读）"\n'
                             'X = "postgresql_readonly"\n',
         # 对照：真证据
@@ -1500,17 +1698,32 @@ def test_a_direction_comes_from_a_value_not_from_a_name_or_a_sentence(tmp_path, 
                              'def to_url(p):\n'
                              '    return "sqlite:///" + str(p)\n\n'
                              'os.environ["DATABASE_URL"] = to_url("data/copy.db")\n',
+        '_x_both_arms_sqlite.py': 'import os\n\n'
+                                  'def url(local):\n'
+                                  '    return "sqlite:///data/copy.db" if local else '
+                                  '"sqlite:///data/mirror.db"\n\n'
+                                  'os.environ["DATABASE_URL"] = url(bool(os.environ.get("L")))\n',
         '_x_printed_label.py': 'print("[目标] 线上生产库（引擎级只读）")\n',
     }, monkeypatch)
     got = {n: scripts[n]['env_written'] for n in
            ('_x_named_mirror.py', '_x_docstring_helper.py', '_x_two_returns.py',
-            '_x_real_helper.py')}
+            '_x_real_helper.py', '_x_ternary_switch.py', '_x_env_default.py',
+            '_x_except_exit.py', '_x_both_arms_sqlite.py')}
     assert got['_x_named_mirror.py'] is False, '变量名里有 `MIRROR` 就判"方向是 sqlite"'
     assert got['_x_docstring_helper.py'] is False, '函数 docstring 里的"sqlite"判成了返回值的方向'
     assert got['_x_two_returns.py'] is False, \
         'helper 有一条出口返回的是环境变量 ⇒ 方向取决于走到哪条分支，不能算证明'
+    for name, why in (('_x_ternary_switch.py', '一条**三目**里有一臂是环境变量：本地/生产开关'),
+                      ('_x_env_default.py', '`os.environ.get(k, "sqlite:///…")` 的默认值买不到方向'),
+                      ('_x_except_exit.py', '`except` 里那条出口也是出口——出事时才走的那条'
+                                            '最可能返回生产串')):
+        assert got[name] is False, '%s 被判成"方向已证明"：%s' % (why, name)
+        assert scripts[name]['env_written_unknown'] is True, \
+            '%s 连"它动过连接串"都没记下来 ⇒ 这一族在台账上隐身' % name
     assert got['_x_real_helper.py'] is True, \
         '真返回 sqlite 串的 helper 被判"方向不明" ⇒ 这条判据在误伤诚实脚本'
+    assert got['_x_both_arms_sqlite.py'] is True, \
+        '两臂都是 sqlite 字面量的三目被判不明 ⇒ 闸门建成了墙（诚实写法也该走得通）'
     dead = scripts['_x_dead_label.py']
     assert not _says_target(dead) and not _declares_http_target(dead), \
         '从不被打印的 `LABEL = "[目标] …"` 仍算"声明了目标"'
@@ -1866,6 +2079,53 @@ def test_pinning_also_refuses_when_a_stray_module_holds_a_remote_engine(tmp_path
     assert 'PINNED sqlite' in ok.stdout, ok.stdout
 
 
+def test_the_stray_probe_also_sees_async_engines_and_instance_holders(tmp_path):
+    """散落连接扫描的两处隐身：async 一族、以及**实例属性**（第 46 轮 B-M11）。
+
+    ① `issubclass(AsyncEngine, sa.engine.Engine)` 实测是 **False** —— async 会话工厂
+      与 `async_sessionmaker` 同样不是同步类的子类，而上一版按同步的五个类做 isinstance，
+      于是 `src.models.database` 换成 async 引擎就整族免检（而 `_url_of` 的注释里
+      明写着上一版按名字找的三个名字之一就是 `async_engine`）。
+    ② 本仓有十几处 `self.db = db or SessionLocal()`（`src/tasks/cleanup_enhanced.py:100`）
+      —— 模块直接持有工厂看得见，持有**实例**看不见。
+    两条都用真子进程跑：不连线（`create_engine` 只把 URL 焊进对象），也不 import src。
+    """
+    prelude = ('import sys, types, sqlalchemy as sa;'
+               "sys.path.insert(0, 'scripts');"
+               'import _db_guard;\n')
+    tail = ('_db_guard.pin_local_sqlite(use_mirror_default=True);'
+            "print('PINNED')")
+    env = {'DATABASE_URL': _FAKE_REMOTE, 'LOCAL_DB_URL': str(tmp_path / 'm.db')}
+    async_shape = (
+        # 本机没装 asyncpg，`create_async_engine` 会在建引擎时就 import_dbapi 崩掉；
+        # 而这条判据要测的是"扫描认不认得 async 那一族的**类型**"，不是驱动在不在。
+        # `async_sessionmaker` 构造时不校验 bind ⇒ 用它来代表这一族
+        # （`issubclass(async_sessionmaker, sessionmaker)` 实测是 False ⇒ 旧 isinstance 名单收不到）。
+        "from sqlalchemy.ext.asyncio import async_sessionmaker; "
+        "m = types.ModuleType('src.async_holder'); "
+        "m.SessionLocal = async_sessionmaker(bind=sa.create_engine(%r)); "
+        "sys.modules['src.async_holder'] = m; " % _FAKE_REMOTE)
+    instance_shape = (
+        "class Holder:\n"
+        "    pass\n"
+        "Holder.__module__ = 'src.services.holder'\n"
+        "m = types.ModuleType('src.instance_holder');\n"
+        "h = Holder();\n"
+        "h.db = sa.create_engine(%r);\n"
+        "m.holder = h;\n"
+        "sys.modules['src.instance_holder'] = m;\n" % _FAKE_REMOTE)
+    for label, shape in (('async 引擎', async_shape), ('实例属性里的 engine', instance_shape)):
+        got = _run_guard_child(prelude + shape + tail, env)
+        assert got.returncode == 4, \
+            '%s 握着生产 engine，钉库却报成功 ⇒ 这一类仍然免检：%s' % (
+                label, (got.stdout + got.stderr)[-400:])
+        assert 'SECRETPASS' not in got.stdout + got.stderr
+    # 控制：同一个形状换成 SQLite 必须**放行**，否则我只是把扫描变成了墙
+    ok = _run_guard_child(prelude + instance_shape.replace(
+        _FAKE_REMOTE, 'sqlite:///%s' % (tmp_path / 'x.db').as_posix()) + tail, env)
+    assert ok.returncode == 0, '本机 SQLite 的实例持有者也被判成远程 ⇒ 误伤：%s' % ok.stdout[-300:]
+
+
 def test_the_stray_probe_never_bricks_the_door_itself(tmp_path):
     """探测"散落连接"这一步不许把守卫自己弄成故障源（第 44 轮我自己踩出来的）。
 
@@ -1914,9 +2174,11 @@ import migration_policy    # noqa: E402  迁移判据的**唯一**实现（运�
 
 # 迁移在**往上走**的那一支里删结构/删数据 = apply 即丢东西。今天一支都没有
 # （实测 9 支的删除全在 `downgrade()`，那是回滚路径，属于正常写法）。
-# 名单住在 `alembic/destructive-upgrades.json`（测试与 `run_migrations.py` 读同一份），
-# 这里只留一条"名单不许比登记的多"的对照用集合。
-DATA_LOSSING_UPGRADES = set()
+# **名单只有一份**：`alembic/destructive-upgrades.json`，由 `migration_policy.load_allowlist()`
+# 读。第 46 轮 B-M1 数的就是这件事：上一版这里另写了一个本地空集合 `DATA_LOSSING_UPGRADES`
+# 传进 `audit()` ⇒ "登记进 JSON"这个动作会让运行期放行、让测试变红，
+# 而错误消息还指挥人"去登记进 destructive-upgrades.json"（死循环）。
+# 下面那条 `test_the_allowlist_under_test_is_the_one_runtime_reads` 钉住"不再出现第二份"。
 
 
 def _migration_dir():
@@ -1974,7 +2236,7 @@ def test_migrations_are_scanned_for_data_loss_on_the_way_up(tmp_path):
     """
     migrations = _tracked_migrations()
     assert len(migrations) >= 9, '只认出 %d 支迁移 ⇒ 扫描范围变了，这条判据快成空判' % len(migrations)
-    problems, seen = migration_policy.audit(str(_migration_dir()), DATA_LOSSING_UPGRADES)
+    problems, seen = migration_policy.audit(str(_migration_dir()))
     assert seen == len(migrations), '仓库里 %d 支、审计只看了 %d 支' % (len(migrations), seen)
     assert problems == [], ('这些迁移在**往上走**的那一支里删东西或让我看不清：%s ⇒ '
                             '结构变更要先问老板；真要上，就登记进 '
@@ -2044,6 +2306,174 @@ def test_migrations_are_scanned_for_data_loss_on_the_way_up(tmp_path):
     no_reason, _s = migration_policy.audit(str(tmp_path), {'_x_raw_text_drop.py': '   '})
     assert any('_x_raw_text_drop.py' in p and '原因' in p for p in no_reason), \
         '登记却什么都不写 ⇒ 名字成了盖章，这条闸就白建了：%s' % no_reason
+
+
+def test_a_migration_that_hides_by_position_or_depth_is_still_named(tmp_path):
+    """B-M4 / A-M5（第 46 轮）：同一句危险 SQL **换个位置、换个深度**就隐身。
+
+    上一版的第二条循环只认"这一整个语句就是一次执行"（`ast.Expr`），于是
+    `r = op.execute("DROP TABLE t")`、`if op.execute("TRUNCATE t"):`、推导式、`with` 块
+    四种写法全部看不见，而且**连"看不清"都不标** —— 审计回的是"干净"，比报"可疑"更坏。
+    另一半：`_funcs` 只收模块级函数 ⇒ 藏在嵌套 `def` 里的 `os.system("alembic downgrade -1")`
+    也一样隐身。
+    反面必须同时成立：`server_default=sa.text("now()")`、`json.loads(SETTINGS)`、
+    `df.apply(...)` 不许被误伤 —— 第 45 轮那次误报就是把闸门建成墙，
+    Render 每次启动都会因此退 4（而墙是会被绕的，绕的人是我自己）。
+    """
+    head = ('from alembic import op\nimport sqlalchemy as sa\nimport json\nimport pandas as pd\n'
+            'import subprocess\n')
+    tail = '\ndef downgrade():\n    pass\n'
+    made = _scan_migrations(tmp_path, {
+        '_x_assigned_execute.py': head + 'def upgrade():\n    r = op.execute("DROP TABLE t")\n' + tail,
+        '_x_in_condition.py': head + 'def upgrade():\n    if op.execute("TRUNCATE t"):\n        pass\n' + tail,
+        '_x_in_comprehension.py': head + 'def upgrade():\n    xs = [op.execute(s) for s in SQLS]\n' + tail,
+        '_x_in_with.py': head + 'def upgrade():\n    with op.get_bind() as c:\n        r = c.execute(VAR)\n' + tail,
+        '_x_nested_def.py': head + 'def upgrade():\n    def inner():\n        op.drop_table("t")\n    inner()\n' + tail,
+        '_x_nested_system.py': head + 'def upgrade():\n    def inner():\n        import os\n'
+                                   '        os.system("alembic downgrade -1")\n    inner()\n' + tail,
+        '_x_subprocess.py': head + 'def upgrade():\n    subprocess.run(["psql", "-c", SQL])\n' + tail,
+        # ↓ 三条对照：正常写法，一条都不许报
+        '_x_c_default.py': head + 'def upgrade():\n    op.add_column("t", sa.Column('
+                               '"c", sa.Text, server_default=sa.text("now()")))\n' + tail,
+        '_x_json.py': head + 'def upgrade():\n    cfg = json.loads(SETTINGS)\n' + tail,
+        '_x_apply.py': head + 'def upgrade():\n    df.apply(lambda r: r, axis=1)\n' + tail,
+    })
+    for name in ('_x_assigned_execute.py', '_x_in_condition.py', '_x_nested_def.py'):
+        assert made[name]['upgrade_drops'], \
+            '%s 在执行危险语句却因为"不在语句位置/不在顶层"而隐身：%s' % (
+                name, made[name])
+    for name in ('_x_in_comprehension.py', '_x_in_with.py', '_x_nested_system.py',
+                 '_x_subprocess.py'):
+        assert made[name]['upgrade_unclear'], \
+            '%s 把内容交给变量/子进程，我看不见却报了"干净"（fail-open）：%s' % (
+                name, made[name])
+    for name in ('_x_c_default.py', '_x_json.py', '_x_apply.py'):
+        facts = made[name]
+        assert not facts['upgrade_drops'] and not facts['upgrade_unclear'], \
+            '正常迁移被误伤 ⇒ 每次 Render 启动都会为它退 4：%s %s' % (name, facts)
+
+
+def test_the_gate_walks_the_same_tree_alembic_will_apply(tmp_path):
+    """这道闸"看见的迁移集合"必须等于 alembic 将要 apply 的集合（第 46 轮 B-M5）。
+
+    旧写法 `os.listdir` 只看顶层，而 alembic 收版本目录用的是 `path_walk`（递归）
+    ⇒ 子目录里放一支 `op.drop_table("predictions")`，屏幕上照样印"已核对 N 支、0 处未登记"，
+    然后那支从未被核对的迁移就被 apply 了。
+    另外两条一起钉：目录空/路径打错 ⇒ 不许报"干净"（一支都没看见＝尺子没跑）；
+    名单传 set（A-m8 的 `AttributeError: 'set' object has no attribute 'get'`）⇒ 不许崩。
+    """
+    (tmp_path / 'nested').mkdir()
+    (tmp_path / 'top_ok.py').write_text(
+        'from alembic import op\ndef upgrade():\n    pass\n\n\ndef downgrade():\n    pass\n',
+        encoding='utf-8')
+    (tmp_path / 'nested' / 'deep_drop.py').write_text(
+        'from alembic import op\n'
+        'def upgrade():\n    op.drop_table("predictions")\n\n\ndef downgrade():\n    pass\n',
+        encoding='utf-8')
+    problems, seen = migration_policy.audit(str(tmp_path), {})
+    assert seen == 2, '递归没走：看见 %d 支，而 alembic 会 apply 2 支 ⇒ 子目录那支免检' % seen
+    assert any('deep_drop' in p for p in problems), \
+        '子目录里那支删 `predictions` 的迁移没被点名：%s' % problems
+    for p in problems:                      # 报的是相对路径，人要能照着登记
+        assert not p.startswith(str(tmp_path)), '消息里印的是绝对路径，没人能复制：%s' % p
+
+    empty_problems, empty_seen = migration_policy.audit(str(tmp_path / 'nope'), {})
+    assert empty_seen == 0 and empty_problems, \
+        '目录不存在/一支都没看见 ⇒ 却可以"没有问题"，这是尺子没跑而不是干净'
+    set_named, _ = migration_policy.audit(str(tmp_path), {'nested/deep_drop.py'})
+    assert not any('deep_drop' in p and '未登记' in p for p in set_named), \
+        '名单传 set 就崩/失效（A-m8）⇒ 同一份登记在两种类型下要走同一条路：%s' % set_named
+
+
+def test_the_allowlist_under_test_is_the_one_runtime_reads(tmp_path, monkeypatch):
+    """测试对账的那张名单，必须**就是**运行期 `run_migrations.py` 读的那份 JSON（第 46 轮 B-M1）。
+
+    上一版这里传的是本文件自己的 `DATA_LOSSING_UPGRADES = set()`，注释却写着
+    "测试与 run_migrations 读同一份" ⇒ 那句话是恒假的（两边都是空，所以看不出来）。
+    真后果：将来谁把一支丢数据迁移**按文档登记进 JSON**，运行期放行、pytest 变红，
+    而失败消息还指挥人"去登记进 destructive-upgrades.json" —— 一个转圈的假闸门。
+    三条一起钉：① 本文件里不许再出现第二份名单常量；② `run_migrations()` 走的确实是
+    `load_allowlist()`；③ 把一支危险迁移登记进**临时 JSON** ⇒ `audit()`（不传名单）
+    必须同时放行 —— 这一条是"登记这个动作真的有用"的控制断言，没有它①②都能空过。
+    """
+    # 判 AST，不判文本：我第一版用 grep 读本文件，结果被**解释这句话的那段注释**自己点红
+    # —— 与第 44 轮"文本 grep 会被自家 docstring 点红"完全同一课，这次栽的是我自己刚写的判据。
+    module_names = {t.id for n in ast.parse(Path(__file__).read_text(encoding='utf-8')).body
+                    if isinstance(n, ast.Assign)
+                    for t in n.targets if isinstance(t, ast.Name)}
+    assert 'DATA_LOSSING_UPGRADES' not in module_names, \
+        '测试文件里又长出一份模块级名单常量 ⇒ "只有一份实现"这句话只剩一半'
+
+    source = (SCRIPTS / 'run_migrations.py').read_text(encoding='utf-8')
+    assert 'migration_policy' in source, '运行期不读那份判据 ⇒ 两张表又各说各话'
+    # 行为判据，不判字符串：把 JSON 换到临时目录并**登记这一支**，运行期那道闸必须跟着放行。
+    # （"测试与运行期读同一份名单"这句话，只有拿一次真的登记动作去问它才算被检验过。）
+    import json as _json2
+    import importlib.util as _ilu
+    allow2 = tmp_path / 'runtime-allow.json'
+    _json2.dump({}, open(str(allow2), 'w', encoding='utf-8'))
+    monkeypatch.setattr(migration_policy, 'ALLOWLIST', str(allow2))
+    spec2 = _ilu.spec_from_file_location('run_migrations_allowlist_probe',
+                                         str(SCRIPTS / 'run_migrations.py'))
+    run_migrations = _ilu.module_from_spec(spec2)
+    spec2.loader.exec_module(run_migrations)
+    versions2 = tmp_path / 'versions2'
+    versions2.mkdir()
+    (versions2 / '_x_runtime.py').write_text(
+        'from alembic import op\ndef upgrade():\n    op.drop_table("gone")\n'
+        'def downgrade():\n    pass\n', encoding='utf-8')
+    import pytest as _pt
+    with _pt.raises(SystemExit) as before:
+        run_migrations._migration_gate(versions_dir=str(versions2))
+    assert before.value.code == 4, '未登记时运行期居然放行 ⇒ 下面那半没有对照意义'
+    _json2.dump({'_x_runtime.py': '老板批准：前像已导出'},
+                open(str(allow2), 'w', encoding='utf-8'))
+    run_migrations._migration_gate(versions_dir=str(versions2))     # 不抛＝放行
+
+    versions = tmp_path / 'versions'
+    versions.mkdir()
+    (versions / '_x_registered.py').write_text(
+        'from alembic import op\ndef upgrade():\n    op.drop_table("gone")\n'
+        'def downgrade():\n    pass\n', encoding='utf-8')
+    allow = tmp_path / 'allow.json'
+    unregistered, _ = migration_policy.audit(str(versions))
+    assert any('_x_registered.py' in p for p in unregistered), \
+        '没登记时居然不报 ⇒ 下面的控制没有对照意义'
+    import json as _json
+    _json.dump({'_x_registered.py': '老板 2026-09-25 批准：该表前像已导出'},
+               open(str(allow), 'w', encoding='utf-8'))
+    monkeypatch.setattr(migration_policy, 'ALLOWLIST', str(allow))
+    after, seen = migration_policy.audit(str(versions))          # **不传**名单：读的就是这份 JSON
+    assert seen == 1 and not any('_x_registered.py' in p and '未登记' in p for p in after), after
+    _json.dump({'_x_registered.py': None}, open(str(allow), 'w', encoding='utf-8'))
+    null_reason, _ = migration_policy.audit(str(versions))
+    assert any('原因' in p for p in null_reason), \
+        '登记值写 `null`/`{}`/`0` 也算"写了原因" ⇒ 空登记就是通行证（B-minor-1）：%s' % null_reason
+
+
+def test_the_dry_run_report_does_not_claim_a_ddl_is_coming(tmp_path, capsys):
+    """`--dry-run` 那一支的自报行不许说"会向它发 DDL"（第 46 轮我自己撞出来的措辞）。
+
+    跑 `python scripts/run_migrations.py --dry-run` 时屏幕上曾印：
+    `[库] 线上生产库（…） —— alembic upgrade head 会向它发 DDL`，紧接着一行才是
+    "只报目标，没连线、没发 DDL"。两句互相打脸，而**第一句是操作者决定要不要接着敲的那句**
+    —— 同一族已经修过三次（`--base` 指本机却自称线上生产库、`ok=True` 却印"已写入"），
+    这条措辞当时零覆盖：`_report_target()` 全仓没有任何用例读过它的内容。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('run_migrations_words',
+                                                  str(SCRIPTS / 'run_migrations.py'))
+    rm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rm)
+    real = rm._report_target()
+    dry = rm._report_target(dry_run=True)
+    assert real.startswith('[库]') and dry.startswith('[库]'), (real, dry)
+    assert '发 DDL' in real and 'dry-run' not in real, real
+    assert '不发 DDL' in dry or '不会' in dry, \
+        'dry-run 那一支仍把目标说成"马上要动它"：%s' % dry
+    assert dry != real, '两档共用同一句话 ⇒ 其中一档一定在说谎'
+    # 控制：这句必须**真的**带了目标库，否则"改措辞"可以改成什么都不报
+    assert len(dry.split('——')[0]) > len('[库] '), dry
 
 
 def test_run_migrations_checks_the_migrations_before_it_connects(tmp_path, capsys):

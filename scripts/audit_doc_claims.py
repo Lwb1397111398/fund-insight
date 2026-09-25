@@ -201,25 +201,45 @@ def _claims():
         text = path.read_text(encoding='utf-8', errors='replace')
         lines = text.splitlines()
         for num, offs, para in _blocks(lines):
+            # 基线流水按**段**判。第 46 轮 B-M2 提议改按句判，我试了，实测驳回：
+            # `AGENTS.md` 的"当前测试基线"是一整条 `（上一基线 X → 本批 Y：+N 条，
+            # 分布在 test_a.py 新增 3 条（…）` 的链，切句之后那句"新增 3 条"就脱离流水语境
+            # 被当成当场账 ⇒ 当场量到一处假红（文档写 3 条、pytest 收到 35 条），
+            # 而"把对的数改成错的"正是这把尺子最不该做的事。
+            # 代价讲明白：**混写在流水段里的真承诺不会被对账** ⇒ 那一条数必须印出来
+            # （见 `main()` 里"其中 N 条只因那一段是基线流水"），尺子管不到的范围要可见。
+
             for m in CLAIM.finditer(para):
                 gap = m.group(2)
                 stated = _to_int(m.group(3))
-                if stated is None or not _wrap_ok(gap):
+                if stated is None:
+                    continue
+                if not _wrap_ok(gap):
+                    unbound.append({'file': rel, 'line': num, 'test': m.group(1),
+                                    'stated': stated, 'why': '跨行超过一处或跨过句末标点',
+                                    'span': (0, 0), 'text': lines[num - 1].strip()[:120]})
                     continue
                 di, dcol = _locate(offs, m.start(3))
                 line_no = num + di
-                # 基线流水是**整段**的性质，不是数所在那一行的性质（第 45 轮 A-m6：
-                # "上一基线 …→ 本批 …"那段里，名字落在行末、数落在行首，按行判就把历史账
-                # 当成当场账了 —— 硬判等于逼人把对的数改错）
                 narr = bool(NARRATIVE_MARK.search(para))
                 item = {'file': rel, 'line': line_no, 'test': m.group(1), 'stated': stated,
                         'span': (dcol, dcol + (m.end(3) - m.start(3))),
                         'text': lines[line_no - 1].strip()[:120]}
+                if narr and not DELTA_MARK.search(gap):
+                    # 只有"本来会被 judged、却因为所在段落是流水而被放过"的那些条才计数；
+                    # 写成 `+N 条`/`新增 N 条` 的增量账本来就是跳过，不该混进这个数字里
+                    # （否则"18 条只因流水"这种话就把两种账说成了一种，等于换了个说法继续骗人）。
+                    item['why'] = '所在那一段是基线流水（`上一基线`/`本批`）'
                 (delta if (narr or DELTA_MARK.search(gap)) else now).append(item)
             for m in CLAIM_BEFORE.finditer(para):
                 stated = _to_int(m.group(1))
                 gap = m.group(2)
-                if stated is None or not _wrap_ok(gap):
+                if stated is None:
+                    continue
+                if not _wrap_ok(gap):
+                    unbound.append({'file': rel, 'line': num, 'test': m.group(3),
+                                    'stated': stated, 'why': '数在名字之前且跨行不合规',
+                                    'span': (0, 0), 'text': lines[num - 1].strip()[:120]})
                     continue
                 si, scol = _locate(offs, m.start(1))
                 line_no = num + si
@@ -327,7 +347,9 @@ def main():
         for c in now:
             print('[当场账]       %-42s %s:%s 说 %d 条' % (c['test'], c['file'], c['line'], c['stated']))
         for c in delta:
-            print('[增量账-跳过] %-43s %s:%s 说 %d 条' % (c['test'], c['file'], c['line'], c['stated']))
+            print('[增量账-跳过] %-43s %s:%s 说 %d 条  %s'
+                  % (c['test'], c['file'], c['line'], c['stated'],
+                     c.get('why') or '（写成 `+N 条`/`新增 N 条` 的增量账）'))
         for c in unbound:
             # 这一行以前印"编号列表实际到 N" —— 第 43 轮 A 席量到那个 N 是错的：
             # 本仓库正文把 ①~⑥ 在一条长 bullet 链上反复续用，计数器把两句承诺数成了一句。
@@ -337,7 +359,9 @@ def main():
         print('[数据源账] 认出 %d 行 `数据源：…`，其中 %d 行认不出是哪个库' % (source_total, len(sources)))
         for c in sources:
             print('   [%s:%s] %s ← %s' % (c['file'], c['line'], c['why'], c['text']))
-        print('共 %d 条当场账、%d 条增量账、%d 条不判账' % (len(now), len(delta), len(unbound)))
+        print('共 %d 条当场账、%d 条增量账（其中 %d 条是因为那一句是基线流水）、%d 条不判账'
+              % (len(now), len(delta),
+                 sum(1 for c in delta if c.get('why')), len(unbound)))
         return 0
 
     counts = _collected_counts()
@@ -349,9 +373,11 @@ def main():
             missing.append(c)
         elif actual != c['stated']:
             bad.append((c, actual))
-    print('[对账] 当场承诺 %d 条（另有 %d 条增量账、%d 条"看得见但不判"的账）；'
+    print('[对账] 当场承诺 %d 条（另有 %d 条增量账：其中 %d 条只因所在那一段是基线流水、'
+          '%d 条写成 `+N 条`/`新增 N 条`；还有 %d 条"看得见但不判"）；'
           'pytest 当场收集到 %d 个测试文件'
-          % (len(now), len(delta), len(unbound), len(counts)))
+          % (len(now), len(delta), sum(1 for c in delta if c.get('why')),
+             sum(1 for c in delta if not c.get('why')), len(unbound), len(counts)))
     for c in unbound:
         print('   [不判-请改写] %-38s %s:%s 说 %d 条 ← %s'
               % (c['test'] or '编号列表账', c['file'], c['line'], c['stated'], c['text']))

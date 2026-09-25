@@ -87,7 +87,13 @@ def _url_of(obj):
     try:
         import sqlalchemy as sa
         from sqlalchemy.orm import Session, scoped_session, sessionmaker
-        kinds = (sa.engine.Engine, sa.engine.Connection, Session, sessionmaker, scoped_session)
+        kinds = [sa.engine.Engine, sa.engine.Connection, Session, sessionmaker, scoped_session]
+        try:                                  # 第 46 轮 B-M11：async 一族**不是**同步类的子类
+            from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+            kinds += [AsyncEngine, AsyncSession, async_sessionmaker]
+        except Exception:                     # noqa: BLE001  老版本没有这一档，缺就只认同步的
+            pass
+        kinds = tuple(kinds)
     except Exception:                                       # noqa: BLE001  没装 sqlalchemy 就谈不上
         return None
     if not isinstance(obj, kinds):
@@ -178,6 +184,19 @@ def _stray_remote_engines():
             elif isinstance(obj, type):
                 for value in list(vars(obj).values())[:200]:
                     _one(value, label + '（类属性）')
+            else:
+                # **实例属性**（第 46 轮 B-M11）：服务类 `self.db = db or SessionLocal()`
+                # 这种写法本仓有十几处（`src/tasks/cleanup_enhanced.py:100` 就是），
+                # 模块直接持有一个会话工厂看得见，持有一个**实例**就看不见。
+                # 只下钻"本仓自己的类"的实例一层，且不碰属性名 —— `weakref` / C 扩展对象
+                # 取 `vars()` 会抛（那条教训今天已经付过：它把 12 条用例一起打死过）。
+                module_of_obj = (getattr(type(obj), '__module__', '') or '')
+                if module_of_obj.startswith('src') or module_of_obj == '__main__':
+                    try:
+                        for value in list(vars(obj).values())[:200]:
+                            _one(value, label + '（实例属性）')
+                    except Exception:                         # noqa: BLE001 没有 __dict__ 就跳过
+                        pass
         for child in children:
             child_name = getattr(child, '__name__', '')
             if child_name == 'src.models.database' and \
@@ -345,6 +364,20 @@ def _conninfo_target(text):
     return out or '(DSN：只留下非凭据字段，其余已隐去)'
 
 
+_SECRET_IN_TEXT = re.compile(r"([?;&/]|^)(password|passwd|pwd|secret|token|apikey|api_key)\s*=\s*[^;&/\s]*",
+                             re.I)
+
+
+def _redact_secrets(text):
+    """把任何形如 `key=值` 的涉密段换成 `[隐去]`，其余原样留着。
+
+    第 46 轮 B-minor-4/我自己那条样品：`postgres:///password=S3cr3tPW` 里口令既不在
+    userinfo 也不在 `?` 之后 —— 它落在**路径段**里，而旧写法只按 `?;&#` 切。
+    "口令一个字符都不出现在自报行里"这条不变式不分位置：凡是 `password=` 这个形状就剥。
+    """
+    return _SECRET_IN_TEXT.sub(lambda m: '%s%s=[隐去]' % (m.group(1), m.group(2).lower()), text)
+
+
 def machine_name(url):
     """自报"连的是哪台"用的名字：sqlite 给文件路径，远程给 `scheme://host/db`。
 
@@ -364,6 +397,12 @@ def machine_name(url):
         # 或 `sqlite:////E:/x.db`。所以先精确剥掉 `sqlite:///` 这三斜杠前缀，再按剩下的形状修。
         body = url[len("sqlite:///"):] if url.lower().startswith("sqlite:///") else rest
         body = body.split("?", 1)[0]
+        # `sqlite:///u:S3cr3tPW@/db` 不是 SQLAlchemy 会自己生成的形状，但 `_db_guard` 吃的是
+        # `.env` / `LOCAL_DB_URL` 里的**原始串**（第 46 轮 B-minor-4）——
+        # "口令一个字符都不出现在自报行里"这条不变式在 sqlite 这一支以前没兜住。
+        # 只剥 `user:pass@` 这一种形状（要求 '@' 之前有个 `:`），
+        # 免得把 `data@copy.db` 这种合法文件名改错 —— 改错方向也是说谎。
+        body = re.sub(r"^[^/]*:[^/]*@", "", body)
         if body.startswith("//"):
             body = body.lstrip("/")
         if re.match(r"^/[A-Za-z]:[\\/]", body):        # 四斜杠 Windows 绝对：/E:/… → E:/…
@@ -372,6 +411,10 @@ def machine_name(url):
     # 剪掉 query / fragment / `;` 参数：`postgresql://h/db?password=X` 里最涉密的那一段
     # 不能跟着"这是哪个库"进日志（第 45 轮 A-m2 / B-m1）
     where = re.split(r"[?;&#]", rest.split("@")[-1], 1)[0]
+    # 但"没有分隔符的整段"也要过一遍涉密键：`postgres:///password=X`（主机被塞进 path 位）
+    # 以前原样回显 —— 第 46 轮我自己写的样品把它照出来，两边一致地泄露（一致地错不会被
+    # "两把尺子逐条相等"那条判据抓到，所以这里必须各自补）。
+    where = _redact_secrets(where)
     return "%s://%s" % (scheme, where)
 
 
@@ -393,23 +436,39 @@ def is_the_mirror(name):
         return False
 
 
-def _db_host(url):
-    """连接串里的**主机名**（小写、去端口、口令一个字符都不取）—— 判"这台是不是本机"用。"""
+def _db_hosts(url):
+    """连接串里能找到的**所有**候选主机（小写、去端口、口令一个字符都不取）。
+
+    第 46 轮 A-m1 / B-M6 的两件事：
+    ① 主机可以不在 netloc 里 —— SQLAlchemy 允许 `postgresql:///db?host=x.supabase.com`
+      （Unix socket + 参数、PgBouncer 写法都长这样）。旧实现只看 netloc，解析出**空主机**，
+      而空主机又被当成"这是本机" ⇒ 真生产被两把尺子一致地报成
+      `本机 PostgreSQL（…，不是线上生产库）`。一致地错比不一致更坏：那条"两把尺子逐条相等"
+      的用例永远绿，看不出来。
+    ② `host=a.supabase.co,b.backup` 是合法的多主机列表（驱动自己做故障转移）。
+      旧写法把整串当一个主机名 ⇒ 精确匹配落空，真生产被说成"不是本项目那台"。
+    所以这里返回**列表**，判档时"任一候选命中生产域"就算生产，"全部候选都是本机"才算本机，
+    **一个候选都没有** ⇒ 不许说本机，只能说"认不出主机"。
+    """
+    hosts = []
     if "://" in url:
         rest = url.split("://", 1)[1]
         where = re.split(r"[?;&#]", rest.split("@")[-1], 1)[0]
         netloc = where.split("/")[0]
         if netloc.startswith("["):
-            # 带方括号的 IPv6 字面量（`postgresql://u@[::1]:5432/db`）：端口在 `]` **之后**，
-            # 按 `:` 切会把主机切成一个 `[`（第 45 轮 B-m5 的对照组当场照出来）
-            end = netloc.find("]")
-            return netloc[:end + 1].lower() if end > 0 else netloc.lower()
-        return netloc.split(":")[0].lower()
-    m = re.search(r"(?:^|[\s;,])hosts?\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s'\",;=&]*))",
-                  url, re.I)
-    if m:
-        return (m.group(1) or m.group(2) or m.group(3) or '').lower()
-    return ""
+            head = netloc[:netloc.find("]") + 1] if "]" in netloc else netloc
+        else:
+            head = netloc.split(":")[0]
+            if not head and netloc:
+                # 不带方括号的 IPv6（`postgres://u@::1/db`）：按 `:` 一切就剩空串 ⇒
+                # "看不见主机"其实是"我切错了"，第 46 轮 B 的用例当场照出来。
+                head = netloc
+        hosts += [h.lower() for h in re.split(r"[,\s]+", head) if h]
+    for m in re.finditer(r"(?:^|[?&;\s,])hosts?\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^&;\s\"']+))",
+                         url, re.I):
+        value = m.group(1) or m.group(2) or m.group(3) or ""
+        hosts += [h.lower().strip("[]") for h in re.split(r"[,\s]+", value) if h]
+    return hosts
 
 
 def _is_a_local_host(host):
@@ -436,19 +495,23 @@ def _is_the_production_host(host):
 
 
 def _postgres_words(url, name):
-    """"这是一个 PostgreSQL"这句话要说到的**三档**，不许一档糊过去。
+    """"这是一个 PostgreSQL"这句话要说到的**四档**，不许一档糊过去。
 
-    第 45 轮 B-m5：旧写法看见 `postgres*://` 就印"线上生产库"。可 `postgresql://u@127.0.0.1/db`
-    是本机起的一个 Postgres，`postgresql://u@10.0.0.5/db` 是内网某台 ——
-    把不是生产的东西说成生产，比报"远程库"更坏：操作员会照着这句话决定要不要按 `--confirm`。
-    现在只有"主机名里带 supabase"（本项目那台的确切形状）才叫线上生产库，
-    其余远程 PostgreSQL 单列一档并明说它不是。
+    第 45 轮 B-m5 把两档改三档（本机 / 本项目 Supabase / 别的远程），
+    第 46 轮 B-M6 补第四档"认不出主机"：旧写法在**看不见主机**时落进"本机"那一档，于是
+    `postgresql:///postgres?host=aws-0-x.pooler.supabase.co` 被印成
+    `本机 PostgreSQL（…，不是线上生产库）` —— 而这一句自报是操作员决定要不要按确认的依据。
+    看不见主机就只能承认看不见，不许猜一个方向（往哪个方向猜都付过账）。
+    多主机列表（`host=a.supabase.co,b.backup`）里**任一**候选命中生产域就算生产
+    （第 46 轮 A-m1：以前整串当一个主机名，精确匹配落空 ⇒ 真生产被说成"不是那台"）。
     """
-    host = _db_host(url)
-    if _is_a_local_host(host):
-        return "本机 PostgreSQL（%s，不是线上生产库）" % name
-    if _is_the_production_host(host):
+    hosts = _db_hosts(url)
+    if any(_is_the_production_host(h) for h in hosts):
         return "线上生产库（%s）" % name
+    if hosts and all(_is_a_local_host(h) for h in hosts):
+        return "本机 PostgreSQL（%s，不是线上生产库）" % name
+    if not hosts:
+        return "PostgreSQL（%s）—— 认不出主机，不敢说它是本机还是线上生产库" % name
     return "远程 PostgreSQL（%s）—— 不是本项目那台 Supabase 生产库" % name
 
 
@@ -469,6 +532,9 @@ def db_kind(url):
         return '本地 sqlite 文件（不是镜像库）：%s' % name
     low = url.lower()
     if low.startswith(('postgres', 'postgresql')):
+        return _postgres_words(url, name)
+    if "://" not in url and "=" in url and _db_hosts(url):
+        # libpq 的 conninfo 写法没有 scheme，但按定义就是 PostgreSQL（与 src 侧同一条）
         return _postgres_words(url, name)
     if low.startswith('mysql'):
         return 'MySQL 库（%s）' % name

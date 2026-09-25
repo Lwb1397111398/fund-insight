@@ -71,7 +71,7 @@ def test_restore_refuses_to_hand_back_owner_immunity_by_default(test_db, tmp_pat
 
     out = []
     with _capture(out):
-        sweep.restore(test_db, path)
+        sweep.restore(test_db, path, apply=True)
     test_db.expire_all()
     after = test_db.query(SectorFundMapping).filter_by(sector_name='半导体').first()
     assert after.fund_code == '599999', '标的没还原 ⇒ 这条用例没在测还原动作本身'
@@ -91,7 +91,7 @@ def test_the_token_does_hand_it_back(test_db, tmp_path):
     path = _manifest(tmp_path, [{'id': row.id, 'sector_name': '债券', 'fund_code': '511260',
                                  'reviewed_by': 'owner', 'owner_locked': True}],
                      ('reviewed_by', 'owner_locked'))
-    sweep.restore(test_db, path, restore_owner_immunity=True)
+    sweep.restore(test_db, path, apply=True, restore_owner_immunity=True)
     test_db.expire_all()
     after = test_db.query(SectorFundMapping).filter_by(sector_name='债券').first()
     assert after.owner_locked is True and after.reviewed_by == 'owner', (
@@ -106,9 +106,129 @@ def test_nothing_is_held_back_when_the_manifest_grants_nothing(test_db, tmp_path
                      ('reviewed_by', 'owner_locked'))
     out = []
     with _capture(out):
-        sweep.restore(test_db, path)
+        sweep.restore(test_db, path, apply=True)
     joined = ''.join(out)
     assert '默认不还原' not in joined, '什么都没剔掉却报了"免疫未还原"：%s' % joined
     test_db.expire_all()
     after = test_db.query(SectorFundMapping).filter_by(sector_name='军工').first()
     assert after.reviewed_by == 'agent', '非授予值（`agent`）被一起吞了 ⇒ 默认拒绝做过头了'
+
+
+def test_restore_is_dry_run_until_apply(test_db, tmp_path):
+    """B-M8：`--restore-from` 以前**没有门** —— 不加 `--apply` 也照样写库、删净值。
+
+    文件头第 8 行那时写着"默认 dry-run，`--apply` 才写库"，可那句话对还原这条路是假的。
+    两头都要钉：① 默认一支笔都不动（映射行与净值原样、回执里说得出"将要写几行/删几行"）；
+    ② `apply=True` 必须**真的有用**（否则①只是"永远不写"，测不到门本身）。
+    """
+    sweep = _load_sweep()
+    from src.models.database import FundInfo, FundHistory
+    from datetime import date
+    row = _mapping(test_db, '红利', '510880')
+    test_db.add(FundInfo(fund_code='999001', fund_name='本轮新建'))
+    test_db.add(FundHistory(fund_code='999001', nav_date=date(2026, 9, 20), nav=1.0))
+    test_db.commit()
+    path = tmp_path / 'm.json'
+    import json
+    json.dump({'created_at': '2026-09-19T10:00:00', 'created_fund_codes': ['999001'],
+               'fields': ['fund_code'],
+               'rows': [{'id': row.id, 'fund_code': '510889'}]},
+              open(str(path), 'w', encoding='utf-8'))
+
+    out = []
+    with _capture(out):
+        assert sweep.restore(test_db, str(path)) == 0
+    test_db.expire_all()
+    joined = ''.join(out)
+    assert test_db.query(SectorFundMapping).filter_by(id=row.id).first().fund_code == '510880', \
+        '没给 --apply 却改了映射表 ⇒ dry-run 是假的'
+    assert test_db.query(FundHistory).filter_by(fund_code='999001').count() == 1, \
+        '没给 --apply 却删了净值（那是不可再生数据）'
+    assert '[dry-run]' in joined and '1 行' in joined, joined
+    assert '--apply --confirm' in joined, '回执没告诉操作者真写要怎么按：%s' % joined
+
+    with _capture(out):
+        assert sweep.restore(test_db, str(path), apply=True) == 0
+    test_db.expire_all()
+    assert test_db.query(SectorFundMapping).filter_by(id=row.id).first().fund_code == '510889', \
+        'apply=True 还是不写 ⇒ 上面那条"默认不写"可能只是恒假'
+    assert test_db.query(FundHistory).filter_by(fund_code='999001').count() == 0
+
+
+def test_a_manifest_without_created_at_refuses_to_delete_nav(test_db, tmp_path):
+    """B-M9：缺 `created_at` 时"只删本轮新建的净值"退化成"删这只基金的全部净值"。
+
+    旧写法 `if since is not None: hist = hist.filter(...)` ⇒ 日期看不见就**不加过滤器**，
+    把"我不知道从哪天起"翻译成"全都删"，而它上面 4 行注释写的正是这个风险。
+    现在要反过来：看不见下界 ⇒ 一行都不删，并且说清为什么。
+    """
+    sweep = _load_sweep()
+    from src.models.database import FundInfo, FundHistory
+    from datetime import date
+    row = _mapping(test_db, '煤炭', '515220')
+    test_db.add(FundInfo(fund_code='999002', fund_name='有历史的基金'))
+    for day in (1, 2, 3):
+        test_db.add(FundHistory(fund_code='999002', nav_date=date(2026, 9, day), nav=1.0))
+    test_db.commit()
+    import json
+    path = tmp_path / 'no-date.json'
+    json.dump({'created_fund_codes': ['999002'], 'fields': ['fund_code'],
+               'rows': [{'id': row.id, 'fund_code': '515220'}]},
+              open(str(path), 'w', encoding='utf-8'))
+    out = []
+    with _capture(out):
+        assert sweep.restore(test_db, str(path), apply=True) == 0
+    test_db.expire_all()
+    joined = ''.join(out)
+    assert test_db.query(FundHistory).filter_by(fund_code='999002').count() == 3, \
+        '缺 created_at 却删光了净值 ⇒ "%s"' % [l for l in out if 'abort' in l]
+    assert '[abort]' in joined and 'created_at' in joined, \
+        '拒删却不说明理由（操作者会以为"已经还原干净了"）：%s' % joined
+
+
+def test_the_manifest_cannot_ask_for_fields_outside_the_whitelist(test_db, tmp_path):
+    """清单是**外部输入**：以前 `data.get('fields', …)` 里写什么就 setattr 什么（含 `id`）。
+
+    一份改过的 manifest 于是能改任意 ORM 属性 ⇒ 还原动作本身成了写入通道。
+    现在白名单外的名字要**报出来并不写**，而白名单内的照常还原（否则这只是把功能关掉）。
+    """
+    sweep = _load_sweep()
+    row = _mapping(test_db, '传媒', '512980')
+    other = _mapping(test_db, '别的板块', '510300')
+    import json
+    path = tmp_path / 'evil.json'
+    json.dump({'created_at': '2026-09-19T10:00:00', 'created_fund_codes': [],
+               'fields': ['fund_code', 'id', 'sector_name'],
+               'rows': [{'id': row.id, 'fund_code': '512980', 'id': 99999,
+                         'sector_name': '被抢来的板块'}]},
+              open(str(path), 'w', encoding='utf-8'))
+    out = []
+    with _capture(out):
+        assert sweep.restore(test_db, str(path), apply=True) == 0
+    joined = ''.join(out)
+    test_db.expire_all()
+    mine = test_db.query(SectorFundMapping).filter_by(id=row.id).first()
+    assert mine.id == row.id, '清单点名要改 `id` 就真的改了 ⇒ 白名单没生效'
+    assert 'id' in joined and '[skip]' in joined, '剔掉了字段却不报告：%s' % joined
+    assert mine.fund_code == '512980'
+
+
+def test_the_apply_gate_is_said_before_the_database_is_touched():
+    """`--restore-from --apply` 缺确认词时必须**在连库之前**退出。
+
+    钉库/建会话排在检查之后的话，一次打错字的命令行就已经连上库了 ——
+    与本仓 seed 那道闸（`--owner-confirm SEED-PROXY`）同一姿势，用 AST 判顺序。
+    """
+    import ast
+    src = open(os.path.join(ROOT, 'scripts', 'sweep_sector_mappings.py'), encoding='utf-8').read()
+    tree = ast.parse(src)
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == 'main')
+    token_check = [n.lineno for n in ast.walk(main) if isinstance(n, ast.Compare)
+                   and 'RESTORE_CONFIRM_TOKEN' in ast.dump(n)]
+    connects = [n.lineno for n in ast.walk(main) if isinstance(n, ast.Call)
+                and getattr(n.func, 'id', '') in ('SessionLocal', 'pin_local_sqlite')]
+    assert token_check, 'main() 里没有确认词检查 ⇒ 门只写在 restore() 里，`--apply` 照旧直通'
+    assert connects, 'main() 里没有建库动作 ⇒ 这条顺序判据是空判'
+    assert min(token_check) < min(connects), \
+        '确认词检查排在连库之后（%s vs %s）⇒ 用法错也会先连一次库' % (token_check, connects)

@@ -266,7 +266,7 @@ def test_restore_keeps_history_that_predates_the_manifest(test_db, tmp_path):
         'rows': [{'id': row.id, 'fund_code': '159805'}],
         'created_fund_codes': ['512170']}), encoding='utf-8')
 
-    restore(test_db, str(manifest))
+    restore(test_db, str(manifest), apply=True)   # 第 46 轮 B-M8：默认只报不改
     dates = [h.nav_date for h in test_db.query(FundHistory).filter(
         FundHistory.fund_code == '512170').all()]
     assert date(2020, 1, 2) in dates, '回滚吃掉了本轮之前老板就有的净值'

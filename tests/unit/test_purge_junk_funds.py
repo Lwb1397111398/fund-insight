@@ -280,14 +280,16 @@ def test_the_production_flag_has_teeth_and_the_check_runs_before_any_write():
     local_pg = 'postgresql://u@127.0.0.1:5432/db'
     assert purge._target_agrees_with_the_flag(False, mirror) is None
     assert purge._target_agrees_with_the_flag(True, prod) is None
+    # 第 46 轮 A-m3 / B-M12：一把公网非 PG 也不算"那台线上库"
+    assert purge._target_agrees_with_the_flag(True, 'mysql://u:p@db.partner.example/d'), \
+        'MySQL 满足了 `--production` ⇒ 这把硬删脚本只问"远不远"，没问"是不是那台"'
+    assert purge._target_agrees_with_the_flag(True, 'postgresql://u:p@staging.example.com/db'), \
+        '别人的暂存库满足了 `--production`'
     for flag, url, what in ((True, mirror, '本地镜像'), (True, local_pg, '本机'),
                             (False, prod, '硬删')):
         why = purge._target_agrees_with_the_flag(flag, url)
         assert why and why.startswith('[abort]'), '%s + %s 竟被放行' % (flag, url)
         assert what in why or 'postgres' in why.lower(), '拒绝理由没说到点上：%s' % why
-    # 控制：把判据换成"只看是不是 sqlite"，本机 PostgreSQL 那一格必须仍然被拒
-    assert purge._target_agrees_with_the_flag(True, local_pg), \
-        '本机 PostgreSQL 被当成线上库放行了 ⇒ 第二半没落地'
 
     tree = ast.parse(open(os.path.join(ROOT, 'scripts', 'purge_junk_funds.py'),
                           encoding='utf-8').read())

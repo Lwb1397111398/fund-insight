@@ -272,13 +272,20 @@ def _target_agrees_with_the_flag(production_flag, url):
     给了旗子却解析出 SQLite ⇒ 说明 `.env` 已经换了，停；
     没给旗子却解析出非 SQLite ⇒ 说明钉库没生效，而这把脚本会**硬删**，停。
     返回 `None` 表示可以继续，否则返回要印的那句拒绝理由。
+
+    第 46 轮 A-m3 / B-M12 补的第二半：**"远不远"不等于"是不是那台"**。上一版只要求
+    "非 SQLite 且非私网"，于是 MySQL、别人暂存环境里的一台公网 Postgres 都能满足
+    `--production` —— 而这把脚本删的是不可再生的 `fund_info`。现在要求主机命中
+    尺子里那张已知生产域表（与第 43 轮 `push_sector_mappings_to_prod.py` 同一课）。
     """
-    from _db_guard import _db_host, _is_a_local_host, db_kind
+    from _db_guard import _db_hosts, _is_the_production_host, db_kind
     is_sqlite = (url or '').lower().startswith('sqlite')
-    really_remote = (not is_sqlite) and not _is_a_local_host(_db_host(url))
-    if production_flag and not really_remote:
-        return ('[abort] --production 说要动**那台线上库**，可连接实际落在 %s ⇒ 两者不一致，'
-                '不敢动手' % db_kind(url))
+    hosts = _db_hosts(url or '')
+    is_our_production = bool(hosts) and any(_is_the_production_host(h) for h in hosts)
+    if production_flag and not (is_our_production and not is_sqlite):
+        return ('[abort] --production 说要动**本项目那台线上库**，可连接实际落在 %s ⇒ '
+                '两者不一致，不敢动手。（换真生产请先把那台主机加进尺子的已知生产域，'
+                '别在一把会硬删的脚本上临时改串）' % db_kind(url))
     if not production_flag and not is_sqlite:
         return ('[abort] 没给 --production 却解析出非 SQLite 的目标 %s ⇒ 钉库没生效。'
                 '这把脚本会**硬删** `fund_info`，停在这里' % db_kind(url))

@@ -201,12 +201,40 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-25 14:0x（北京），第 45 轮返修（A 74 / B 76，取低分 74）之后，
-最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
+最近一次核对（2026-09-25 16:5x（北京），第 46 轮返修（A 76 / B 72，取低分 72）之后，
+最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1054 passed / 16 skipped / 0 failed**（532.33 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1063 passed / 16 skipped / 0 failed**（570.75 秒）。
+- `pytest tests/unit -q` → **1067 passed / 16 skipped / 0 failed**（445.73 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1076 passed / 16 skipped / 0 failed**（357.13 秒）。
+  （**串行跑**是这一轮新加的规矩：A 席并发时段读到过 1064 而干净复跑是 1063 ——
+  pytest 与 pytest **不互斥**（那把锁只挡体检），第二个会话抢不到锁时现在会印一行
+  `[警告] 已经有一个 pytest 会话握着 …` ⇒ "跑不动"与"跑不绿"从此分得开。
+  上一基线 1054/1063 → 本批 1067/1076：+13 条，分布在 `test_script_db_guards.py` +5
+  （危险语句**换个位置/换个深度**仍要被点名（赋值、`if`、推导式、`with`、嵌套 `def`、
+  `os.system`）+ 三条"正常写法不许误伤"的对照 / 递归扫描与"空目录不许报干净" /
+  测试用的名单就是运行期那份 JSON（行为判据：登记进临时 JSON ⇒ 运行期那道闸跟着放行）/
+  `--dry-run` 的自报行不许说"会发 DDL" / async 引擎与实例属性里的散落连接），
+  `test_sweep_restore_owner_immunity.py` +4（还原默认 dry-run、缺 `created_at` 一行净值都不清、
+  清单点名字段过白名单、`--apply` 缺确认词必须**在连库之前**退出），
+  `test_database_label_targets.py` +1（主机只写在 `?host=` 里、多主机列表、
+  "认不出主机"那一档不许冒充本机），`test_doc_claims.py` +2
+  （流水段里"没判几条"必须印出来 + 尺子拿不到时要 skip 不要 fail），
+  `test_sector_identity_audit.py` +1（**用例产物不许堆进 `docs/`**：`write_manifest` 的两条用例
+  以前把回滚清单写进仓库里那份真清单的同名目录，断言中途红就不清 —— 本机实测漏过两份
+  `sweep-manifest-pytest-realign*.json`；现在 `OUT_DIR` 用 `monkeypatch` 钉到 `tmp_path`，
+  闸自带"现造一份泄漏必须被点名"的控制，撤掉重定向实测 2 条一起红），
+  `test_database_label_targets.py` 与守卫侧同步扩了**主机**这一维的样品池。
+  **这一轮被两份评审共同打脸的，是上一轮我写在"当前测试基线"里的那三句撤谎话本身**：
+  "方向只认值"当时的实现是"表达式里**出现过** sqlite 字样" ⇒ 一条三目就能买到（A-M1/B-M3）、
+  "每条 return 都是 sqlite"漏掉 `except` 那条出口（A-M2）、
+  "同一条分支要可达且排在危险动作之前"里，可达只问到"函数名有没有被写过"、
+  顺序只比"同一个最内层函数里的行号" ⇒ DDL 抽进 helper 就绕过（A-M4）。
+  现在这四条各自有样品钉死，另加：`_is_dead_test` 改**求值**、顺序改走**调用图**（行号元组字典序，
+  第一版用累加小数把顺序弄反过，被真护栏对照组当场点红 ⇒ 又是"控制断言抓自己"那一族）。
+  **还有一条要记的**：B 席建议把文档流水账"按句判"，我照做后立刻假红一处
+  （AGENTS 基线那段是整条链，切句把"新增 3 条"变成当场账：文档写 3、当场 35）
+  ⇒ 建议的修法**实测驳回**，只保留它要的另一半（没判的条数必须印出来）。）
   （上一基线 1041/1050 → 本批 1054/1063：+13 条，分布在 `test_script_db_guards.py` +5
   （守卫那条分支必须**可达**且**排在危险动作之前**（死路样品 + 先动手后拒跑样品）/
   "方向"只能来自**值**（函数每条 `return` 都是 sqlite 才算，按名字猜一律不算）/
@@ -480,6 +508,35 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （`onrender.com.attacker.example`、`notonrender.com` 都能自称"经 HTTP 写线上生产库"），
   而我第一版改成"或它的子域"是**另一个方向的过头** —— Render 一个共享后缀压着别人的应用，
   那不是我的生产。判据用 `hostname`（自动去端口/userinfo/转小写），显示仍用 netloc。
+- **"这是哪个库"今天说四档，认不出主机就必须说认不出**（第 46 轮 B-M6 / A-m1）：
+  第 45 轮的三档（本机 / 本项目 Supabase / 别的远程）有个致命的默认 —— **看不见主机就当本机**。
+  而 `postgresql:///postgres?host=aws-0-x.pooler.supabase.co` 是 SQLAlchemy 的正规写法之一
+  （主机只出现在 query 里），两把尺子于是**一致地**把线上库印成
+  `本机 PostgreSQL（…，不是线上生产库）`；"两把尺子逐条相等"那条判据对这种错永远绿 ——
+  **一致地错比不一致更危险**，因为唯一盯着它的用例正好是那条相等检查。
+  现在：`_db_hosts()` 同时看 netloc 与 `host=`/`hosts=` 参数，并按 `,` / 空格切成**候选列表**
+  （多主机列表是 libpq 的故障转移写法，整串当一个名字 ⇒ `a.supabase.co,b.backup` 混不进生产档）；
+  任一候选命中生产域 ⇒ 生产；全部候选都是回环/私网 ⇒ 本机；**一个候选都没有 ⇒ 第四档
+  "认不出主机，不敢说它是本机还是线上生产库"**。键值写法（没有 `://`）也进这四档（libpq conninfo
+  按定义就是 Postgres）。
+  同一轮补两条口令面：`sqlite:///u:S3cr3tPW@/db` 原样回显（sqlite 那一支以前不剥 userinfo）、
+  `postgres:///password=S3cr3tPW`（口令落在**路径段**、没有 `?` 分隔）也原样进日志 ——
+  现在两边都过 `_redact_secrets`：**"口令一个字符都不出现"这条不变式不分位置、不分方言**。
+  反向边界也钉了：`data/mail@copy.db` 这种合法文件名不许被剥坏。
+- **`--production` 这把旗子要问"是不是那台"，不是"远不远"**（第 46 轮 A-m3 / B-M12）：
+  `purge_junk_funds.py`（S6 那把**硬删** `fund_info` 的脚本）的方向闸上一版只要求
+  "非 SQLite 且非私网" ⇒ MySQL、别人暂存环境里的一台公网 Postgres 都满足 `--production`，
+  而同一批刚写好的 `_is_the_production_host()` 就在同一个模块里没被调用。现在必须命中
+  那张已知生产域表，否则退 4，并把"要怎么改"说清（加进尺子的域名，而不是在删数据的脚本上调串）。
+- **`sweep_sector_mappings.py --restore-from` 今天才有门**（第 46 轮 B-M8 / B-M9，我上一轮刚动过这条函数）：
+  文件头第 8 行一直写着"默认 dry-run，`--apply` 才写库"，可还原那条支路是
+  `if args.restore_from: return restore(...)` —— 绕过 `--apply`、没有确认词，直接 `setattr`
+  之后 `db.commit()`，末尾还 `FundHistory.delete()`。现在：默认 dry-run 只报"将写几行、将清几行"，
+  真写要 `--apply --confirm RESTORE-SWEEP`，且这道检查排在 `pin_local_sqlite()`/`SessionLocal()`
+  **之前**（用法错不该先连一次库）。另一半更贵：`created_at` 缺失/被截断时以前是
+  `if since is not None: 加过滤器` ⇒ "我不知道从哪天起"被翻译成"全删"，
+  而净值历史**不可再生**（每日同步只回补最近 30 天）；现在拿不到下界就一行都不清并说出来。
+  清单是外部输入 ⇒ 字段名过 `MANIFEST_FIELDS` 白名单（以前写什么就 `setattr` 什么，含 `id`）。
 - **钉库守卫在钉之前先问"进程里还有谁连着别处"**（第 44 轮 B-MAJOR-6）：
   只查 `sys.modules['src.models.database']` 是被 `del sys.modules[...]` 绕过的 ——
   调用方手里那个 `engine` 对象不会因此松开。现在 `pin_local_sqlite()` 之前把所有
@@ -559,7 +616,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   也算"碰得到一个活的连接" —— 判据走 src 顶层 import 图的可达性，
   对照样品是一棵**临时造的 src 树**（不是手抄的邻接表）。
   ⑤ `alembic/versions/*.py` 从此在扫描范围里（B-m4）：每一支必须有 `upgrade` 与 `downgrade`，
-  **往上走那一支**删结构要登记进 `DATA_LOSSING_UPGRADES`（今天为空，9 支迁移的删除全在
+  **往上走那一支**删结构要登记进 `alembic/destructive-upgrades.json`（今天为空，9 支迁移的删除全在
   `downgrade`）。`alembic/env.py` 那道方向闸只管"能不能连过去"，管不到"过去之后删什么"。
   ⑥ 受检集合"git 不可用就退回磁盘并明说"这一支今天自己跑过一次（A-m3：以前只在 docstring 里），
   并配"临时目录里现造文件必须被收进来"的空判对照。
@@ -578,7 +635,32 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   先问它），登记处在 `alembic/destructive-upgrades.json`（键＝迁移名、值＝为什么这不算事故）。
   上一轮这里写的 `DATA_LOSSING_UPGRADES` 是个**当时并不存在的名字** ⇒ 数与名字都要跟着命令走，
   复核：`python -c "import sys; sys.path.insert(0,'scripts'); import migration_policy as m; p,s=m.audit(); print(s,p)"`（今天印 `9 []`）。
-- **写死"老板已确认"的授予点有棘轮了**（第 44 轮 A-M-3 起，第 45 轮把形状补全）：AGENTS 那句
+  **第 46 轮：这四处每一处都又被买到过一次，下面才是它们现在的样子**（A-M1/M2/M3/M4 + B-M3/M4/M5）：
+  ①′ "方向要来自值"当时的实现是**"这个表达式里出现过 `sqlite` 这几个字"** ⇒
+  `= "sqlite:///data/copy.db" if a.local else os.environ["PROD_URL"]` 与
+  `= os.environ.get("X", "sqlite:///x.db")` 都能白买到守卫。现在走 `_proves_sqlite`：
+  字面量必须**以** sqlite 开头、多臂表达式（三目 / `or`）**每一臂**都要单独证明、
+  式子里只要有"到运行时才决定"的子式（环境 / 配置 / `.get(k, 默认)`）就整体不证明；
+  **解析顺序**也算判据 —— 先认 helper 的出口、再问有没有运行时子式，
+  反过来的话 `url(bool(os.environ.get("L")))`（参数来自环境、每条出口都是 sqlite）
+  这种诚实写法会被一起打死（我自己第一版就打死了，被那条对照抓红）。
+  ②′ `_returns_sqlite` 的出口集合必须**含 `except` 里那几条**（`try: return sqlite / except: return os.environ[...]`
+  以前判"每条出口都是 sqlite"）。同一文件里 `_guard_stmts` 反过来**不钻** `except` —— 那边问的是
+  "正常路径会不会停下来"，这边问的是"这个 helper 可能交出什么值"，**两个问题共用一个开关才是 bug**。
+  ③′ 死路改**求值**：`and 1 == 0`、`if not True`、`if ()`、`while 0:` 以前全算活 ⇒
+  现在常量折叠（`ast.literal_eval` + 自己算常量比较），求不出来才当它是活的。
+  ④′ 顺序与可达走**调用图**：危险动作抽进 helper、主流程先调用它再判方向 ⇒ 现在能认出来；
+  护栏只被一个从不被调用的函数调用 ⇒ 不再算守卫。比较用的是**行号元组的字典序**
+  （`(216, 133, 37)` vs `(216, 165)`），**不是累加小数** —— 累加会把顺序整个弄反
+  （我把一条真护栏判红过，是那条"真护栏必须仍算守卫"的对照抓出来的）。
+  ⑤′ 危险语句的识别从"必须是一整句"改成"**看所有调用**"：`r = op.execute(SQL)`、
+  `if op.execute(...)`、推导式、`with` 块里的 `c.execute(VAR)` 以前全部隐身且不标"看不清"
+  （审计回的是"干净"）；现在按"是不是**执行** SQL 的入口"判，
+  `sa.text(默认值)` 这种只构造不执行的仍然不误伤 —— **闸门建成墙的代价与漏报同量级**。
+  ⑥′ `audit()` 的三件事：递归走目录（alembic 自己用 `path_walk`＝`os.walk`，
+  子目录里一支 `drop_table` 会被 apply 却从未被核对）、名单类型归一（传 set 曾直接
+  `AttributeError`）、**一支都没看到不许报"干净"**。
+- **写死"老板已确认"的授予点有棘轮了**（第 44 轮 A-M-3 起，第 45 轮把形状补全，第 46 轮改成"真值语义"）：AGENTS 那句
   "豁免每一条来源都要显式令牌"以前只是话 —— `is_correct` 与 `fund_code` 的"唯一入口"
   当初也只是话，后来各自多出一个入口。现在 `tests/unit/test_review_ownership_and_matching.py`
   用 AST 扫 `src/` 与 `scripts/`，凡是"把授予值写死"的形状都要认（属性赋值 / 字典字面量 /
@@ -589,6 +671,17 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   两处反向样品不许误伤（"搬运已有值"＝备份/序列化；与豁免无关的 `setattr(obj, name, v)`），
   字段名是变量的 `setattr` 既不静默放过也不硬算成授予 ⇒ 落进 `IMMUNITY_OPAQUE_SITES`
   并要求写明依据。`__init__.py` 从第 45 轮起**不再整族免检**（本仓的包 `__init__` 真放代码）。
+  **第 46 轮（A-M6 / B-M10）：判的是"真值语义"，不是字面量 `True`。** 库里读的是
+  `if getattr(row, 'owner_locked', None)` ⇒ 真值即免疫，于是以前只认 `True` 的清单漏掉六种
+  日常写法：`= 2`、`= not False`、`= x or True`、带类型标注的赋值
+  （`row.owner_locked: bool = True`）、`def grant(row, lock=True)` 这种"隔一层参数默认值"、
+  `setdefault('owner_locked', True)` / `row['reviewed_by'] = 'owner'`、
+  以及裸 SQL（`UPDATE … SET owner_locked = true`，列名和值都在字符串里）。现在都认，
+  样品同样进 `shapes` 字典 —— **每一条都配了"搬运已有值不许误伤"的反向对照**。
+  **一条边界要说明白，别以为它管全部**：值的来路看不见（跨模块常量、外层变量、`{**payload}`）
+  ⇒ **不算"写死授予值"**，也不另开登记通道。第一版开了，当场把 5 处正常代码变成"待解释"，
+  那张 `IMMUNITY_OPAQUE_SITES` 就从"要依据"退化成"盖章" —— 而它存在的理由正是防这个。
+  这一档的真实归属是**载荷驱动**那条路（`_clean_row` 剔列 + 行为判据）。
   边界：`purge_junk_funds.py --restore-owner-immunity` 那一腿是**载荷驱动**的（值不是字面量），
   这条扫不到，由 `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉。
 - **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：

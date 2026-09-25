@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest    # `_collected_counts_or_skip` 要用它把"尺子拿不到"变成 skip（第 46 轮 B-M7）
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'scripts' / 'audit_doc_claims.py'
 
@@ -58,6 +60,24 @@ def test_a_claim_that_cannot_be_resolved_to_a_collected_file_is_reported(tmp_pat
     assert now[0]['test'] not in mod._collected_counts()
 
 
+def _collected_counts_or_skip(mod):
+    """拿条数尺子；**拿不到就 skip，不许 fail**（第 46 轮 B-M7）。
+
+    前端变异体检持有 `.mutation-harness.lock` 时，脚本内部那次嵌套
+    `pytest --collect-only` 会被 `tests/conftest.py` 挡下 ⇒ `_collected_counts` 直接
+    `SystemExit('[abort] pytest 只收集到 0 条 ⇒ 尺子本身不可用')`。那是"这台机器此刻
+    测不了"，不是"文档在说谎"。同文件另一条（真文档过账）本来就认了这一档，
+    而 in-process 这条没认 ⇒ 同一状况一条 skip、一条 fail，
+    下一轮就会有人去改代码而不是等锁放下来（B 席实测：`pytest tests/unit -q` 1 failed /
+    单跑本文件 13 passed）。
+    """
+    try:
+        return mod._collected_counts()
+    except SystemExit as exc:
+        pytest.skip('条数尺子此刻拿不到（多半是前端变异体检持有互斥锁）⇒ 不是文档的问题：%s'
+                    % exc)
+
+
 def test_the_collected_counts_ruler_is_the_real_pytest_one():
     """尺子本身要通：当场收集到的条数必须与 `pytest --collect-only -q` 的输出一致。
 
@@ -65,9 +85,29 @@ def test_the_collected_counts_ruler_is_the_real_pytest_one():
     写死一个数就又变成一条"没绑口径的当场账"。
     """
     mod = _load()
-    counts = mod._collected_counts()
+    counts = _collected_counts_or_skip(mod)
     assert len(counts) > 50, '只收到 %d 个测试文件' % len(counts)
     assert sum(counts.values()) > 900, '当场收集到的总数少得可疑：%d' % sum(counts.values())
+
+
+def test_an_unavailable_ruler_skips_instead_of_going_red(monkeypatch, capsys):
+    """控制断言：`_collected_counts_or_skip` 必须**真的**把"尺子不可用"变成 skip。
+
+    没有这一条，上面那个 helper 可以写成"照样 raise"，而全套件只在体检并发的日子才红 ——
+    那种红每次都要重新查一遍根因，正是 B 席这轮记下来的成本。
+    """
+    mod = _load()
+
+    def _blind():
+        raise SystemExit('[abort] pytest 只收集到 0 条 ⇒ 尺子本身不可用，不做对账')
+
+    monkeypatch.setattr(mod, '_collected_counts', _blind)
+    try:
+        _collected_counts_or_skip(mod)
+    except pytest.skip.Exception as exc:
+        assert '尺子' in str(exc) or '互斥锁' in str(exc), exc
+    else:
+        assert False, '尺子不可用时没有 skip ⇒ 并发那天整条基线会被读成"代码坏了"'
 
 
 def test_the_repository_has_no_stale_doc_counts():
@@ -238,6 +278,37 @@ def test_the_repository_data_source_lines_are_auditable():
     assert seen >= 1, '一行 `数据源：` 都没认出来 ⇒ 尺子与文档写法脱节了'
     assert bad == [], '这些报告没说自己出自哪个库：%s' % [
         '%s:%s %s' % (c['file'], c['line'], c['text']) for c in bad]
+
+
+def test_claims_skipped_because_the_paragraph_is_baseline_flow_are_counted_aloud(
+        tmp_path, monkeypatch, capsys):
+    """流水段里"没判"这件事必须**可见**（第 46 轮 B-M2）。
+
+    B 席要的按句判我实测驳回了：`AGENTS.md` 的"当前测试基线"是一整条
+    `（上一基线 X → 本批 Y：+N 条，分布在 test_a.py 新增 3 条（…）` 的链，
+    切句后"新增 3 条"脱离流水语境被当当场账 ⇒ 假红（文档写 3 条、当场 35 条），
+    而"把对的数改成错的"是这把尺子最不该做的事。
+    所以这里钉的是**能做的那一半**：混在流水段里的真承诺确实不判，但条数必须印出来；
+    同一句改写成独立段落就必须重新被 judged（否则这条 print 只是装饰）。
+    """
+    mod = _load()
+    doc = tmp_path / 'F.md'
+    doc.write_text(u'- （上一基线 10/11 → 本批 12/13：+2 条，分布在 `tests/unit/test_a.py` 1 条）\n'
+                   u'\n'
+                   u'另一处独立成段：`tests/unit/test_b.py` 9 条钉着。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_a.py': 4, 'test_b.py': 9})
+    now, delta, _unbound = mod._claims()
+    assert [c['test'] for c in now] == ['test_b.py'], \
+        '独立成段的那句没被当当场账 ⇒ 流水豁免扩到了整篇：%s' % now
+    assert [c['test'] for c in delta] == ['test_a.py'], delta
+    assert delta[0].get('why'), '流水段里跳过的那条没带原因 ⇒ 印出来的数没人看得懂'
+    monkeypatch.setattr(mod, 'ROOT', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['audit_doc_claims.py'])
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert '1 条只因所在那一段是基线流水' in out, \
+        '"没判几条"没印出来 ⇒ B-M2 说的那种空转还是不可见：%s' % out
 
 
 def test_the_fix_flag_rewrites_counts_and_leaves_the_other_accounts_alone(tmp_path, monkeypatch,

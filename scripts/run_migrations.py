@@ -51,13 +51,19 @@ def _parser():
     return ap
 
 
-def _report_target() -> str:
-    """不连线地报出目标库：`create_engine` 只把 URL 焊进对象，不发任何请求。"""
+def _report_target(dry_run=False) -> str:
+    """不连线地报出目标库：`create_engine` 只把 URL 焊进对象，不发任何请求。
+
+    `--dry-run` 那一支要说的是"本来会发给谁"，不是"我正在发给谁" ——
+    同一句"会向它发 DDL"印在一次什么都不做的运行里，就是把措辞写得比动作更危险
+    （本仓为这类话已经被抓过三次：`--base` 指到本机却自称线上生产库、
+    `ok=True` 却印"已写入"、失败分支报"已还原 N 行"）。
+    """
     from src.models.database import DB_TYPE, engine
     from src.services.verdict_evidence import database_label
 
-    return '[库] %s —— alembic upgrade head 会向它发 DDL（方言 %s）' % (
-        database_label(engine), DB_TYPE)
+    verb = '本来会是这个目标（本次 --dry-run：不发 DDL）' if dry_run else 'alembic upgrade head 会向它发 DDL'
+    return '[库] %s —— %s（方言 %s）' % (database_label(engine), verb, DB_TYPE)
 
 
 def _migration_gate(strict=True, versions_dir=None, allowlist=None) -> None:
@@ -70,15 +76,18 @@ def _migration_gate(strict=True, versions_dir=None, allowlist=None) -> None:
     有未登记的丢数据迁移就退 4，一句 DDL 都不发。`--dry-run` 那一支不连线，所以只报不拦。
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from migration_policy import ALLOWLIST, audit
+    from migration_policy import REL_ALLOWLIST, audit
 
     problems, seen = audit(versions_dir, allowlist)
     print('[迁移] 已核对 %d 支：其中 %d 处未登记的危险动作' % (seen, len(problems)), flush=True)
     for line in problems:
         print('[abort] %s' % line if strict else '[警告] %s' % line, flush=True)
     if problems and strict:
+        # 印的是仓库相对路径而不是 `os.path.relpath(绝对路径, 仓库根)`：
+        # 后者在 Windows 上跨盘符会直接 ValueError（第 46 轮 B 的用例把名单指到 C: 的
+        # 临时目录就撞上了）—— 一句"提示该怎么登记"的话，不许把闸门本身弄崩。
         print('[提示] 真要上这一支：把它连同"为什么非丢不可"写进 %s（结构变更要先问老板）'
-              % os.path.relpath(ALLOWLIST, PROJECT_ROOT), flush=True)
+              % REL_ALLOWLIST, flush=True)
         raise SystemExit(4)
 
 
@@ -118,7 +127,7 @@ def main(argv=None) -> int:
     if args.dry_run:
         _migration_gate(strict=False)       # 只报不拦：这一支压根不连线
         _prepare_database_url()
-        print(_report_target(), flush=True)
+        print(_report_target(dry_run=True), flush=True)
         print('[dry-run] 只报目标，没连线、没发 DDL（要真跑就去掉 --dry-run；'
               'Render 的 startCommand 就是无参数那一支）')
         return 2
