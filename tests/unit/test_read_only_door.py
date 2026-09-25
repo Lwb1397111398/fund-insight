@@ -179,7 +179,10 @@ def test_the_three_l3_l1_scripts_now_go_through_the_door(tmp_path):
     """
     import ast
     for name in ('audit_l3_clear_labels.py', 'estimate_l3_vague_labels.py',
-                 'backtest_l1_weighting.py'):
+                 'backtest_l1_weighting.py',
+                 # 第 48 轮 A-9 / 任务 #51：这份体检以前只能钉在镜像上 ⇒ 生产那一行
+                 # "⚠ 419 条 / 区间 33.68%~73.32%" 在仓库里没有任何可跑命令。现在它也走这把门。
+                 'audit_verdict_evidence.py'):
         src = (ROOT / 'scripts' / name).read_text(encoding='utf-8')
         tree = ast.parse(src, filename=name)
         calls = {((n.func.attr if isinstance(n.func, ast.Attribute) else n.func.id)
@@ -187,6 +190,54 @@ def test_the_three_l3_l1_scripts_now_go_through_the_door(tmp_path):
                  for n in ast.walk(tree) if isinstance(n, ast.Call)}
         assert 'read_only_connect' in calls, '%s 没走统一只读门（调用点：%s）' % (name, sorted(calls)[:8])
         assert 'create_engine' not in calls, '%s 又自己建 engine 了' % name
+
+
+def test_the_verdict_audit_switches_target_only_when_the_flag_says_so(tmp_path):
+    """`--production` 才是换目标的那一句，而且自报行必须点出**读的是哪一份**。
+
+    为什么单独钉这条（第 48 轮 A-9 / 任务 #51）：`audit_verdict_evidence.py` 以前只能钉在
+    本地镜像上 ⇒ `AGENTS.md` 里"生产 ⚠ 419 条 / 区间 33.68%~73.32%"那一行在仓库里**没有
+    任何可跑命令**（是手写 SQL 复算的）。现在它能读线上了，就得同时钉住两件事：
+    ① 没旗子时 `DATABASE_URL` 在场也不算"人说过要连"（那是第 41 轮这条门的原罪）；
+    ② 有旗子时 argv 必须真的递到门口 —— 递到了才会撞上"线上得是 PostgreSQL"这一句
+    （这里给的是 sqlite 副本，所以**正确结局就是拒跑**：拿一份 sqlite 自称"生产"正是
+    第 46 轮那条"`--production` 要问是不是那台"要拦的事）。门自己拒得对，脚本自己不许代收。
+    两份都是临时目录里的真 sqlite 文件（"只读"于是是引擎的事实，不是我的正则）。
+    """
+    from sqlalchemy import create_engine as _ce
+    from src.models.database import Base as _Base
+    script = str(ROOT / 'scripts' / 'audit_verdict_evidence.py')
+    mirror = tmp_path / 'mirror_copy.db'
+    prod = tmp_path / 'prod_copy.db'
+    for p in (mirror, prod):
+        eng = _ce('sqlite:///' + p.as_posix())
+        _Base.metadata.create_all(eng)
+        eng.dispose()
+
+    def run(extra, local_db=None):
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        # 要读线上时**不能**再留 `LOCAL_DB_URL`：门已经先认了镜像副本，再要线上会被
+        # 那条"先定镜像后又要求 --production 必须说破"的规矩拒掉（那是另一条判据在管）。
+        env['LOCAL_DB_URL'] = str(local_db) if local_db else ''
+        env['DATABASE_URL'] = 'sqlite:///' + prod.as_posix()
+        return subprocess.run([sys.executable, script] + extra, cwd=str(ROOT), env=env,
+                              capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=300)
+
+    quiet = run([], local_db=mirror)
+    assert quiet.returncode == 0, quiet.stderr[-400:]
+    first = (quiet.stdout or '').splitlines()[:1]
+    assert first and 'mirror_copy.db' in first[0], '默认那一行没点名它读的镜像副本：%s' % first
+    assert 'prod_copy.db' not in quiet.stdout, \
+        '`DATABASE_URL` 在场就把另一份副本读了 ⇒ 那道旗子等于没接线'
+
+    loud = run(['--production'])
+    assert loud.returncode == 4, (
+        '给了 `--production` 却没走到那道"线上必须是 PostgreSQL"的检查 ⇒ '
+        'argv 根本没递给门（rc=%s，stdout=%s）' % (loud.returncode, (loud.stdout or '')[-300:]))
+    assert 'PostgreSQL' in (loud.stdout or ''), \
+        '退 4 了但说的不是那件事 ⇒ 这条判据在替别的错误作保：%s' % (loud.stdout or '')[-300:]
 
 
 def _hardcoded_report_dates(src):

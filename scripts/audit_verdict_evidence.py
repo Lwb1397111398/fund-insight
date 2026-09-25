@@ -17,9 +17,17 @@ fund_code"归责出"挂错标的 97 条"，其中 95 条的末次验证其实发
 这个仓库已经为"两份清单"付过四次账。
 
 用法：
-    python scripts/audit_verdict_evidence.py                 # 分桶计数 + 每桶样例
+    python scripts/audit_verdict_evidence.py                 # 分桶计数 + 每桶样例（本地镜像）
     python scripts/audit_verdict_evidence.py --json out.json
     python scripts/audit_verdict_evidence.py --max-stale 0   # 退码 3 的阈值（默认 0）
+    python scripts/audit_verdict_evidence.py --production    # 读**线上**（只读门，见下）
+
+**为什么有 `--production` 这一支**（第 48 轮 A-9 / B-8 与任务 #51 同一条账）：这份体检以前
+只能钉在本地镜像上跑 ⇒ `AGENTS.md` 里"生产 ⚠ 419 条 / 区间 33.68%~73.32%"那一行**在仓库里
+没有任何可跑命令**（是 09-22 手写 SQL 复算出来的），也就是说老板页面上那行灰字我一直没法独立复核。
+现在它走 `_db_guard.read_only_connect()` 那把门：默认镜像、要读线上必须**显式写 `--production`**、
+两条路都是引擎级只读 + 真试一次写（探针不通就 abort），第一行自报连的是哪一台（口令不出现）。
+
 本脚本**一行都不写**。三种处置（撤掉重验 / 只标"证据已失效" / 删除）里
 删除会永久失去"当初为什么这么判"的审计链，已排除；老板同意"标注 + 能复现的重验"。
 """
@@ -34,7 +42,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
-from _db_guard import pin_local_sqlite  # noqa: E402
+from _db_guard import read_only_connect    # noqa: E402
 
 
 def _as_of():
@@ -124,16 +132,12 @@ def main():
     ap.add_argument('--json', help='把逐行明细写成 JSON')
     ap.add_argument('--max-stale', type=int, default=0,
                     help='允许多少条"证据已失效"的结论；超过就退码 3（默认 0）')
+    ap.add_argument('--production', action='store_true',
+                    help='读线上生产库（引擎级只读 + 写探针，探针不通就 abort）；不设则读本地镜像')
     args = ap.parse_args()
 
-    pin_local_sqlite(use_mirror_default=True)                       # 必须在任何 ORM import 之前
-    from datetime import date
-    from src.models.database import SessionLocal
-
-    db = SessionLocal()
+    engine, db, _label = read_only_connect()        # 必须在任何 ORM import 之前定库（第 41 轮 B-MAJOR-2）
     try:
-        from src.services.verdict_evidence import database_label
-        print('[库] %s' % database_label(db))
         judged, buckets, samples, detail = audit(db)
         bad = sum(buckets.values())
         print('[体检] 已判结论 %d 条；端点证据与**当前标的**对不上 %d 条（%.1f%%）'

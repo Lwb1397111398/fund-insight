@@ -204,6 +204,20 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   未删预测 1616、已判 1057（判对 591）、到期未判 **149**，末次验证 09-13 15:23，而
   `GET /api/predictions/verify-all/status` 仍停在 `total 83 / processed 65 / success 62`
   ⇒ 那一次批量验证**中途断了没人接手**（净值停在 09-13 的原因老板已答过：一直是手点，见上面那条）。
+- **第一次真尝试上线（21:44 推 ⇒ 22:0x 部署）失败了，而且日志第一句本来就会骗人**：
+  应用在**导入阶段**就死在 `src/models/database.py`，印的是
+  `RuntimeError: DATABASE_URL is PostgreSQL, but psycopg2 is not installed; refusing to fall back to SQLite.`
+  —— 那个 `try` 当时把 `create_engine(...)` 与 `logger.info(...)` 一起圈了进去 ⇒ 深处任何
+  `ImportError` 都会被这句话顶包（已收窄，并把原始异常 / `sys.version` / `sys.platform` 写进那句话，
+  判据 `test_a_broken_postgres_driver_says_what_is_actually_broken` 拿"存在但一导入就抛"的假驱动喂它）。
+  **另一件必须先知道的事**：`render.yaml` 钉的是 `PYTHON_VERSION: "3.10.12"`，而 Render 实际在跑
+  **Python 3.14.3**（证据就在 traceback 的路径里：`.venv/lib/python3.14/site-packages`、
+  `Python-3.14.3/lib/python3.14/importlib`）⇒ **那份 Blueprint 的版本钉对现有服务没生效**（仪表板设置盖过它），
+  而本机的 1082 条用例全跑在 **3.12** 上 ⇒ 上线前先把解释器对齐到 3.12，否则连失败原因都拿不到第二手证据。
+  这次失败**没有动到生产数据**：应用没起来，跑的仍是 8 月 6 日那一版（页面 md5 未变）。
+- **只读门现在能读线上了**（任务 #51）：`python scripts/audit_verdict_evidence.py --production`
+  ⇒ 引擎级只读 + 真试一次写，第一行自报哪一台；2026-09-25 21:5x 首次实跑印
+  `已判 1057 / 判对 591 = 55.91%`、`⚠ 419（39.6%）`、`区间 33.68% ~ 73.32%`（与 09-22 手算逐字对上）。
 - Render Web Service：`uvicorn src.api.main:app --host 0.0.0.0 --port $PORT`。
 - Render Cron：每天 10:30 运行 `python scripts/run_scheduled_tasks.py daily`。
 - Supabase/PostgreSQL：通过 `DATABASE_URL` 连接；连接池参数见 `render.yaml` 和 `src/models/database.py`。
@@ -230,12 +244,18 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-25 21:1x（北京），第 48 轮返修（A 70 / B 76，取低分 70）之后，
+最近一次核对（2026-09-25 22:2x（北京），第 48 轮返修之后的**产品批**（#51 结掉 + 部署失败后的一处报错改正）之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1072 passed / 16 skipped / 0 failed**（686.63 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1081 passed / 16 skipped / 0 failed**（569.28 秒）。
+- `pytest tests/unit -q` → **1073 passed / 16 skipped / 0 failed**（736.11 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1082 passed / 16 skipped / 0 failed**（598.94 秒）。
+  （上一基线 1072/1081 → 本批 1073/1082：+1 条 —— `test_database_url_routing.py` 的
+  "驱动坏了要说出坏在哪"（见下面 `S6-上线前检查单.md` §0 那次部署失败那一条）。
+  同批还做了两件不增条数的事：① `scripts/audit_verdict_evidence.py` 改走只读门并加 `--production`
+  ⇒ 任务 #51 结掉，生产那行"⚠ 419 / 区间 33.68%~73.32%"从此有了可跑命令（实跑与 09-22 手算逐字对上）；
+  ② `src/models/database.py` 那个把 `create_engine` 一起圈进去的 `try` 收窄，
+  报错从此带**原始异常 + 解释器版本 + 平台**，不再用一句"psycopg2 is not installed"替深处的问题顶包。）
   （**老板这一轮破了一次例**：门禁仍是"两份取低分 ≥80"，本轮实际 70 未达，但线上构建被量出来
   落后 113 个提交（详见下面"生产库结构现状"那条）⇒ 他选"破例上线一次（推荐）"，
   并选"改标那 345 条先出清单再点"。**除这一次上线授权外，其余纪律一律不动**：
@@ -865,9 +885,20 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   上面那句"镜像 10600 行"是 09-22 的状态，别再拿来当今天的尺子。
   复现：`python scripts/q.py --production "select max(nav_date), count(*) from fund_history"`
   与 `python scripts/q.py "select count(*) from fund_history"`。
-  **另外一条今天要说白的边界**：`audit_verdict_evidence.py` 钉的是镜像 ⇒ 上面**生产那一行**的
-  ⚠ 419 / 区间 33.68%~73.32% 在仓库里**没有可跑命令**（第 35 轮 B 抓到，已列任务 #51）——
-  在那条命令补上之前，报生产准确率区间只能标"手写 SQL 复算过、非工具产出"。
+  **这条边界今天撤掉了**（第 48 轮 A-9 / B-8 与任务 #51）：`audit_verdict_evidence.py` 以前只能钉镜像，
+  ⇒ 上面**生产那一行**的 ⚠ 419 / 区间 33.68%~73.32% 在仓库里**没有可跑命令**（第 35 轮 B 抓到，
+  一直是手写 SQL 复算的）。现在它改走 `_db_guard.read_only_connect()` 那把门，
+  复现命令：`python scripts/audit_verdict_evidence.py --production`（默认读镜像，要读线上必须显式给这句旗；
+  引擎级只读 + 真试一次写，探针不通就 abort）。**2026-09-25 21:5x 第一次跑它**，结果与 09-22 手算的那行
+  **逐字对上**：`已判 1057 / 判对 591 = 55.91%`、`⚠ 419（39.6%）`、`区间 33.68% ~ 73.32%`
+  ⇒ 那三个数从"我说的"变成"命令印的"。**同时量出两件新事实**：① 419 的构成是
+  `verdict_under_other_fund 220 / nav_row_missing 110 / nav_rewritten 89`（以前生产从没分过桶）；
+  ② **生产体检的覆盖面比镜像差得多** —— 1057 条已判结论里 **713 条（67.5%）**挂的代码在
+  `sector_fund_mapping` 里根本没有行 ⇒ 身份体检对它们没有意见（镜像那比例是 430/1110＝38.7%）。
+  这条不是"门漏了"，是**生产映射只有 118 行而结论来自 20+ 批不同代码**，所以回写之前生产的 ⚠ 只会越查越多。
+  判据：`tests/unit/test_read_only_door.py::test_the_verdict_audit_switches_target_only_when_the_flag_says_so`
+  （两件事一起钉：没旗子时 `DATABASE_URL` 在场也不算数；递了旗子必须真的撞到"线上得是 PostgreSQL"那一句 ——
+  拿一份 sqlite 自称"生产"正是第 46 轮要拦的事）。
   **准确率只能当区间报，而且区间要现算**：`python scripts/audit_verdict_evidence.py` 最后一行
   打印 `已判 1110 条 / 判对 573 条 = 51.62%`，以及把 197 条（17.7%）证据失效结论按
   "全判错/全判对"两个极端折算出的 **43.96% ~ 61.71%**（第 18 轮 MAJOR-3：我此前手算报出去

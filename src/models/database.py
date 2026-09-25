@@ -52,29 +52,35 @@ def _create_sqlite_engine(database_url: str):
 
 if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
     # PostgreSQL 数据库
+    # 这个 try 以前把 `create_engine(...)` 和 `logger.info(...)` 一起圈了进去 ⇒ 任何更深处
+    # 抛出的 ImportError 都会被报成"psycopg2 没装"。2026-09-25 那次部署失败就是这句话在替
+    # 真故障打掩护：Render 日志第一句被截断之后，剩下这句话把人往"依赖没装"上带。
+    # 现在只把"驱动能不能导入"这一件事交给它，并且把**真实原因与解释器版本**一起印出来。
     try:
-        import psycopg2  # 检查驱动是否可用
-        pool_settings = _get_postgres_pool_settings()
-        engine = create_engine(
-            DATABASE_URL,
-            echo=False,
-            **pool_settings,
-            pool_pre_ping=True,
-            pool_use_lifo=True,
-            connect_args={
-                "keepalives": 1,
-                "keepalives_idle": 30,
-                "keepalives_interval": 10,
-                "keepalives_count": 5,
-                "sslmode": "require",
-            },
-        )
-        DB_TYPE = "postgresql"
-        logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: {pool_settings['pool_size']}+{pool_settings['max_overflow']}）")
+        import psycopg2  # noqa: F401  只检查驱动是否可用
     except ImportError as exc:
         raise RuntimeError(
-            "DATABASE_URL is PostgreSQL, but psycopg2 is not installed; refusing to fall back to SQLite."
+            "DATABASE_URL is PostgreSQL, but importing psycopg2 failed: %s: %s "
+            "(python %s, %s); refusing to fall back to SQLite."
+            % (type(exc).__name__, exc, sys.version.split()[0], sys.platform)
         ) from exc
+    pool_settings = _get_postgres_pool_settings()
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        **pool_settings,
+        pool_pre_ping=True,
+        pool_use_lifo=True,
+        connect_args={
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+            "sslmode": "require",
+        },
+    )
+    DB_TYPE = "postgresql"
+    logger.info(f"[数据库] 使用 PostgreSQL 引擎（连接池: {pool_settings['pool_size']}+{pool_settings['max_overflow']}）")
 elif DATABASE_URL and DATABASE_URL.startswith("sqlite"):
     # 测试、恢复验收和本地隔离环境必须尊重显式 SQLite 连接串。
     engine = _create_sqlite_engine(DATABASE_URL)

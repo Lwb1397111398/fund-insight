@@ -117,3 +117,49 @@ raise SystemExit(1)
 
     assert result.returncode == 0
     assert "DATABASE_URL" in result.stdout
+
+
+def test_a_broken_postgres_driver_says_what_is_actually_broken(tmp_path):
+    """驱动"装了但一导入就抛"时，那句话必须把**真实原因与解释器版本**印出来。
+
+    起因（2026-09-25 的部署失败）：Render 上应用一起来就死在 `src/models/database.py`，
+    而它报的是 "psycopg2 is not installed" —— 同一个 `try` 里还圈着 `create_engine` 与
+    `logger.info`，任何深处抛的 ImportError 都由这句话顶包。日志被截断之后，这句谎话
+    会把人整整一源地往"依赖没装"上带。现在只让 `import psycopg2` 待在那个 try 里，
+    并且把原始异常与 `sys.version` 一起写进那句话。
+
+    样品是一个**存在、但一导入就抛 ImportError** 的假 `psycopg2`（Windows 上也能造，
+    不必真的把驱动卸掉）：撤掉"报真实原因"这半句，这条立刻红。
+    """
+    fake = tmp_path / "fakepkgs"
+    fake.mkdir()
+    (fake / "psycopg2.py").write_text(
+        'raise ImportError("libpq.so.5: cannot open shared object file: No such file or directory")\n',
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["DATABASE_URL"] = "postgresql://u:p@db.invalid/proddb"
+    env["PYTHONPATH"] = os.pathsep.join([str(fake), os.getcwd()])
+    code = """
+try:
+    import src.models.database as m
+    print("NO-RAISE DB_TYPE=%s" % m.DB_TYPE)
+except RuntimeError as exc:
+    print("RAISED::%s" % exc)
+    print("CAUSE::%r" % (exc.__cause__,))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=os.getcwd(),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    out = result.stdout + result.stderr
+    assert "RAISED::" in out, "没走到那句报错：%s" % out[-500:]
+    assert "libpq.so.5" in out, "报错没带上真实原因（深处抛的 ImportError 又被顶包了）：%s" % out[-500:]
+    assert "python %s" % sys.version.split()[0] in out, "报错没带解释器版本：%s" % out[-400:]
+    assert "psycopg2 is not installed" not in out, "那句会把人往错方向带的旧话又回来了：%s" % out[-400:]
