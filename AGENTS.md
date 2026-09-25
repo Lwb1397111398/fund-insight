@@ -215,6 +215,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `Python-3.14.3/lib/python3.14/importlib`）⇒ **那份 Blueprint 的版本钉对现有服务没生效**（仪表板设置盖过它），
   而本机的 1082 条用例全跑在 **3.12** 上 ⇒ 上线前先把解释器对齐到 3.12，否则连失败原因都拿不到第二手证据。
   这次失败**没有动到生产数据**：应用没起来，跑的仍是 8 月 6 日那一版（页面 md5 未变）。
+  **根因在第二次部署（钉到 3.12.10 之后）自己浮出来了**：`ModuleNotFoundError: No module named 'psycopg'`
+  —— 不是 psycopg2 没装，是 **`postgresql://` 这种不带 `+driver` 的连接串用哪个驱动，是 SQLAlchemy 的
+  默认值**：2.0.x 默认 psycopg2，2.1 起默认改成 psycopg(v3)，而 `requirements.txt` 里只有
+  `psycopg2-binary`、且写的是 `sqlalchemy>=2.0.0`（没上界）⇒ 构建时解析到 2.1 就直接起不来。
+  **两处一起修**：`src/models/database.py` 把驱动名钉死（`postgresql+psycopg2`，判据看的是
+  "交给 `create_engine` 的那个 URL"，不是"方言用的是谁"——后者在 2.0.48 上结构性看不见这个缺陷）；
+  `requirements.txt` 给 sqlalchemy 加上界 `<2.1.0`，与本机测过的 2.0.48 对齐。
+  另立一条规矩：**`.python-version` 已经在仓库里钉住 3.12.10**（Render 构建读它；仪表板里的
+  `PYTHON_VERSION` 优先级更高，所以那个值要么别填、要么同样填 3.12.10 —— 2026-09-25 第一次失败时
+  Render 实际在跑 3.14.3，而 `render.yaml` 里钉的 3.10.12 对现有服务根本没生效）。
 - **只读门现在能读线上了**（任务 #51）：`python scripts/audit_verdict_evidence.py --production`
   ⇒ 引擎级只读 + 真试一次写，第一行自报哪一台；2026-09-25 21:5x 首次实跑印
   `已判 1057 / 判对 591 = 55.91%`、`⚠ 419（39.6%）`、`区间 33.68% ~ 73.32%`（与 09-22 手算逐字对上）。

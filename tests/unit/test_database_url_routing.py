@@ -163,3 +163,56 @@ except RuntimeError as exc:
     assert "libpq.so.5" in out, "报错没带上真实原因（深处抛的 ImportError 又被顶包了）：%s" % out[-500:]
     assert "python %s" % sys.version.split()[0] in out, "报错没带解释器版本：%s" % out[-400:]
     assert "psycopg2 is not installed" not in out, "那句会把人往错方向带的旧话又回来了：%s" % out[-400:]
+
+
+def test_a_plain_postgres_url_names_its_driver_instead_of_trusting_the_default(tmp_path):
+    """`postgresql://`（没写 `+driver`）必须被钉成 `postgresql+psycopg2`，不交给 SQLAlchemy 的默认值。
+
+    起因（2026-09-25 第二次部署失败）：默认值会随版本翻 —— 2.0.x 默认 psycopg2，2.1 起默认
+    改成 psycopg(v3)，而 requirements 里只有 `psycopg2-binary` ⇒ 线上应用一起来就
+    `ModuleNotFoundError: No module named 'psycopg'`（`create_engine` 阶段，连都没连）。
+    判据钉的是**交给 create_engine 的那个 URL**，不是"能不能连上"：删掉那两行 `url.set(...)`，
+    `engine.url.drivername` 立刻退回 `postgresql` ⇒ 这条红（在当前 2.0.48 上默认值也是
+    psycopg2，所以只判"方言用的是谁"会结构性看不见这个缺陷）。
+    """
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["DATABASE_URL"] = "postgresql://u:p@db.invalid/proddb"
+    code = """
+import src.models.database as m
+print("URL=%s" % m.engine.url.drivername)
+print("DIALECT=%s" % m.engine.dialect.driver)
+print("TYPE=%s" % m.DB_TYPE)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=os.getcwd(),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    out = result.stdout + result.stderr
+    assert "URL=postgresql+psycopg2" in out, "驱动名没被钉住，交给默认值了：%s" % out[-400:]
+    assert "DIALECT=psycopg2" in out, "方言不是 psycopg2：%s" % out[-400:]
+    assert "TYPE=postgresql" in out, "DB_TYPE 没说清是 pg：%s" % out[-400:]
+
+
+def test_requirements_keep_the_engine_version_that_matches_the_tests():
+    """`sqlalchemy` 必须有上界：没上界 ⇒ 构建时解析到哪一版，"用哪个驱动"就跟着变。
+
+    这条不是形式主义：本机 1082 条用例跑的是 2.0.48，而 2026-09-25 那次部署装到的那一版
+    把 `postgresql://` 的默认驱动换成了 psycopg(v3) —— 应用没起来。写死驱动（上一条）之外，
+    版本也得钉住，否则下一次"默默漂移"还是会从构建那天开始。
+    """
+    import re
+    req = os.path.join(os.getcwd(), "requirements.txt")
+    with open(req, encoding="utf-8") as handle:
+        lines = [ln.strip() for ln in handle if ln.strip() and not ln.strip().startswith("#")]
+    sa = [ln for ln in lines if re.match(r"^sqlalchemy(\b|[^A-Za-z])", ln, re.I)]
+    assert sa, "requirements.txt 里没有 sqlalchemy 这一行（那更该问：引擎从哪来的）"
+    assert any("<" in ln for ln in sa), \
+        "sqlalchemy 没有上界（%s）⇒ 构建时解析到哪一版没人知道，驱动的默认值就会跟着变" % sa
+    assert any("psycopg2" in ln.lower() for ln in lines), \
+        "钉了 psycopg2 却要把 psycopg2 从依赖里删掉的话，得同时改 src/models/database.py 那两行"

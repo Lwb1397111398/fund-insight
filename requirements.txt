@@ -5,7 +5,12 @@ a2wsgi>=1.10.0  # ASGI转WSGI，用于PythonAnywhere部署
 python-multipart>=0.0.10  # FastAPI文件上传依赖
 
 # Database
-sqlalchemy>=2.0.0
+# SQLAlchemy 必须有上界：`postgresql://` 这种"没写 +driver"的连接串用哪个驱动，
+# 是 SQLAlchemy 的**默认值**——2.0.x 默认 psycopg2（本仓装的），2.1 起默认改成 psycopg(v3)（没装）。
+# 2026-09-25 那次部署失败就是构建时解析到 2.1：应用一起来就 `ModuleNotFoundError: No module named 'psycopg'`。
+# 本机 1082 条用例跑的是 2.0.48 ⇒ 上界钉到 <2.1，让线上与测过的那一份对齐；
+# `src/models/database.py` 那边同时把驱动名写死，两处不再依赖默认值。
+sqlalchemy>=2.0.0,<2.1.0
 psycopg2-binary>=2.9.0
 alembic>=1.13.0,<2.0.0
 

@@ -2,7 +2,7 @@
 数据库模型 - 增强版
 支持：自动分析、智能基金管理、定时验证、投资建议
 """
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Date, UniqueConstraint, Index, ForeignKey, event, Numeric
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Date, UniqueConstraint, Index, ForeignKey, event, Numeric, make_url
 from sqlalchemy.orm import Session, declarative_base, sessionmaker, relationship
 from datetime import datetime, date
 from pathlib import Path
@@ -65,8 +65,16 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
             % (type(exc).__name__, exc, sys.version.split()[0], sys.platform)
         ) from exc
     pool_settings = _get_postgres_pool_settings()
+    # 连接串里没写 `+driver` 时，"用哪个 psycopg" 是 **SQLAlchemy 的默认值**，而默认值会随版本翻：
+    # 2.0.x 默认 psycopg2（本仓 requirements 里装的那个），2.1 起默认改成 psycopg(v3)
+    # ⇒ 2026-09-25 第二次部署就是死在这上面：`ModuleNotFoundError: No module named 'psycopg'`，
+    # 而它上面那句"psycopg2 is not installed"是上一版 try 圈太宽造出来的假线索。
+    # 驱动不能交给默认值，这里自己钉住（已经是 `postgresql+xxx://` 的原样放过）。
+    url = make_url(DATABASE_URL)
+    if url.drivername == "postgresql":
+        url = url.set(drivername="postgresql+psycopg2")
     engine = create_engine(
-        DATABASE_URL,
+        url,
         echo=False,
         **pool_settings,
         pool_pre_ping=True,
