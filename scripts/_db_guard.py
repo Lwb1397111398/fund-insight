@@ -407,9 +407,12 @@ def machine_name(url):
         # `sqlite:///u:S3cr3tPW@/db` 不是 SQLAlchemy 会自己生成的形状，但 `_db_guard` 吃的是
         # `.env` / `LOCAL_DB_URL` 里的**原始串**（第 46 轮 B-minor-4）——
         # "口令一个字符都不出现在自报行里"这条不变式在 sqlite 这一支以前没兜住。
-        # 只剥 `user:pass@` 这一种形状（要求 '@' 之前有个 `:`），
-        # 免得把 `data@copy.db` 这种合法文件名改错 —— 改错方向也是说谎。
-        body = re.sub(r"^[^/]*:[^/]*@", "", body)
+        # 剥的是"第一个 `@` 之前、且中间确实有 `:`"那一段（第 48 轮 B-3：上一版不许跨过 `/`，
+        # 于是 Windows 的 `sqlite:///E:/u:S3cr3tPW@data/x.db` 整段回显）。
+        # `data/mail@copy.db` 这种"文件名里有 @ 但没有口令形状"的合法路径仍一个字都不许改 ——
+        # 改错方向也是说谎。口令落在路径段（`sqlite:///password=X`）同样剥。
+        body = re.sub(r"(?:^|(?<=[/:]))[^/@]*:[^/@]*@", "", body)
+        body = _redact_secrets(body)
         if body.startswith("//"):
             body = body.lstrip("/")
         if re.match(r"^/[A-Za-z]:[\\/]", body):        # 四斜杠 Windows 绝对：/E:/… → E:/…

@@ -263,7 +263,8 @@ def target_name(url: str) -> str:
         body = body.split('?', 1)[0]
         # 与守卫侧同一条：`user:pass@` 这种形状只有"吃原始串"时才见得到，
         # 而"口令一个字符都不出现"这条不变式不分方言（第 46 轮 B-minor-4）。
-        body = re.sub(r'^[^/]*:[^/]*@', '', body)
+        body = re.sub(r"(?:^|(?<=[/:]))[^/@]*:[^/@]*@", "", body)
+        body = _redact_secrets(body)
         if body.startswith('//'):
             body = body.lstrip('/')
         if re.match(r'^/[A-Za-z]:[\\/]', body):

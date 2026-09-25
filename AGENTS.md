@@ -175,6 +175,29 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   在 `.env` 指向生产时**会被 `alembic/env.py` 当场拒跑**（第 38 轮 B 的 BLOCKER：旧写法把
   `DATABASE_URL` 悄悄顶进 ini，等于给生产发 DDL；要动远程得**同时**给 `ALEMBIC_DATABASE_URL` 与 `ALEMBIC_ALLOW_REMOTE=1`（第 40 轮 B：只给一道旗子、目标还来自 `.env`，等于把那条 BLOCKER 重新打开））。
 
+- **线上到底跑的是哪一版 —— 2026-09-25 20:3x 第一次量出来**（在这之前包括我在内都按"线上＝最近改完的那一版"
+  说话，文档里每一句"页面上看得见"因此都没被送达）：`curl -s https://fund-insight.onrender.com/index.html`
+  的 md5 = `5325f47d5ab67c5f3b1b77d56f5537bc`，与提交 **`a7d2057`（2026-08-06）** 的 `web/index.html`
+  **逐字节相同**，而 `origin/main` 就是 `138ab0a`（2026-08-06 19:44）⇒ 本地领先 **113 个提交**
+  （复核 `git rev-list --count a7d2057..HEAD`）。三条接口面同向：`GET /api/stats/evidence` → **404**、
+  线上映射列表 229 行里**没有** `relevance_state`、`GET /api/health/detail` 的
+  `scheduler_running: false`。
+  **后果一**：目标①②（页面上看得见 ⚠ 条数、只报带库名与截止日的区间）在生产上从没成立过。
+  **后果二**：那两个按钮在线上走的还是**第 18 轮之前**的老改标规则（`git grep -n "retag_prediction" a7d2057 -- src/`
+  为空）。我照那条规则原样写了只读 SQL 量今天的暴露面（全文见 `docs/迭代计划/S6-上线前检查单.md` §0
+  第 48 轮那行）：**会被改标的活预测 345 条，其中 223 条带着已判结论**；而老代码"改标就清结论"那一支
+  今天**一条都不触发** —— 线上 `status` 存的是 `success 591 / pending 559 / failed 466`，老判据要的是
+  `correct/wrong/expired` ⇒ 净效果是 **223 行"标的换了、结论还挂着"、无台账**，正是第 18 轮那族脏数据
+  ⇒ **所以这次没点**。老板 09-25 的决定：破例上线一次，上线后这批**先出清单再点**。
+  **上线不需要新 DDL**：`alembic/versions/` 只有 9 支，head 仍是生产 09-22 已 stamp 的
+  `add_sector_mapping_keywords`，且 `python scripts/sync_db_columns.py --against-production`
+  （不带 `--apply`）回 `[元数据] 模型 27 张表；库里缺 0 张` + `[ok] 列与索引都已存在`
+  ⇒ `render.yaml:11` 的 `run_migrations.py` 启动时是对生产的一次 no-op；库里另有 9 个"模型没声明"的
+  表/对象（`advice_feedback`、`market_data` 等），那个脚本不动它们。
+  **生产净值现状**（2026-09-25 20:2x，只读）：`fund_history` 末条 **2026-09-13** / 9541 行 / 基金 162 只，
+  未删预测 1616、已判 1057（判对 591）、到期未判 **149**，末次验证 09-13 15:23，而
+  `GET /api/predictions/verify-all/status` 仍停在 `total 83 / processed 65 / success 62`
+  ⇒ 那一次批量验证**中途断了没人接手**（净值停在 09-13 的原因老板已答过：一直是手点，见上面那条）。
 - Render Web Service：`uvicorn src.api.main:app --host 0.0.0.0 --port $PORT`。
 - Render Cron：每天 10:30 运行 `python scripts/run_scheduled_tasks.py daily`。
 - Supabase/PostgreSQL：通过 `DATABASE_URL` 连接；连接池参数见 `render.yaml` 和 `src/models/database.py`。
@@ -201,12 +224,52 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-25 18:2x（北京），第 47 轮返修（A 68 / B 80，取低分 68）之后，
+最近一次核对（2026-09-25 21:1x（北京），第 48 轮返修（A 70 / B 76，取低分 70）之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1070 passed / 16 skipped / 0 failed**（453.57 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1079 passed / 16 skipped / 0 failed**（419.45 秒）。
+- `pytest tests/unit -q` → **1072 passed / 16 skipped / 0 failed**（686.63 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1081 passed / 16 skipped / 0 failed**（569.28 秒）。
+  （**老板这一轮破了一次例**：门禁仍是"两份取低分 ≥80"，本轮实际 70 未达，但线上构建被量出来
+  落后 113 个提交（详见下面"生产库结构现状"那条）⇒ 他选"破例上线一次（推荐）"，
+  并选"改标那 345 条先出清单再点"。**除这一次上线授权外，其余纪律一律不动**：
+  生产写入仍是只读预检→dry-run→显式确认→逐行回执。）
+  （上一基线 1070/1079 → 本批 1072/1081：+2 条，都在 `test_sweep_restore_owner_immunity.py`
+  （7 → 9 条，当场 `pytest tests/unit/test_sweep_restore_owner_immunity.py --collect-only -q` 印 9）——
+  一条钉"过期 `created_at` 必须拒还原，且 `[计划]` 那一行必须排在 `[还原]` 之前"，
+  一条钉"免疫授予的棘轮不许把**读**同一列判成授予、绑参数式授予必须在名单里"。
+  本批其余改动（三把棘轮并成一把、sqlite 口令两支、迁移委托样品）都**并在已有用例的样品表里**，
+  不另起条数。）
+  （**本批只修了"会丢数据的 + 会说谎的标签"这一类**，是老板圈定的范围（原话："先修产品，
+  守卫只修会丢数据的（推荐）"）：① `sweep_sector_mappings.py --restore-from` 以前**在 commit 之后**
+  才报"清掉几行净值"（第 48 轮 B-1）—— 现在动手前先印 `[计划]`，并且给 `created_at` 加了一道
+  **合理性边界**：它离清单自身时间戳超过 90 天（或晚于一天以上）就退 4。上一轮修掉的是
+  "我不知道从哪天起 ⇒ 全删"，这一轮修的是"**我猜错了那一天** ⇒ 还是全删"，净值不可再生；
+  ② 写死授予值 / `is_correct` / `fund_code` 三把棘轮的"这句 SQL 在写哪一列"**改共用一把尺子**
+  （新 `scripts/sql_write_policy.py`）—— 上一轮我只在两处接了新尺子、把免疫那把的老正则留下没换，
+  于是它**两个方向都是坏的**（第 48 轮 A-4 / B-2 各自量到）：`SELECT … WHERE owner_locked = true`
+  算 2 条授予（墙），`SET owner_locked = :ok` + 参数字典算 0 条（漏）。现在 SET 子句 /
+  INSERT 列清单才算、`WHERE` 一律不算、绑参数按调用的实参字典求值；③ sqlite 串的口令**不分位置**
+  都要剥（A-6 / B-3）：`sqlite:///E:/u:S3cr3tPW@data/x.db`（口令在带盘符的路径段里）上一版那条
+  正则不许跨过 `/` ⇒ 整段回显，而两把尺子**一致地错**（"逐条相等"那条判据对它结构性失明）。
+  ④ 撤一句我上一轮写在下面的**谎话**（两席同条点到，我今天自己也复现了一次）：
+  "pytest 与 pytest 不互斥（那把锁只挡体检）"**是错的** —— 套件里 `test_mutation_lock.py` 有一条
+  要抢**机器全局**的体检锁，第二个真会话会让它响。今天实测：我为了复现一条失败用例并发跑了
+  1 条单测，同一时刻后台那次 `pytest tests/ -q` 就红了 `test_a_second_session_under_the_default_locale_still_runs`
+  ⇒ 规矩从"数会漂"升级成"**跑基线期间不许再起第二个 pytest 会话**"。
+  ⑤ 一条我自己的卫生账（这次由闸替我盯住）：新模块 `scripts/sql_write_policy.py` 我建了却**没
+  `git add`** ⇒ `test_the_scanned_set_is_the_repository_s_not_this_disk_s` 当场红 ——
+  那条"受检集合由 `git ls-files` 定义"的用例存在的意义正是"你造了个真模块，它不在受检集合里"。）
+  （**本轮按老板的决定没修的，全部记在这儿**，别当成已封：A 席 A-1（helper 返回一句写死的
+  `[目标]` 仍买到自报）、A-2（方向不明只在**字面下标 key** 时才算）、A-3（`importlib.import_module("sqlite3")`
+  再 `connect` 仍不算 DB-API 能力）、A-5（迁移里 `from . import helpers; helpers.wipe()` 仍报干净，
+  而 `run_migrations.py` 每次 Render 启动先问它）、A-8/B-5（能力类别与样品的对应仍没有断言）、
+  B-4（`sqlite+aiosqlite:///data/fund_insight.db` 自报成 `/data/fund_insight.db` ⇒ **真镜像被说成
+  "不是镜像库"**，复核：`PYTHONIOENCODING=utf-8 python -c "import sys; sys.path.insert(0,'scripts');
+  import _db_guard as g; print(g.machine_name('sqlite+aiosqlite:///data/fund_insight.db'))"`）、
+  B-6（`q.py` 的 sqlite 腿仍只有 `mode=ro`，没 `PRAGMA query_only`）、B-7（`audit_doc_claims`
+  当场只判 3 条账）。转去做产品那一半：#51 生产区间没有可跑命令、#58 三个列表取数点没铺
+  `withWakeRetry`、生产净值落后的监控与页面可见（第 48 轮 A-9 / B-8 同条：净值停在 2026-09-13）。）
   （上一基线 1067/1076 → 本批 1070/1079：+3 条 —— `test_script_db_guards.py` 的
   "整趟散落连接扫描跑不完就不许钉库"（第 47 轮 B-4 那一支以前 0 覆盖）、
   `test_mutation_lock.py` 的"默认 locale 下第二个会话不许崩"（A4）、
@@ -215,7 +278,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   类方法/改名/跨模块 helper 里的删除、裸 SQL 授予换位置）都**并在那几条已有用例的样品表里**，
   不另起条数。）
   （**串行跑**是第 46 轮加的规矩：A 席并发时段读到过 1064 而干净复跑是 1063 ——
-  pytest 与 pytest **不互斥**（那把锁只挡体检），第二个会话抢不到锁时现在会印一行
+  pytest 与 pytest **不互斥**（那把锁只挡体检；**第 48 轮已证伪，见上面第 ④ 条**），
+  第二个会话抢不到锁时现在会印一行
   `[警告] 已经有一个 pytest 会话握着 …` ⇒ "跑不动"与"跑不绿"从此分得开。
   上一基线 1054/1063 → 本批 1067/1076：+13 条，分布在 `test_script_db_guards.py` +5
   （危险语句**换个位置/换个深度**仍要被点名（赋值、`if`、推导式、`with`、嵌套 `def`、

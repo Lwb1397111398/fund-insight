@@ -11,6 +11,7 @@
 2. **改标必须同时清掉旧结论并留痕** —— 这是防复发的正解，光清理存量数据只是打地鼠；
 3. 列表接口把状态带出去（前端的 ⚠ 标记读它）。
 """
+import os
 from datetime import date
 
 from src.models.database import (
@@ -389,38 +390,20 @@ def test_export_snapshot_carries_the_badge_too(test_db):
     assert row['evidence_status'] == 'nav_rewritten'
     assert exported['predictions_evidence']['stale_evidence'] == 1
 
-def _raw_sql_write_hits(node, column):
-    """`db.execute(text("UPDATE predictions SET is_correct = true"))` —— 列名和写动作都在串里。
+def _raw_sql_write_hits(node, column, sql_vars=None):
+    """委托给 `scripts/sql_write_policy.py` —— 三处棘轮共用**一份**判据（第 48 轮 B-2）。
 
-    第 47 轮 B-3：`is_correct` 与 `fund_code` 那两条"只有一个入口"的棘轮**没有这一腿**，
-    而本仓真的这么写 SQL（`src/api/main.py:463` 接返回值、`:556` 把语句拼进变量）。
-    于是绕开 `PredictionVerifyService` 不需要发明新写法，只要走裸 SQL。
-
-    两头都要有牙：
-      * 只认 **SET 子句 / INSERT 列清单**里的那一列 —— `UPDATE … SET status = 1 WHERE is_correct = true`
-        是**读**这一列来定位行，判成"写"就是把闸门建成墙（与 `_bulk_write_hits` 那条过宽对照同一课）；
-      * 语句里连 `UPDATE/INSERT/DELETE` 都没有 ⇒ 不认（`SELECT … WHERE is_correct = true` 是查询）。
+    上一轮我在这一处写了一份、在授予那一处留了另一份，两份一好一坏：好的那份知道
+    "只看 SET 子句"，坏的那份不知道 ⇒ 同一句话在一边是三处授予、在另一边一处都不算。
+    "判据只许有一份实现"这条规矩在 `migration_policy` 上立过，这里当时没照做。
     """
-    import ast
-    import re
-    verb = re.compile(r'\b(update|insert|delete)\b', re.I)
-    assign = re.compile(r'\b%s\b\s*=' % re.escape(column), re.I)
-    in_list = re.compile(r'insert\s+into\s+[\w."]+\s*\([^)]*\b%s\b' % re.escape(column), re.I)
-    for c in ast.walk(node):
-        if not (isinstance(c, ast.Constant) and isinstance(c.value, str)):
-            continue
-        text, low = c.value, c.value.lower()
-        if not verb.search(text):
-            continue
-        at = low.find(' set ')
-        if at >= 0:
-            tail = low.find(' where ', at)
-            segment = text[at + 5:] if tail < 0 else text[at + 5:tail]
-            if assign.search(segment):
-                return True
-        elif in_list.search(text):
-            return True
-    return False
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), 'scripts'))
+    import sql_write_policy as sp
+    return sp.writes_column(node, column, extra_texts=(sql_vars or {}).get(
+        getattr(node.func, 'id', '') or '', ()))
+
 
 
 def _shape_hits(src, column):

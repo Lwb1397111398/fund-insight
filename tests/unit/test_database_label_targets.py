@@ -84,6 +84,13 @@ def _all_samples():
         out.append('postgres:///%s' % q.replace('=', '='))
     out.append('host=aws-0-x.pooler.supabase.co port=5432 dbname=postgres user=u password=S3cr3tPW')
     out.append('sqlite:///u:S3cr3tPW@/tmp/x.db')            # sqlite 这一支的口令（B-minor-4）
+    # 第 48 轮 B-3 / A-6：盘符路径与"口令落在路径段"这两种，上一版的剥 userinfo 正则
+    # 不许跨过 `/` ⇒ `sqlite:///E:/u:pw@data/x.db` 整段回显；而**两把尺子一致地错**，
+    # 这条"逐条相等"的判据永远看不见（第 46 轮就写过这条教训）。样品进池子才算数。
+    out.append('sqlite:///E:/u:S3cr3tPW@data/x.db')
+    out.append('sqlite:////E:/u:S3cr3tPW@data/x.db')
+    out.append('sqlite:///password=S3cr3tPW')
+    out.append('sqlite:////password=S3cr3tPW/x.db')
     return sorted(set(out))
 
 

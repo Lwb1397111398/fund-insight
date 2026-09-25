@@ -18,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 from src.models.database import Blogger, FundInfo, Post, Prediction, SectorFundMapping
+import sys                                     # noqa: E402  下面要把 scripts/ 放进路径
+sys.path.insert(0, str(ROOT / 'scripts'))
+import sql_write_policy as _sql_write          # noqa: E402  三处棘轮共用的一份判据
 from src.services.prediction_verify_service import PredictionVerifyService
 from src.services.sector_fund_service import SectorFundService
 
@@ -643,8 +646,8 @@ def _grants_immunity(root):
                         param_defaults.add(kw.arg)
         # 裸 SQL 的授予：`UPDATE sector_fund_mapping SET owner_locked = true`
         # 列名与值都在一条字符串里，AST 的"赋值/字典/关键字参数"三条都看不见（B-M10 第 6 条）
-        _RAW_SQL_GRANT = re.compile(
-            r"(owner_locked\s*=\s*(?:true|1|'1'|\"1\"))|(reviewed_by\s*=\s*'owner')", re.I)
+        # 判据搬走了：`scripts/sql_write_policy.py`（三处棘轮共用一份）
+        sql_vars = _sql_write.resolve_assigned_sql(tree)
 
         def _literal_grant(field, node, nested=False):
             """这个表达式里有没有**看得见**的授予值（常量 / 三目的某一臂 / 模块常量）。
@@ -720,16 +723,21 @@ def _grants_immunity(root):
                             and _literal_grant(key.value, value):
                         _hit(node.lineno)
             elif isinstance(node, ast.Call):
-                # 裸 SQL 的授予（列名和值都在一条字符串里，赋值/字典/关键字参数三条都看不见）。
-                # 第 47 轮 A5：以前这条腿挂在 `ast.Expr` 上 —— 也就是**只有"这一句整条就是
-                # 一次调用"才算**。于是 `n = db.execute(text("UPDATE … owner_locked = true"))`、
-                # `if db.execute(...).rowcount:`、列表推导里的那一条全部隐身，
-                # 而同一轮我在 `migration_policy` 里刚把另一台扫描器从"必须是一整句"改成
-                # "看所有调用"（⑤′）。同一个缺陷类在同一个提交里留了第二现场。
-                strs = [c.value for c in ast.walk(node) if isinstance(c, ast.Constant)
-                        and isinstance(c.value, str)]
-                if any(_RAW_SQL_GRANT.search(s or '') for s in strs):
+                # 裸 SQL 的授予：**用那份共用判据**（第 48 轮 A-4：上一轮我给 `is_correct`
+                # 写的那份知道"只看 SET 子句"，这条棘轮自己那份不知道 ⇒
+                # `SELECT … WHERE owner_locked = true` 被算成三处授予（把墙建起来），
+                # 而 `SET reviewed_by = :who, owner_locked = :ok` + 参数字典一处都不算
+                # （新来源全绿））。一头过宽、一头过窄，同源同修。
+                granted, unclear = _sql_write.classify_sql(
+                    node, _sql_write.IMMUNITY_COLUMNS,
+                    extra_texts=_sql_write.variable_sqls(node, sql_vars))
+                for col in sorted(granted):
                     _hit(node.lineno)
+                if unclear:
+                    # 值在变量 / 表达式 / 解不开的绑定参数里 ⇒ 不猜"没事"也不硬算授予，
+                    # 交给下面那张"必须写依据"的登记表
+                    if mentions_immunity:
+                        opaque.add((rel, _enclosing(node.lineno)))
                 fname = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)
                 if fname in ('setattr', '__setattr__') and len(node.args) == 3:
                     field = node.args[1]

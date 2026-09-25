@@ -29,7 +29,7 @@ import shutil
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -1123,7 +1123,23 @@ def restore(db, manifest_path, apply=False, restore_owner_immunity=False):
     # 本来就有的净值一起吞掉（那是不可再生数据，同步任务不会补历史全量）。
     since_raw = (data.get('created_at') or '')[:10]
     since = datetime.strptime(since_raw, '%Y-%m-%d').date() if since_raw else None
+    # "我不知道从哪天起"堵住了，"我猜错了那一天"还没堵（第 48 轮 B-1）：
+    # 清单里 `created_at` 被写成 2020-01-01 ⇒ `nav_date >= 那天` 命中这只基金**全部**历史，
+    # 与上一轮那条 bug 的后果一字不差。下界必须与"这份清单是什么时候写的"自洽：
+    # 清单是当轮生成的，净值下界不会早于文件时间 90 天以上（镜像落后十天是实测常态，
+    # 90 天是按它留三倍余量），也不会晚于它。对不上就一行都不清。
+    if since is not None:
+        try:
+            stamp = datetime.fromtimestamp(os.path.getmtime(manifest_path)).date()
+        except OSError:
+            stamp = None
+        if stamp is not None and (since < stamp - timedelta(days=90) or since > stamp + timedelta(days=1)):
+            print('[abort] 清单写的净值下界是 %s，而这份清单自身的时间戳是 %s ⇒ 两者差得太远，'
+                  '不拿它当"本轮新建"的边界（拿不准就会把不可再生的历史整只删掉）。'
+                  '重新跑一次 sweep 生成清单，或手工核对后改回真实日期。' % (since, stamp))
+            return 4
     codes = list(data.get('created_fund_codes') or [])
+
     refused = len(codes) if (codes and since is None) else 0
     if refused:
         print('[abort] 清单要清 %d 只基金档案，却没有（或截断了）`created_at` ⇒ '
@@ -1139,6 +1155,13 @@ def restore(db, manifest_path, apply=False, restore_owner_immunity=False):
     nav_rows = sum(db.query(FundHistory).filter(FundHistory.fund_code == code,
                                                 FundHistory.nav_date >= since).count()
                    for code in codes) if codes else 0
+    # **写之前**先把"要清掉多少行不可再生的净值"说出口（第 48 轮 B-1）。
+    # 上一轮的修法只堵了"清单里根本没有 created_at"，可"我猜错了那一天"是同一个后果：
+    # `created_at` 被写成 2020-01-01 ⇒ `nav_date >= 那一天` 命中这只基金的全部历史，
+    # 而"6 行"这个数字以前只在 `db.commit()` **之后**才印出来 —— 出事时屏幕上只有事后账。
+    if codes:
+        print('[计划] 将清掉 %d 只新建基金的 %d 行净值（下界 %s）'
+              % (len(codes), nav_rows, since.date() if hasattr(since, 'date') else since))
 
     if not apply:
         print('[dry-run] 未写库。将按 %s 还原 %d 行映射；将清掉 %d 只新建基金的 %d 行净值'

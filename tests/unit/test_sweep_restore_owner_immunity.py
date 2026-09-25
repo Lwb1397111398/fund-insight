@@ -241,3 +241,82 @@ def test_the_apply_gate_is_said_before_the_database_is_touched():
     assert connects, 'main() 里没有建库动作 ⇒ 这条顺序判据是空判'
     assert min(token_check) < min(connects), \
         '确认词检查排在连库之后（%s vs %s）⇒ 用法错也会先连一次库' % (token_check, connects)
+
+
+def test_a_stale_created_at_is_refused_and_the_plan_is_said_before_the_delete(test_db, tmp_path):
+    """第 48 轮 B-1：`created_at` **写成过去的日期**与"没有 `created_at`"是同一个后果。
+
+    上一轮堵的是"看不见下界"，但清单是外部输入：把它写成 `2020-01-01` ⇒
+    `nav_date >= 那天` 命中这只基金**全部**历史（实测副本 6 行删剩 0，其中 4 行是
+    老板本来就有的）。现在下界必须与清单自身的时间戳自洽（不早于 90 天、不晚于 1 天），
+    而且"要清掉几行不可再生的净值"必须印在**动手之前**——以前只有事后那一句。
+    """
+    sweep = _load_sweep()
+    from src.models.database import FundInfo, FundHistory
+    from datetime import date, timedelta
+    row = _mapping(test_db, '煤炭', '515220')
+    test_db.add(FundInfo(fund_code='999003', fund_name='老历史基金'))
+    back = date.today() - timedelta(days=400)
+    for day in range(6):
+        test_db.add(FundHistory(fund_code='999003', nav_date=back + timedelta(days=day), nav=1.0))
+    test_db.commit()
+    path = tmp_path / 'stale.json'
+    import json
+    json.dump({'created_at': '2020-01-01', 'created_fund_codes': ['999003'],
+               'fields': ['fund_code'], 'rows': [{'id': row.id, 'fund_code': '510300'}]},
+              open(str(path), 'w', encoding='utf-8'))
+    out = []
+    with _capture(out):
+        rc = sweep.restore(test_db, str(path), apply=True)
+    joined = ''.join(out)
+    assert rc == 4, '下界与清单时间戳差 6 年却照写照删（退码 %s）：%s' % (rc, joined)
+    assert '[abort]' in joined and '净值下界' in joined, joined
+    test_db.expire_all()
+    assert test_db.query(FundHistory).filter_by(fund_code='999003').count() == 6, \
+        '一份日期写错的清单就把不可再生的 6 行净值清光了'
+    # 同一份清单换成自洽的日期：必须**先报计划再动手**
+    json.dump({'created_at': str(date.today()), 'created_fund_codes': ['999003'],
+               'fields': ['fund_code'], 'rows': [{'id': row.id, 'fund_code': '510300'}]},
+              open(str(path), 'w', encoding='utf-8'))
+    out2 = []
+    with _capture(out2):
+        sweep.restore(test_db, str(path), apply=True)
+    lines = ''.join(out2).splitlines()
+    plan = [i for i, l in enumerate(lines) if l.startswith('[计划]')]
+    done = [i for i, l in enumerate(lines) if l.startswith('[还原]')]
+    assert plan and done and plan[0] < done[0], \
+        '"要清几行"没排在动手之前印出来（操作者读到事后账＝来不及停）：%s' % lines
+
+
+def test_the_immunity_grant_ratchet_rejects_a_read_of_the_same_column(tmp_path):
+    """第 48 轮 A-4：授予那台扫描器以前用**自己那份**正则 ⇒
+    `SELECT … WHERE owner_locked = true` 被算成三处授予（把墙建起来，将来没人信它），
+    而 `SET reviewed_by = :who, owner_locked = :ok` 配参数字典一处都不算（新来源全绿）。
+    现在三处棘轮共用 `scripts/sql_write_policy.py`，两个方向各有样品。
+    """
+    import importlib.util
+    import os
+    import sys
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    spec = importlib.util.spec_from_file_location(
+        'ratchet', os.path.join(root, 'tests', 'unit', 'test_review_ownership_and_matching.py'))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault('ratchet', mod)
+    spec.loader.exec_module(mod)
+    pkg = tmp_path / 'pkg'
+    pkg.mkdir()
+    with open(str(pkg / '_read_only_where.py'), 'w', encoding='utf-8') as fh:
+        fh.write('import sqlalchemy as sa\n\n\ndef stat(db):\n'
+                 '    return db.execute(sa.text("SELECT id FROM sector_fund_mapping '
+                 'WHERE owner_locked = true")).fetchall()\n')
+    with open(str(pkg / '_bind_param_grant.py'), 'w', encoding='utf-8') as fh:
+        fh.write('import sqlalchemy as sa\n\n\ndef grant(db):\n'
+                 '    return db.execute(sa.text("UPDATE sector_fund_mapping '
+                 "SET reviewed_by = :who, owner_locked = :ok\"), "
+                 '{\"who\": \"owner\", \"ok\": True})\n')
+    found, _opaque = mod._grants_immunity(pkg)
+    files = {k[0].split('/')[-1] for k in found}
+    assert '_bind_param_grant.py' in files, \
+        '绑定参数式授予仍然看不见 ⇒ 加一条豁免来源不必登记：%s' % sorted(files)
+    assert '_read_only_where.py' not in files, \
+        '只读的一列定位被算成授予 ⇒ 判据过宽（第 44 轮"闸门建成墙"同一课）：%s' % sorted(files)
