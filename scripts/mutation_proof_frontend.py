@@ -24,6 +24,7 @@
 看到锁被持有就 `pytest.exit`。锁是操作系统管理的，进程被强杀也会自己放开。
 """
 import argparse
+import importlib.util
 import io
 import os
 import re
@@ -35,7 +36,17 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.utils import mutation_lock  # noqa: E402
+# 按**文件路径**加载这把锁，而不是 `from src.utils import mutation_lock`。
+# 后者会执行 `src/__init__.py`（`from src.fund import fund_api, fund_data_manager`），
+# 一路拉起 `src.models.database` ⇒ 在这个"只改写 web/ 文件"的进程里，按 `.env`
+# 建出一个绑生产 Supabase 的全局 engine（第 45 轮 A-M5 把这条链照出来：本仓所有 src 包
+# 的 `__init__.py` 都用相对 import，旧的 import 图看不见）。这个锁是纯标准库，够用。
+_lock_spec = importlib.util.spec_from_file_location(
+    'mutation_lock', ROOT / 'src' / 'utils' / 'mutation_lock.py')
+mutation_lock = importlib.util.module_from_spec(_lock_spec)
+_lock_spec.loader.exec_module(mutation_lock)
+assert 'src.models.database' not in sys.modules, \
+    '加载锁的时候把 ORM 拉起来了 ⇒ 这个进程会按 .env 建 engine，正是要避免的那种事'
 
 HTML = 'web/index.html'
 JS = 'web/prediction-manager.js'

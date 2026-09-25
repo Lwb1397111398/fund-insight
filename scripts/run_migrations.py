@@ -60,7 +60,34 @@ def _report_target() -> str:
         database_label(engine), DB_TYPE)
 
 
+def _migration_gate(strict=True, versions_dir=None, allowlist=None) -> None:
+    """**发 DDL 之前**先核一遍迁移文件本身（第 45 轮 B-M-2 / A-M-8 的最后一环）。
+
+    上一轮我把"upgrade 那一支不许偷偷删结构"写成了 pytest 里的一条判据，而每次真正
+    apply 迁移的是这个脚本（`render.yaml:11` 的 startCommand，Render 每次启动都跑）——
+    它从不跑测试，也就不读那张名单 ⇒ 那句话只在"有人记得跑 pytest"时成立。
+    现在判据搬到 `scripts/migration_policy.py`（**一份实现，两边共用**），这里在连线之前调用它：
+    有未登记的丢数据迁移就退 4，一句 DDL 都不发。`--dry-run` 那一支不连线，所以只报不拦。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from migration_policy import ALLOWLIST, audit
+
+    problems, seen = audit(versions_dir, allowlist)
+    print('[迁移] 已核对 %d 支：其中 %d 处未登记的危险动作' % (seen, len(problems)), flush=True)
+    for line in problems:
+        print('[abort] %s' % line if strict else '[警告] %s' % line, flush=True)
+    if problems and strict:
+        print('[提示] 真要上这一支：把它连同"为什么非丢不可"写进 %s（结构变更要先问老板）'
+              % os.path.relpath(ALLOWLIST, PROJECT_ROOT), flush=True)
+        raise SystemExit(4)
+
+
 def run_migrations() -> None:
+    # 顺序是硬的：**先核对迁移文件，再 import ORM**。`src.models.database` 顶层就
+    # `create_engine(DATABASE_URL)`，而在本仓 `from src.anything import …` 会先执行
+    # `src/__init__.py`（它 import 了 `src.fund`）⇒ 引擎按 `.env`（＝生产）当场焊死。
+    # 所以这道闸必须排在它前面，否则"核对完再决定要不要动手"就成了空话。
+    _migration_gate()
     _prepare_database_url()
     from src.models.database import DB_TYPE, engine
     from src.services.verdict_evidence import database_label
@@ -89,6 +116,7 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(argv)
     if args.dry_run:
+        _migration_gate(strict=False)       # 只报不拦：这一支压根不连线
         _prepare_database_url()
         print(_report_target(), flush=True)
         print('[dry-run] 只报目标，没连线、没发 DDL（要真跑就去掉 --dry-run；'

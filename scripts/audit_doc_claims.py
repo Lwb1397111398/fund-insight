@@ -9,7 +9,9 @@
 **这把尺子管得到什么、管不到什么**（第 42 轮两份评审都追问过"你是不是又在说满话"，写死在这里）：
 - **判红**：`test_x.py` 与"N 条/个/项/种/处"在 12 字内相邻的**当场账**（中文数字也认 ——
   第 41 轮 B-MINOR-4 指出只认 ASCII 的话，"三条钉着""那两条行为判据"这类结构性看不见）。
-- **跳过**：增量账 —— 写作 `+N 条` / `新增 N 条` / `16→23`，或整行是基线流水（含"上一基线""本批"）。
+  扫描单位是**段**不是行（第 45 轮 A-m6）：文件名落在行末、数落在行首的软换行排版，
+  旧写法压根读不到；跨行的间隔只许一处换行且不许跨过句末标点，否则就是把两句拼成一句。
+- **跳过**：增量账 —— 写作 `+N 条` / `新增 N 条` / `16→23`，或整**段**是基线流水（含"上一基线""本批"）。
 - **只报不判**（打出来请人改写成上面两种形状，但不判红）：
   ① 数字在文件名**之前**且隔得远（"当场照出 14 条漏桩用例（`test_x.py` 整个文件…"）——
      这种句子多半在讲历史，硬判就是把对的数改错；
@@ -60,8 +62,13 @@ CN = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七
 # 名字前面必须是"非标识符字符"：`backtest_l1_weighting.py` 里含 `test_l1_weighting.py`，
 # 不加这道边界的话，脚本侧的名字会被当成一条测试文件承诺，然后永远"收集不到"（第 42 轮实测误报）。
 _TEST_NAME = r'(?<![A-Za-z0-9_-])(test_[a-z0-9_]+\.py)'
-CLAIM = re.compile(_TEST_NAME + r'([^0-9\n]{0,12}?)' + NUM + r'\s*(?:条|个|项|种|处)')
-CLAIM_BEFORE = re.compile(NUM + r'\s*(?:条|个|项|种|处)([^。\n]{0,24}?)' + _TEST_NAME)
+# 间隔允许跨过**一处软换行**（第 45 轮 A-m6）：markdown 里"文件名写在一行末尾、
+# `（16 条判据…）`写在下一行开头"是常见排版，逐行扫的旧写法让它压根进不了尺子 ——
+# `docs/模块总览/前端与接口层.md` 那条早就过时的"16 条判据、35 处变异"就是这么躲过去的。
+CLAIM = re.compile(_TEST_NAME + r'([^0-9]{0,12}?)' + NUM + r'\s*(?:条|个|项|种|处)')
+CLAIM_BEFORE = re.compile(NUM + r'\s*(?:条|个|项|种|处)([^。]{0,24}?)' + _TEST_NAME)
+# 顶格的列表/标题/引用/表格行 = 新的一段（兄弟 bullet 各算一段，免得把上一句的数配到下一句的名字上）
+_BLOCK_BREAK = re.compile(r'^[-*#>|]')
 # 数完之后还要看"编号列表自己有几条"：`五条硬规矩：① … ⑥` 这类当场就能自相矛盾
 CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮'
 LIST_CLAIM = re.compile(NUM + r'\s*(?:条|处|个|种|步|项)\s*'
@@ -121,12 +128,69 @@ def _collected_counts():
     return {name: len(ids) for name, ids in counts.items()}
 
 
+def _blocks(lines):
+    """把软换行拼成段：`[(首行行号, [每行在段内的起始偏移], 段文本)]`。
+
+    为什么必须拼段（第 45 轮 A-m6）：旧写法逐行扫，而 markdown 里"文件名落在一行末尾、
+    `（16 条判据…）`写在下一行开头"是常见排版 ⇒ `docs/模块总览/前端与接口层.md`
+    那句早就过时的"16 条判据、35 处变异"就这样躲在尺子的盲区里。
+    断段条件 = 空行，或**顶格**的列表/标题/表格行 —— 兄弟 bullet 各算一段，
+    免得把上一句承诺的数配到下一句的名字上（误报的尺子会逼人把对的数改错）。
+    """
+    out, buf, start = [], [], 1
+    for i, line in enumerate(lines, 1):
+        if not line.strip():
+            if buf:
+                out.append((start, buf))
+                buf = []
+            continue
+        if _BLOCK_BREAK.match(line) or not buf:
+            if buf:
+                out.append((start, buf))
+            buf, start = [line], i
+        else:
+            buf.append(line)
+    if buf:
+        out.append((start, buf))
+    res = []
+    for num, buf in out:
+        offs, acc = [], 0
+        for ln in buf:
+            offs.append(acc)
+            acc += len(ln) + 1
+        res.append((num, offs, '\n'.join(buf)))
+    return res
+
+
+def _wrap_ok(gap):
+    """跨行的间隔只允许**一处换行**，且不许跨过句末标点。
+
+    放开 `\n` 之后新出现的风险是"把上一句的数配到下一句的名字"（样品：
+    "…14 条漏桩用例（`test_far.py` 整个文件的补拉腿）。" 换行 "五条硬规矩：①…" ⇒
+    间隔里带 `。` 又带换行，一眼就是两句）。第 42 轮的教训在这里同样成立：
+    **数错了的尺子比没有尺子更坏**，所以宁可少收，不可误伤。
+    """
+    if gap.count('\n') > 1:
+        return False
+    return not ('\n' in gap and ('。' in gap or '；' in gap))
+
+
+def _locate(offs, pos):
+    """段内偏移 → `(行号偏移, 行内列)`；行号 = 段首行号 + 返回的第一个值。"""
+    idx = len(offs) - 1
+    while idx > 0 and offs[idx] > pos:
+        idx -= 1
+    return idx, pos - offs[idx]
+
+
 def _claims():
-    """返回 `(当场账, 增量账)` 两组承诺。
+    """返回 `(当场账, 增量账, 看得见但不判)` 三组承诺。
 
     两种形状都收：① "`test_x.py` N 条"（名字在前）；② "N 条 …… `test_x.py`"（名字在后，
     中间隔不超过 24 个字）。第 41 轮 B-MINOR-4 抓的就是②加中文数字那一族 —— 只认①的话，
     `AGENTS.md` 里"三条钉着""那两条行为判据"这类当场账结构上看不见。
+    扫描单位是**段**（见 `_blocks`），这样换行排版不再藏得住话；每处命中再换算回
+    `(行号, 行内列)`，`--fix` 才能继续按行改写。
     """
     now, delta, unbound = [], [], []
     for path in _doc_files():
@@ -136,22 +200,38 @@ def _claims():
             rel = str(path)        # 用例会把样品文档放在 tmp 目录里，不许因此炸
         text = path.read_text(encoding='utf-8', errors='replace')
         lines = text.splitlines()
-        for num, line in enumerate(lines, 1):
-            narrative = bool(NARRATIVE_MARK.search(line))
-            for m in CLAIM.finditer(line):
+        for num, offs, para in _blocks(lines):
+            for m in CLAIM.finditer(para):
+                gap = m.group(2)
                 stated = _to_int(m.group(3))
-                if stated is None:
+                if stated is None or not _wrap_ok(gap):
                     continue
-                item = {'file': rel, 'line': num, 'test': m.group(1), 'stated': stated,
-                        'span': (m.start(3), m.end(3)), 'text': line.strip()[:120]}
-                (delta if (narrative or DELTA_MARK.search(m.group(2))) else now).append(item)
-            for m in CLAIM_BEFORE.finditer(line):
+                di, dcol = _locate(offs, m.start(3))
+                line_no = num + di
+                # 基线流水是**整段**的性质，不是数所在那一行的性质（第 45 轮 A-m6：
+                # "上一基线 …→ 本批 …"那段里，名字落在行末、数落在行首，按行判就把历史账
+                # 当成当场账了 —— 硬判等于逼人把对的数改错）
+                narr = bool(NARRATIVE_MARK.search(para))
+                item = {'file': rel, 'line': line_no, 'test': m.group(1), 'stated': stated,
+                        'span': (dcol, dcol + (m.end(3) - m.start(3))),
+                        'text': lines[line_no - 1].strip()[:120]}
+                (delta if (narr or DELTA_MARK.search(gap)) else now).append(item)
+            for m in CLAIM_BEFORE.finditer(para):
                 stated = _to_int(m.group(1))
-                if stated is None or NARRATIVE_MARK.search(line) or DELTA_MARK.search(line):
+                gap = m.group(2)
+                if stated is None or not _wrap_ok(gap):
                     continue
-                unbound.append({'file': rel, 'line': num, 'test': m.group(3),
-                                'stated': stated, 'span': (m.start(1), m.end(1)),
-                                'text': line.strip()[:120]})
+                si, scol = _locate(offs, m.start(1))
+                line_no = num + si
+                blob = lines[line_no - 1]
+                if NARRATIVE_MARK.search(para) or DELTA_MARK.search(blob) \
+                        or DELTA_MARK.search(gap):
+                    continue
+                unbound.append({'file': rel, 'line': line_no, 'test': m.group(3),
+                                'stated': stated,
+                                'span': (scol, scol + (m.end(1) - m.start(1))),
+                                'text': blob.strip()[:120]})
+        for num, line in enumerate(lines, 1):
             # ③ "五条硬规矩：① … ⑥" 这种：承诺的数与**同一行往下的编号个数**当场就能对上
             lm = LIST_CLAIM.search(line)
             if lm:

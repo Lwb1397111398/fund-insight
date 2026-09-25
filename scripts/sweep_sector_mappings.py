@@ -477,6 +477,9 @@ def main():
     # 带时分秒：同一天二次 --apply 不能覆盖唯一的还原清单（覆盖=丢掉回滚能力）
     ap.add_argument('--tag', default=datetime.now().strftime('%Y%m%d-%H%M%S'))
     ap.add_argument('--restore-from', default=None, help='按 manifest 逐字段还原')
+    ap.add_argument('--restore-owner-immunity', action='store_true',
+                    help='还原时连 `reviewed_by="owner"` / `owner_locked` 一起还回去'
+                         '（默认不还原：体检豁免只能由老板在页面上盖）')
     ap.add_argument('--refresh-roster', action='store_true')
     ap.add_argument('--upgrade-etf', action='store_true',
                     help='把"有场内 ETF 可用却挂着联接/LOF/场外基金"的映射换成那只 ETF"')
@@ -496,7 +499,8 @@ def main():
     db = SessionLocal()
     try:
         if args.restore_from:
-            return restore(db, args.restore_from)
+            return restore(db, args.restore_from,
+                           restore_owner_immunity=args.restore_owner_immunity)
 
         rows = db.query(SectorFundMapping).order_by(SectorFundMapping.id).all()
         if args.limit:
@@ -1037,17 +1041,34 @@ def _coerce(field, value):
     return value
 
 
-def restore(db, manifest_path):
-    """按 manifest 逐字段还原：体检写坏任何东西都能退回原样。"""
+def restore(db, manifest_path, restore_owner_immunity=False):
+    """按 manifest 逐字段还原：体检写坏任何东西都能退回原样。
+
+    ⚠ 清单里带着 `reviewed_by='owner'` / `owner_locked=True` 的行**默认不还原这两列**
+    （第 45 轮：升级"谁能盖老板已确认"的棘轮抓出来的第六条来源 —— 还原动作会**凭一份文件**
+    把体检免疫与老板署名发回库里，而这两样按规矩只能由老板在页面上逐行盖）。
+    要连它们一起还原，得显式 `--restore-owner-immunity`；回执里报剔掉了几行。
+    """
     from src.models.database import SectorFundMapping, FundInfo, FundHistory
     data = json.load(io.open(manifest_path, encoding='utf-8'))
     restored = 0
+    held_back = 0
     for item in data['rows']:
         row = db.query(SectorFundMapping).filter(
             SectorFundMapping.id == item['id']).first()
         if not row:
             continue
-        for field in data.get('fields', MANIFEST_FIELDS):
+        fields = list(data.get('fields', MANIFEST_FIELDS))
+        if not restore_owner_immunity:
+            dropping = [f for f in fields
+                        if f in ('owner_locked', 'reviewed_by')
+                        and ((f == 'owner_locked' and item.get('owner_locked'))
+                             or (f == 'reviewed_by'
+                                 and str(item.get('reviewed_by') or '').lower() == 'owner'))]
+            if dropping:
+                fields = [f for f in fields if f not in dropping]
+                held_back += 1
+        for field in fields:
             if field not in item:
                 continue
             setattr(row, field, _coerce(field, item[field]))
@@ -1072,6 +1093,9 @@ def restore(db, manifest_path):
     invalidate_denied_cache()
     print('[还原] %d 行已按 %s 恢复；清掉本轮新建基金档案 %d 只'
           % (restored, manifest_path, removed))
+    if held_back:
+        print('[免疫] %d 行带着老板署名/锁定，**默认不还原**（免疫只能由老板在页面上逐行盖）。'
+              '确实要连它一起还原：加 --restore-owner-immunity' % held_back)
     return 0
 
 

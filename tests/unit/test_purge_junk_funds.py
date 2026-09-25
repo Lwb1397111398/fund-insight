@@ -261,3 +261,43 @@ def test_restore_dedupe_needs_every_business_column_to_match(test_db, tmp_path):
     codes = sorted(r.fund_code for r in test_db.query(SectorFundMapping).filter_by(
         sector_name='ZZZ同板块'))
     assert codes == ['999999', 'ZZZ010'], codes
+
+
+def test_the_production_flag_has_teeth_and_the_check_runs_before_any_write():
+    """`--production` 从"多印一行 [target]"变成**方向闸**（第 45 轮 B-m5：装饰性旗子）。
+
+    旧写法里这把旗子只决定打印什么：把它从 argparse 整条删掉，脚本行为一个字都不变 ——
+    而"没写这把旗子就动不到生产"正是操作员会照做的读法。现在四种形状各测一次：
+    ① 默认 + 镜像 ⇒ 放行；② 旗子 + 真远程 ⇒ 放行；
+    ③ 旗子 + 镜像 ⇒ 拒；④ 旗子 + **本机** PostgreSQL ⇒ 也拒（`postgresql://u@127.0.0.1/db`
+    不是那台线上库，第 45 轮 B-m5 的另一半）；⑤ 没旗子却解析出远程 ⇒ 拒（钉库没生效）。
+    再加一条"main 真的调了它、而且排在第一次 commit 之前"的 AST 判据 ——
+    不然这函数可以永远是对的却没人用它。
+    """
+    import ast
+    mirror = 'sqlite:///data/fund_insight.db'
+    prod = 'postgresql://u:p@aws-0-x.pooler.supabase.com:6543/postgres'
+    local_pg = 'postgresql://u@127.0.0.1:5432/db'
+    assert purge._target_agrees_with_the_flag(False, mirror) is None
+    assert purge._target_agrees_with_the_flag(True, prod) is None
+    for flag, url, what in ((True, mirror, '本地镜像'), (True, local_pg, '本机'),
+                            (False, prod, '硬删')):
+        why = purge._target_agrees_with_the_flag(flag, url)
+        assert why and why.startswith('[abort]'), '%s + %s 竟被放行' % (flag, url)
+        assert what in why or 'postgres' in why.lower(), '拒绝理由没说到点上：%s' % why
+    # 控制：把判据换成"只看是不是 sqlite"，本机 PostgreSQL 那一格必须仍然被拒
+    assert purge._target_agrees_with_the_flag(True, local_pg), \
+        '本机 PostgreSQL 被当成线上库放行了 ⇒ 第二半没落地'
+
+    tree = ast.parse(open(os.path.join(ROOT, 'scripts', 'purge_junk_funds.py'),
+                          encoding='utf-8').read())
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == 'main')
+    checks = [n.lineno for n in ast.walk(main) if isinstance(n, ast.Call)
+              and getattr(n.func, 'id', '') == '_target_agrees_with_the_flag']
+    commits = [n.lineno for n in ast.walk(main) if isinstance(n, ast.Call)
+               and getattr(n.func, 'attr', '') in ('commit', 'flush', 'delete', 'add')]
+    assert checks, 'main() 压根没调用方向闸 ⇒ 上面那三格是死代码'
+    assert commits, 'main() 里没有写动作 ⇒ 这条"排在写之前"的判据是空判'
+    assert min(checks) < min(commits), \
+        '方向闸排在第一次写之后 ⇒ 它拦不住它说要拦的那件事（%s vs %s）' % (checks, commits)

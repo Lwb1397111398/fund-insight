@@ -521,45 +521,89 @@ def test_ghost_mapping_row_cannot_serve_or_poison_the_cache(test_db):
 
 
 # 谁可以盖"老板已确认"（＝身份体检豁免）。这张名单只许变短。
-# 三条页面路径的**行为**由本文件上面那几条用例钉着；这条闸管的是"第四、第五条来源
-# 之外不许再多一条" —— 第 44 轮 A 席 M-3：AGENTS.md 写着"豁免共五条来源，每条都要显式令牌"，
+# 三条页面路径的**行为**由本文件上面那几条用例钉着；这条闸管的是"名单之外不许再多一处"。
+# 第 44 轮 A 席 M-3：AGENTS.md 写着"豁免每一条来源都要显式令牌"，
 # 但仓库里没有任何机器把这句话说成判据（同一条通病的第三次：`is_correct` 与 `fund_code`
 # 的"唯一入口"当初也是只写在文档里，后来各自多出一个入口）。
+# **这里不抄"共几条"**（第 45 轮我自己就加出了一处当时文档没登记的）：
+# 真值就是下面这两张表的键集合，加一处不登记 ⇒ 本文件那条判据红。
 IMMUNITY_GRANT_SITES = {
-    ('src/services/sector_fund_service.py', 'mark_reviewed_by_id'),    # 页面逐行审查
-    ('src/services/sector_fund_service.py', 'batch_mark_reviewed'),    # 页面批量审查
-    ('src/services/sector_fund_service.py', 'update_mapping'),         # 页面编辑保存
-    ('scripts/seed_owner_proxies.py', 'main'),                          # `--owner-confirm SEED-PROXY`
+    # 键是 (文件, 最内层函数)，值是**那一处里的授予条数**（第 45 轮 A-m4：只按 (文件, 函数)
+    # 收录时，同一个函数里再写一行授予不会新增条目 ⇒ 名单看不出"多了一处"）。
+    ('src/services/sector_fund_service.py', 'mark_reviewed_by_id'): 2,    # 页面逐行审查
+    ('src/services/sector_fund_service.py', 'batch_mark_reviewed'): 2,    # 页面批量审查
+    ('src/services/sector_fund_service.py', 'update_mapping'): 2,         # 页面编辑保存
+    ('scripts/seed_owner_proxies.py', 'main'): 2,                        # `--owner-confirm SEED-PROXY`
 }
 _IMMUNITY_FIELDS = {'owner_locked': (True,), 'reviewed_by': ('owner',)}
 
+# 字段名是变量、从 AST 看不见"写的是哪一列"的站点。这张表**不是免检名单**：
+# 每条都要写明凭什么被相信，而且依据要能被别的用例复核（括号里点了文件名）。
+# 新增一条而没有依据 ⇒ `test_only_the_registered_places_can_grant_owner_immunity` 变红。
+IMMUNITY_OPAQUE_SITES = {
+    ('src/api/routes/config.py', '_audit_apply_row'):
+        '载荷先过 `_clean_row`：`owner_locked=True` 与 `reviewed_by="owner"` 在那里被剔掉，'
+        '行为判据在 tests/unit/test_sector_mapping_audit_import.py',
+    ('scripts/sweep_sector_mappings.py', 'restore'):
+        '清单里的老板署名/锁定**默认不还原**，要还原得显式 --restore-owner-immunity；'
+        '行为判据在 tests/unit/test_sweep_restore_owner_immunity.py',
+}
+
 
 def _grants_immunity(root):
-    """AST 扫"把老板署名/锁定**写死成授予值**"的代码点，三种写法都认。
+    """AST 扫"把老板署名/锁定**写成授予值**"的代码点：`{(文件, 函数): 条数}` + 看不清的集合。
 
-    ① `row.owner_locked = True`；② `{'owner_locked': True, 'reviewed_by': 'owner'}`；
-    ③ `setattr(row, 'owner_locked', True)`。
-    只认**字面量授予**：`payload.get('owner_locked')`、`bool(m.owner_locked)` 这类
-    "把已有值原样搬过去"的写法不算授予（那条腿由
+    认的写法（第 45 轮 A-M7 一次补全，每一种都有现造样品钉着）：
+      ① `row.owner_locked = True`；② `{'reviewed_by': 'owner'}`（字典字面量）；
+      ③ `setattr(row, 'owner_locked', True)` **以及** `object.__setattr__(row, …)`；
+      ④ `stmt.values(owner_locked=True)` / `update(reviewed_by='owner')` —— **关键字参数**，
+         这正是本仓在用的 SQLAlchemy 批量写法（`src/api/main.py:528 sa_insert(...).values(**…)`)；
+      ⑤ 值来自模块常量（`OWNER = True` 然后 `row.owner_locked = OWNER`）；
+      ⑥ 值是三目（`row.reviewed_by = 'owner' if ok else None`）—— 有一条臂给授予值就算。
+    只认"看得见的授予值"：`payload.get('owner_locked')`、`bool(m.owner_locked)` 这类
+    **搬运已有值**的写法不算授予（那条腿由
     `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉）。
+    字段名本身是变量时（`setattr(row, k, v)`）看不见写的是哪一列 ⇒ 不猜"没事"，
+    落进第二个返回值 `opaque`，由用例要求它要么消失、要么写明去向。
     """
     import ast
-    found = set()
+    found, opaque = {}, set()
     for py in sorted(root.rglob('*.py')):
-        if '__pycache__' in str(py) or py.name.startswith(('_tmp_', '__')):
+        # 只放过 `__pycache__` 与本机草稿。以前这里写的是 `startswith(('_tmp_', '__'))`
+        # ⇒ 全仓每个 `__init__.py` 整族免检（第 45 轮 A-M6：`src/services/__init__.py`、
+        # `src/fund/__init__.py` 正是本仓真放代码的地方 —— 与第 39 轮"前缀整族豁免"同一课）
+        if '__pycache__' in str(py) or py.name.startswith('_tmp_'):
             continue
         try:
             tree = ast.parse(py.read_text(encoding='utf-8', errors='replace'))
         except SyntaxError:
-            found.add(('%s（解析不了）' % py.name, '<unknown>'))   # fail-closed：坏文件按可疑处理
+            found[('%s（解析不了）' % py.name, '<unknown>')] = 1  # fail-closed：坏文件按可疑处理
             continue
         try:
             rel = str(py.relative_to(root.parent)).replace('\\', '/')
         except ValueError:
             rel = str(py).replace('\\', '/')
 
+        # 模块级常量：`OWNER = True` 这种"给授予值起个名字"的写法
+        granted_by_name = {}
+        for st in tree.body:
+            if isinstance(st, ast.Assign) and isinstance(st.value, ast.Constant):
+                for t in st.targets:
+                    if isinstance(t, ast.Name):
+                        for field, vals in _IMMUNITY_FIELDS.items():
+                            if st.value.value in vals:
+                                granted_by_name.setdefault(t.id, set()).add(field)
+
         def _literal_grant(field, node):
-            return isinstance(node, ast.Constant) and node.value in _IMMUNITY_FIELDS[field]
+            """这个表达式里有没有**看得见**的授予值（常量 / 三目的某一臂 / 模块常量）。"""
+            if isinstance(node, ast.Constant):
+                return node.value in _IMMUNITY_FIELDS[field]
+            if isinstance(node, ast.IfExp):
+                return (_literal_grant(field, node.body)
+                        or _literal_grant(field, node.orelse))
+            if isinstance(node, ast.Name):
+                return field in granted_by_name.get(node.id, ())
+            return False
 
         def _enclosing(lineno):
             """包住这一行的**最内层**函数名（挑最里层，否则同一文件里的名字会串位）。"""
@@ -571,60 +615,143 @@ def _grants_immunity(root):
                     best, best_line = n.name, n.lineno
             return best
 
+        def _hit(lineno):
+            key = (rel, _enclosing(lineno))
+            found[key] = found.get(key, 0) + 1
+
+        # 这个文件是不是"做豁免生意"的（字段名以字面量出现过）。只在这种文件里，
+        # "字段名是变量的 setattr"才值得问一句 —— 否则每个 `setattr(obj, name, v)` 都会红。
+        mentions_immunity = any(isinstance(c, ast.Constant) and c.value in _IMMUNITY_FIELDS
+                                for c in ast.walk(tree))
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for tgt in node.targets:
                     if isinstance(tgt, ast.Attribute) and tgt.attr in _IMMUNITY_FIELDS \
                             and _literal_grant(tgt.attr, node.value):
-                        found.add((rel, _enclosing(node.lineno)))
+                        _hit(node.lineno)
             elif isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values):
                     if isinstance(key, ast.Constant) and key.value in _IMMUNITY_FIELDS \
                             and _literal_grant(key.value, value):
-                        found.add((rel, _enclosing(node.lineno)))
-            elif isinstance(node, ast.Call) and getattr(node.func, 'id', None) == 'setattr' \
-                    and len(node.args) == 3 \
-                    and isinstance(node.args[1], ast.Constant) \
-                    and node.args[1].value in _IMMUNITY_FIELDS \
-                    and _literal_grant(node.args[1].value, node.args[2]):
-                found.add((rel, _enclosing(node.lineno)))
-    return found
+                        _hit(node.lineno)
+            elif isinstance(node, ast.Call):
+                fname = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)
+                if fname in ('setattr', '__setattr__') and len(node.args) == 3:
+                    field = node.args[1]
+                    if isinstance(field, ast.Constant) and field.value in _IMMUNITY_FIELDS \
+                            and _literal_grant(field.value, node.args[2]):
+                        _hit(node.lineno)
+                    elif not isinstance(field, ast.Constant) and mentions_immunity:
+                        # 字段名是变量（`[setattr(row, k, v) for k, v in pairs]`）：
+                        # 看不见写的是哪一列 ⇒ 不猜"没事"，也不硬算成授予，交给用例问一句
+                        opaque.add((rel, _enclosing(node.lineno)))
+                for kw in (node.keywords or []):
+                    # `.values(owner_locked=True)` / `update(reviewed_by='owner')` 这一族
+                    if kw.arg in _IMMUNITY_FIELDS and _literal_grant(kw.arg, kw.value):
+                        _hit(node.lineno)
+            elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+                # 批量写的数据源：`(("owner_locked", True),)` —— 字段名与授予值成对出现，
+                # 即使真正的 `setattr` 在别处（列表推导里），这一对本身就是"写死要授予"。
+                strs = [c.value for c in ast.walk(node) if isinstance(c, ast.Constant)]
+                if any(isinstance(s, str) and s in _IMMUNITY_FIELDS for s in strs) and any(
+                        isinstance(v, bool) and v or v == 'owner' for v in strs):
+                    _hit(node.lineno)
+    return found, opaque
 
 
 def test_only_the_registered_places_can_grant_owner_immunity(tmp_path):
     """"豁免只有这几条来源"从今天起有机器钉着：新增一个授予点就地变红。
 
-    控制断言分两半：
+    名单的值是**条数**（第 45 轮 A-m4：以前键只有 (文件, 函数)，同一个函数里再写一行授予
+    不会新增任何条目 ⇒ 名单看不出"多了一处"）。
+    控制断言分三半：
     ① 仓库里必须**真的**找得到已登记的这几处（0 命中 = 尺子坏了，不是"很干净"）；
-    ② 临时目录现造三种新写法，每种都必须被点名；一处"搬运已有值"的写法不许被点名
-       （否则判据过宽，正常的备份/序列化代码都会红）。
+    ② 临时目录现造六种写法（属性赋值 / 字典字面量 / `setattr` / `object.__setattr__` /
+       SQLAlchemy 的 `.values(owner_locked=True)` / 模块常量 / 三目），每一种都必须被点名；
+    ③ 一处"搬运已有值"（备份、序列化）不许被点名，否则判据过宽、正常代码全都红。
+       另有一处"字段名是变量"的写法落进 `opaque`（不猜它没事，也不硬算成授予）。
     """
     repo = ROOT
-    found = _grants_immunity(repo / 'src') | _grants_immunity(repo / 'scripts')
+    src_found, src_opaque = _grants_immunity(repo / 'src')
+    scr_found, scr_opaque = _grants_immunity(repo / 'scripts')
+    found, opaque = dict(src_found), set(src_opaque) | set(scr_opaque)
+    found.update(scr_found)
     assert found, '一条授予点都没找到 ⇒ `_grants_immunity` 的判据形状与代码脱节了，这条是空判'
-    assert found <= IMMUNITY_GRANT_SITES, (
-        '新增了写死"老板已确认"的代码点：%s ⇒ 体检豁免只能由页面上的显式确认或已登记的两个脚本'
-        '给出；真要加一条，先在 AGENTS.md 把"五条来源"那句话改对，并挂上它自己的显式令牌与用例'
-        % sorted(found - IMMUNITY_GRANT_SITES))
+    assert set(found) <= set(IMMUNITY_GRANT_SITES), (
+        '新增了写死"老板已确认"的代码点：%s ⇒ 体检豁免只能由页面上的显式确认或已登记的脚本旗子'
+        '给出；真要加一条，先在 AGENTS.md 把来源那段话改对（那一段现在不抄条数，抄的是这两张表），'
+        '并挂上它自己的显式令牌与用例'
+        % sorted(set(found) - set(IMMUNITY_GRANT_SITES)))
     assert found == IMMUNITY_GRANT_SITES, (
-        '登记名单与实际授予点对不上了（多：%s / 少：%s）⇒ 名单里的条目要么已经换掉了就删掉，'
-        '要么是判据漏了形状' % (sorted(IMMUNITY_GRANT_SITES - found),
-                              sorted(found - IMMUNITY_GRANT_SITES)))
+        '登记名单与实际授予点对不上了（多：%s / 少：%s / 条数不符：%s）⇒ '
+        '名单里的条目要么已经换掉了就删掉，要么是判据漏了形状'
+        % (sorted(set(found) - set(IMMUNITY_GRANT_SITES)),
+           sorted(set(IMMUNITY_GRANT_SITES) - set(found)),
+           sorted((k, v, IMMUNITY_GRANT_SITES.get(k)) for k, v in found.items()
+                  if IMMUNITY_GRANT_SITES.get(k) != v)))
+    # "字段名是变量的 setattr"从 AST 看不见写的是哪一列 ⇒ 既不静默放过，也不硬算成授予：
+    # 每一条都得登记在下面这张表里并写明**凭什么被相信**（上游剔掉了授予值且有行为判据 /
+    # 默认拒绝、要显式旗子）。新增一条而没人写依据 ⇒ 这条变红。
+    assert opaque <= set(IMMUNITY_OPAQUE_SITES), (
+        '多出这些"字段名是变量"的授予写法：%s ⇒ 先看清楚它到底能写哪一列，再登记并写明依据'
+        % sorted(opaque - set(IMMUNITY_OPAQUE_SITES)))
+    assert set(IMMUNITY_OPAQUE_SITES) <= opaque, (
+        '登记过的动态 setattr 站点不见了：%s ⇒ 代码里真删掉了就把条目删掉，'
+        '别留一条谁也复核不了的旧名单' % sorted(set(IMMUNITY_OPAQUE_SITES) - opaque))
+    for key, reason in IMMUNITY_OPAQUE_SITES.items():
+        assert reason.strip(), '登记了 %s 却没写依据 ⇒ 这张表成了盖章' % (key,)
 
     pkg = tmp_path / 'sample'
     pkg.mkdir()
-    (pkg / '_a_attr.py').write_text(
+    (pkg / '__init__.py').write_text(
         'def grant(row):\n    row.owner_locked = True\n', encoding='utf-8')
-    (pkg / '_b_dict.py').write_text(
-        'def grant(row):\n    return {"reviewed_by": "owner", "id": row.id}\n', encoding='utf-8')
-    (pkg / '_c_setattr.py').write_text(
-        'def grant(row):\n    setattr(row, "reviewed_by", "owner")\n', encoding='utf-8')
-    (pkg / '_d_moves_values.py').write_text(
-        'def grant(row, other):\n'
-        '    row.owner_locked = bool(other.owner_locked)\n'
-        '    return {"reviewed_by": other.reviewed_by}\n', encoding='utf-8')
-    made = _grants_immunity(pkg)
-    for name in ('_a_attr.py', '_b_dict.py', '_c_setattr.py'):
-        assert any(name in f for f, _ in made), '三种写法认不出 %s ⇒ 换这种拼写就能绕过' % name
-    assert not any('_d_moves_values.py' in f for f, _ in made), \
+    shapes = {
+        '_a_attr.py': 'def grant(row):\n    row.owner_locked = True\n',
+        '_b_dict.py': 'def grant(row):\n    return {"reviewed_by": "owner", "id": row.id}\n',
+        '_c_setattr.py': 'def grant(row):\n    setattr(row, "reviewed_by", "owner")\n',
+        '_d_object_setattr.py': 'def grant(row):\n'
+                                '    object.__setattr__(row, "owner_locked", True)\n',
+        '_e_values_kw.py': 'def grant(stmt):\n'
+                           '    return stmt.values(owner_locked=True, reviewed_by="owner")\n',
+        '_f_module_const.py': 'OWNER = True\n\n\ndef grant(row):\n    row.owner_locked = OWNER\n',
+        '_g_ternary.py': 'def grant(row, ok):\n'
+                         '    row.reviewed_by = "owner" if ok else None\n',
+        # 字段名是变量的 setattr（列表推导里批量授予）⇒ 要么点名成授予，要么落进 opaque，
+        # 两条都不许静默走过
+        '_i_dynamic_field.py': 'PAIRS = (("owner_locked", True),)\n\n'
+                               'def grant(row):\n'
+                               '    return [setattr(row, k, v) for k, v in PAIRS]\n',
+        # 反向对照：与豁免无关的文件里，`setattr(obj, name, value)` 不该被问一句
+        '_j_unrelated_setattr.py': 'def shape(obj, name, value):\n'
+                                   '    return setattr(obj, name, value)\n',
+        # 反向样品：把已有的值搬过去（备份/序列化），不是"授予"
+        '_h_moves_values.py': 'def grant(row, other):\n'
+                              '    row.owner_locked = bool(other.owner_locked)\n'
+                              '    return {"reviewed_by": other.reviewed_by}\n',
+    }
+    for name, body in shapes.items():
+        (pkg / name).write_text(body, encoding='utf-8')
+    made, made_opaque = _grants_immunity(pkg)
+    for name in ('_a_attr.py', '_b_dict.py', '_c_setattr.py', '_d_object_setattr.py',
+                 '_e_values_kw.py', '_f_module_const.py', '_g_ternary.py'):
+        assert any(name in f for f, _n in made), \
+            '六种写法认不出 %s ⇒ 换这种拼写就能绕过这道棘轮' % name
+    assert made.get(('sample/__init__.py', 'grant')) == 1, \
+        '`__init__.py` 整族被豁免 ⇒ 而本仓的包 `__init__` 是真放代码的地方（A-M6）：%s' % sorted(made)
+    assert not any('_h_moves_values.py' in f for f, _n in made), \
         '"把已有值搬过去"被判成授予 ⇒ 判据过宽，备份/序列化代码都会红：%s' % sorted(made)
+    assert any('_i_dynamic_field.py' in pair[0] for pair in made_opaque), \
+        '字段名是变量的 setattr 被静默放过 ⇒ 既不算授予也不报错，正是最该问一句的形状：%s' \
+        % sorted(made_opaque)
+    assert not any('_j_unrelated_setattr.py' in pair[0] for pair in made_opaque), \
+        '与豁免无关的 `setattr(obj, name, v)` 也被问一句 ⇒ 判据过宽，全仓到处是假警报：%s' \
+        % sorted(made_opaque)
+    # 同一函数里再写一行授予，条数必须变（这就是"名单看不出多了一处"的那个洞）
+    (pkg / '_e_values_kw.py').write_text(
+        'def grant(stmt, row):\n'
+        '    row.owner_locked = True\n'
+        '    return stmt.values(owner_locked=True, reviewed_by="owner")\n', encoding='utf-8')
+    again, _ = _grants_immunity(pkg)
+    assert again[('sample/_e_values_kw.py', 'grant')] >= 3, \
+        '同一函数里多写一处授予，名单上的条目数却没变 ⇒ 键的粒度还是太粗：%s' % again

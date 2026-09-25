@@ -12,13 +12,16 @@ reviewed_by='owner'`（第 18 轮 MAJOR-1 后只给 `reviewed=True`，署名与�
 现在整批发给 `POST /api/config/sector-mappings/-/audit-import`，由服务端按 sector_name
 寻址、逐列照搬审计结论，并逐行回执 updated/created/unchanged/refused(原因)。
 
-三道硬闸，缺一不动：
+四道硬闸，缺一不动：
 1. 默认 dry-run，只让服务端出计划；真写必须 `--confirm WRITE-TO-PROD`
    （它会原样进请求的 confirm 字段，服务端没有这个字面量就自动退回计划）；
 2. 只按 `sector_name` 匹配，清单里的本地 id 一律不发 —— 两边 id 不同，按 id 写会写错行；
 3. 每一行都读服务端回执：**老板锁定/署名的行会被服务端拒绝覆盖**（那是有意代理，
    如 债券→512000、SpaceX→159206），这类拒绝是预期的、只汇报；其余拒绝或写失败
    一律非 0 退出，不做静默跳过。绝不删除任何行。
+4. `--base` 必须是本项目的生产域名或本机回环地址，且非本机必须 https
+   （第 45 轮 B-MAJOR-7：以前这一条只管**措辞**，代码照旧把 `ACCESS_PASSWORD` 与整份清单
+   发给任意主机 —— 一行文案挡不住任何东西）。要发给别处得显式 `--allow-any-base`。
 
 口令只从环境变量 `ACCESS_PASSWORD` 读，绝不出现在命令行、代码或日志里。
 
@@ -144,6 +147,36 @@ def show_items(items, limit=15):
         print('   ...其余 %d 行省略' % (len(interesting) - limit))
 
 
+LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '::1')
+
+
+def _send_allowed(base, allow_any):
+    """**动作**层面的闸：口令与整份清单只许发给自己的后端（第 45 轮 B-M-7）。
+
+    上一轮我只把那一行**措辞**改准了（`--base` 指到别处时不再自称"线上生产库"），
+    而代码照旧无条件 `request(args.base, ...)`：把 `X-Access-Password` 和整份映射清单
+    POST 给任意主机，`http://` 也照发。一行文案是给人看的，挡不住任何东西 ——
+    B 席数的这条是本轮最实在的一个洞（S6 的首次真回写正要用这个工具）。
+    回环地址放行：本地核验时对着 `serve_mirror.py` 跑 dry-run 是常规操作，
+    那把口令本来就是现造的一次性口令。
+    """
+    parsed = urlparse(base)
+    host = (parsed.hostname or '').lower()
+    scheme = (parsed.scheme or '').lower()
+    if not host:
+        return '目标地址解析不出主机名 ⇒ 不知道要把口令发给谁，一行都不发：%r' % base
+    if scheme != 'https' and host not in LOOPBACK_HOSTS:
+        return ('协议是 `%s://` 而不是 https，也不是本机回环 ⇒ 访问口令与整份清单会'
+                '以**明文**离开这台机器，一行都不发' % scheme)
+    if _is_known_prod_host(base) or host in LOOPBACK_HOSTS:
+        return None
+    if allow_any:
+        return None
+    return ('`%s` 既不是本项目的生产域名（%s），也不是本机回环地址 ⇒ 不敢把 '
+            'ACCESS_PASSWORD 和整份清单发过去。确认要发给它，就显式加 --allow-any-base'
+            % (host, '、'.join(PROD_HOSTS)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base', default=os.getenv('APP_BASE_URL', DEFAULT_BASE))
@@ -151,11 +184,18 @@ def main():
     ap.add_argument('--limit', type=int, default=None, help='只处理前 N 行（先小批验证）')
     ap.add_argument('--allow-unservable', action='store_true',
                     help='连"生产压根没有这只基金档案/净值"的行也一起发（默认剔除，见检查单 §7）')
+    ap.add_argument('--allow-any-base', action='store_true',
+                    help='明知 `--base` 不是本项目生产域名、也不是本机，仍要发出去'
+                         '（默认拒绝：那会把访问口令交给陌生主机）')
     args = ap.parse_args()
 
     password = os.getenv('ACCESS_PASSWORD', '')
     if not password:
         print('[abort] 环境变量 ACCESS_PASSWORD 未设置：口令只走环境变量，不进命令行/代码')
+        return 2
+    refusal = _send_allowed(args.base, args.allow_any_base)
+    if refusal:
+        print('[abort] %s' % refusal)
         return 2
     if not os.path.exists(MANIFEST):
         print('[abort] 没有清单，先跑 python scripts/export_repaired_mappings.py')

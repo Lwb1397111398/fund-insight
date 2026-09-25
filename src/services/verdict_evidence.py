@@ -17,6 +17,7 @@
   - `nav_row_missing`            端点那一天该标的没有净值行：周末目标日的老数据、镜像缺行、基金停更都在这一桶。
   - `nav_rewritten`              同一天有行，数值不同 ⇒ 净值被就地改写或覆盖过。
 """
+import ipaddress
 import os
 import re
 from datetime import date, datetime
@@ -196,6 +197,11 @@ def span_report(db) -> Dict:
 
 
 _DSN_KEEP_KEYS = ('host', 'hosts', 'port', 'dbname', 'database')
+# 一个键值对：值可以是 `'带空格的'`、`"带空格的"` 或裸词。分隔符按 libpq/URI 两种写法都认
+# （`&` 与 `,` 以前不切，于是 `host=h&password=X` 整串被当成**一个**值原样印出来 —— A-m2）。
+_DSN_PAIR = re.compile(r"(?P<k>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+                       r"(?:'(?P<q1>[^']*)'|\"(?P<q2>[^\"]*)\"|(?P<p>[^\s'\",;=&]*))")
+_DSN_SECRET_KEYS = ('password', 'passwd', 'pwd', 'secret')
 
 
 def _conninfo_target(text: str) -> str:
@@ -210,15 +216,24 @@ def _conninfo_target(text: str) -> str:
     if '=' not in text:
         # 认不出键值写法时按"@ 之后"处理：宁可少说，不可把凭据多说出去。
         return text.split('@')[-1] or '(空)'
-    kept = []
-    for part in re.split(r'[;\s]+', text):
-        if '=' not in part:
+    # 引号不配对 ⇒ 键值切分不可信（第 45 轮 B-m1：`password='two words dbname=LEAKED'`
+    # 会被按空格切分的写法当成两个键，口令的第二个词以 `dbname=` 的名义印出来）。
+    # 这种情况只留 host/port。
+    unbalanced = (text.count("'") % 2) or (text.count('"') % 2)
+    kept, secret_seen = [], False
+    for m in _DSN_PAIR.finditer(text):
+        key = (m.group('k') or '').strip().lower()
+        value = next((g for g in (m.group('q1'), m.group('q2'), m.group('p'))
+                      if g is not None), '').strip()
+        if key in _DSN_SECRET_KEYS:
+            secret_seen = True
             continue
-        key, _, value = part.partition('=')
-        key, value = key.strip().lower(), value.strip()
-        if key in _DSN_KEEP_KEYS and value:
+        if key in _DSN_KEEP_KEYS and value and not (unbalanced and key not in ('host', 'port')):
             kept.append('%s=%s' % (key, value))
-    return ' '.join(kept) or '(DSN：只留下非凭据字段，其余已隐去)'
+    out = ' '.join(kept)
+    if unbalanced and secret_seen:
+        out += '（引号不配对，其余字段已隐去）'
+    return out or '(DSN：只留下非凭据字段，其余已隐去)'
 
 
 def target_name(url: str) -> str:
@@ -234,7 +249,7 @@ def target_name(url: str) -> str:
     if '://' not in url:
         return _conninfo_target(url)
     scheme, rest = url.split('://', 1)
-    if scheme.startswith('sqlite'):
+    if scheme.lower().startswith('sqlite'):
         body = url[len('sqlite:///'):] if url.lower().startswith('sqlite:///') else rest
         body = body.split('?', 1)[0]
         if body.startswith('//'):
@@ -242,11 +257,16 @@ def target_name(url: str) -> str:
         if re.match(r'^/[A-Za-z]:[\\/]', body):
             body = body[1:]                    # 四斜杠 Windows 绝对路径：/E:/… → E:/…
         return body or '(当前目录里的 sqlite 文件)'
-    where = rest.split('@')[-1].split('?', 1)[0]
+    # 剪掉 query / fragment / `;` 参数：`postgresql://h/db?password=X` 里最涉密的那一段
+    # 不能跟着"这是哪个库"进日志（第 45 轮 A-m2 / B-m1，与守卫侧同一条改动）
+    where = re.split(r'[?;&#]', rest.split('@')[-1], 1)[0]
     return '%s://%s' % (scheme, where)
 
 
 MIRROR_SUFFIX = os.path.join('data', 'fund_insight.db')
+# 本项目那台线上库的**注册域**：与 `scripts/_db_guard._PROD_DB_DOMAINS` 逐字相等
+# （两份实现由 `tests/unit/test_database_label_targets.py` 钉住，漂了就红）。
+_PROD_DB_DOMAINS = ('supabase.com', 'supabase.co', 'supabase.in')
 
 
 def is_the_mirror(name: str) -> bool:
@@ -270,6 +290,64 @@ def is_the_mirror(name: str) -> bool:
         return False
 
 
+def _db_host(url: str) -> str:
+    """连接串里的**主机名**（小写、去端口、不含口令）—— 判"这台是不是本机"用。
+
+    与 `scripts/_db_guard._db_host()` 同形（两份实现，逐条相等由
+    `tests/unit/test_database_label_targets.py` 钉住）。
+    """
+    if '://' in url:
+        rest = url.split('://', 1)[1]
+        where = re.split(r'[?;&#]', rest.split('@')[-1], 1)[0]
+        netloc = where.split('/')[0]
+        if netloc.startswith('['):
+            # 带方括号的 IPv6：端口在 `]` 之后，按 `:` 切会把主机切成一个 `[`
+            end = netloc.find(']')
+            return netloc[:end + 1].lower() if end > 0 else netloc.lower()
+        return netloc.split(':')[0].lower()
+    m = re.search(r'(?:^|[\s;,])hosts?\s*=\s*(?:\'([^\']*)\'|"([^"]*)"|([^\s\'",;=&]*))',
+                  url, re.I)
+    if m:
+        return (m.group(1) or m.group(2) or m.group(3) or '').lower()
+    return ''
+
+
+def _is_a_local_host(host: str) -> bool:
+    """空主机 / localhost / 回环 / 私网 ⇒ 这台**不可能**是线上生产库（第 45 轮 B-m5）。"""
+    if not host or host in ('localhost', '::1', '[::1]'):
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip('[]'))
+    except ValueError:
+        return False                      # 域名：不是"显然本机"，也不许被判成本机
+    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
+
+
+def _is_the_production_host(host: str) -> bool:
+    """主机名**就是**（或挂在）Supabase 的注册域下面 ⇒ 才是本项目那台线上库。
+
+    与 `scripts/_db_guard._is_the_production_host()` 同一张表：判据不许写成
+    `'supabase' in host` —— `notsupabase.evil.example` 会被那种子串买通
+    （第 43 轮 `push_sector_mappings_to_prod.py` 上的同名课程）。
+    """
+    host = (host or '').lower()
+    return any(host == s or host.endswith('.' + s) for s in _PROD_DB_DOMAINS)
+
+
+def _postgres_words(url: str, name: str) -> str:
+    """"这是一个 PostgreSQL"要说到的三档，不许一档糊过去（与守卫侧 `_postgres_words` 同文）。
+
+    旧写法看见 `postgres*://` 就印"线上生产库" ⇒ `postgresql://u@127.0.0.1/db`（本机起的
+    一个 Postgres）也被说成线上，而这句自报正是操作员决定"要不要按确认"的依据。
+    """
+    host = _db_host(url)
+    if _is_a_local_host(host):
+        return '本机 PostgreSQL（%s，不是线上生产库）' % name
+    if _is_the_production_host(host):
+        return '线上生产库（%s）' % name
+    return '远程 PostgreSQL（%s）—— 不是本项目那台 Supabase 生产库' % name
+
+
 def describe_url(url: str) -> str:
     """连接串 → 一句"这是哪个库"。与 `scripts/_db_guard.db_kind()` 同一套词（两份实现，用例钉相等）。
 
@@ -285,7 +363,7 @@ def describe_url(url: str) -> str:
             return '本地镜像库（data/fund_insight.db）'
         return '本地 sqlite 文件（不是镜像库）：%s' % name
     if low.startswith(('postgres', 'postgresql')):
-        return '线上生产库（%s）' % name
+        return _postgres_words(url, name)
     if low.startswith('mysql'):
         return 'MySQL 库（%s）' % name
     # 认不出的 scheme **不许把原串回显出来**（第 44 轮 A-m6）：`low.split('://')[0]` 在没有

@@ -38,6 +38,13 @@ _PATHS = ['data/fund_insight.db', 'data/copy_20260920.db', '/home/me/f.db', '/E:
           'E:/AI Agent/data/f.db', 'E:x.db', ':memory:', 'x.db', '']
 _CREDENTIALS = ['', 'u@', 'u:S3cr3tPW@']
 _QUERIES = ['', '?mode=ro', '?sslmode=require&foo=1']
+# 远程那一族的**主机**形状（第 45 轮 B-m5 / B-m7）：本机回环、私网 IP、带方括号的 IPv6、
+# 大写 scheme、带端口、`@` 前后带不带口令 —— 两把尺子对"这是哪一档库"的判断必须逐条一致，
+# 而这套判断从 scheme 之外还要看主机，所以样品必须连主机一起笛卡尔积。
+_REMOTE_HOSTS = ['', 'h', 'localhost', 'LOCALHOST', '127.0.0.1', '8.8.8.8', '::1', '[::1]',
+                 '192.168.1.20', '10.0.0.7', '172.16.0.5', '172.32.0.5', '169.254.1.1',
+                 'db.example.com', 'db.example.com:6543', 'u@db.example.com', 'u:p@db.example.com',
+                 'x.supabase.co', 'AWS-0-X.POOLER.SUPABASE.COM', 'notsupabase.evil.example']
 
 
 def _all_samples():
@@ -59,6 +66,12 @@ def _all_samples():
                 for path in _PATHS:
                     for q in _QUERIES:
                         out.append('%s%s%s%s%s' % (sch, sl, cred, path, q))
+    # 远程那一族单独再乘一遍**主机**：`db_kind` 从第 45 轮起要看主机（本机/生产/别的远程），
+    # 只看 scheme 的旧样品覆盖不到这条新判据 —— 两把尺子必须在这些主机上也逐条相等。
+    for sch in ('postgresql', 'postgres', 'PostgreSQL', 'mysql'):
+        for host in _REMOTE_HOSTS:
+            out.append('%s://%s/db' % (sch, host))
+            out.append('%s://u:S3cr3tPW@%s:5432/db?sslmode=require' % (sch, host))
     return sorted(set(out))
 
 
@@ -76,8 +89,50 @@ def test_an_engine_tells_which_database_it_points_at():
     """直接在 2.0 上跑过的形状：`create_engine('sqlite:///...')` 自己就是"库"。"""
     assert database_label(create_engine('sqlite:///data/fund_insight.db')) \
         == '本地镜像库（data/fund_insight.db）'
-    assert database_label(create_engine('postgresql://u:p@h/db')) \
-        == '线上生产库（postgresql://h/db）'
+    assert database_label(create_engine('postgresql://u:p@x.supabase.co/db')) \
+        == '线上生产库（postgresql://x.supabase.co/db）'
+
+
+def test_a_postgres_url_is_not_automatically_the_production_database():
+    """"这是 PostgreSQL"要说三档：本机 / 本项目的 Supabase 生产 / 别的远程（第 45 轮 B-m5）。
+
+    旧写法只要 scheme 以 `postgres` 开头就印"线上生产库"。可 `postgresql://u@127.0.0.1/db`
+    是本机起的一个 Postgres、`postgresql://u@10.0.0.5/db` 是内网某台 ——
+    而**这句自报是操作员决定要不要按确认的依据**，把不是生产的东西说成生产，
+    比报"远程库"更坏（同一族缺陷第 43 轮在 `push_sector_mappings_to_prod.py` 上已经
+    修过一次：`--base http://127.0.0.1:9/` 那时也自称"线上生产库"）。
+    """
+    def kind(url):
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        try:
+            import _db_guard
+            return _db_guard.db_kind(url)
+        finally:
+            sys.path.remove(str(ROOT / 'scripts'))
+
+    assert kind('postgresql://u@127.0.0.1/db').startswith('本机 PostgreSQL'), \
+        kind('postgresql://u@127.0.0.1/db')
+    # 判"有没有自称生产"要看**这一句的开头是什么档**，不能看整串里出没出现过那四个字 ——
+    # "本机 PostgreSQL（…，不是线上生产库）"里就含那四个字，用子串判会把对的话读成谎话
+    # （我自己第一版就是这样，被这条用例的对照组当场点红）。
+    for local in ('postgresql://u@localhost:5432/db', 'postgres://u@::1/db',
+                  'postgresql://u@[::1]/db', 'postgresql://u@192.168.1.20/db',
+                  'postgresql://u@10.0.0.7/db', 'postgresql://u@169.254.1.1/db'):
+        assert kind(local).startswith('本机 PostgreSQL'), '%s 被说成了：%s' % (local, kind(local))
+    assert kind('postgresql://u:p@aws-0-x.pooler.supabase.co:6543/postgres').startswith(
+        '线上生产库'), kind('postgresql://u:p@aws-0-x.pooler.supabase.co:6543/postgres')
+    other = kind('postgresql://u:p@db-partner.example.com/db')
+    assert other.startswith('远程 PostgreSQL'), other
+    # 子串买不到"生产"这一档（第 43 轮 `push_sector_mappings_to_prod.py` 的同一条课）
+    for fake in ('notsupabase.evil.example', 'supabase.co.attacker.example',
+                 'mysupabase.internal'):
+        assert kind('postgresql://u@%s/db' % fake).startswith('远程 PostgreSQL'), \
+            '%s 靠子串混成了线上生产库' % fake
+    # 控制：三档必须**真的**是三档 —— 如果实现退化成"一律远程"或"一律生产"，上面会一起响；
+    # 这一条保证我没有只是把标签全删（那等于把这条闸拆了）。
+    assert len({kind('postgresql://u@127.0.0.1/db').split('（')[0],
+                kind('postgresql://u:p@x.supabase.co/db').split('（')[0],
+                kind('postgresql://u:p@db.example.com/db').split('（')[0]}) == 3
 
 
 def test_a_raw_connection_tells_which_database_it_points_at():
@@ -286,7 +341,12 @@ def test_the_two_self_report_rulers_stay_identical():
     try:
         import _db_guard
     except Exception as exc:                              # noqa: BLE001
-        pytest.skip('这台机器导入不了 `_db_guard`：%s' % exc)
+        # 第 45 轮 A-m3：这里以前 `pytest.skip` ⇒ 守卫文件一旦语法坏/改名/动了个顶层导入，
+        # "两把尺子逐条相等"这条承诺就静默变成"这台机器没测成"。skip 只能表达"环境做不到"，
+        # 而 `_db_guard` 只依赖标准库 + sqlalchemy（本文件下面已经在 import src.*），做不到
+        # 不是环境的正常结局。
+        raise AssertionError(
+            '导入不了 `scripts/_db_guard.py` ⇒ 两把尺子的对表**没测**，不是"通过"：%s' % exc) from exc
     finally:
         sys.path.remove(str(ROOT / 'scripts'))
     from src.services.verdict_evidence import describe_url

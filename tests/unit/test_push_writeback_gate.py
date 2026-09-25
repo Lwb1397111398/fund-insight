@@ -68,6 +68,45 @@ def test_dry_run_asks_the_server_only_once(monkeypatch, tmp_path):
     assert len(calls) == 1 and calls[0]['dry_run'] is True, calls
 
 
+def test_the_password_never_leaves_for_an_unknown_base(monkeypatch, tmp_path, capsys):
+    """`--base` 指到陌生主机时，**一次请求都不许发**（第 45 轮 B-M-7）。
+
+    第 43 轮 B-MAJOR-5 只改了那一行的措辞：`--base http://127.0.0.1:9/` 不再自称"线上生产库"，
+    但 `main()` 照旧把 `X-Access-Password` 与整份映射清单 POST 过去 —— 一行文案是给人看的，
+    挡不住任何东西。S6 的首次真回写就用这个工具，所以这条要钉在**动作**上：
+    ① 陌生主机 + 明文 http ⇒ 退 2 且零请求；
+    ② 同一台主机加了 `--allow-any-base` ⇒ 照发（拒绝必须是显式的）；
+    ③ 本机回环（对着 `serve_mirror.py` 核验）不加旗也放行；
+    ④ 生产域名但用 `http://` ⇒ 拦（口令不许走明文）。
+    """
+    code, calls = _run(monkeypatch, tmp_path, ['--base', 'http://evil.example/'])
+    assert code == 2, '把口令发给陌生主机居然退 %s' % code
+    assert calls == [], '一行都没该发出去：%s' % calls
+    out = capsys.readouterr().out
+    assert '[abort]' in out and ('明文' in out or '不敢把' in out),         '拦下来了却没说清为什么 ⇒ 操作者只会去加重试：%s' % out
+
+    code, calls = _run(monkeypatch, tmp_path, ['--base', 'https://staging.example/'])
+    assert code == 2 and calls == [], 'https 但不是我那台生产，也不该把口令交出去：%s' % calls
+    assert '不敢把' in capsys.readouterr().out, '陌生 https 主机那条拒绝理由没说清是谁'
+    code, calls = _run(monkeypatch, tmp_path,
+                       ['--base', 'https://staging.example/', '--allow-any-base'])
+    assert code == 0 and calls, '显式同意之后仍被拦 ⇒ 这道闸没有出口（退 %s）' % code
+
+    code, calls = _run(monkeypatch, tmp_path, ['--base', 'http://127.0.0.1:8098/'])
+    assert code == 0 and calls, '本机演练也被拦 ⇒ 本地核验这条常规路被焊死了'
+
+    code, calls = _run(monkeypatch, tmp_path,
+                       ['--base', 'http://fund-insight.onrender.com/'])
+    assert code == 2 and calls == [], '生产域名走 http 明文也要拦：%s / %s' % (code, calls)
+
+    # 控制：把闸拆掉（恒放行）时上面几条必须变绿 —— 证明这几条判据真的在看 `_send_allowed`
+    original = push._send_allowed
+    monkeypatch.setattr(push, '_send_allowed', lambda base, allow_any: None)
+    code, calls = _run(monkeypatch, tmp_path, ['--base', 'http://evil.example/'])
+    assert code == 0 and calls, '把 `_send_allowed` 换成恒放行后仍然拦 ⇒ 上面几条测的不是它'
+    monkeypatch.setattr(push, '_send_allowed', original)
+
+
 def test_real_write_preflights_and_drops_unpriced_rows(monkeypatch, tmp_path):
     code, calls = _run(monkeypatch, tmp_path, ['--confirm', push.CONFIRM])
     assert code == 0, code

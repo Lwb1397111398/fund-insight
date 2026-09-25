@@ -234,12 +234,19 @@ def test_the_l3_report_date_is_computed_and_not_copied():
         assert got == expected, '%s 报的日期是 %s，今天北京是 %s ⇒ 日期不是现算的' % (
             name, got, expected)
 
-    src = (ROOT / 'scripts' / 'estimate_l3_vague_labels.py').read_text(encoding='utf-8')
-    frozen_in_repo = _hardcoded_report_dates(src)
-    assert not frozen_in_repo, '脚本里又出现写死的报告日期：%s' % frozen_in_repo
-    frozen = src.replace('report_date = _today_beijing().isoformat()', 'report_date = "2026-07-29"')
-    assert frozen != src, '替换没生效（那句的形状变了）⇒ 下面这条控制断言是空判'
-    assert _hardcoded_report_dates(frozen), '把日期抄回字面量，尺子却没响 ⇒ 这条判据是死的'
+    # 第 45 轮 A-M9：形状腿以前**只读了一个脚本**，而 AGENTS 的说法是"两份 L3 报告的日期
+    # 必须现算"。行为腿循环两支、形状腿却只看一支 ⇒ 把 `audit_l3_clear_labels.py` 那一支
+    # 改回字面量，没有任何判据读得到它。现在两支各自过一遍，各自带一处"抄回去必须响"的控制。
+    anchor = 'report_date = _today_beijing().isoformat()'
+    for script_name in ('estimate_l3_vague_labels.py', 'audit_l3_clear_labels.py'):
+        text = (ROOT / 'scripts' / script_name).read_text(encoding='utf-8')
+        frozen_in_repo = _hardcoded_report_dates(text)
+        assert not frozen_in_repo, '%s 里有写死的报告日期：%s' % (script_name, frozen_in_repo)
+        broke = text.replace(anchor, 'report_date = "2026-07-29"')
+        assert broke != text, \
+            '%s 里找不到那句现算的赋值 ⇒ 这条控制断言在该文件上是空判' % script_name
+        assert _hardcoded_report_dates(broke), \
+            '%s 把日期抄回字面量而尺子没响 ⇒ 这一支没人看着' % script_name
 
 
 def test_the_read_only_door_also_blocks_writes_that_go_through_attach(tmp_path):
@@ -290,6 +297,54 @@ def test_the_read_only_door_also_blocks_writes_that_go_through_attach(tmp_path):
     assert payload['plain'] == 'succeeded', (
         '对照组（普通连接）也没写成功 ⇒ ATTACH 那一路压根没被打开过，'
         '上面那条"被拒绝"证明不了任何事：%s' % payload['plain'])
+
+
+def _lock_comes_after_the_probe(source):
+    """`read_only_connect` 里，`_enforce_query_only(...)` 是不是排在 `_write_probe(...)` 后面。"""
+    import ast
+    tree = ast.parse(source)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == 'read_only_connect'), None)
+    if fn is None:
+        return None
+
+    def _call_names(node):
+        return (getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)) \
+            if isinstance(node, ast.Call) else None
+
+    probes = [n.lineno for n in ast.walk(fn) if _call_names(n) == '_write_probe']
+    locks = [n.lineno for n in ast.walk(fn) if _call_names(n) == '_enforce_query_only']
+    return (probes, locks)
+
+
+def test_read_only_connect_locks_the_connection_only_after_the_probe():
+    """`PRAGMA query_only=ON` 必须排在"真试一次写"的探针**后面**（第 45 轮 A-m7）。
+
+    这句话以前只写在 `_enforce_query_only` 的 docstring 里，没有任何判据读顺序：把两行调换，
+    ATTACH 那条判据照样绿（它只看结果），而探针在**可写**库上也会被 pragma 拒绝 ⇒
+    "数据库自己说不许写"这道 fail-closed 校验当场变成恒真自检 —— 正是它要防的那类谎。
+    所以判的是顺序。控制：拿一份把两句对调过的源码喂同一个函数，它必须说"不对"
+    （否则这条判据只是在看"两行都在不在"）。
+    """
+    src = (ROOT / 'scripts' / '_db_guard.py').read_text(encoding='utf-8')
+    got = _lock_comes_after_the_probe(src)
+    assert got, '找不到 `read_only_connect` ⇒ 这条判据在空转'
+    probes, locks = got
+    assert probes and locks, '探针或加锁那一句不见了（%s / %s）⇒ 顺序判据没有对象' % (probes, locks)
+    assert min(locks) > max(probes), \
+        '加锁在第 %s 行、探针在第 %s 行 ⇒ 探针会被 pragma 自己"通过"，那道 fail-closed 校验成恒真' \
+        % (min(locks), max(probes))
+
+    # 控制：拿一段"两句对调"的假函数喂同一个检查，它必须判"顺序不对"
+    # （否则这条判据只是在看"两行在不在"，而不是在看顺序）
+    swapped = ('def read_only_connect():\n'
+               '    engine = None\n'
+               '    _enforce_query_only(engine)\n'
+               '    why = _write_probe(engine, ["CREATE TEMP TABLE t"])\n'
+               '    return engine\n')
+    late_probes, early_locks = _lock_comes_after_the_probe(swapped)
+    assert not (min(early_locks) > max(late_probes)), \
+        '把两句对调之后这条判据仍然说"顺序对" ⇒ 它根本没在看顺序'
 
 
 def _doc_snapshot():

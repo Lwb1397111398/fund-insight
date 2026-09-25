@@ -143,6 +143,46 @@ def test_a_data_source_line_must_name_a_target_or_admit_it_was_never_recorded(tm
     assert seen == 1 and len(vague) == 1, '承认"未记录"却不给复现命令 ⇒ 不该放行'
 
 
+def test_a_claim_wrapped_onto_the_next_line_is_still_a_claim(tmp_path, monkeypatch, capsys):
+    """文件名落在行末、数落在行首的软换行排版，逐行扫的旧写法读不到（第 45 轮 A-m6）。
+
+    现场：`docs/模块总览/前端与接口层.md` 那句"（16 条判据、35 处变异逐条打红）"就写在
+    `test_frontend_cold_start.py` 的**下一行**开头，而当场其实是 42 条 ⇒ 没有任何判据读得到它。
+    两头都要钉：① 认得出，且认出来之后 `--fix` 改写的是**数所在那一行**（段内偏移换算错了
+    就会改到别的字节上）；② 反向对照：上一句已经用 `。` 收口、下一行另起一句 ⇒ 两句不许
+    被拼成一条承诺（误报的尺子会逼人把对的数改错）。
+    """
+    mod = _load()
+    doc = tmp_path / 'W.md'
+    doc.write_text(u'判据：`tests/unit/test_wrap.py`\n（9 条判据逐条打红）。\n'
+                   u'当场照出 14 条漏桩用例（`tests/unit/test_far.py` 整个文件的补拉腿）。\n'
+                   u'五条硬规矩：① 甲；② 乙；③ 丙；④ 丁；⑤ 戊。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
+    monkeypatch.setattr(mod, '_collected_counts',
+                        lambda: {'test_wrap.py': 42, 'test_far.py': 3})
+    now, _delta, _unbound = mod._claims()
+    assert [(c['test'], c['stated'], c['line']) for c in now] == [('test_wrap.py', 9, 2)], now
+
+    # 控制：把"数"搬回同一行，旧写法本来就该认得 —— 排除"新形状靠的是别的东西"
+    same = tmp_path / 'S.md'
+    same.write_text(u'判据：`tests/unit/test_wrap.py` 9 条判据。\n', encoding='utf-8')
+    monkeypatch.setattr(mod, '_doc_files', lambda: [same])
+    assert [(c['test'], c['stated'], c['line']) for c in mod._claims()[0]] == [
+        ('test_wrap.py', 9, 1)], '同一行的形状反而不认得了 ⇒ 跨行改动把老形状弄坏了'
+
+    monkeypatch.setattr(mod, 'ROOT', tmp_path)
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])       # 指回跨行那份，别改到对照组样品上
+    monkeypatch.setattr(mod, '_source_lines', lambda: ([], 0))
+    monkeypatch.setattr(sys, 'argv', ['audit_doc_claims.py', '--fix'])
+    assert mod.main() == 0, '条数已经不符却退了"全部对上" ⇒ 跨行承诺没进判红的那一组'
+    out = capsys.readouterr().out
+    lines = doc.read_text(encoding='utf-8').splitlines()
+    assert lines[0] == u'判据：`tests/unit/test_wrap.py`', '名字那一行被动了：%s / %s' % (lines, out)
+    assert lines[1] == u'（42 条判据逐条打红）。', '该改的那一处没改对字节：%s / %s' % (lines, out)
+    assert lines[2] == u'当场照出 14 条漏桩用例（`tests/unit/test_far.py` 整个文件的补拉腿）。', lines
+    assert '已改写 1 处条数' in out, out
+
+
 def test_a_script_name_that_happens_to_contain_test_is_not_a_claim(tmp_path, monkeypatch):
     """`backtest_l1_weighting.py` 里含着 `test_l1_weighting.py` ⇒ 不算一条测试承诺。
 

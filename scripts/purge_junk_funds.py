@@ -13,10 +13,13 @@
 4. 这个仓库反复为"批量删除"付过账 ⇒ 一律：先备份被删的行、逐行回执、`--restore-from` 可还原。
 
 用法：
-    python scripts/purge_junk_funds.py                       # 只读预检 + 出计划
-    python scripts/purge_junk_funds.py --production          # 对生产做只读预检
+    python scripts/purge_junk_funds.py                       # 只读预检 + 出计划（默认钉本地镜像）
+    python scripts/purge_junk_funds.py --production          # 对**生产**做只读预检（不加 --apply 时）
     python scripts/purge_junk_funds.py --apply --confirm PURGE-JUNK
+    python scripts/purge_junk_funds.py --production --apply --confirm PURGE-JUNK   # 真删生产
     python scripts/purge_junk_funds.py --restore-from backup/purge-junk-xxx.json
+`--production` 不是"多印一行目标"：它同时是方向闸 —— 给了它却解析出 SQLite、或没给却解析出
+非 SQLite，都当场拒跑（见 `_target_agrees_with_the_flag`）。
 """
 import argparse
 import io
@@ -260,6 +263,28 @@ def _coerce_row(model, row):
     return out
 
 
+def _target_agrees_with_the_flag(production_flag, url):
+    """旗子说"要动哪台"与连接**实际**落在哪台必须一致，否则拒跑（第 45 轮 B-m5）。
+
+    `--production` 以前只是"多印一行 [target]"：它既不改变连接怎么建，也没有任何一处回头
+    核对结果 ⇒ 把它从 argparse 里删掉，行为一个字都不变（一条装饰性的旗子比没有旗子更坏 ——
+    它会让人以为"没写这把旗子就动不到生产"）。现在它是**双向**的闸：
+    给了旗子却解析出 SQLite ⇒ 说明 `.env` 已经换了，停；
+    没给旗子却解析出非 SQLite ⇒ 说明钉库没生效，而这把脚本会**硬删**，停。
+    返回 `None` 表示可以继续，否则返回要印的那句拒绝理由。
+    """
+    from _db_guard import _db_host, _is_a_local_host, db_kind
+    is_sqlite = (url or '').lower().startswith('sqlite')
+    really_remote = (not is_sqlite) and not _is_a_local_host(_db_host(url))
+    if production_flag and not really_remote:
+        return ('[abort] --production 说要动**那台线上库**，可连接实际落在 %s ⇒ 两者不一致，'
+                '不敢动手' % db_kind(url))
+    if not production_flag and not is_sqlite:
+        return ('[abort] 没给 --production 却解析出非 SQLite 的目标 %s ⇒ 钉库没生效。'
+                '这把脚本会**硬删** `fund_info`，停在这里' % db_kind(url))
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description='删除 6 个垃圾 fund_info 码（默认只出计划）')
     ap.add_argument('--apply', action='store_true')
@@ -299,6 +324,15 @@ def main():
     from src.models.database import FundInfo, SectorFundMapping, SessionLocal
 
     db = SessionLocal()
+    # 旗子要有牙（第 45 轮 B-m5）：连接**实际**落在哪台，必须与 `--production` 说的一致。
+    from _db_guard import db_kind as _kind
+    actual_url = str(db.get_bind().url)
+    why = _target_agrees_with_the_flag(args.production, actual_url)
+    if why:
+        db.close()
+        print(why)
+        return 4
+    print('[target] 复核：连接实际落在 %s（--production=%s）' % (_kind(actual_url), args.production))
     try:
         if args.restore_from:
             if not os.path.exists(args.restore_from):

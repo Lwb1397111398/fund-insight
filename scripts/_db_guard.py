@@ -5,6 +5,7 @@
 `import src.models.database` 的脚本默认都在连线上库；覆盖导入/批量写库这类
 操作一旦误连就是线上事故。所以脚本必须先调用本模块，再 import 任何 ORM。
 """
+import ipaddress
 import os
 import re
 import sys
@@ -13,7 +14,9 @@ import sys
 # 所有脚本统一在导入本模块时把 stdout/stderr 切成 UTF-8 + 替换模式。
 # `line_buffering=True` 是第 43 轮 B-M4 补的：stdout 进管道（Render 日志、`> log 2>&1`、cron）
 # 时是**块缓冲**，而 alembic / logging 走 stderr ⇒ "[库] 我要动谁"会排到它承诺领先的那件事后面，
-# 进程被杀时那一行一个字都看不见。一句改成行缓冲，19 个自报点一起生效。
+# 进程被杀时那一行一个字都看不见。一句改成行缓冲，各脚本的自报点一起生效
+# （第 45 轮 A-m5：这里曾写死"19 个自报点"——没有任何命令印得出这个数，
+# 加一个自报行它就过时，属于"会漂移的数不留文字版"那一族）。
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
@@ -22,6 +25,10 @@ for _stream in (sys.stdout, sys.stderr):
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB = os.path.join(ROOT, "data", "fund_insight.db")
+# 本项目那台线上库的**注册域**（不是子串！见 `_is_the_production_host`）。
+# 两份实现共用同一张表：`src/services/verdict_evidence._PROD_DB_DOMAINS` 必须逐字相等，
+# 由 `tests/unit/test_database_label_targets.py` 钉住。
+_PROD_DB_DOMAINS = ("supabase.com", "supabase.co", "supabase.in")
 
 
 def _dotenv_database_url():
@@ -62,28 +69,42 @@ def already_built_url():
         return '?'
 
 
-_ENGINE_HOLDERS = ('engine', 'SessionLocal', 'async_engine')
-
-
 def _url_of(obj):
-    """从一个**真的像连接**的对象问出它连的目标：Engine / Connection / Session / sessionmaker。
+    """从一个**真的是一条连接**的对象问出它连的目标：Engine / Connection / Session /
+    sessionmaker / scoped_session。
 
-    先按类型过滤，不是按"有没有 url 这个属性"：`vars(sqlalchemy)` 里就有一个叫 `engine` 的
-    **子模块**（`sqlalchemy.engine`），而 `str(模块对象)` 既不报 `sqlite` 也不是连接串 ——
-    第一版没做这一层过滤，于是 `pin_local_sqlite()` 对每个导入过 sqlalchemy 的进程都 abort，
-    连"已建在 SQLite 只许警告"那一档都被它打死（现场由
-    `tests/unit/test_script_db_guards.py::test_pinning_also_refuses_when_a_stray_module_holds_a_remote_engine`
-    与 `…_warns_instead_of_aborting` 一起抓出来）。
+    三遍学费，都是这个文件自己写出来又被打脸的：
+    ① 按"有没有 url 属性"猜 ⇒ `sqlalchemy.engine` 是个**叫 engine 的子模块**，
+       每个导入过 sqlalchemy 的进程都被判成"绑在远程"（12 条 in-process 用例一起红）；
+    ② 改成"类型属于 sqlalchemy"仍然不够 ⇒ `_FunctionGenerator`（`func.url(...)` 那类东西）
+       与 `CrawlerArticleRecord.url` 这样的**模型列**都能 `str()` 出一串不像连接串的东西，
+       于是扫描把 ORM 的列当成了"一条远程连接"（第 45 轮由我自己的两条对照抓红）；
+    ③ 现在 **isinstance 认具体的类**，并且结果必须长得像连接串（含 `://` 或 `=`）才算数。
+
+    边界照旧要说清：调用方自己包装的连接（不是这几个类）与**函数局部变量**里的引用，
+    这一道照不到 —— 那一半仍然只能靠"把钉库提到所有 src.* 导入之前"。
     """
-    if not (type(obj).__module__ or '').startswith('sqlalchemy'):
+    try:
+        import sqlalchemy as sa
+        from sqlalchemy.orm import Session, scoped_session, sessionmaker
+        kinds = (sa.engine.Engine, sa.engine.Connection, Session, sessionmaker, scoped_session)
+    except Exception:                                       # noqa: BLE001  没装 sqlalchemy 就谈不上
         return None
-    for pick in (lambda: str(obj.url), lambda: str(obj.engine.url),
-                 lambda: str(obj.get_bind().url), lambda: str(obj.kw['bind'].url),
-                 lambda: str(obj.bind.url)):
+    if not isinstance(obj, kinds):
+        return None
+    candidates = []
+    for pick in (lambda: str(obj.url),                                   # Engine
+                 lambda: str(obj.engine.url),                            # Connection
+                 lambda: str(obj.get_bind().url),                        # Session / scoped_session
+                 lambda: str(obj.kw['bind'].url),                        # sessionmaker(bind=…)
+                 lambda: str(obj.registry.kw['bind'].url)):              # scoped_session 的工厂
         try:
-            return pick()
+            candidates.append(pick())
         except Exception:                                     # noqa: BLE001 形状不对就换下一个
             continue
+    for url in candidates:
+        if url and ('://' in url or '=' in url):
+            return url
     return None
 
 
@@ -93,7 +114,7 @@ def _stray_remote_engines():
     第 44 轮 B-MAJOR-6：`already_built_url()` 只问 `src.models.database` 那一个模块，
     于是 `del sys.modules['src.models.database']` 再重新 import（或任何把那条标记抹掉的写法）
     就能让钉库"看起来成功"，而已经 `from src.models.database import engine` 的那些调用方
-    仍绑在生产串上。所以钉库之前把 `sys.modules` 里所有模块的 `_ENGINE_HOLDERS` 属性都问一遍。
+    仍绑在生产串上。所以钉库之前把本仓库模块里的**每一个值**都问一遍"像不像一条连接"。
 
     三处刻意的克制（每一条都是被真实故障教出来的）：
     ① 只读 `vars(模块)` 里**已经存在**的名字，不用 `getattr` 逐个试 ——
@@ -115,7 +136,9 @@ def _stray_remote_engines():
     root_norm = os.path.normcase(os.path.realpath(ROOT)) + os.sep
 
     def _ours(name, mod):
-        if name.startswith('src'):
+        if name.startswith('src') or name == '__main__':
+            # `__main__` 也算：一次性探针就是它（第 45 轮 B-M-3 的 H 样品：探针脚本自己
+            # 的 `__file__` 在仓库外，以前整族跳过 ⇒ "钉库前先看谁还连着"对它不成立）
             return True
         try:
             file_ = getattr(mod, '__file__', '') or ''
@@ -123,23 +146,48 @@ def _stray_remote_engines():
         except Exception:                                     # noqa: BLE001 问不动就当不是我们的
             return False
 
+    def _one(obj, label):
+        url = _url_of(obj)
+        if url and not url.lower().startswith('sqlite'):
+            out.append((label, url))
+
     def _ask(mod, label):
         if id(mod) in seen:
             return
         seen.add(id(mod))
         try:
-            holders = {k: v for k, v in vars(mod).items() if k in _ENGINE_HOLDERS}
-            children = [v for v in vars(mod).values() if type(v) is types.ModuleType]
+            values = list(vars(mod).values())
+            children = [v for v in values if type(v) is types.ModuleType]
         except Exception as exc:                              # noqa: BLE001 怪对象不许弄坏守卫
             print("[警告] 探测散落连接时读不了模块 `%s`（%s）⇒ 这一道没跑完"
                   % (label, str(exc)[:80]))
             return
-        for obj in holders.values():
-            url = _url_of(obj)
-            if url and not url.lower().startswith('sqlite'):
-                out.append((label, url))
+        # **不按属性名筛**（第 45 轮 B-M-3 / A-m1：上一版只认 `engine`/`SessionLocal`/
+        # `async_engine` 三个名字 —— 改名 `_engine`、`DB_ENGINE`，或塞进 dict / 类属性就隐身，
+        # 而本仓 `src/api/main.py:391` 那种命名风格就在旁边）。认的是"这个值像不像一条连接"：
+        # `_url_of` 先按类型过滤（`type(obj).__module__` 以 sqlalchemy 开头），所以既不会
+        # 误伤 `sqlalchemy.engine` 那个**叫 engine 的子模块**，也不需要知道它叫什么。
+        for obj in values:
+            _one(obj, label)
+            if isinstance(obj, dict):
+                for value in list(obj.values())[:200]:
+                    _one(value, label + '（dict 里的值）')
+            elif isinstance(obj, (list, tuple, set)) and len(obj) <= 200:
+                for value in obj:
+                    _one(value, label + '（容器里的元素）')
+            elif isinstance(obj, type):
+                for value in list(vars(obj).values())[:200]:
+                    _one(value, label + '（类属性）')
         for child in children:
-            _ask(child, getattr(child, '__name__', '?'))
+            child_name = getattr(child, '__name__', '')
+            if child_name == 'src.models.database' and \
+                    sys.modules.get(child_name) is child:
+                # 只有"确实还挂在那个键下"才交给 `already_built_url()` 去报（同一个对象报两遍
+                # 是噪音）。`del sys.modules['src.models.database']` 之后，父包属性上那个模块
+                # 对象**还在**、engine 也还绑着生产串，而 `already_built_url()` 已经看不见它了
+                # —— 那正是第 44 轮 B-MAJOR-6 要堵的绕法，按名字一律跳过等于给它留了门。
+                continue
+            _ask(child, child_name or '?')
 
     for name, mod in list(sys.modules.items()):
         if name == 'src.models.database' or type(mod) is not types.ModuleType:
@@ -221,7 +269,7 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
         if "://" in override and not override.lower().startswith("sqlite"):
             # 报错信息教操作者设的那玩意，自己也不能是 postgres://
             print("[abort] %s 也必须指向 SQLite（%s）：本脚本只操作本地镜像库"
-                  % (allow_env_override, override.split("@")[-1]))
+                  % (allow_env_override, machine_name(override)))
             raise SystemExit(4)
         if "://" not in override:
             # 允许只给一个文件路径，统一转成 sqlite URL
@@ -239,7 +287,7 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
             print("[abort] DATABASE_URL 指向非 SQLite（%s）。"
                   "本脚本只操作本地镜像库：设 LOCAL_DB_URL=sqlite:///<路径>，"
                   "或在脚本里显式 pin_local_sqlite(use_mirror_default=True)。"
-                  % configured.split("@")[-1])
+                  % machine_name(configured))
             raise SystemExit(4)
     elif configured:
         # `.env` 里本来就是 SQLite：把值写回进程环境，否则下面按 key 取会 KeyError
@@ -250,7 +298,7 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
     url = os.environ.get("DATABASE_URL", "")
     # 兜底断言（不是 assert：`python -O` 会把 assert 整条剥掉）
     if not url.lower().startswith("sqlite"):
-        print("[abort] 最终 DATABASE_URL 仍非 SQLite（%s）" % url.split("@")[-1])
+        print("[abort] 最终 DATABASE_URL 仍非 SQLite（%s）" % machine_name(url))
         raise SystemExit(4)
     print("[env] DATABASE_URL = %s" % url)
     sys.stdout.flush()
@@ -258,6 +306,11 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
 
 
 _DSN_KEEP_KEYS = ('host', 'hosts', 'port', 'dbname', 'database')
+# 一个键值对：值可以是 `'带空格的'`、`"带空格的"` 或裸词。分隔符按 libpq 与 URI 两种写法都认
+# （`&` 与 `,` 以前不切，`host=h&password=X` 整串被当成**一个**值原样印出来 —— 第 45 轮 A-m2）。
+_DSN_PAIR = re.compile(r"(?P<k>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+                       r"(?:'(?P<q1>[^']*)'|\"(?P<q2>[^\"]*)\"|(?P<p>[^\s'\",;=&]*))")
+_DSN_SECRET_KEYS = ('password', 'passwd', 'pwd', 'secret')
 
 
 def _conninfo_target(text):
@@ -272,15 +325,24 @@ def _conninfo_target(text):
     if '=' not in text:
         # 认不出键值写法时按"@ 之后"处理：宁可少说，不可把凭据多说出去。
         return text.split('@')[-1] or '(空)'
-    kept = []
-    for part in re.split(r'[;\s]+', text):
-        if '=' not in part:
+    # 引号不配对 ⇒ 后面的键值切分不可信（第 45 轮 B-m1 的复现形状：
+    # `password='two words dbname=LEAKED'` 会被 naive 的按空格切分当成两个键，
+    # 于是口令的第二个词以 `dbname=` 的名义印出来）。这种情况下只留 host/port。
+    unbalanced = (text.count("'") % 2) or (text.count('"') % 2)
+    kept, secret_seen = [], False
+    for m in _DSN_PAIR.finditer(text):
+        key = (m.group('k') or '').strip().lower()
+        value = next((g for g in (m.group('q1'), m.group('q2'), m.group('p'))
+                      if g is not None), '').strip()
+        if key in _DSN_SECRET_KEYS:
+            secret_seen = True
             continue
-        key, _, value = part.partition('=')
-        key, value = key.strip().lower(), value.strip()
-        if key in _DSN_KEEP_KEYS and value:
+        if key in _DSN_KEEP_KEYS and value and not (unbalanced and key not in ('host', 'port')):
             kept.append('%s=%s' % (key, value))
-    return ' '.join(kept) or '(DSN：只留下非凭据字段，其余已隐去)'
+    out = ' '.join(kept)
+    if unbalanced and secret_seen:
+        out += '（引号不配对，其余字段已隐去）'
+    return out or '(DSN：只留下非凭据字段，其余已隐去)'
 
 
 def machine_name(url):
@@ -295,7 +357,7 @@ def machine_name(url):
     if "://" not in url:
         return _conninfo_target(url)
     scheme, rest = url.split("://", 1)
-    if scheme.startswith("sqlite"):
+    if scheme.lower().startswith("sqlite"):
         # 自报要照着**打得开的那个路径**报（第 41 轮 B-MINOR-3）。SQLAlchemy 的 sqlite URL 里
         # 前导斜杠的个数有意义：`sqlite:///data/x.db` 是**相对**路径、
         # `sqlite:////home/x.db` 才是 POSIX 绝对路径、Windows 写成 `sqlite:///E:/x.db`
@@ -307,7 +369,9 @@ def machine_name(url):
         if re.match(r"^/[A-Za-z]:[\\/]", body):        # 四斜杠 Windows 绝对：/E:/… → E:/…
             body = body[1:]
         return body or "(当前目录里的 sqlite 文件)"
-    where = rest.split("@")[-1].split("?", 1)[0]
+    # 剪掉 query / fragment / `;` 参数：`postgresql://h/db?password=X` 里最涉密的那一段
+    # 不能跟着"这是哪个库"进日志（第 45 轮 A-m2 / B-m1）
+    where = re.split(r"[?;&#]", rest.split("@")[-1], 1)[0]
     return "%s://%s" % (scheme, where)
 
 
@@ -329,6 +393,65 @@ def is_the_mirror(name):
         return False
 
 
+def _db_host(url):
+    """连接串里的**主机名**（小写、去端口、口令一个字符都不取）—— 判"这台是不是本机"用。"""
+    if "://" in url:
+        rest = url.split("://", 1)[1]
+        where = re.split(r"[?;&#]", rest.split("@")[-1], 1)[0]
+        netloc = where.split("/")[0]
+        if netloc.startswith("["):
+            # 带方括号的 IPv6 字面量（`postgresql://u@[::1]:5432/db`）：端口在 `]` **之后**，
+            # 按 `:` 切会把主机切成一个 `[`（第 45 轮 B-m5 的对照组当场照出来）
+            end = netloc.find("]")
+            return netloc[:end + 1].lower() if end > 0 else netloc.lower()
+        return netloc.split(":")[0].lower()
+    m = re.search(r"(?:^|[\s;,])hosts?\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s'\",;=&]*))",
+                  url, re.I)
+    if m:
+        return (m.group(1) or m.group(2) or m.group(3) or '').lower()
+    return ""
+
+
+def _is_a_local_host(host):
+    """空主机 / localhost / 回环 / 私网 ⇒ 这台**不可能**是线上生产库（第 45 轮 B-m5）。"""
+    if not host or host in ("localhost", "::1", "[::1]"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False                      # 域名：不是"显然本机"，也不许被判成本机
+    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
+
+
+def _is_the_production_host(host):
+    """主机名**就是**（或挂在）Supabase 的域下面 ⇒ 才是本项目那台线上库。
+
+    第 45 轮 B-m5 的第二半：判据写成 `'supabase' in host` 会被 `notsupabase.evil.example`
+    买通 —— 与第 43 轮 `push_sector_mappings_to_prod.py` 上那条"子串匹配的生产域名"同一课。
+    所以只认"精确等于或以这几个注册域结尾"（`x.supabase.co.attacker.example` 不算）。
+    本项目真要换托管商，改这张表，别把判据改回子串。
+    """
+    host = (host or '').lower()
+    return any(host == s or host.endswith('.' + s) for s in _PROD_DB_DOMAINS)
+
+
+def _postgres_words(url, name):
+    """"这是一个 PostgreSQL"这句话要说到的**三档**，不许一档糊过去。
+
+    第 45 轮 B-m5：旧写法看见 `postgres*://` 就印"线上生产库"。可 `postgresql://u@127.0.0.1/db`
+    是本机起的一个 Postgres，`postgresql://u@10.0.0.5/db` 是内网某台 ——
+    把不是生产的东西说成生产，比报"远程库"更坏：操作员会照着这句话决定要不要按 `--confirm`。
+    现在只有"主机名里带 supabase"（本项目那台的确切形状）才叫线上生产库，
+    其余远程 PostgreSQL 单列一档并明说它不是。
+    """
+    host = _db_host(url)
+    if _is_a_local_host(host):
+        return "本机 PostgreSQL（%s，不是线上生产库）" % name
+    if _is_the_production_host(host):
+        return "线上生产库（%s）" % name
+    return "远程 PostgreSQL（%s）—— 不是本项目那台 Supabase 生产库" % name
+
+
 def db_kind(url):
     """连接串 → "这是哪个库"那半句话。与 `src/services/verdict_evidence.describe_url()` 同一套词。
 
@@ -346,7 +469,7 @@ def db_kind(url):
         return '本地 sqlite 文件（不是镜像库）：%s' % name
     low = url.lower()
     if low.startswith(('postgres', 'postgresql')):
-        return '线上生产库（%s）' % name
+        return _postgres_words(url, name)
     if low.startswith('mysql'):
         return 'MySQL 库（%s）' % name
     # 认不出的 scheme：两边都必须走同一条 fallback（第 43 轮笛卡尔积样品 `''`/`'://x'`
@@ -507,8 +630,12 @@ def read_only_connect(argv=None):
         try:
             engine = sa.create_engine(url, pool_pre_ping=True,
                                       execution_options={"postgresql_readonly": True})
+            # 第二条必须是 `DROP TABLE IF EXISTS`：PG 的 DDL 是**事务性**的，探针下面那句
+            # `conn.rollback()` 会把刚建的临时表一起带走 ⇒ 用裸 `DROP TABLE`  cleanup 必然报
+            # "表不存在"，于是判定虽然仍然拒写（方向没错），话却指挥人去线上查一张根本没留下的表
+            # （第 45 轮 A-m8 / B-m6）。SQLite 腿不受影响：那边 DDL 隐式提交，表是真会留下的。
             why = _write_probe(engine, ["CREATE TEMP TABLE _db_guard_probe(x int)",
-                                        "DROP TABLE _db_guard_probe"])
+                                        "DROP TABLE IF EXISTS _db_guard_probe"])
         except Exception as exc:                      # noqa: BLE001  连不上也要说清是谁
             print("[abort] 连不上 %s：%s" % (db_kind(url), str(exc)[:160]))
             raise SystemExit(4)

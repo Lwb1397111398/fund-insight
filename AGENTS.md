@@ -201,17 +201,43 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-25 10:3x（北京），第 44 轮返修（A 76 / B 73，取低分 73）之后，
+最近一次核对（2026-09-25 14:0x（北京），第 45 轮返修（A 74 / B 76，取低分 74）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1041 passed / 16 skipped / 0 failed**（471.06 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1050 passed / 16 skipped / 0 failed**（448.64 秒）。
+- `pytest tests/unit -q` → **1054 passed / 16 skipped / 0 failed**（532.33 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1063 passed / 16 skipped / 0 failed**（570.75 秒）。
+  （上一基线 1041/1050 → 本批 1054/1063：+13 条，分布在 `test_script_db_guards.py` +5
+  （守卫那条分支必须**可达**且**排在危险动作之前**（死路样品 + 先动手后拒跑样品）/
+  "方向"只能来自**值**（函数每条 `return` 都是 sqlite 才算，按名字猜一律不算）/
+  借道子进程那份名单不许是**过期闸门**（现造一条借道调用必须被点名）/
+  动态 `importlib` + `exec` 买的透明性必须被点名（含"别拿 importlib 读文件"的过宽对照）/
+  `run_migrations` 问迁移闸门排在**建连接与导入 ORM 之前**），
+  `test_sweep_restore_owner_immunity.py` +3（新文件：还原默认拒绝盖回老板免疫 /
+  显式旗子才还原 / manifest 里一处免疫都没写时不许虚报"我拦下了几行"），
+  `test_database_label_targets.py` +1（PostgreSQL 三档：本机 / Supabase 生产 / 别的远程，
+  含"子串混进生产档"的对照与"三档必须真的互不相同"的控制）、`test_doc_claims.py` +1
+  （文件名在行末、数在行首的**软换行**必须仍然被对账，且 `--fix` 改的是数所在那一行；
+  反向对照：上一句已用 `。` 收口 ⇒ 两句不许拼成一条承诺）、
+  `test_read_only_door.py` +1（两份 L3 报告的日期各自都要过现算那把尺子 —— 以前只读了一支）、
+  `test_push_writeback_gate.py` +1（`--base` 未知时那行目标不许自称线上生产库）、
+  `test_purge_junk_funds.py` +1（`--production` 有牙：旗子与实际连接不一致 ⇒ 退 4，
+  并用 AST 钉"这道判在第一次 commit 之前"）。
+  **本批改了我自己上一轮写的三句谎话**：① "`del sys.modules[...]` 那条绕法作废" ——
+  散落连接扫描按 `__name__` 跳过 `src.models.database`，而 `del` 之后那个对象的 `__name__`
+  还在 ⇒ 我要堵的路自己留着门（现在只有"确实还挂在那个键下"才交给 `already_built_url()`）；
+  ② "豁免共五条来源" —— 我这一批自己加了第六条（`sweep_sector_mappings.py
+  --restore-owner-immunity`）而那句话当场过期 ⇒ 文档与用例的注释都不再抄这个数，
+  真值就是 `IMMUNITY_GRANT_SITES` + `IMMUNITY_OPAQUE_SITES` 两张表；
+  ③ "守卫信号改成判同一条分支" —— 同一条分支如果不可达、或者排在 `upgrade()` 之后，
+  等于没判（这正是第 45 轮两份报告独立点到的同一层）。
+  还有一条关于**我自己写判据**的：我用子串断言"不许说线上生产库"，而"（…，不是线上生产库）"
+  里就含那四个字 ⇒ 对的话被读成谎话；改成判"这一档的开头是什么"。）
   （上一基线 1029/1038 → 本批 1041/1050：+12 条，分布在 `test_script_db_guards.py` +5
   （"赋 DATABASE_URL"方向不明时不再算守卫，含现造样品与对照组 / 钉库前先看**别的模块**还连着谁，
   含"怪对象不许把守卫弄崩"的对照 / 只 import 一个 service 也算碰库（走 import 图，配一棵临时 src）/
   git 不可用时退回磁盘那一支自己跑一次 / `alembic/versions/*.py` 从此在扫描范围内：
-  upgrade 里删结构要登记，三种坏形状现造必被点名、正常迁移不许误伤）、
+  upgrade 里删结构要登记，现造的坏形状必被点名、正常迁移不许误伤（形状清单在那条用例里））、
   `test_read_only_door.py` +2（L3 报告的日期必须现算：子进程真问一次 + 全文件不许有写死日期，
   并当场把日期抄回字面量证明尺子会响 / 只读门的 `ATTACH` 侧门：门内写侧库要红、门外普通连接要绿）、
   `test_database_label_targets.py` +1（key=value 写法：**摘掉口令但留下 host 与库名**，
@@ -221,7 +247,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   现造一个"算了但没说"的形状必须判为没自报）、`test_drop_probe_residue.py` +1
   （`declared_tables()` 这把 oracle 自己没人测过 ⇒ 拿 AST 读 `__tablename__` 与元数据逐字对表）、
   `test_review_ownership_and_matching.py` +1（写死"老板已确认"的**授予点**从此有棘轮：
-  四种拼写都要认、搬运已有值不许误伤）。
+  写死授予值的拼写都要认、搬运已有值不许误伤；下一轮把形状清单补全，见上面那条棘轮）。
   **本批没动 `web/`**，所以前端那 104 处变异不需要重跑（原始日志随仓库走：
   `docs/迭代计划/run-20260924-mutation/round43-frontend-mutations.txt`）。
   **这一轮最值得记的一条**：新加的"探测散落连接"守卫把自己弄崩了 —— 它对 `sys.modules`
@@ -537,12 +563,32 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `downgrade`）。`alembic/env.py` 那道方向闸只管"能不能连过去"，管不到"过去之后删什么"。
   ⑥ 受检集合"git 不可用就退回磁盘并明说"这一支今天自己跑过一次（A-m3：以前只在 docstring 里），
   并配"临时目录里现造文件必须被收进来"的空判对照。
-- **写死"老板已确认"的授予点有棘轮了**（第 44 轮 A-M-3）：AGENTS 那句"豁免共五条来源、
-  每条都要显式令牌"以前只是话 —— `is_correct` 与 `fund_code` 的"唯一入口"当初也只是话，
-  后来各自多出一个入口。现在 `tests/unit/test_review_ownership_and_matching.py`
-  用 AST 扫 `src/` 与 `scripts/`，`row.owner_locked = True`、`{'reviewed_by': 'owner'}`、
-  `setattr(row, 'owner_locked', True)` 三种写法都要认，命中集合**必须逐字等于**登记名单
-  （名单只许变短），并且现造三种坏拼写各点名一次、一处"搬运已有值"（备份/序列化）不许误伤。
+- **同一条分支还不够：要"会执行、且排在危险动作之前"，方向要来自"值"**（第 45 轮两席共同的主账，
+  与上面那条同源，只是又深了一层）：
+  ① **死路不算守卫** —— `if False:`、`if X and False:` 那种恒假分支里的 `[abort]` 现在被认成死代码
+  （判据 `test_a_guard_must_be_reachable_and_stand_in_front_of_the_danger`，样品是它自己现造的）。
+  ② **顺序** —— 同一条分支里 `upgrade(...)` / `commit` / `drop` 在前、拒跑在后 ⇒ 不算守卫，
+  因为那句话执行的时候事情已经做完了；触发词表就是扫描器里的 `DANGEROUS_CALLS`。
+  ③ **方向要来自值** —— "自设 `DATABASE_URL`"要能证明设的是 SQLite：只认**函数自己每条 `return`
+  都返回 sqlite 字面量**（`_returns_sqlite` 不钻嵌套函数）、赋的字面量、`pin_local_sqlite`，
+  或一跳可证的本地调用；**按变量名猜、按 docstring 里出现过的词判，一律不算**
+  （A-M-2：`def local_url()` 返回生产串也会被名字骗到）。
+  ④ 危险迁移的判断从今天起**只有一份实现**：`scripts/migration_policy.py` 被 pytest 与
+  `scripts/run_migrations.py` 同时读（运行期在**建连接之前**、`import src.models.database` 之前
+  先问它），登记处在 `alembic/destructive-upgrades.json`（键＝迁移名、值＝为什么这不算事故）。
+  上一轮这里写的 `DATA_LOSSING_UPGRADES` 是个**当时并不存在的名字** ⇒ 数与名字都要跟着命令走，
+  复核：`python -c "import sys; sys.path.insert(0,'scripts'); import migration_policy as m; p,s=m.audit(); print(s,p)"`（今天印 `9 []`）。
+- **写死"老板已确认"的授予点有棘轮了**（第 44 轮 A-M-3 起，第 45 轮把形状补全）：AGENTS 那句
+  "豁免每一条来源都要显式令牌"以前只是话 —— `is_correct` 与 `fund_code` 的"唯一入口"
+  当初也只是话，后来各自多出一个入口。现在 `tests/unit/test_review_ownership_and_matching.py`
+  用 AST 扫 `src/` 与 `scripts/`，凡是"把授予值写死"的形状都要认（属性赋值 / 字典字面量 /
+  `setattr` 与 `object.__setattr__` / SQLAlchemy 批量 `.values(owner_locked=True)` /
+  值来自模块常量 / 三目的其中一臂 / 字段名与授予值成对的元组列表 —— 完整清单就是那条用例里
+  的 `shapes` 字典，**加一种拼写就在那加一个样品**），命中集合**必须逐字等于**登记名单且
+  **按条数**相等（同一函数里多写一行授予 ⇒ 名单看不出"多了一处"，第 45 轮 A-m4），
+  两处反向样品不许误伤（"搬运已有值"＝备份/序列化；与豁免无关的 `setattr(obj, name, v)`），
+  字段名是变量的 `setattr` 既不静默放过也不硬算成授予 ⇒ 落进 `IMMUNITY_OPAQUE_SITES`
+  并要求写明依据。`__init__.py` 从第 45 轮起**不再整族免检**（本仓的包 `__init__` 真放代码）。
   边界：`purge_junk_funds.py --restore-owner-immunity` 那一腿是**载荷驱动**的（值不是字面量），
   这条扫不到，由 `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉。
 - **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：
@@ -661,18 +707,27 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `scripts/purge_junk_funds.py --restore-owner-immunity`（`restore()` 的参数，149-174 行）
   在还原备份时可以把 `reviewed_by='owner' + owner_locked=True` 一起还原回去 ——
   它要的也是显式旗子，但以前文档只说"第四条来源"，等于承诺了一个不存在的封闭名单。
-  **现在把话说全：豁免共五条来源**（页面逐行审查 / 页面批量审查 / 页面编辑保存 /
-  seed 脚本的 `--owner-confirm SEED-PROXY` / 还原备份的 `--restore-owner-immunity`），
-  每一条都要显式令牌，且**都有用例钉着**：前三条在
+  **第 45 轮又数出一条**（我自己这批加的，先记在这里）：`scripts/sweep_sector_mappings.py
+  --restore-owner-immunity` —— 按 manifest 还原映射时同样能把老板署名/锁定盖回去，
+  默认**不**还原（判据 `tests/unit/test_sweep_restore_owner_immunity.py`）。
+  **每一条都要显式令牌**：前三条在
   `tests/unit/test_review_ownership_and_matching.py`（逐行审查那条）与
   `tests/unit/test_sector_mapping_api.py`（批量审查与编辑保存各有一条），
-  第四条在 `tests/unit/test_seed_owner_proxies_gate.py`（当场 8 条判据，数看
+  第四条在 `tests/unit/test_seed_owner_proxies_gate.py`（当场条数看
   `pytest tests/unit/test_seed_owner_proxies_gate.py --collect-only -q`：
   不给令牌退 4 / 给错令牌退 4 / `--dry-run` 不写 / 给了令牌才落 `owner` 署名 /
   "闸排在 `pin_local_sqlite` 之前"的源码顺序 / 探针说取不到 ⇒ 不写 / 探针说可抓但没官方名 ⇒ 不写 /
-  桩的键必须等于真返回的键）；第五条在
-  `tests/unit/test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity`）。
-  但**别说成"豁免只有三个入口"**，也别再说成"只有四条"——数要跟着命令跑。
+  桩的键必须等于真返回的键）；后两条（还原备份的两把旗子）各在
+  `tests/unit/test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 与
+  `tests/unit/test_sweep_restore_owner_immunity.py`。
+  **这个名单到底几条，别在这里抄**：以
+  `tests/unit/test_review_ownership_and_matching.py` 的 `IMMUNITY_GRANT_SITES`
+  （写死授予值的代码点，含条数）＋ `IMMUNITY_OPAQUE_SITES`（字段名是变量那一站，含依据）
+  两张表为准 —— **加一处授予点不登记就红、登记了却没写依据也红**，所以数跟着表走
+  （看：`python -c "import ast; t=ast.parse(open('tests/unit/test_review_ownership_and_matching.py',encoding='utf-8').read()); print([(n.targets[0].id, len(getattr(n.value,'keys',None) or n.value.elts)) for n in ast.walk(t) if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','') in ('IMMUNITY_GRANT_SITES','IMMUNITY_OPAQUE_SITES')])"`
+  —— 今天印 `[('IMMUNITY_GRANT_SITES', 4), ('IMMUNITY_OPAQUE_SITES', 2)]`）。
+  以前这里写"豁免共五条来源"，而第 45 轮我动手加了第六条 ⇒ 那句话当场变成谎话，
+  现在改成"别处不抄数"。**仍然要说清的是**：别说成"豁免只有三个入口"。
   **这句话今天还多了一道机器闸**（第 44 轮 A-M-3）：AST 扫全仓"写死授予值"的代码点，
   命中集合必须逐字等于登记名单（名单只许变短）——见上面那条棘轮。
   换了基金代码又没重新确认时，**旧标的上继承来的锁定会被一并撤掉**（`row_unservable()` 的
