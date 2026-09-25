@@ -232,3 +232,48 @@ def test_the_target_line_only_claims_production_for_the_production_host(capsys):
         line = push._target_line(base)
         assert '这不是已知的生产域名' in line, line
         assert '线上生产库' not in line, '%s 仍被说成生产：%s' % (base, line)
+
+    # 第 44 轮 B-m6：上一版的判据是 `mark in host` 的**子串**匹配 ⇒
+    # `onrender.com.attacker.example` 与 `notonrender.com` 都能自称"经 HTTP 写线上生产库"。
+    # 这一行是操作者要不要按 `--confirm` 的唯一依据，被一个买得到的假串买通最坏。
+    # 反向样品也要钉：同后缀上**别人的** Render 应用同样不是我的生产（第 44 轮 B-m6 的
+    # 另一半 —— 我第一版改成"或它的子域"，正好把这一族放进了"线上生产库"）。
+    for not_mine in ('https://onrender.com.attacker.example/', 'https://notonrender.com/',
+                     'https://fund-insight.onrender.com.evil.test/',
+                     'https://somebody-else.onrender.com/', 'https://onrender.com/'):
+        line = push._target_line(not_mine)
+        assert '这不是已知的生产域名' in line, '假域名/别人的应用自称生产：%s ⇒ %s' % (not_mine, line)
+    # 真生产那一支仍然要说得出"生产"（否则这条闸只是把话全说了）：大小写与端口都不许它改口
+    for real in ('https://FUND-INSIGHT.ONRENDER.COM/', 'https://fund-insight.onrender.com:443/'):
+        assert '线上生产库' in push._target_line(real), push._target_line(real)
+
+
+def _prints_the_target(tree):
+    """这棵树上有没有一句 `print(...)` 里**含着** `_target_line(...)` 调用。"""
+    import ast
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == 'print'):
+            continue
+        if any(isinstance(s, ast.Call) and isinstance(s.func, ast.Name)
+               and s.func.id == '_target_line' for s in ast.walk(node)):
+            return True
+    return False
+
+
+def test_the_target_line_is_actually_said_out_loud():
+    """`_target_line()` 定义了却没人印 = 屏幕上仍然什么都没有（第 44 轮 A-m4）。
+
+    上一轮把守卫扫描改成"helper 返回值里的 `[目标]` 只有被印过才算自报"，
+    但没有一条用例正面回答"真脚本里它到底被印了吗"。这条读 AST 里那句 `print`，
+    并**当场造一个"算了但没说"的反面样品**证明判据会响 —— 只测仓库现状的判据，
+    在 helper 被改成"赋值给变量"的那天就退化成空判。
+    """
+    import ast
+    src = io.open(spec.origin, encoding='utf-8').read()
+    assert _prints_the_target(ast.parse(src)), \
+        '回写工具算出了目标却没把它印出来 ⇒ 操作者按 `--confirm` 时无从判断自己在动谁'
+    silenced = src.replace('print(_target_line(args.base))', '_line = _target_line(args.base)')
+    assert silenced != src, '替换没生效（那句 print 的形状变了）⇒ 这条控制断言是空判'
+    assert not _prints_the_target(ast.parse(silenced)), \
+        '"算了但没印"仍被判成自报 ⇒ 上面那条判据只是在看字符串在不在文件里"存在"'

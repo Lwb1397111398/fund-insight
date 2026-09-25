@@ -189,6 +189,109 @@ def test_the_three_l3_l1_scripts_now_go_through_the_door(tmp_path):
         assert 'create_engine' not in calls, '%s 又自己建 engine 了' % name
 
 
+def _hardcoded_report_dates(src):
+    """模块里**除 docstring 之外**写死的 `YYYY-MM-DD`（docstring 是在解释，不是在被渲染）。"""
+    import ast
+    import re
+    tree = ast.parse(src)
+    prose = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = getattr(node, 'body', None)
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                prose.add(id(body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in prose and re.search(r'\b20\d{2}-\d{2}-\d{2}\b', n.value)]
+
+
+def test_the_l3_report_date_is_computed_and_not_copied():
+    """报告上那个日期得**现算**，而且这件事得有两条腿钉着（第 44 轮 A：这条改完零覆盖）。
+
+    第 43 轮 B-MINOR-2 把模板字面量 `"2026-07-29"` 换成 `_today_beijing()` —— 换完没有任何用例
+    盯着它，把那句改回字面量，全套件仍然全绿。两半各钉一条：
+    ① 行为：子进程里真问一次 `_today_beijing()`，它必须等于**今天的北京日期**
+       （老字面量冻在 2026-07-29，这一支必红）；
+    ② 形状：脚本里除 docstring 外不许再出现写死的报告日期，并**当场造一处违规**证明尺子会响
+       （只测仓库现状的判据，在有人把日期抄回模板那天就是空判）。
+    """
+    from datetime import datetime, timedelta, timezone
+    expected = (datetime.now(timezone.utc) + timedelta(hours=8)).date().isoformat()
+    code = ('import importlib.util, sys\n'
+            'spec = importlib.util.spec_from_file_location("m", sys.argv[1])\n'
+            'm = importlib.util.module_from_spec(spec)\n'
+            'spec.loader.exec_module(m)\n'
+            'print(m._today_beijing().isoformat())\n')
+    for name in ('audit_l3_clear_labels.py', 'estimate_l3_vague_labels.py'):
+        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        out = subprocess.run([sys.executable, '-c', code, str(ROOT / 'scripts' / name)],
+                             cwd=str(ROOT), env=env, capture_output=True, text=True,
+                             encoding='utf-8', errors='replace', timeout=300)
+        assert out.returncode == 0, '%s 的 `_today_beijing()` 跑不起来：%s' % (
+            name, (out.stdout + out.stderr)[-300:])
+        got = out.stdout.strip().splitlines()[-1]
+        assert got == expected, '%s 报的日期是 %s，今天北京是 %s ⇒ 日期不是现算的' % (
+            name, got, expected)
+
+    src = (ROOT / 'scripts' / 'estimate_l3_vague_labels.py').read_text(encoding='utf-8')
+    frozen_in_repo = _hardcoded_report_dates(src)
+    assert not frozen_in_repo, '脚本里又出现写死的报告日期：%s' % frozen_in_repo
+    frozen = src.replace('report_date = _today_beijing().isoformat()', 'report_date = "2026-07-29"')
+    assert frozen != src, '替换没生效（那句的形状变了）⇒ 下面这条控制断言是空判'
+    assert _hardcoded_report_dates(frozen), '把日期抄回字面量，尺子却没响 ⇒ 这条判据是死的'
+
+
+def test_the_read_only_door_also_blocks_writes_that_go_through_attach(tmp_path):
+    """`mode=ro` 只锁**主库** —— 侧门是 `ATTACH`（第 44 轮 B-m1）。
+
+    这道门的承诺是"引擎级只读"，而 SQLite 的 `mode=ro` 管的是主库那一个文件：
+    从同一条 ro 连接 `ATTACH` 一个普通可写文件、再往**那个库**建表，SQLite 是答应的。
+    于是"只读"这句话留着一个能把写带出去的出口 —— 而读侧脚本拿到的是整条连接。
+    补的是 `PRAGMA query_only=ON`（管整条连接、含 attach 进来的库）。
+
+    对照组是这条判据的第二半：**不用门的普通连接**必须真的写成功，
+    否则"写不成功"可能只是因为 SQLite 压根不让 ATTACH，我的锁就成了看不见的空话。
+    """
+    mirror = _temp_db(tmp_path)
+    side = _temp_db(tmp_path, name='side.db').as_posix()
+    mirror_posix = str(mirror).replace('\\', '/')
+    # 两个路径经环境变量传进子进程：在这里手拼 SQL 字面量正是要避免的事（引号、反斜杠一转就错）
+    body = (
+        'import sqlalchemy as sa\n'
+        'engine, session, label = _db_guard.read_only_connect([])\n'
+        'out = {"pragma": None, "door": None, "plain": None}\n'
+        'with engine.connect() as conn:\n'
+        '    out["pragma"] = conn.exec_driver_sql("PRAGMA query_only").scalar()\n'
+        '    try:\n'
+        '        conn.exec_driver_sql("ATTACH DATABASE %r AS side" % os.environ["SIDE"])\n'
+        '        conn.exec_driver_sql("CREATE TABLE side.t_from_door(x int)")\n'
+        '        out["door"] = "succeeded"\n'
+        '    except Exception as exc:\n'
+        '        out["door"] = "refused: " + str(exc)[:60]\n'
+        'plain = sa.create_engine("sqlite:///" + os.environ["MIRROR"])\n'
+        'with plain.connect() as conn:\n'
+        '    try:\n'
+        '        conn.exec_driver_sql("ATTACH DATABASE %r AS side2" % os.environ["SIDE"])\n'
+        '        conn.exec_driver_sql("CREATE TABLE side2.t_plain(x int)")\n'
+        '        conn.commit()\n'
+        '        out["plain"] = "succeeded"\n'
+        '    except Exception as exc:\n'
+        '        out["plain"] = "refused: " + str(exc)[:60]\n'
+        'out["label"] = label\n'
+        'print(json.dumps(out, ensure_ascii=False))\n'
+    )
+    payload = _payload(_run(tmp_path, body, LOCAL_DB_URL=str(mirror), SIDE=side,
+                            MIRROR=mirror_posix))
+
+    assert payload['door'].startswith('refused'), \
+        '通过只读门的连接仍然能写 ATTACH 进来的库 ⇒ "引擎级只读"这句话有出口：%s' % payload['door']
+    assert str(payload['pragma']) in ('1', 'True'), 'pragma query_only 没打开：%s' % payload['pragma']
+    assert payload['plain'] == 'succeeded', (
+        '对照组（普通连接）也没写成功 ⇒ ATTACH 那一路压根没被打开过，'
+        '上面那条"被拒绝"证明不了任何事：%s' % payload['plain'])
+
+
 def _doc_snapshot():
     import hashlib
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()

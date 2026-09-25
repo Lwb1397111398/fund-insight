@@ -10,6 +10,9 @@
    （MAJOR-2 / 与 `scripts/audit_verdict_evidence.py` 的 `verdict_under_other_fund` 同族）。
 """
 import pytest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 from src.models.database import Blogger, FundInfo, Post, Prediction, SectorFundMapping
 from src.services.prediction_verify_service import PredictionVerifyService
@@ -515,3 +518,113 @@ def test_ghost_mapping_row_cannot_serve_or_poison_the_cache(test_db):
     assert fresh is not None, \
         '被 verdict 否掉的幽灵行被当成"这板块已经有映射了"，正确的标的行根本没写进去'
     assert fresh.reviewed is not True, '机器写入不许自带"已审查"'
+
+
+# 谁可以盖"老板已确认"（＝身份体检豁免）。这张名单只许变短。
+# 三条页面路径的**行为**由本文件上面那几条用例钉着；这条闸管的是"第四、第五条来源
+# 之外不许再多一条" —— 第 44 轮 A 席 M-3：AGENTS.md 写着"豁免共五条来源，每条都要显式令牌"，
+# 但仓库里没有任何机器把这句话说成判据（同一条通病的第三次：`is_correct` 与 `fund_code`
+# 的"唯一入口"当初也是只写在文档里，后来各自多出一个入口）。
+IMMUNITY_GRANT_SITES = {
+    ('src/services/sector_fund_service.py', 'mark_reviewed_by_id'),    # 页面逐行审查
+    ('src/services/sector_fund_service.py', 'batch_mark_reviewed'),    # 页面批量审查
+    ('src/services/sector_fund_service.py', 'update_mapping'),         # 页面编辑保存
+    ('scripts/seed_owner_proxies.py', 'main'),                          # `--owner-confirm SEED-PROXY`
+}
+_IMMUNITY_FIELDS = {'owner_locked': (True,), 'reviewed_by': ('owner',)}
+
+
+def _grants_immunity(root):
+    """AST 扫"把老板署名/锁定**写死成授予值**"的代码点，三种写法都认。
+
+    ① `row.owner_locked = True`；② `{'owner_locked': True, 'reviewed_by': 'owner'}`；
+    ③ `setattr(row, 'owner_locked', True)`。
+    只认**字面量授予**：`payload.get('owner_locked')`、`bool(m.owner_locked)` 这类
+    "把已有值原样搬过去"的写法不算授予（那条腿由
+    `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉）。
+    """
+    import ast
+    found = set()
+    for py in sorted(root.rglob('*.py')):
+        if '__pycache__' in str(py) or py.name.startswith(('_tmp_', '__')):
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding='utf-8', errors='replace'))
+        except SyntaxError:
+            found.add(('%s（解析不了）' % py.name, '<unknown>'))   # fail-closed：坏文件按可疑处理
+            continue
+        try:
+            rel = str(py.relative_to(root.parent)).replace('\\', '/')
+        except ValueError:
+            rel = str(py).replace('\\', '/')
+
+        def _literal_grant(field, node):
+            return isinstance(node, ast.Constant) and node.value in _IMMUNITY_FIELDS[field]
+
+        def _enclosing(lineno):
+            """包住这一行的**最内层**函数名（挑最里层，否则同一文件里的名字会串位）。"""
+            best, best_line = '<module>', -1
+            for n in ast.walk(tree):
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+                        and n.lineno <= lineno <= (n.end_lineno or n.lineno) \
+                        and n.lineno > best_line:
+                    best, best_line = n.name, n.lineno
+            return best
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Attribute) and tgt.attr in _IMMUNITY_FIELDS \
+                            and _literal_grant(tgt.attr, node.value):
+                        found.add((rel, _enclosing(node.lineno)))
+            elif isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if isinstance(key, ast.Constant) and key.value in _IMMUNITY_FIELDS \
+                            and _literal_grant(key.value, value):
+                        found.add((rel, _enclosing(node.lineno)))
+            elif isinstance(node, ast.Call) and getattr(node.func, 'id', None) == 'setattr' \
+                    and len(node.args) == 3 \
+                    and isinstance(node.args[1], ast.Constant) \
+                    and node.args[1].value in _IMMUNITY_FIELDS \
+                    and _literal_grant(node.args[1].value, node.args[2]):
+                found.add((rel, _enclosing(node.lineno)))
+    return found
+
+
+def test_only_the_registered_places_can_grant_owner_immunity(tmp_path):
+    """"豁免只有这几条来源"从今天起有机器钉着：新增一个授予点就地变红。
+
+    控制断言分两半：
+    ① 仓库里必须**真的**找得到已登记的这几处（0 命中 = 尺子坏了，不是"很干净"）；
+    ② 临时目录现造三种新写法，每种都必须被点名；一处"搬运已有值"的写法不许被点名
+       （否则判据过宽，正常的备份/序列化代码都会红）。
+    """
+    repo = ROOT
+    found = _grants_immunity(repo / 'src') | _grants_immunity(repo / 'scripts')
+    assert found, '一条授予点都没找到 ⇒ `_grants_immunity` 的判据形状与代码脱节了，这条是空判'
+    assert found <= IMMUNITY_GRANT_SITES, (
+        '新增了写死"老板已确认"的代码点：%s ⇒ 体检豁免只能由页面上的显式确认或已登记的两个脚本'
+        '给出；真要加一条，先在 AGENTS.md 把"五条来源"那句话改对，并挂上它自己的显式令牌与用例'
+        % sorted(found - IMMUNITY_GRANT_SITES))
+    assert found == IMMUNITY_GRANT_SITES, (
+        '登记名单与实际授予点对不上了（多：%s / 少：%s）⇒ 名单里的条目要么已经换掉了就删掉，'
+        '要么是判据漏了形状' % (sorted(IMMUNITY_GRANT_SITES - found),
+                              sorted(found - IMMUNITY_GRANT_SITES)))
+
+    pkg = tmp_path / 'sample'
+    pkg.mkdir()
+    (pkg / '_a_attr.py').write_text(
+        'def grant(row):\n    row.owner_locked = True\n', encoding='utf-8')
+    (pkg / '_b_dict.py').write_text(
+        'def grant(row):\n    return {"reviewed_by": "owner", "id": row.id}\n', encoding='utf-8')
+    (pkg / '_c_setattr.py').write_text(
+        'def grant(row):\n    setattr(row, "reviewed_by", "owner")\n', encoding='utf-8')
+    (pkg / '_d_moves_values.py').write_text(
+        'def grant(row, other):\n'
+        '    row.owner_locked = bool(other.owner_locked)\n'
+        '    return {"reviewed_by": other.reviewed_by}\n', encoding='utf-8')
+    made = _grants_immunity(pkg)
+    for name in ('_a_attr.py', '_b_dict.py', '_c_setattr.py'):
+        assert any(name in f for f, _ in made), '三种写法认不出 %s ⇒ 换这种拼写就能绕过' % name
+    assert not any('_d_moves_values.py' in f for f, _ in made), \
+        '"把已有值搬过去"被判成授予 ⇒ 判据过宽，备份/序列化代码都会红：%s' % sorted(made)

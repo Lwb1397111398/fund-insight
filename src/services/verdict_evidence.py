@@ -18,6 +18,7 @@
   - `nav_rewritten`              同一天有行，数值不同 ⇒ 净值被就地改写或覆盖过。
 """
 import os
+import re
 from datetime import date, datetime
 from typing import Dict, Iterable, List, Optional
 
@@ -194,6 +195,32 @@ def span_report(db) -> Dict:
     }
 
 
+_DSN_KEEP_KEYS = ('host', 'hosts', 'port', 'dbname', 'database')
+
+
+def _conninfo_target(text: str) -> str:
+    """**没有** `://` 的连接串（libpq/pgbouncer 的 `key=value` 写法）→ 只留不涉密的键。
+
+    第 44 轮 A-m6：旧写法是"认不出 scheme 就原样返回"，于是
+    `host=db.example.com user=u password=真口令 dbname=proddb` 会被自报行**整条印出来** ——
+    而自报的目的恰恰是"把目标打进 stdout / Render 日志 / `docs/` 报告"。
+    报库名的机制自己成了凭据泄露面，这与它要防的事同级。
+    与 `scripts/_db_guard._conninfo_target()` 是同一件事的两份实现。
+    """
+    if '=' not in text:
+        # 认不出键值写法时按"@ 之后"处理：宁可少说，不可把凭据多说出去。
+        return text.split('@')[-1] or '(空)'
+    kept = []
+    for part in re.split(r'[;\s]+', text):
+        if '=' not in part:
+            continue
+        key, _, value = part.partition('=')
+        key, value = key.strip().lower(), value.strip()
+        if key in _DSN_KEEP_KEYS and value:
+            kept.append('%s=%s' % (key, value))
+    return ' '.join(kept) or '(DSN：只留下非凭据字段，其余已隐去)'
+
+
 def target_name(url: str) -> str:
     """连接串 → **打得开的那个目标**：sqlite 给文件路径，远程给 `scheme://host/db`（不含口令）。
 
@@ -202,15 +229,17 @@ def target_name(url: str) -> str:
     两份实现不许各说各话：`tests/unit/test_database_label_targets.py` 拿一批同样的样品
     逐一比对两者的输出。
     """
-    if not url or '://' not in url:
-        return url or '(空)'
+    if not url:
+        return '(空)'
+    if '://' not in url:
+        return _conninfo_target(url)
     scheme, rest = url.split('://', 1)
     if scheme.startswith('sqlite'):
         body = url[len('sqlite:///'):] if url.lower().startswith('sqlite:///') else rest
         body = body.split('?', 1)[0]
         if body.startswith('//'):
             body = body.lstrip('/')
-        if len(body) > 3 and body[0] == '/' and body[2] == ':' and body[3] in '/\\' and body[1].isalpha():
+        if re.match(r'^/[A-Za-z]:[\\/]', body):
             body = body[1:]                    # 四斜杠 Windows 绝对路径：/E:/… → E:/…
         return body or '(当前目录里的 sqlite 文件)'
     where = rest.split('@')[-1].split('?', 1)[0]
@@ -259,7 +288,13 @@ def describe_url(url: str) -> str:
         return '线上生产库（%s）' % name
     if low.startswith('mysql'):
         return 'MySQL 库（%s）' % name
-    return '%s 库（%s）' % (low.split('://')[0], name)
+    # 认不出的 scheme **不许把原串回显出来**（第 44 轮 A-m6）：`low.split('://')[0]` 在没有
+    # `://` 时是整个输入，于是 `host=h password=真口令 dbname=d` 里最涉密的那一段
+    # 会跟着"这是哪个库"一起进日志。scheme 只在长得像 scheme 时才印。
+    scheme = low.split('://', 1)[0] if '://' in low else ''
+    if not re.match(r'^[a-z][a-z0-9+._-]{0,19}$', scheme):
+        return '认不出 scheme 的连接串（目标：%s）' % name
+    return '%s 库（%s）' % (scheme, name)
 
 
 def database_label(db) -> str:

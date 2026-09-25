@@ -286,11 +286,15 @@ def main():
             return 4
         # 分类词不算出处（第 42 轮 B-c）：这是一把**硬删**的闸，屏幕上那行必须答得出
         # "删的是哪台"。`DATABASE_URL` 在本地与 Render 上都指生产，写变量名同理不够。
-        from _db_guard import machine_name
-        print('[target] 线上生产库：%s' % machine_name(url))
+        # 类别词交给尺子（第 44 轮 B-m2）：以前这里硬写着"线上生产库"，
+        # 换一把别的远程方言就会说错。
+        from _db_guard import db_kind
+        print('[target] %s' % db_kind(url))
     else:
-        from _db_guard import machine_name, pin_local_sqlite
-        print('[target] 本地镜像库：%s' % machine_name(pin_local_sqlite(use_mirror_default=True)))
+        # 同上：以前这一行硬写"本地镜像库"，而 `LOCAL_DB_URL` 指到副本时它照样印"镜像" ——
+        # "拿副本的数当镜像的数"正是这个项目代价最大的那次错。
+        from _db_guard import db_kind, pin_local_sqlite
+        print('[target] %s' % db_kind(pin_local_sqlite(use_mirror_default=True)))
 
     from src.models.database import FundInfo, SectorFundMapping, SessionLocal
 

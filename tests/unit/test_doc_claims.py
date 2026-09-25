@@ -198,3 +198,42 @@ def test_the_repository_data_source_lines_are_auditable():
     assert seen >= 1, '一行 `数据源：` 都没认出来 ⇒ 尺子与文档写法脱节了'
     assert bad == [], '这些报告没说自己出自哪个库：%s' % [
         '%s:%s %s' % (c['file'], c['line'], c['text']) for c in bad]
+
+
+def test_the_fix_flag_rewrites_counts_and_leaves_the_other_accounts_alone(tmp_path, monkeypatch,
+                                                                          capsys):
+    """`--fix` 改了**什么**、没改**什么**，得有第二条用例（第 44 轮 A-m2：这条分支零覆盖）。
+
+    脚本自己写着"只代改条数这一种账"，但没人跑过这句话：把它改成"连数据源那一行一起替换"、
+    或"算了却没写回文件"、或"每次跑都再腐蚀一遍"，全套件仍然全绿。所以四件事都要钉：
+    ① 两处不符的条数被改成当场数；② 本来就对的那一处与"不代改"的数据源行**一个字节都不许动**；
+    ③ 回执把两笔账各报各的数（`已改写 N 处` / `不代改：M 行数据源账`）；
+    ④ 再跑一次必须什么都没改（幂等）。
+    """
+    mod = _load()
+    doc = tmp_path / 'AGENTS.md'
+    doc.write_text(u'用例：`tests/unit/test_x.py` 3 条钉着。\n'
+                   u'另一处：`tests/unit/test_y.py` 12 条。\n'
+                   u'数据源：`DATABASE_URL`（这一行认不出是哪个库）\n', encoding='utf-8')
+    monkeypatch.setattr(mod, 'ROOT', tmp_path)
+    monkeypatch.setattr(mod, '_doc_files', lambda: [doc])
+    monkeypatch.setattr(mod, '_collected_counts', lambda: {'test_x.py': 9, 'test_y.py': 12})
+    monkeypatch.setattr(mod, '_source_lines', lambda: ([{
+        'file': 'AGENTS.md', 'line': 3, 'why': '只写了变量名', 'text': '数据源：`DATABASE_URL`'}], 1))
+    monkeypatch.setattr(sys, 'argv', ['audit_doc_claims.py', '--fix'])
+
+    rc = mod.main()
+    out = capsys.readouterr().out
+    text = doc.read_text(encoding='utf-8')
+    assert '`tests/unit/test_x.py` 9 条' in text, '该改的那一处没改：%s / %s' % (text, out)
+    assert '`tests/unit/test_y.py` 12 条' in text, '本来就对的一处被改了 ⇒ 它在动自己没核对过的字节'
+    assert '数据源：`DATABASE_URL`' in text, '说了"不代改"却动手改了数据源那一行'
+    assert '已改写 1 处条数' in out, out
+    assert '不代改：1 行数据源账' in out, out
+    assert rc == 3, '数据源账还没平却退 %s ⇒ `--fix` 把"没修完"报成了"修完了"' % rc
+
+    before = text
+    assert mod.main() == 3                       # 第二次跑：条数已经对上了
+    again = capsys.readouterr().out
+    assert '已改写 0 处条数' in again, again
+    assert doc.read_text(encoding='utf-8') == before, '--fix 不幂等 ⇒ 它每跑一次就腐蚀一次文档'

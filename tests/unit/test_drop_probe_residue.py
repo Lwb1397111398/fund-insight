@@ -98,8 +98,7 @@ def test_apply_removes_only_empty_unclaimed_probe_tables(tmp_path):
     assert json.dumps(left).count('probe') == 0
 
 
-def test_a_model_claimed_table_is_never_treated_as_residue(tmp_path, monkeypatch):
-    """名字恰好像残渣、但模型声明了它 ⇒ 拒绝。这条判据不许被"名字匹配"绕过。"""
+def _load_tool():
     scripts_dir = str(ROOT / 'scripts')
     sys.path.insert(0, scripts_dir)
     try:
@@ -109,6 +108,42 @@ def test_a_model_claimed_table_is_never_treated_as_residue(tmp_path, monkeypatch
         s.loader.exec_module(m)
     finally:
         sys.path.remove(scripts_dir)
+    return m
+
+
+def test_declared_tables_actually_reads_the_orm_metadata():
+    """`declared_tables()` 是"模型认不认识这张表"的**唯一 oracle**，它自己不能没人测。
+
+    上面那条把 `declared={'_db_guard_probe'}` 手搓给 `find_residue` ⇒ 这个函数就算整体
+    写成 `return set()`，四条用例照样全绿，而真工具会把一张"模型声明了、名字恰好像残渣"
+    的表删掉 —— 删表没有回退路径。所以拿**第二个独立证据源**对表：直接 AST 读
+    `src/models/database.py` 里的 `__tablename__`，与元数据逐字相等。
+    """
+    import ast
+    m = _load_tool()
+    declared = m.declared_tables()
+    assert len(declared) > 20 and 'bloggers' in declared and 'predictions' in declared, \
+        'ORM 元数据里只读出 %d 张表 ⇒ 这把 oracle 本身已经不可信：%s' % (len(declared), sorted(declared)[:5])
+
+    tree = ast.parse((ROOT / 'src' / 'models' / 'database.py').read_text(encoding='utf-8'))
+    from_ast = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for st in node.body:
+            if isinstance(st, ast.Assign) and isinstance(st.value, ast.Constant) \
+                    and isinstance(st.value.value, str) \
+                    and any(isinstance(t, ast.Name) and t.id == '__tablename__' for t in st.targets):
+                from_ast.add(st.value.value)
+    assert from_ast, 'AST 一条 `__tablename__` 都没读到 ⇒ 尺子坏了，这条判据成了空判'
+    assert declared == from_ast, (
+        '元数据与源码里的表名对不上：只在元数据 %s / 只在源码 %s'
+        % (sorted(declared - from_ast), sorted(from_ast - declared)))
+
+
+def test_a_model_claimed_table_is_never_treated_as_residue(tmp_path, monkeypatch):
+    """名字恰好像残渣、但模型声明了它 ⇒ 拒绝。这条判据不许被"名字匹配"绕过。"""
+    m = _load_tool()
     db = tmp_path / 'one.db'
     _make_db(db, {'_db_guard_probe': 0})
     conn = sqlite3.connect(str(db))

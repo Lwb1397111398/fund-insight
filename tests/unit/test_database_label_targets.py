@@ -41,7 +41,18 @@ _QUERIES = ['', '?mode=ro', '?sslmode=require&foo=1']
 
 
 def _all_samples():
-    out = ['', 'not-a-url', 'sqlite://', '://x', 'postgresql://u:p@h', 'postgres://h/db']
+    out = ['', 'not-a-url', 'sqlite://', '://x', 'postgresql://u:p@h', 'postgres://h/db',
+           # 第 44 轮 A-m6：**没有 `://` 的连接串**。libpq/pgbouncer 允许 key=value 写法
+           # （`host=h port=5432 user=u password=真口令 dbname=d`），而旧尺子对它的处理是
+           # "认不出 scheme 就原样返回" ⇒ 口令跟着自报行进 stdout / Render 日志 / `docs/` 报告。
+           # 这几条样品就是那条漏洞的复现样本：把它们喂给修复前的尺子，
+           # 下面那条 `assert 'S3cr3tPW' not in …` 必须响。
+           'host=db.example.com port=5432 user=u password=S3cr3tPW dbname=proddb',
+           'password=S3cr3tPW',
+           'user=u;password=S3cr3tPW;host=h;dbname=d',
+           'u:S3cr3tPW@h/db',
+           # 盘符不是 ASCII 字母时两把尺子曾经分叉（src 用 `str.isalpha()`、守卫用 `[A-Za-z]`）
+           'sqlite:////é:/data/f.db', 'sqlite:///é:/x.db', '/é:/data/f.db']
     for sch in _SCHEMES:
         for sl in _SLASHES:
             for cred in (['', 'u@'] if sch.startswith('sqlite') else _CREDENTIALS):
@@ -126,8 +137,79 @@ HAND_ROLLED_REDACTION_ALLOWED = {
 }
 
 
+def _sep_is_at(call):
+    """这个 `.split/.rsplit/.partition/.rpartition` 是不是按 `'@'` 切（位置参数或 `sep=` 都算）。"""
+    import ast
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr in ('split', 'rsplit', 'partition', 'rpartition')):
+        return None
+    args = [a.value for a in call.args if isinstance(a, ast.Constant)]
+    if args and args[0] == '@':
+        return call.func.attr
+    for kw in (call.keywords or []):
+        if kw.arg == 'sep' and isinstance(kw.value, ast.Constant) and kw.value.value == '@':
+            return call.func.attr
+    return None
+
+
+def _is_index(expr, value):
+    """下标就是这个整数（`[-1]` 在 AST 里是 `UnaryOp(USub, Constant(1))`，不是 `Constant(-1)`）。"""
+    import ast
+    if isinstance(expr, ast.Constant):
+        return expr.value == value
+    if value < 0 and isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub):
+        return isinstance(expr.operand, ast.Constant) and expr.operand.value == -value
+    return False
+
+
+def _takes_the_tail(node):
+    """`X[...]` 取的是**最后一段**（= 剥掉 `user:pass@` 之后剩下的主机）吗？"""
+    import ast
+    if not isinstance(node, ast.Subscript):
+        return False
+    attr = _sep_is_at(node.value)
+    if attr is None:
+        return False
+    sl = node.slice
+    if attr in ('split', 'rsplit'):
+        return _is_index(sl, -1) or (isinstance(sl, ast.Slice) and _is_index(sl.lower, -1))
+    return _is_index(sl, 2) or (isinstance(sl, ast.Slice) and _is_index(sl.lower, 2))
+
+
+def _finds_then_slices(node):
+    """`url[url.find('@') + 1:]` —— 换了个动词、又换成切片，干的是同一件事。"""
+    import ast
+    if not isinstance(node, ast.Subscript) or not isinstance(node.slice, ast.Slice):
+        return False
+    low = node.slice.lower
+    if not (isinstance(low, ast.BinOp) and isinstance(low.op, ast.Add)
+            and isinstance(low.right, ast.Constant) and low.right.value == 1):
+        return False
+    head = low.left
+    return (isinstance(head, ast.Call) and isinstance(head.func, ast.Attribute)
+            and head.func.attr in ('find', 'rfind', 'index', 'rindex')
+            and bool(head.args) and isinstance(head.args[0], ast.Constant)
+            and head.args[0].value == '@')
+
+
+def _rewrites_by_regex(node):
+    """`re.sub(r'://[^@]*@', '://', url)` —— 用正则改写凭据也是同一件事的一份手抄。"""
+    import ast
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == 're'
+            and node.func.attr in ('sub', 'subn', 'split')):
+        return False
+    return bool(node.args) and isinstance(node.args[0], ast.Constant) \
+        and isinstance(node.args[0].value, str) and '@' in node.args[0].value
+
+
 def _hand_rolled_sites(root, bases=('scripts', 'src')):
-    """扫 AST 找 `x.split('@')[-1]` 这种"手写剥口令"的代码位置（不是文本 grep）。"""
+    """找"手写剥口令"的代码位置（AST，不是文本 grep），四种写法都要认。
+
+    第 44 轮 A-m7：第一版只认 `x.split('@')[-1]` 一种拼写，于是换个动词（`rsplit`）、
+    换个参数名（`sep='@'`）、换成 `partition`、换成 `x[x.find('@')+1:]`、或直接用正则改写
+    就**绕过了棘轮** —— 而棘轮的全部意义是"下一个手抄会被点名"。
+    """
     import ast
     found = set()
     for base in bases:
@@ -140,26 +222,9 @@ def _hand_rolled_sites(root, bases=('scripts', 'src')):
                 found.add(py.name + '（解析不了）')
                 continue
             for node in ast.walk(tree):
-                if not isinstance(node, ast.Subscript):
-                    continue
-                v = node.value
-                if not (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
-                        and v.func.attr == 'split' and len(v.args) == 1
-                        and isinstance(v.args[0], ast.Constant)
-                        and v.args[0].value == '@'):
-                    continue
-                sl = node.slice
-                # `x.split('@')[-1]` 的 `slice` **就是那个表达式本身**（单个下标不是 `ast.Slice`
-                # —— `ast.Slice` 只出现在 `[-1:]` 这种切片里），而 `-1` 在 AST 里是
-                # `UnaryOp(USub, Constant(1))`，不是 `Constant(-1)`。
-                # 第一版两条都猜错了 ⇒ 整条棘轮恒空集（`offenders` 永远是 `set()`），
-                # 是下面"现造一处违规"的控制断言把它抓红的。
-                def _is_minus_one(expr):
-                    return (isinstance(expr, ast.Constant) and expr.value == -1) or (
-                        isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub)
-                        and isinstance(expr.operand, ast.Constant) and expr.operand.value == 1)
-                if _is_minus_one(sl):
+                if _takes_the_tail(node) or _finds_then_slices(node) or _rewrites_by_regex(node):
                     found.add(str(py.relative_to(root)).replace('\\', '/'))
+                    break
     return found
 
 
@@ -184,14 +249,29 @@ def test_no_new_hand_rolled_credential_stripping_appears(tmp_path):
     # 控制：这道棘轮自己得会响 —— 现造一个"新写了一处手抄"的目录，它必须被点名；
     # 而只在 docstring 里提这句话的文件**不许**被点名（否则规则会去误伤解释性文字）。
     (tmp_path / 'scripts').mkdir()
-    (tmp_path / 'scripts' / '_x_new_offender.py').write_text(
-        'def go(url):\n    return url.split("@")[-1]\n', encoding='utf-8')
-    (tmp_path / 'scripts' / '_x_only_prose.py').write_text(
-        '"""以前这里写 url.split("@")[-1]，现在换成尺子了。"""\n', encoding='utf-8')
+    variants = {
+        '_x_split.py': 'def go(url):\n    return url.split("@")[-1]\n',
+        # 第 44 轮 A-m7 的四条绕行写法，每一条都必须和上面那条一样被抓到
+        '_x_rsplit.py': 'def go(url):\n    return url.rsplit("@", 1)[-1]\n',
+        '_x_kwarg.py': 'def go(url):\n    return url.split(sep="@")[-1]\n',
+        '_x_partition.py': 'def go(url):\n    return url.partition("@")[2]\n',
+        '_x_find_slice.py': 'def go(url):\n    return url[url.find("@") + 1:]\n',
+        '_x_regex.py': ('import re\n\ndef go(url):\n'
+                        '    return re.sub(r"://[^@]*@", "://", url)\n'),
+        '_x_only_prose.py': '"""以前这里写 url.split("@")[-1]，现在换成尺子了。"""\n',
+        # 反向样品：取的是**凭据那一段**（不是剥口令）、或找的不是 '@' ⇒ 不该误伤
+        '_x_head_not_tail.py': 'def go(url):\n    return url.split("@")[0]\n',
+        '_x_other_char.py': 'def go(p):\n    return p[p.find("-") + 1:]\n',
+    }
+    for name, body in variants.items():
+        (tmp_path / 'scripts' / name).write_text(body, encoding='utf-8')
     found = _hand_rolled_sites(tmp_path)
-    assert found == {'scripts' + ('/' if '/' in str(tmp_path) else '/') + '_x_new_offender.py'} \
-        or any('_x_new_offender.py' in f for f in found), found
-    assert not any('_x_only_prose' in f for f in found), found
+    for name in variants:
+        hit = any(name in f for f in found)
+        if name.endswith('_only_prose.py') or name in ('_x_head_not_tail.py', '_x_other_char.py'):
+            assert not hit, '误伤了 %s（它不是"剥口令后取主机"的写法）' % name
+        else:
+            assert hit, '棘轮认不出 %s ⇒ 换这种拼写就能绕过它' % name
 
 
 def test_the_two_self_report_rulers_stay_identical():
@@ -218,3 +298,30 @@ def test_the_two_self_report_rulers_stay_identical():
         c, d = describe_url(url), _db_guard.db_kind(url)
         assert c == d, '整句类别词分叉：src 侧 %r、守卫侧 %r（样品 %r）' % (c, d, url)
         assert 'S3cr3tPW' not in a + c + b + d, '自报把口令印出来了：%r' % url
+
+
+def test_a_key_value_dsn_is_reported_without_its_credentials():
+    """`host=… password=…` 这种没有 `://` 的写法：要**留下认得出的那半、摘掉涉密的那半**。
+
+    为什么不只靠上面那条"不含 S3cr3tPW"：把整句改成返回 `'(未知)'` 同样能让它绿 ——
+    那条闸只证明"没泄露"，不证明"还在报目标"。自报的全部意义是答"连的是哪个库"，
+    所以这里两头都钉：口令不许出现，主机与库名必须出现。
+    """
+    dsn = 'host=db.example.com port=5432 user=u password=S3cr3tPW dbname=proddb'
+    sys.path.insert(0, str(ROOT / 'scripts'))
+    try:
+        import _db_guard
+    finally:
+        sys.path.remove(str(ROOT / 'scripts'))
+    for name in (target_name(dsn), _db_guard.machine_name(dsn)):
+        assert 'S3cr3tPW' not in name and 'user=u' not in name, name
+        assert 'host=db.example.com' in name and 'dbname=proddb' in name, \
+            '摘口令顺手把目标也摘了 ⇒ 自报又变成一句没有信息量的话：%r' % name
+    kind = _db_guard.db_kind(dsn)
+    assert 'S3cr3tPW' not in kind and 'db.example.com' in kind, kind
+    # 只有口令、没有可报字段时：宁可说"隐去了"，也不许把原串回显
+    alone = target_name('password=S3cr3tPW')
+    assert 'S3cr3tPW' not in alone and '隐去' in alone, alone
+    # 没有 `=` 又没有 `://` 的裸串（例如 `user:pw@host/db`）走"@ 之后"那一路
+    naked = target_name('u:S3cr3tPW@h/db')
+    assert 'S3cr3tPW' not in naked and naked.startswith('h/'), naked

@@ -62,6 +62,111 @@ def already_built_url():
         return '?'
 
 
+_ENGINE_HOLDERS = ('engine', 'SessionLocal', 'async_engine')
+
+
+def _url_of(obj):
+    """从一个**真的像连接**的对象问出它连的目标：Engine / Connection / Session / sessionmaker。
+
+    先按类型过滤，不是按"有没有 url 这个属性"：`vars(sqlalchemy)` 里就有一个叫 `engine` 的
+    **子模块**（`sqlalchemy.engine`），而 `str(模块对象)` 既不报 `sqlite` 也不是连接串 ——
+    第一版没做这一层过滤，于是 `pin_local_sqlite()` 对每个导入过 sqlalchemy 的进程都 abort，
+    连"已建在 SQLite 只许警告"那一档都被它打死（现场由
+    `tests/unit/test_script_db_guards.py::test_pinning_also_refuses_when_a_stray_module_holds_a_remote_engine`
+    与 `…_warns_instead_of_aborting` 一起抓出来）。
+    """
+    if not (type(obj).__module__ or '').startswith('sqlalchemy'):
+        return None
+    for pick in (lambda: str(obj.url), lambda: str(obj.engine.url),
+                 lambda: str(obj.get_bind().url), lambda: str(obj.kw['bind'].url),
+                 lambda: str(obj.bind.url)):
+        try:
+            return pick()
+        except Exception:                                     # noqa: BLE001 形状不对就换下一个
+            continue
+    return None
+
+
+def _stray_remote_engines():
+    """进程里**别的模块**已经握着非 SQLite 的 engine/SessionLocal —— 钉库救不了它们。
+
+    第 44 轮 B-MAJOR-6：`already_built_url()` 只问 `src.models.database` 那一个模块，
+    于是 `del sys.modules['src.models.database']` 再重新 import（或任何把那条标记抹掉的写法）
+    就能让钉库"看起来成功"，而已经 `from src.models.database import engine` 的那些调用方
+    仍绑在生产串上。所以钉库之前把 `sys.modules` 里所有模块的 `_ENGINE_HOLDERS` 属性都问一遍。
+
+    三处刻意的克制（每一条都是被真实故障教出来的）：
+    ① 只读 `vars(模块)` 里**已经存在**的名字，不用 `getattr` 逐个试 ——
+       `sqlalchemy`/`typing` 这类包实现了惰性 `__getattr__`，去问一个不存在的属性会**触发导入**；
+    ② 只认 `type(x) is ModuleType` 的**真模块**，并且只看"这个仓库里的模块"（`src.*` 或
+       `__file__` 落在仓库内）—— Windows 上 `ctypes` 会把 `kernel32.dll` 这类对象塞进
+       `sys.modules`，对它们取 `vars()` 会直接抛 `ffi.error: symbol ... not found`
+       （第一版就是这么把 12 条 in-process 用例打崩的）；
+    ③ 顺一层已经是模块的属性（`src.models` 上挂着的 `database`），
+       因为 `del sys.modules[...]` 抹不掉那条引用。
+
+    看得见与看不见的边界要写清楚（别把这句念成"任何引用都跑不掉"）：
+    函数**局部变量**里的 engine 引用 AST 与 `sys.modules` 都照不到 —— 那一半仍然只能靠
+    "把钉库提到所有 src.* 导入之前"这条规矩。
+    """
+    import types
+    out = []
+    seen = set()
+    root_norm = os.path.normcase(os.path.realpath(ROOT)) + os.sep
+
+    def _ours(name, mod):
+        if name.startswith('src'):
+            return True
+        try:
+            file_ = getattr(mod, '__file__', '') or ''
+            return bool(file_) and os.path.normcase(os.path.realpath(file_)).startswith(root_norm)
+        except Exception:                                     # noqa: BLE001 问不动就当不是我们的
+            return False
+
+    def _ask(mod, label):
+        if id(mod) in seen:
+            return
+        seen.add(id(mod))
+        try:
+            holders = {k: v for k, v in vars(mod).items() if k in _ENGINE_HOLDERS}
+            children = [v for v in vars(mod).values() if type(v) is types.ModuleType]
+        except Exception as exc:                              # noqa: BLE001 怪对象不许弄坏守卫
+            print("[警告] 探测散落连接时读不了模块 `%s`（%s）⇒ 这一道没跑完"
+                  % (label, str(exc)[:80]))
+            return
+        for obj in holders.values():
+            url = _url_of(obj)
+            if url and not url.lower().startswith('sqlite'):
+                out.append((label, url))
+        for child in children:
+            _ask(child, getattr(child, '__name__', '?'))
+
+    for name, mod in list(sys.modules.items()):
+        if name == 'src.models.database' or type(mod) is not types.ModuleType:
+            continue                      # 那一个由 `already_built_url()` 负责，别报两遍
+        if not _ours(name, mod):
+            continue
+        _ask(mod, name)
+    return out
+
+
+def _refuse_when_a_stray_engine_is_remote(who):
+    try:
+        strays = _stray_remote_engines()
+    except Exception as exc:                                  # noqa: BLE001 扫描坏了要看得见，别弄死脚本
+        print("[警告] 探测散落连接这一步没跑成（%s）⇒ 只核对了全局 engine 那一条。"
+              % str(exc)[:100])
+        strays = []
+    for name, url in strays:
+        print("[abort] %s 来得太晚了：模块 `%s` 里已经有一个连接绑在 %s（不是 SQLite）。"
+              "钉库只改 `DATABASE_URL` 这个**变量**，改不动那个已经建好的对象 —— "
+              "凡是从它取出的会话照样写线上。请把钉库提到所有 src.* 导入之前，"
+              "或只想读就改用 read_only_connect()。"
+              % (who, name, machine_name(url)))
+        sys.stdout.flush()
+        raise SystemExit(4)
+
+
 def _refuse_to_pin_a_dead_engine(who):
     """engine 已经按别的目标建好时，钉库不许"改了环境变量"当成成功。
 
@@ -106,6 +211,7 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
     优先级：`LOCAL_DB_URL` > 进程环境 `DATABASE_URL` > `.env` 里的 `DATABASE_URL` > 默认镜像。
     """
     _refuse_to_pin_a_dead_engine("pin_local_sqlite()")
+    _refuse_when_a_stray_engine_is_remote("pin_local_sqlite()")
     configured = os.environ.get("DATABASE_URL", "") or _dotenv_database_url()
     override = os.environ.get(allow_env_override, "")
     if override:
@@ -151,6 +257,32 @@ def pin_local_sqlite(allow_env_override="LOCAL_DB_URL", use_mirror_default=False
     return url
 
 
+_DSN_KEEP_KEYS = ('host', 'hosts', 'port', 'dbname', 'database')
+
+
+def _conninfo_target(text):
+    """**没有** `://` 的连接串（libpq/pgbouncer 的 `key=value` 写法）→ 只留不涉密的键。
+
+    第 44 轮 A-m6：旧写法"认不出 scheme 就原样返回"，于是
+    `host=db.example.com user=u password=真口令 dbname=proddb` 会被自报行整条印进
+    stdout / Render 日志 / `docs/` 报告 —— 报库名的机制自己成了凭据泄露面。
+    与 `src/services/verdict_evidence._conninfo_target()` 是同一件事的两份实现，
+    两者逐条相等由 `tests/unit/test_database_label_targets.py` 钉住。
+    """
+    if '=' not in text:
+        # 认不出键值写法时按"@ 之后"处理：宁可少说，不可把凭据多说出去。
+        return text.split('@')[-1] or '(空)'
+    kept = []
+    for part in re.split(r'[;\s]+', text):
+        if '=' not in part:
+            continue
+        key, _, value = part.partition('=')
+        key, value = key.strip().lower(), value.strip()
+        if key in _DSN_KEEP_KEYS and value:
+            kept.append('%s=%s' % (key, value))
+    return ' '.join(kept) or '(DSN：只留下非凭据字段，其余已隐去)'
+
+
 def machine_name(url):
     """自报"连的是哪台"用的名字：sqlite 给文件路径，远程给 `scheme://host/db`。
 
@@ -158,8 +290,10 @@ def machine_name(url):
     本地 `.env` 里它指生产，Render 上它指生产，CI 里可能指测试库。
     口令一个字符都不出现：只取 `@` 后面那一段。
     """
-    if not url or "://" not in url:
-        return url or "(空)"
+    if not url:
+        return "(空)"
+    if "://" not in url:
+        return _conninfo_target(url)
     scheme, rest = url.split("://", 1)
     if scheme.startswith("sqlite"):
         # 自报要照着**打得开的那个路径**报（第 41 轮 B-MINOR-3）。SQLAlchemy 的 sqlite URL 里
@@ -217,7 +351,12 @@ def db_kind(url):
         return 'MySQL 库（%s）' % name
     # 认不出的 scheme：两边都必须走同一条 fallback（第 43 轮笛卡尔积样品 `''`/`'://x'`
     # 一喂下去就量到分叉：src 印 `" 库（(空)）"`、守卫印 `"远端库（(空)）"`）。
-    return '%s 库（%s）' % (low.split('://')[0], name)
+    # 第 44 轮 A-m6 的另一半：**不许把原串回显出来** —— `low.split('://')[0]` 在没有 `://` 时
+    # 是整个输入，`host=h password=真口令 dbname=d` 里最涉密那段会跟着"这是哪个库"进日志。
+    scheme = low.split('://', 1)[0] if '://' in low else ''
+    if not re.match(r'^[a-z][a-z0-9+._-]{0,19}$', scheme):
+        return '认不出 scheme 的连接串（目标：%s）' % name
+    return '%s 库（%s）' % (scheme, name)
 
 
 def production_requested(argv=None):
@@ -265,6 +404,10 @@ def _sqlite_ro_url(url):
     为什么要自己拼：实测 `create_engine("sqlite:///C:/…/x.db", connect_args={'uri': True})`
     并没有被当成只读 URI（写照样成功），而 `sqlite:///file:…?mode=ro&uri=true` 才会
     报 `attempt to write a readonly database`。正则挡不住写，引擎挡得住。
+
+    ⚠ 它锁的只是**主库**：从这条连接 `ATTACH` 一个可写文件、往**那个库**写照样成功
+    （第 44 轮 B-m1）。补的那一道在 `_enforce_query_only()`，由 `read_only_connect()`
+    在探针通过之后挂上。
     """
     body = url[len("sqlite:///"):] if url.lower().startswith("sqlite:///") else url
     body = body.split("?", 1)[0]
@@ -314,6 +457,28 @@ def _write_probe(engine, statements):
         return refused or '探针什么都没发 ⇒ 判定不成立'
 
 
+def _enforce_query_only(engine):
+    """给这条 sqlite 引擎补一道**整条连接**的只读（含 `ATTACH` 进来的别的库）。
+
+    第 44 轮 B-m1：`mode=ro` 只锁主库。从一条 ro 连接里 `ATTACH '别的东西.db'` 再往**那个库**
+    写，SQLite 是答应的 —— 于是"引擎级只读"这句话留着一个能把写带出去的侧门。
+    `PRAGMA query_only=ON` 管的是整条连接，attach 进来的一起算。
+
+    **顺序是硬的**：必须排在 `_write_probe` 之后，并且 `dispose()` 掉探针用过的那条连接。
+    先开 pragma 的话，一条**可写**连接上的探针也会被 pragma 拒绝 ⇒
+    那道"数据库自己说不许写才算只读"的 fail-closed 闸门当场变成恒真。
+    """
+    from sqlalchemy import event
+
+    def _pragma(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA query_only=ON")
+        cursor.close()
+
+    event.listen(engine, "connect", _pragma)
+    engine.dispose()          # 池里那条旧连接不带 pragma ⇒ 留着它等于没锁
+
+
 def read_only_connect(argv=None):
     """只读分析脚本的统一连库口。返回 `(engine, session, label)`。
 
@@ -327,7 +492,9 @@ def read_only_connect(argv=None):
     1) 默认连**本地镜像**（`pin_local_sqlite(use_mirror_default=True)`）。
        要读线上必须命令行显式出现 `--production`：`.env` 里躺着生产串不算"人说过要连"。
     2) 两条路都是**引擎级只读 + 真写探针**，探针不通直接 abort；探针自己**不在目标库里留东西**
-       （sqlite 腿建完立刻删 —— 见 `_write_probe`）。
+       （sqlite 腿建完立刻删 —— 见 `_write_probe`）。sqlite 腿在探针通过之后再补一道
+       `PRAGMA query_only=ON`（`_enforce_query_only`）：`mode=ro` 只锁主库，
+       `ATTACH` 一个可写文件再往**那个库**写照样能成 —— 第 44 轮 B-m1 的那道侧门。
     3) **动手之前**先自报机器名（`[库] 准备以引擎级只读连 …`），这样连不上时也知道是谁；
        连接/探针过了之后再补一行"已核"。口令一个字符都不出现。
     """
@@ -369,6 +536,7 @@ def read_only_connect(argv=None):
         if why:
             print("[abort] %s" % why)
             raise SystemExit(4)
+        _enforce_query_only(engine)     # 探针之后才锁：见 `_enforce_query_only` 的"顺序是硬的"
         label = ("%s（引擎级只读；要分析线上数据得显式 --production，"
                  "等价命令 scripts/q.py --production）" % db_kind(url))
     print("[库] %s" % label)

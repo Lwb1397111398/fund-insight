@@ -38,24 +38,41 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(ROOT, 'docs', '迭代计划', 'run-2026-09-20',
                         'prod-writeback-sector-mappings.json')
 DEFAULT_BASE = 'https://fund-insight.onrender.com'
-# 已知生产域名的判据（第 43 轮 B-MAJOR-5）：`--base` 是可以随手指的，
+# 已知生产域名（第 43 轮 B-MAJOR-5）：`--base` 是可以随手指的，
 # 而那一行自报以前**无条件**写"经 HTTP 写线上生产库"。B 席实测：
 # `--base http://127.0.0.1:9/` ⇒ 屏幕上出现"[目标] 127.0.0.1:9 —— 经 HTTP 写**线上生产库**"，
 # 与上一行"目标=http://127.0.0.1:9/"自相矛盾。这句话是操作者决定要不要按 `--confirm` 的依据，
 # 它说错方向比不说更坏。
-PROD_HOST_MARKS = ('onrender.com',)
+PROD_HOSTS = ('fund-insight.onrender.com',)
+
+
+def _is_known_prod_host(base):
+    """**逐字等于**已知生产主机才算（第 44 轮 B-m6 收紧）。
+
+    两版都太松：
+    ① 旧写法 `mark in host` 是**子串**匹配 ⇒ `onrender.com.attacker.example`、
+       `notonrender.com` 都能自称"线上生产库"，被一个买得到的假域名买通；
+    ② 我第一版改成"或它的子域"，那是**另一个方向**的过头 —— Render 上一个共享后缀
+       压着成千上万个互不相干的应用，`somebody-else.onrender.com` 不是本项目的应用，
+       更不是我那台生产库（而这句话是给操作者按不按 `--confirm` 看的）。
+    所以判据只剩"就是这个主机的 hostname"。比对用 `hostname`（自动去端口、去 userinfo、
+    转小写），显示仍用 netloc（端口要看得见）。要加第二个生产主机就改 `PROD_HOSTS`，
+    别把这里改回模糊匹配。
+    """
+    host = (urlparse(base).hostname or '').lower()
+    return bool(host) and host in PROD_HOSTS
 
 
 def _target_line(base):
     host = urlparse(base).netloc
-    known = host == urlparse(DEFAULT_BASE).netloc or any(m in host for m in PROD_HOST_MARKS)
+    known = _is_known_prod_host(base)
     if known:
         return ('[目标] %s —— 经 HTTP 写**线上生产库**的写入口'
                 '（不是本地镜像 `data/fund_insight.db`）' % host)
     return ('[目标] %s —— ⚠ **这不是已知的生产域名**（已知的只有 %s）。'
             '所以这一行不敢自称"动的是线上库"：HTTP 写的落点是**那个后端自己连的库**'
             '（本机 `serve_mirror.py` 就是镜像）。要写生产请把 --base 指回 %s。'
-            % (host, urlparse(DEFAULT_BASE).netloc, DEFAULT_BASE))
+            % (host, '、'.join(PROD_HOSTS), DEFAULT_BASE))
 ENDPOINT = '/api/config/sector-mappings/-/audit-import'
 CONFIRM = 'WRITE-TO-PROD'
 

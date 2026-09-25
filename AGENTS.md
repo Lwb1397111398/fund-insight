@@ -201,13 +201,39 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-24 15:4x（北京），第 43 轮返修（A 81 / B 66，取低分 66）之后，
+最近一次核对（2026-09-25 10:3x（北京），第 44 轮返修（A 76 / B 73，取低分 73）之后，
 最后一次改用例后立刻重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1029 passed / 16 skipped / 0 failed**（380.75 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1038 passed / 16 skipped / 0 failed**（386.81 秒）。
-  （上一基线 1019/1028 → 本批 1029/1038：+10 条，分布在 `test_drop_probe_residue.py` 新增 4 条
+- `pytest tests/unit -q` → **1041 passed / 16 skipped / 0 failed**（471.06 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1050 passed / 16 skipped / 0 failed**（448.64 秒）。
+  （上一基线 1029/1038 → 本批 1041/1050：+12 条，分布在 `test_script_db_guards.py` +5
+  （"赋 DATABASE_URL"方向不明时不再算守卫，含现造样品与对照组 / 钉库前先看**别的模块**还连着谁，
+  含"怪对象不许把守卫弄崩"的对照 / 只 import 一个 service 也算碰库（走 import 图，配一棵临时 src）/
+  git 不可用时退回磁盘那一支自己跑一次 / `alembic/versions/*.py` 从此在扫描范围内：
+  upgrade 里删结构要登记，三种坏形状现造必被点名、正常迁移不许误伤）、
+  `test_read_only_door.py` +2（L3 报告的日期必须现算：子进程真问一次 + 全文件不许有写死日期，
+  并当场把日期抄回字面量证明尺子会响 / 只读门的 `ATTACH` 侧门：门内写侧库要红、门外普通连接要绿）、
+  `test_database_label_targets.py` +1（key=value 写法：**摘掉口令但留下 host 与库名**，
+  只剩口令时要说"隐去了"而不是回显原串）、`test_doc_claims.py` +1（`--fix` 只当代改条数：
+  该改的改了、不该动的字节不动、回执两笔账各报各的、第二次跑必须零改动）、
+  `test_push_writeback_gate.py` +1（`_target_line` 必须真的被 `print` 出来：
+  现造一个"算了但没说"的形状必须判为没自报）、`test_drop_probe_residue.py` +1
+  （`declared_tables()` 这把 oracle 自己没人测过 ⇒ 拿 AST 读 `__tablename__` 与元数据逐字对表）、
+  `test_review_ownership_and_matching.py` +1（写死"老板已确认"的**授予点**从此有棘轮：
+  四种拼写都要认、搬运已有值不许误伤）。
+  **本批没动 `web/`**，所以前端那 104 处变异不需要重跑（原始日志随仓库走：
+  `docs/迭代计划/run-20260924-mutation/round43-frontend-mutations.txt`）。
+  **这一轮最值得记的一条**：新加的"探测散落连接"守卫把自己弄崩了 —— 它对 `sys.modules`
+  里每个值取 `vars()`，而 Windows 上那里混着 `ctypes` 的 `kernel32.dll` 对象，
+  `ffi.error: symbol 'RtlNtStatusToDosError' not found` 直接让 `pin_local_sqlite()` 退出，
+  **12 条** in-process 用例一起红（`test_audit_fund_info_identity` ×4 +
+  `test_sector_seed_route_honesty` ×2 + `test_seed_owner_proxies_gate` ×4 +
+  `test_snapshot_prod_mappings.py` ×2，这份分布是从当场失败清单里读的，不是回忆）；
+  同族第二起：第一版按"有没有 url 属性"过滤，而 `sqlalchemy` 包自己有个叫 `engine` 的**子模块**
+  ⇒ 每个导入过 sqlalchemy 的进程都被判成"绑在远程库上"。⇒ **每加严一道守卫，
+  都要当场跑一遍全量 in-process 用例**，只看新用例绿不绿看不见它把别的调用方打死了。）
+  （上一基线 1019/1028 → 1029/1038：+10 条，分布在 `test_drop_probe_residue.py` 新增 4 条
   （探针残渣工具：报告模式不改库 / 没口令不删 / 有行的表让整批不删、改完名才删且不动别的表 /
   模型声明过的名字绝不许当残渣删）、`test_script_db_guards.py` 新增 3 条
   （说明文与样板句买不到守卫信号（含两个真护栏对照组）/ 落笔能力逐类有牙（含"只读不许被判成能写"的
@@ -215,16 +241,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `test_database_label_targets.py` 新增 1 条（手写剥口令的**只许变短**棘轮，自带"现造一处违规"控制）、
   `test_doc_claims.py` 新增 1 条（"指向收不到的文件"必须算进退码 + 同一形状收得到时必须退 0）、
   `test_push_writeback_gate.py` 新增 1 条（`--base` 指到非生产域名时不许出现"线上生产库"那四个字）。
-  **本批没动 `web/`**，所以前端 104 处变异不需要重跑（上一批的原始日志已改成随仓库走：
-  `docs/迭代计划/run-20260924-mutation/round43-frontend-mutations.txt`）。
-  **两条自己被抓出来的判据缺陷（记下来，因为它们正是这一族的标准死法）**：
+  那一批自己被抓出来的两条（这一族的标准死法，仍然有效）：
   ① 那道棘轮的第一版按文本 grep ⇒ 我被"解释这句的 docstring"自己点红；改成判 AST 后第二版仍然**恒空**
   —— `x[-1]` 的 slice 既不是 `ast.Slice` 也不是 `Constant(-1)`，而是 `UnaryOp(USub, Constant(1))`；
   两次都是同一条"现造一处违规必须被点名"的控制断言抓出来的 ⇒ **没有控制断言的判据等于没有判据**。
-  ② 上一轮我在 `scripts/_db_guard.py` 与文档里手抄的"一律 abort 会打死 8 条正经用例"，
-  数是对的（当场实测 8 条）但**归错了文件**（我把它们记成了 `test_seed_owner_proxies_gate.py` 那 8 条，
-  实为 `test_audit_fund_info_identity.py` ×4 + `test_sector_seed_route_honesty.py` ×2 +
-  `test_snapshot_prod_mappings.py` ×2）⇒ 已在两处更正并写明复核方式。）
+  ② 手抄的"一律 abort 会打死 8 条正经用例"数对但**归错了文件** ⇒ 已在两处更正并写明复核方式。）
   （再上一基线 1000/1009 → 本批 1019/1028：净 +19（新增 20 条、把一条已被替换的
   `test_delete_blogger_tells_four_different_endings_apart` 删掉），分布在
   `test_script_db_guards.py` +3（钉库来得太晚必须 abort / 已建在 SQLite 只许警告并说清写的哪个文件 /
@@ -239,7 +260,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （`unchanged` 行一个字都没写，不许进"本次已照样写入"那个桶）。
   本批前端 4 处变异全 RED：`python scripts/mutation_proof_frontend.py --only bloggers_notice_` /
   `--only stale_rows_never_counted` / `--only refresh_death_blamed_on_the_delete`；
-  **全套 104 处本轮逐条跑过**（`data/_mutation_round43.log` 是这一批的原始输出：
+  **全套 104 处本轮逐条跑过**（原始输出随仓库走：
+  `docs/迭代计划/run-20260924-mutation/round43-frontend-mutations.txt`——
+  别指 `data/_mutation_round43.log`，`.gitignore` 有一条全局 `*.log` 而 `data/` 整目录不入库）：
   CONTROL-GREEN + 101 RED + 3 处 ANCHOR-MISS），那 3 处 ANCHOR-MISS 已修锚点并各自复跑为 RED
   —— 修的是锚点不是判据：`pagination_reports_zero_on_failure` /
   `predictions_pager_claims_fresh_rows` 的锚点还停在"翻页条直接印 `total || 0`"的旧形状，
@@ -403,6 +426,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   stderr，"我要动哪个库"那一行会排到它承诺领先的那件事后面，进程被杀时一个字都看不见。
 - **`数据源` / 残渣 / 报告日期三处小账**（B-MINOR-2/6、A-MINOR-7/8）：
   ① 两份 L3 报告的"日期"以前是模板字面量（重跑一遍数字全变了、日期还盖着两个月前）⇒ `_today_beijing()`；
+  **第 44 轮 A 指出这句话当时只是一条承诺、没有判据**（把日期改回字面量，全套件仍然全绿）⇒
+  现在两腿都有闸：子进程真问一次 `_today_beijing()` 必须等于今天的北京日期，
+  且脚本里除 docstring 外不许出现写死的 `YYYY-MM-DD`（并当场把日期抄回去证明尺子会响）；
   ② 真镜像里躺着第 41 轮旧探针留下的 `_db_guard_probe2`（0 行、全仓 0 处引用），
   新增 `python scripts/drop_probe_residue.py`（默认只报告退 3；`--apply --confirm DROP-PROBE` 才删；
   只碰 SQLite、只删"0 行 + 模型没声明"的探针名字），2026-09-24 已用它清掉镜像那张；
@@ -411,6 +437,35 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （**第一版我把它存成 `.log` 就直接写进文档了** —— `.gitignore:47` 有一条全局 `*.log`，
   那句"随仓库走"当场是假的；改名之后用 `git ls-files` 核过才算。教训：**说"入库了"要拿
   `git ls-files` 核，不是看文件在不在磁盘上**。）
+- **"报哪个库"这把尺子自己有两个出口，第 44 轮一起堵上**（A-m6 / B-m1 / B-m2 / B-m6）：
+  ① 两份 `machine_name()` / `target_name()` 对**没有 `://` 的连接串**是"原样返回"，
+  而 libpq 允许 `host=db.example.com user=u password=真口令 dbname=proddb` 这种 key=value 写法
+  ⇒ 自报行会把口令整条印进 stdout / Render 日志 / `docs/` 报告（认不出 scheme 的那一支
+  也是回显原串）。现在这种串只留 `host`/`port`/`dbname` 三个不涉密的键，
+  scheme 只在"长得像 scheme"时才印；样品已进笛卡尔积（`test_a_key_value_dsn_is_reported_without_its_credentials`
+  两头都钉：口令不许出现，**主机与库名必须还在** —— 只测"没泄露"会退化成"什么都不报"）。
+  ② 只读门的 SQLite 腿以前只有 `mode=ro`，而 **`mode=ro` 只锁主库**：同一条连接
+  `ATTACH` 一个可写文件、往**那个库**建表照样成功（当场跑通）。现在探针通过之后再补
+  `PRAGMA query_only=ON` 并 `engine.dispose()`。**顺序不许反**：先开 pragma，
+  可写连接上的探针也会被它拒绝 ⇒ 那道"数据库自己说不许写"的 fail-closed 校验变成恒真自检。
+  ③ 类别词不许硬写：`purge_junk_funds.py` 的 `[target]` 改印 `db_kind()`
+  （`LOCAL_DB_URL` 指到副本时它以前仍自称"本地镜像库"）；
+  ④ `push_sector_mappings_to_prod.py` 认生产改成**逐字等于**已知主机：旧的是子串匹配
+  （`onrender.com.attacker.example`、`notonrender.com` 都能自称"经 HTTP 写线上生产库"），
+  而我第一版改成"或它的子域"是**另一个方向的过头** —— Render 一个共享后缀压着别人的应用，
+  那不是我的生产。判据用 `hostname`（自动去端口/userinfo/转小写），显示仍用 netloc。
+- **钉库守卫在钉之前先问"进程里还有谁连着别处"**（第 44 轮 B-MAJOR-6）：
+  只查 `sys.modules['src.models.database']` 是被 `del sys.modules[...]` 绕过的 ——
+  调用方手里那个 `engine` 对象不会因此松开。现在 `pin_local_sqlite()` 之前把所有
+  **本仓库的**模块（名字以 `src` 开头，或 `__file__` 落在仓库内）的 `engine`/`SessionLocal`/
+  `async_engine` 属性都问一遍，绑在非 SQLite 上就 `[abort]` 退 4 并印出那台目标（口令不泄露）。
+  **两处克制是被自己的故障教出来的**：① 只认 `type(x) is ModuleType` 并把 `vars()` 包进 try ——
+  Windows 上 `sys.modules` 里混着 `ctypes` 的 `kernel32.dll`，对它取 `vars()` 直接抛
+  `ffi.error: symbol not found`，第一版因此把 **12 条** in-process 用例一起打死（守卫自己成了故障源）；
+  ② 先按 `type(obj).__module__` 是 sqlalchemy 才问 url —— `sqlalchemy` 包自己有个叫 `engine` 的
+  **子模块**，`str(模块)` 既不含 `sqlite` 也不是连接串 ⇒ 每个导入过 sqlalchemy 的进程都被判"绑在远程"。
+  边界要说明白：**函数局部变量里的 engine 引用这一道照不到**，那一半仍然只能靠
+  "把钉库提到所有 src.* 导入之前"（上一条运行期守卫）与 AST 判据。
 - **文档里"`test_x.py` N 条"这类当场账，有脚本对表**：`python scripts/audit_doc_claims.py`
   拿 `pytest tests --collect-only -q` 当场收集的条数去对 `AGENTS.md` / `DEPLOYMENT.md` /
   `docs/模块总览/*.md` 里的每个"N 条"承诺，不符就退码 3（`--fix` 就地改）。
@@ -462,6 +517,34 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   改环境变量救不回来，当场 `[abort]`（退码 4）并印出那个目标（口令不泄露）。
   判据 `test_the_door_refuses_to_pin_when_the_engine_is_already_built` 两路都跑真子进程：
   先导入必红、先钉库必放行（没有控制断言的判据等于没判据）。
+- **守卫扫描器的判据这一轮从"文件里出现过"改成"同一条分支做到了"**（第 44 轮两席共同的主账，
+  A-M-1 / B-BL-1 / B-M-4 / B-M-3 / A-M-2）：
+  ① "会拒跑"以前是三个**独立**条件（出现过 `postgres` 字样 + 出现过 `[abort]` + 会 raise），
+  放在同一个文件里就能买通 ⇒ 现在判的是**一个分支**：条件看的是库的方向、分支里印 `[abort]`、
+  并且**停下来**（`raise` / `return 非 0` / `sys.exit(非 0)` 都算 —— 不认 `sys.exit` 会误伤
+  仓库里真在用它的三个脚本，误报方向一样要修）；`if False:` 那一支算死代码不认。
+  ② "自设 `DATABASE_URL`"以前只看有没有赋值过，方向不明也算守卫 ⇒
+  现在只有**能证明是 SQLite**（字面量、`pin_local_sqlite`、一跳可证的本地变量/函数）才计分，
+  方向不明的赋值另记一个键、只用来让"它动过连接串"这件事可见。
+  `run_migrations.py` 就是被这一条从"靠赋值过关"改到"靠自报库名过关"的。
+  ③ helper 返回的 `[目标]` 只有**这个 helper 被 print 过**才算自报（`push_sector_mappings_to_prod.py`
+  的形状），并且现在有一条正面判据问"真脚本里它到底被印了吗"（A-m4：`_target_line` 以前零覆盖）。
+  ④ 读侧触发补**一次间接**：脚本自己一句 `src.models` 都不写、只 `import src.services.x`
+  也算"碰得到一个活的连接" —— 判据走 src 顶层 import 图的可达性，
+  对照样品是一棵**临时造的 src 树**（不是手抄的邻接表）。
+  ⑤ `alembic/versions/*.py` 从此在扫描范围里（B-m4）：每一支必须有 `upgrade` 与 `downgrade`，
+  **往上走那一支**删结构要登记进 `DATA_LOSSING_UPGRADES`（今天为空，9 支迁移的删除全在
+  `downgrade`）。`alembic/env.py` 那道方向闸只管"能不能连过去"，管不到"过去之后删什么"。
+  ⑥ 受检集合"git 不可用就退回磁盘并明说"这一支今天自己跑过一次（A-m3：以前只在 docstring 里），
+  并配"临时目录里现造文件必须被收进来"的空判对照。
+- **写死"老板已确认"的授予点有棘轮了**（第 44 轮 A-M-3）：AGENTS 那句"豁免共五条来源、
+  每条都要显式令牌"以前只是话 —— `is_correct` 与 `fund_code` 的"唯一入口"当初也只是话，
+  后来各自多出一个入口。现在 `tests/unit/test_review_ownership_and_matching.py`
+  用 AST 扫 `src/` 与 `scripts/`，`row.owner_locked = True`、`{'reviewed_by': 'owner'}`、
+  `setattr(row, 'owner_locked', True)` 三种写法都要认，命中集合**必须逐字等于**登记名单
+  （名单只许变短），并且现造三种坏拼写各点名一次、一处"搬运已有值"（备份/序列化）不许误伤。
+  边界：`purge_junk_funds.py --restore-owner-immunity` 那一腿是**载荷驱动**的（值不是字面量），
+  这条扫不到，由 `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉。
 - **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：
   `tests/unit/test_blogger_hit_rate_map.py` 三条钉 `src/api/routes/bloggers.py:_hit_rate_map`。
   此前全仓对它零覆盖：把判据 `Prediction.is_deleted == False` 反向改成 `== True`
@@ -590,6 +673,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   桩的键必须等于真返回的键）；第五条在
   `tests/unit/test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity`）。
   但**别说成"豁免只有三个入口"**，也别再说成"只有四条"——数要跟着命令跑。
+  **这句话今天还多了一道机器闸**（第 44 轮 A-M-3）：AST 扫全仓"写死授予值"的代码点，
+  命中集合必须逐字等于登记名单（名单只许变短）——见上面那条棘轮。
   换了基金代码又没重新确认时，**旧标的上继承来的锁定会被一并撤掉**（`row_unservable()` 的
   owner 例外只认老板这次确认过的那只基金）。页面上区分三种状态：待审查 / 已审查（只是看过）/
   老板已确认（免疫）。
