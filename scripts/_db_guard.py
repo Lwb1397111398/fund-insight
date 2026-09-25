@@ -220,10 +220,17 @@ def _stray_remote_engines():
 def _refuse_when_a_stray_engine_is_remote(who):
     try:
         strays = _stray_remote_engines()
-    except Exception as exc:                                  # noqa: BLE001 扫描坏了要看得见，别弄死脚本
-        print("[警告] 探测散落连接这一步没跑成（%s）⇒ 只核对了全局 engine 那一条。"
-              % str(exc)[:100])
-        strays = []
+    except Exception as exc:                                  # noqa: BLE001
+        # **单个模块读不动**是另一件事（那一条在 `_ask` 里面，只印警告 —— 否则 Windows 上
+        # `sys.modules` 里那些 ctypes 的 DLL 对象会把守卫自己弄崩，第 44 轮付过账：12 条用例
+        # 一起红）。但**整趟扫描跑不完**是"我没法回答进程里还有谁连着别处"，
+        # 而这道题的答案直接决定要不要放行钉库 —— 答不出就不能当"没事"（第 47 轮 B-M4：
+        # 上一版这里印一行警告然后继续钉库，正好把"进程里躺着一个活着的生产会话"放过去）。
+        print("[abort] 探测散落连接这一步整趟没跑成（%s）⇒ 我没法回答"
+              "「进程里还有没有连接绑在别处」，不敢替你钉库。请把钉库提到所有 src.* 导入之前，"
+              "或只想读就改用 read_only_connect()。" % str(exc)[:120])
+        sys.stdout.flush()
+        raise SystemExit(4)
     for name, url in strays:
         print("[abort] %s 来得太晚了：模块 `%s` 里已经有一个连接绑在 %s（不是 SQLite）。"
               "钉库只改 `DATABASE_URL` 这个**变量**，改不动那个已经建好的对象 —— "
@@ -415,6 +422,17 @@ def machine_name(url):
     # 以前原样回显 —— 第 46 轮我自己写的样品把它照出来，两边一致地泄露（一致地错不会被
     # "两把尺子逐条相等"那条判据抓到，所以这里必须各自补）。
     where = _redact_secrets(where)
+    # 档位算对 ≠ 报得出个体（第 47 轮 B-6）：`postgresql:///postgres?host=aws-…supabase…`
+    # 的 netloc 是**空的**（主机只在参数里，PgBouncer / Unix socket 的正规写法），
+    # 于是自报成 `线上生产库（postgresql:///postgres）` —— 一句话说不清是**哪一台**生产，
+    # 而 `docs/*.md` 里"数据源："那行要的就是这个。补上参数里那些主机（口令仍然不取）。
+    # 只对"netloc 真的是空的"这一种补：`postgresql://::1/db` 那种裸 IPv6 里
+    # 冒号本身就是主机的一部分，再按"有没有冒号"猜会给自己拼出一个假主机
+    # （第一版就是这么把两份尺子弄分歧的 —— 那条"逐条相等"的判据当场把它抓红了）。
+    if (rest.split('@')[-1].split('?')[0]).startswith('/'):
+        params = _db_hosts(url)
+        if params:
+            where = "%s@%s" % (where, ",".join(params))
     return "%s://%s" % (scheme, where)
 
 

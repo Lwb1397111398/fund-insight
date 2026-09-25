@@ -1130,7 +1130,12 @@ def restore(db, manifest_path, apply=False, restore_owner_immunity=False):
               '无法界定"本轮新建"的净值。**本次一行净值都不清**'
               '（清错＝删掉不可再生的历史）；要还原映射行本身，把 `created_fund_codes` 置空后重跑'
               % refused)
-        codes = []
+        # 印了 `[abort]` 就必须**停下来**（本仓自己的定义：`[abort]` + 停下来）。上一版这里
+        # 只是把 `codes` 清空然后往下走 ⇒ 屏幕上是一句拒跑，实际退码 0、`[dry-run]` 照印，
+        # 而 `--apply --confirm` 那一支还会把映射行写回去（第 47 轮 B-5）。
+        # "拒绝清历史、但照写映射行"不是一件事的两半，是两件事：操作者读到 [abort] 会以为
+        # 这一次什么都没做。要还原行，就让他明确地再跑一次（清单置空），而不是顺手替他不一致地做一半。
+        return 4
     nav_rows = sum(db.query(FundHistory).filter(FundHistory.fund_code == code,
                                                 FundHistory.nav_date >= since).count()
                    for code in codes) if codes else 0

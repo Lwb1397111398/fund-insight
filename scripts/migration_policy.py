@@ -19,9 +19,17 @@ import json
 import os
 import re
 
-# 明确会删结构/删数据的 alembic 方法名
-DESTRUCTIVE_METHODS = {'drop_table', 'drop_column', 'drop_index', 'drop_constraint',
-                       'drop_schema', 'drop_view', 'drop_sequence', 'truncate'}
+# 明确会删结构/删数据的 alembic 方法名。**按类别取**（第 47 轮 B-1：上一版逐个点名，
+# `op.rename_table` 不在名单里 ⇒ "把 `predictions` 改名成 `predictions_old`"这一支
+# 审计回的是"干净"，而应用侧那张表就此消失 —— 改名与删除在"数据还找不找得回来"这件事上
+# 是同一类，alembic 的删除方法一律是 `drop_*` 前缀，所以这里只点前缀 + 三个不规则名字）
+DESTRUCTIVE_METHODS = {'truncate', 'rename_table', 'rename_column'}
+DESTRUCTIVE_PREFIX = 'drop'
+
+
+def _is_destructive_method(name):
+    return bool(name) and (name in DESTRUCTIVE_METHODS or name.startswith(DESTRUCTIVE_PREFIX))
+
 # 裸 SQL 里的危险动词（`ALTER` 也算：改列类型/去默认值会重写或清空既有值）
 DANGEROUS_SQL = re.compile(r'\b(DROP|TRUNCATE|DELETE|UPDATE|ALTER|RENAME)\b', re.I)
 # **执行** SQL 的入口：跑起来就把语句发出去，不管调用方有没有用返回值。
@@ -91,8 +99,20 @@ def _classify_calls(nodes):
             attr = getattr(node.func, 'attr', None)
             fname = getattr(node.func, 'id', None)
             strs = _strings(node)
-            if attr in DESTRUCTIVE_METHODS:
-                hits.append('op.%s' % attr)
+            if attr in ('alter_column', 'modify_column'):
+                # 改列类型/收窄长度会**重写或清空**既有值（`DANGEROUS_SQL` 里早就有 `ALTER`，
+                # 但方法形式以前既不算命中也不算看不清，审计回的是"干净"——第 47 轮 B-1 的
+                # 第四种形状）。为什么不直接算"删除"：多数 `alter_column` 只是加默认值，
+                # 硬算删除会把 9 支正常迁移全逼进登记表；按"看不清"报出来让人看一眼，
+                # 判据与代价都对得上。
+                unclear += 1
+                continue
+            if _is_destructive_method(attr) or (isinstance(node.func, ast.Name)
+                                                and _is_destructive_method(fname)):
+                # 裸名调用也算（第 47 轮 B-1：`from alembic.op import drop_table` 之后
+                # 直接写 `drop_table("predictions")` —— 语义一个字没改，只因为不是
+                # `op.` 前缀就隐身）
+                hits.append('%s（删除类方法）' % (attr or fname))
                 continue
             if (attr or fname) == 'getattr' and any(_DYNAMIC_PREFIX.search(s) for s in strs):
                 # `getattr(op, "drop_" + "table")("x")`：方法名是拼出来的，但拼完还是删。
@@ -156,17 +176,69 @@ def scan_migration(path):
         per_func[name], unclear[name] = hits, bad
 
     def reachable(entry):
-        """entry 直接或间接调用了哪些本文件 helper（含自己）。"""
+        """entry 直接或间接调用了哪些本文件 helper（含自己）。
+
+        第 47 轮 B-1：以前只跟 `func.id`（裸名字），于是
+        `class Legacy: def wipe(self): op.drop_table(...)` + `upgrade(): Legacy().wipe()`
+        整条链隐身 —— 方法调用的 callee 是 `ast.Attribute`，`getattr(node.func,'id',None)`
+        压根不是名字。**按调用图跟，不认写法**：`_a()`、`obj.wipe()`、`Legacy().wipe()`
+        只要那个名字在本文件定义过，就算这一支会走到。
+        """
         found, stack = {entry}, [entry]
         while stack:
             for fn in funcs.get(stack.pop(), []):
                 for node in ast.walk(fn):
-                    if isinstance(node, ast.Call):
-                        called = getattr(node.func, 'id', None)
+                    if not isinstance(node, ast.Call):
+                        continue
+                    for called in (getattr(node.func, 'id', None),
+                                   getattr(node.func, 'attr', None)):
                         if called in funcs and called not in found:
                             found.add(called)
                             stack.append(called)
         return found
+
+    def unresolved(entry):
+        """这一支往上走时，有多少处调用**我看不出它会做什么**（第 47 轮 B-1 / A6）。
+
+        `from ._util import wipe_everything` 之后 `upgrade(): wipe_everything()` ——
+        名字既不在本文件的 def 里、也不是内置函数，alembic 的 `op`/`sa`/`insp` 这些
+        模块前缀更沾不上边。上一版这种调用**既不算命中也不算看不清**，审计回的是"干净"，
+        而它自己的 docstring 写着"看不懂的按可疑报出来"。
+        只对**裸名字**调用发难（属性调用挂在 `op.` / `insp.` 这类对象上，对象可能是
+        本地变量或连接，硬判"看不清"会把 `insp.get_indexes()` 这种正常写法打死 ——
+        那就是"把闸门建成墙"，与第 45 轮 `sa.text(d)` 那次误报同一课）。
+        两条豁免要分开看：本文件 `def` 出来的 helper 看得见（`reachable()` 已经跟进去了）、
+        内置函数看得见；**从别的模块 import 进来的裸名字看不见**（第 47 轮 B-1 的
+        `from ._util import wipe_everything` ⇒ 上一版把它算成"认得的名字"而放过，
+        等于跨模块就能把删除藏起来）。
+        """
+        local = set(funcs) | {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+        import builtins as _py_builtins        # 模块级拿 `__builtins__` 时它是 dict 还是 module
+        builtins_ = set(dir(_py_builtins))     # 取决于谁 import 了我，两种都有过
+        imported, assigned = set(), set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported |= {(a.asname or a.name).split('.')[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported |= {(a.asname or a.name) for a in node.names}
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for t in targets:
+                    if isinstance(t, ast.Name):
+                        assigned.add(t.id)
+        bad = 0
+        for name in reachable(entry):
+            for fn in funcs.get(name, []):
+                for node in ast.walk(fn):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                        callee = node.func.id
+                        if callee in local or callee in builtins_ or callee in assigned:
+                            continue
+                        if callee in imported:
+                            bad += 1        # 看得见名字、看不见函数体 ⇒ 这一支会做什么我不知道
+                            continue
+                        bad += 1
+        return bad
 
     def collect(entry):
         hits, bad = [], 0
@@ -177,6 +249,8 @@ def scan_migration(path):
 
     up_hits, up_unclear = collect('upgrade') if 'upgrade' in top else ([], 0)
     down_hits, down_unclear = collect('downgrade') if 'downgrade' in top else ([], 0)
+    up_unclear += unresolved('upgrade') if 'upgrade' in top else 0
+    down_unclear += unresolved('downgrade') if 'downgrade' in top else 0
     # 根级别（模块顶层）直接执行的动作：`import` 这支迁移就跑了它，不等 upgrade()
     root_hits, root_unclear = _classify_calls(
         [n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,

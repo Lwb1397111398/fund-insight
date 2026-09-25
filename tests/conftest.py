@@ -13,6 +13,24 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# 测试进程自己印刷的每一个字符都要能落进控制台（第 47 轮 A4：`⇒` 在默认 cp936 下
+# 让第二个 pytest 会话 `UnicodeEncodeError` 直接 INTERNALERROR —— 那行警告的本意是
+# "跑不动与跑不绿分得开"，结果它把会话打死，两件事一件也没分开）。
+# 只把**编码错误**换成替换字符，不改编码：中文照旧按控制台那套走，
+# 只有箭头这类 cp936 装不下的字符退化成 `?`。
+def _make_streams_lossy():
+    # 顶层这一次**不够**：`wrap_session` 会在 conftest 之后把 sys.stdout 换成它自己的
+    # 捕获对象（实测只在这里改 ⇒ pytest_configure 里那句 print 仍按 gbk/strict 崩），
+    # 所以 `pytest_configure` 开头还要对着"当时那个流"再来一次。
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:                       # 被换成没这方法的对象时不许弄坏起手式
+            pass
+
+
+_make_streams_lossy()
+
 # 前端变异体检正在改写 web/ 时，这一轮 pytest 读到的源码不是老板那份 —— 拦掉。
 # 体检自己起的子 pytest（带 MUTATION_HARNESS_PID）放行，见 src/utils/mutation_lock.py。
 # **这里不许在模块顶层 import src.***：`src/__init__.py` 会拉起 `src.core.config`，

@@ -309,6 +309,16 @@ def test_claims_skipped_because_the_paragraph_is_baseline_flow_are_counted_aloud
     out = capsys.readouterr().out
     assert '1 条只因所在那一段是基线流水' in out, \
         '"没判几条"没印出来 ⇒ B-M2 说的那种空转还是不可见：%s' % out
+    # 第 47 轮 B-7 要求结论行**重复**这个数。重复的是同一个数，不是再算一遍别的：
+    # 我第一版写成"不判 + 增量"之和（当场印成 28，而上面那行是 9）⇒ 修一处可见性
+    # 造出一个新的假数，正是这一族最常见的死法。两行必须给同一个数。
+    import re as _re
+    head = _re.search(u'还有 (\\d+) 条"看得见但不判"', out)
+    tail = _re.search(u'另有 (\\d+) 条"看得见但不判"', out)
+    assert head and tail, '结论行没带上"看得见但不判"的条数：%s' % out
+    assert head.group(1) == tail.group(1), \
+        '两行报了两个不同的"不判"条数（%s vs %s）⇒ 结论行那个数不是同一把尺子算出来的' % (
+            head.group(1), tail.group(1))
 
 
 def test_the_fix_flag_rewrites_counts_and_leaves_the_other_accounts_alone(tmp_path, monkeypatch,

@@ -67,6 +67,31 @@ def test_a_stray_pytest_session_is_blocked_while_the_harness_holds_the_lock():
         guard.__exit__(None, None, None)
 
 
+def test_a_second_session_under_the_default_locale_still_runs(tmp_path):
+    """并发会话那行警告不许把整个会话打死（第 47 轮 A4）。
+
+    上面两条端到端用例都显式给了 `PYTHONIOENCODING=utf-8` ⇒ 真正会撞的形狀
+    ——**第二个会话按控制台默认 locale 起**（Windows 上就是 cp936）—— 零覆盖，
+    而 A 席就是这么撞上的：`print(... '⇒' ...)` 在 `pytest_configure` 里抛
+    `UnicodeEncodeError` ⇒ `INTERNALERROR`，整个会话一条结果都没有。
+    那行警告的本意是"跑不动与跑不绿分得开"，它自己却成了"跑不动"。
+    判据两头：不许 INTERNALERROR，**而且那行警告必须真印出来**（只判"没崩"
+    可以靠把 print 删掉混过去）。
+    """
+    env = {k: v for k, v in os.environ.items()
+           if k not in (mutation_lock.ENV_PID, 'PYTHONIOENCODING')}
+    r = subprocess.run([sys.executable, '-m', 'pytest',
+                        'tests/unit/test_mutation_lock.py::test_both_sides_are_actually_wired',
+                        '-q', '--no-header', '-p', 'no:cacheprovider'],
+                       cwd=str(PROJECT_ROOT), capture_output=True, env=env,
+                       text=True, errors='replace')      # encoding=None ⇒ 与子进程同一套 locale
+    out = r.stdout + r.stderr
+    assert 'INTERNALERROR' not in out, '默认 locale 下的第二个会话直接崩了：%s' % out[-400:]
+    assert r.returncode == 0, '第二个会话没跑完（退码 %s）：%s' % (r.returncode, out[-400:])
+    assert '已经有一个 pytest 会话握着' in out, \
+        '并发警告没印出来 ⇒ 要么闸没了，要么这条用例走的是能编码的那条路：%s' % out[-300:]
+
+
 def test_both_directions_are_blocked(tmp_path):
     """互斥必须是双向的（第 33 轮 A-MAJOR-3 / B-MINOR-11）。
 

@@ -241,6 +241,12 @@ def test_no_new_direct_fund_code_writes_appear():
                            and node.args[1].value == 'fund_code')
                     if not hit and fname in ('update', 'values'):
                         hit = _bulk_write_hits(node, 'fund_code')
+                    # 裸 SQL 那一腿（第 47 轮 B-3）：以前"唯一入口"的判据只看 AST 里的
+                    # 属性赋值 / 批量写 / setattr，一条 `db.execute(text("UPDATE predictions
+                    # SET fund_code = …"))` 就绕过去了 —— 而"绕开唯一入口"最常见的形态
+                    # 恰恰是"我根本没走 ORM"。判据与样品共用 `_raw_sql_write_hits`。
+                    if not hit:
+                        hit = _raw_sql_write_hits(node, 'fund_code')
                     if hit:
                         found.add(self._here())
                     self.generic_visit(node)
@@ -309,7 +315,8 @@ def test_is_correct_is_only_written_by_the_verify_service():
             hit = (fname == 'setattr' and len(node.args) >= 2
                    and isinstance(node.args[1], ast.Constant)
                    and node.args[1].value == 'is_correct') \
-                or (fname in ('update', 'values') and _mentions(node))
+                or (fname in ('update', 'values') and _mentions(node)) \
+                or _raw_sql_write_hits(node, 'is_correct')
             if hit:
                 writers.add(self.rel)
             self.generic_visit(node)
@@ -382,6 +389,40 @@ def test_export_snapshot_carries_the_badge_too(test_db):
     assert row['evidence_status'] == 'nav_rewritten'
     assert exported['predictions_evidence']['stale_evidence'] == 1
 
+def _raw_sql_write_hits(node, column):
+    """`db.execute(text("UPDATE predictions SET is_correct = true"))` —— 列名和写动作都在串里。
+
+    第 47 轮 B-3：`is_correct` 与 `fund_code` 那两条"只有一个入口"的棘轮**没有这一腿**，
+    而本仓真的这么写 SQL（`src/api/main.py:463` 接返回值、`:556` 把语句拼进变量）。
+    于是绕开 `PredictionVerifyService` 不需要发明新写法，只要走裸 SQL。
+
+    两头都要有牙：
+      * 只认 **SET 子句 / INSERT 列清单**里的那一列 —— `UPDATE … SET status = 1 WHERE is_correct = true`
+        是**读**这一列来定位行，判成"写"就是把闸门建成墙（与 `_bulk_write_hits` 那条过宽对照同一课）；
+      * 语句里连 `UPDATE/INSERT/DELETE` 都没有 ⇒ 不认（`SELECT … WHERE is_correct = true` 是查询）。
+    """
+    import ast
+    import re
+    verb = re.compile(r'\b(update|insert|delete)\b', re.I)
+    assign = re.compile(r'\b%s\b\s*=' % re.escape(column), re.I)
+    in_list = re.compile(r'insert\s+into\s+[\w."]+\s*\([^)]*\b%s\b' % re.escape(column), re.I)
+    for c in ast.walk(node):
+        if not (isinstance(c, ast.Constant) and isinstance(c.value, str)):
+            continue
+        text, low = c.value, c.value.lower()
+        if not verb.search(text):
+            continue
+        at = low.find(' set ')
+        if at >= 0:
+            tail = low.find(' where ', at)
+            segment = text[at + 5:] if tail < 0 else text[at + 5:tail]
+            if assign.search(segment):
+                return True
+        elif in_list.search(text):
+            return True
+    return False
+
+
 def _shape_hits(src, column):
     """一段源码里有没有"写这一列"的形状（赋值目标位 + 批量写参数位，两条都算）。
 
@@ -399,6 +440,8 @@ def _shape_hits(src, column):
                     and isinstance(node.args[1], ast.Constant) and node.args[1].value == column:
                 return True
             if _bulk_write_hits(node, column):
+                return True
+            if _raw_sql_write_hits(node, column):
                 return True
     return False
 
@@ -425,6 +468,21 @@ def test_the_bulk_write_detector_recognises_every_spelling_we_claim():
          'q.update({"status": Prediction.fund_code})', 'fund_code', False),
         ('裸读取：赋值目标是别人', 'x = Prediction.is_correct', 'is_correct', False),
         ('写别的列不算写这一列', 'q.update({Prediction.sector: y})', 'is_correct', False),
+        # ↓ 第 47 轮 B-3：`is_correct` / `fund_code` 两条"唯一入口"以前**没有裸 SQL 这一腿**。
+        # 绕开唯一入口不需要发明新写法 —— 本仓就有 `result = db.execute(...)`
+        # （`src/api/main.py:463`）与把语句拼进变量（`:556`）这两种真写法。
+        ('裸 SQL 的 SET 就是写这一列',
+         'db.execute(sa.text("UPDATE predictions SET is_correct = true"))', 'is_correct', True),
+        ('返回值被接走，语义一个字没变',
+         'r = db.execute(text("UPDATE predictions SET fund_code = \'510300\'"))',
+         'fund_code', True),
+        ('INSERT 的列清单里点名这一列也算写',
+         'db.execute("INSERT INTO predictions (is_correct) VALUES (1)")', 'is_correct', True),
+        ('列名只在 WHERE 里是**定位行**，不是写它',
+         'db.execute("UPDATE predictions SET status = 1 WHERE is_correct = true")',
+         'is_correct', False),
+        ('SELECT 里出现列名不算写',
+         'db.execute("SELECT id FROM predictions WHERE is_correct = true")', 'is_correct', False),
     ]
     for name, src, col, want in shapes:
         assert _shape_hits(src, col) is want, '%s：判成 %s，应为 %s（源码：%s）' % (

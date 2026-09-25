@@ -12,14 +12,30 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# `_db_guard` 住在 `scripts/` 下（那里不是包），而 alembic 只会把仓库根放进 sys.path。
+# 显式按 `__file__` 找过去：报"哪个库"的尺子必须与守卫、与 `q.py` 是**同一把**（第 47 轮 B-2
+# 的根因就是这里自己搓了第二份，query 串里的口令没剥）。
+_SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts')
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+
 
 def _redact(url):
-    """自报目标时只留 scheme + host/db，**连接串里的口令一个字符都不许出现在终端上**
-    （同仓 `scripts/sync_db_columns.py` 用的也是这个尺度）。"""
-    if "://" not in url:
-        return url
-    scheme, rest = url.split("://", 1)
-    return "%s://%s" % (scheme, rest.split("@")[-1])
+    """自报目标时只留 scheme + host/db，**连接串里的口令一个字符都不许出现在终端上**。
+
+    第 47 轮 B-2：这里曾经是这仓库里的**第三把**手搓剥口令尺子 —— `rest.split("@")[-1]`
+    只处理了 `user:pw@host` 那种位置，`postgresql://host:5432/db?password=S3cr3tPW`
+    （SQLAlchemy 允许把参数写在 query 里）与 `postgresql:///db?host=…&password=…`
+    都会被原样印进 `[abort]` / `[库]` 那两行，而后者走 stderr、直接进 Render 日志。
+    更糟的是它**永远不会被那条棘轮抓到**：棘轮扫的是 `scripts/` 与 `src/`，这里是 `alembic/`。
+    所以现在直接用 `_db_guard` 那把尺子；拿不到时只报 scheme —— **宁可不报名字，
+    也不把原串印出去**（回退到"自己再搓一遍"正是这一族的病根）。
+    """
+    try:
+        from _db_guard import machine_name
+    except ImportError:
+        return "%s://（认不出目标：守卫没加载成功）" % url.split("://", 1)[0]
+    return machine_name(url)
 
 explicit_url = os.getenv("ALEMBIC_DATABASE_URL")
 ini_url = config.get_main_option("sqlalchemy.url") or ""

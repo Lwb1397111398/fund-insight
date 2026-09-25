@@ -274,6 +274,14 @@ def target_name(url: str) -> str:
     where = re.split(r'[?;&#]', rest.split('@')[-1], 1)[0]
     # 没有分隔符的整段也要过涉密键：`postgres:///password=X` 把口令藏在路径位（第 46 轮）
     where = _redact_secrets(where)
+    # 与 `scripts/_db_guard.machine_name()` 同步（第 47 轮 B-6）：netloc 为空、主机只写在
+    # `?host=` 里的那一种合法串，以前报成 `线上生产库（postgresql:///postgres）` ——
+    # 档位对，可"是哪一台"没说。两份实现不能互相 import，所以补在同一处、同一条件，
+    # 由 `test_the_two_self_report_rulers_stay_identical` 逐样品钉相等。
+    if (rest.split('@')[-1].split('?')[0]).startswith('/'):
+        params = _db_hosts(url)
+        if params:
+            where = '%s@%s' % (where, ','.join(params))
     return '%s://%s' % (scheme, where)
 
 

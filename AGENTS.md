@@ -201,13 +201,20 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-25 16:5x（北京），第 46 轮返修（A 76 / B 72，取低分 72）之后，
+最近一次核对（2026-09-25 18:2x（北京），第 47 轮返修（A 68 / B 80，取低分 68）之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1067 passed / 16 skipped / 0 failed**（445.73 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1076 passed / 16 skipped / 0 failed**（357.13 秒）。
-  （**串行跑**是这一轮新加的规矩：A 席并发时段读到过 1064 而干净复跑是 1063 ——
+- `pytest tests/unit -q` → **1070 passed / 16 skipped / 0 failed**（453.57 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1079 passed / 16 skipped / 0 failed**（419.45 秒）。
+  （上一基线 1067/1076 → 本批 1070/1079：+3 条 —— `test_script_db_guards.py` 的
+  "整趟散落连接扫描跑不完就不许钉库"（第 47 轮 B-4 那一支以前 0 覆盖）、
+  `test_mutation_lock.py` 的"默认 locale 下第二个会话不许崩"（A4）、
+  `test_alembic_target_direction.py` 的"env.py 报目标必须用共用那把尺子"（B-2）。
+  本批改的判据形状样品（if/else 方向、写死的 `[目标]`、DB-API 三种拼写、迁移里藏在
+  类方法/改名/跨模块 helper 里的删除、裸 SQL 授予换位置）都**并在那几条已有用例的样品表里**，
+  不另起条数。）
+  （**串行跑**是第 46 轮加的规矩：A 席并发时段读到过 1064 而干净复跑是 1063 ——
   pytest 与 pytest **不互斥**（那把锁只挡体检），第二个会话抢不到锁时现在会印一行
   `[警告] 已经有一个 pytest 会话握着 …` ⇒ "跑不动"与"跑不绿"从此分得开。
   上一基线 1054/1063 → 本批 1067/1076：+13 条，分布在 `test_script_db_guards.py` +5
@@ -620,6 +627,39 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `downgrade`）。`alembic/env.py` 那道方向闸只管"能不能连过去"，管不到"过去之后删什么"。
   ⑥ 受检集合"git 不可用就退回磁盘并明说"这一支今天自己跑过一次（A-m3：以前只在 docstring 里），
   并配"临时目录里现造文件必须被收进来"的空判对照。
+- **判据"形状对了"还不算完：要看它能不能被普通写法走到**（第 47 轮两席共同的主账，A 68 / B 80 ⇒ 68）：
+  ① **文件级 OR 是最常见的漏**：`env_written` 以前问"这篇文件里有没有一处证明方向" ⇒
+  `if LOCAL: 钉 sqlite / else: 赋生产串`（与上一轮修掉的三目同一个语义，只换了语句形状）白买守卫。
+  现在同文件里存在**任何一处**方向不明的赋值，整篇都不计分。
+  ② **印出来 ≠ 报得出来**：`print("[目标] 本地镜像库（sqlite）")` 是一句抄死的话，
+  `.env` 指向生产时它照样这么印 ⇒ 自报的那句话必须**从值算出来**（f-string 挖空 / `%` 插值 / 调函数）。
+  ③ **恒空的能力类别比没有类别更坏**：`dbapi_direct` 的判据写成
+  `resolved in DBAPI_MODULES and name == 'connect'`，而 `resolved` 是被调函数的**叶子名**
+  （`sqlite3.connect` 的叶子是 `connect`）⇒ 永不成立、全仓 0 命中，而"每类一个合成样品逐类钉"
+  那句话当时是假的：那一类的样品是靠 `raw_sql_write`（串里有 DML 动词）被抓的。
+  真正的洞是 `from sqlite3 import connect` + `cur.execute(sql)`（SQL 在变量里）判"不能改数据"
+  ⇒ 从不被问连哪儿。现在按"开了 DB-API 连接 **且** 要么发出一条看不见的语句、要么 `commit()`"判，
+  而 `execute("select …")` 这种看得见的只读仍然不误伤。
+  ④ **一条判据换到另一台机器上要重看一遍位置**：授予点棘轮的裸 SQL 那条腿挂在 `ast.Expr` 上
+  （"这一整句必须正好是一次调用"）⇒ `n = db.execute(text("UPDATE … owner_locked = true"))`、
+  `if db.execute(...).rowcount:`、列表推导里的全部隐身；而 `is_correct` / `fund_code`
+  两条"唯一入口"以前**根本没有裸 SQL 这一腿**。现在三处共用同一个位置无关的
+  `_raw_sql_write_hits`，并且只认 SET 子句 / INSERT 列清单里的列名
+  （`UPDATE … SET status = 1 WHERE is_correct = true` 是**读**那一列来定位行，判成写就是建墙）。
+  ⑤ **"看不见就当没事"是 fail-open**：迁移闸门对解析不出的调用（类方法里的 `op.drop_table`、
+  `Legacy().wipe()` 这种属性出口、跨模块 helper、`op.rename_table`）以前既不算命中也不算看不清，
+  审计回的是"干净"，而 `run_migrations.py` 每次 Render 启动**先问它**再对 `.env` 那个库发 DDL；
+  钉库前的散落连接扫描整趟失败时也只印一行警告继续钉。两处都改成"答不出就拒跑"（退 4），
+  `alter_column` 归"看不清"（改类型/收窄会重写既有值，但硬算删除会把 9 支正常迁移逼进登记表）。
+  ⑥ **`[abort]` 必须停下来**：`sweep_sector_mappings.py --restore-from` 缺 `created_at` 那一支
+  印完 `[abort]` 就把 `codes` 清空继续往下走 ⇒ 退码 0、`[dry-run]` 照印、`--apply` 还照写映射行。
+  现在返回 4。（把这条旧行为钉成规矩的正是我自己上一轮写的那条用例 —— **判据写错时，
+  绿色的用例会替错误行为作保**。）
+  ⑦ 还有一条**关于我自己**的：本轮我（在压缩上下文之后）把 B 席的条目清单凭记忆重写成了一份
+  **含不存在条目**的记录（"只读门 `PRAGMA` 侧门 + 生产写进 3 行 + 镜像里 `_load_legacy_probe` 残渣"），
+  而 B 席原文只有 B-1~B-7、且明说"生产未连接"。我实测镜像 28 张表里没有任何探针残渣表、
+  `drop_probe_residue.py` 回 `[ok] 没有探针残渣表` ⇒ 那三条**作废**，任务记录已按两份原文重写。
+  教训：转述评审必须拿原文，凭印象重列等于再造一份未复现的事实。
 - **同一条分支还不够：要"会执行、且排在危险动作之前"，方向要来自"值"**（第 45 轮两席共同的主账，
   与上面那条同源，只是又深了一层）：
   ① **死路不算守卫** —— `if False:`、`if X and False:` 那种恒假分支里的 `[abort]` 现在被认成死代码
@@ -928,7 +968,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `tests/conftest.py::pytest_configure` 看到它被持有就 `pytest.exit`；反过来 pytest 会话握
   `.pytest-session.lock`，体检启动前先问 `mutation_lock.harness_may_start()`。
   锁由操作系统管，进程被强杀也会自己放开；两个锁文件都在 `.gitignore` 里。
-  用例：`tests/unit/test_mutation_lock.py`（7 条：两条真起子进程验两端、一条验两头都真的接了线）。
+  用例：`tests/unit/test_mutation_lock.py`（当场条数看 `grep -c '^def test_' tests/unit/test_mutation_lock.py`；
+  两条真起子进程验两端、一条验两头都真的接了线、第 47 轮 A4 起还验"默认 locale 下的第二会话不许崩"）。
   第 29 轮两份复评（72 / 86）就是拿这四条反过来打我的：第一版"只挡没答话"漏了 5xx、
   两条文本判据结构上不可能响、并发失败各起一轮 90 秒轮询。
   **文本判据必须配一个能把它打红的变异**，否则它只是在描述自己。

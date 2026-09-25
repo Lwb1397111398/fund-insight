@@ -210,3 +210,55 @@ def test_every_self_report_branch_is_a_real_print_statement():
                    'print("[库] alembic 目标 %s（远程；由 ALEMBIC_DATABASE_URL 说出',
                    'print("[库] alembic 目标是本地 sqlite 文件'):
         assert marker in src, '少了这一条自报：%s' % marker
+
+
+def test_the_self_report_ruler_is_the_shared_one_not_a_local_copy():
+    """`env.py` 报目标时必须用那把共用的尺子，不是自己再搓一遍（第 47 轮 B-2）。
+
+    这里原来躺着这仓库的**第三把**手搓剥口令尺子：`rest.split("@")[-1]` 只处理了
+    `user:pw@host` 那一种位置，而 SQLAlchemy 允许把参数写进 query ——
+    `postgresql://host:5432/db?password=S3cr3tPW` 被**原样**印进 `[abort]` 与 `[库]`
+    那两行（后者走 stderr ⇒ 直接进 Render 日志）。而"不许再手搓剥口令"的那道棘轮只扫
+    `scripts/` 与 `src/` ⇒ 对这里**结构上看不见**（同一条不变式写在 AGENTS 里，
+    管它的两条尺子却不知道自己存在）。
+
+    判据不 import `env.py`（一 import 就拉起 alembic 上下文、还要读 `.env`）：
+    按 AST 把那个函数取出来自己执行一次，喂四种真会出现的连接串。
+    控制：把 `_redact` 换回上一版那种写法，这四格里至少两格必须红（下面最后一段）。
+    """
+    import ast
+    import sys
+    src = (ROOT / 'alembic' / 'env.py').read_text(encoding='utf-8')
+    tree = ast.parse(src)
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_redact'),
+              None)
+    assert fn is not None, 'env.py 里找不到 `_redact` ⇒ 自报换实现人了？那这条判据要跟着改'
+    scripts = str(ROOT / 'scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    ns = {}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), '<env._redact>', 'exec'), ns)
+    redact = ns['_redact']
+    cases = (
+        ('postgresql://aws-1-ap-south-1.pooler.supabase.co:6543/postgres?password=S3cr3tPW'
+         '&sslmode=require', 'aws-1-ap-south-1.pooler.supabase.co'),
+        ('postgresql:///postgres?host=aws-1-ap-south-1.pooler.supabase.co&password=S3cr3tPW',
+         'aws-1-ap-south-1.pooler.supabase.co'),
+        ('postgresql://u:S3cr3tPW@aws-1-ap-south-1.pooler.supabase.co:5432/postgres',
+         'aws-1-ap-south-1.pooler.supabase.co'),
+        ('postgres://someone:anotherS3cr3t@db.internal.example:5432/app', 'db.internal.example'),
+    )
+    for url, host in cases:
+        got = redact(url)
+        assert 'S3cr3t' not in got and 'anotherS3cr3t' not in got, \
+            '自报行把口令带出来了：%s ← %s' % (got, url)
+        assert host in got, \
+            '口令是藏住了，可"是哪一台"也没了（%s）⇒ 报成"认不出"等于没报' % got
+    # 反向：旧写法（`split('@')[-1]` 就完事）必须被这四格抓着 —— 否则上面那段是空判
+    old = 'def _redact(url):\n    if "://" not in url:\n        return url\n' \
+          '    scheme, rest = url.split("://", 1)\n    return "%s://%s" % (scheme, ' \
+          'rest.split("@")[-1])\n'
+    legacy_ns = {}
+    exec(compile(old, '<legacy>', 'exec'), legacy_ns)
+    leaked = [u for u, _h in cases if 'S3cr3t' in legacy_ns['_redact'](u)]
+    assert leaked, '控制失效：上一版那种写法在这四格里一格都没泄露 ⇒ 样品是编的'

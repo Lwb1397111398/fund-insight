@@ -76,6 +76,45 @@ def _docstring_consts(tree):
 DML_WORDS = re.compile(r'^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|MERGE)\b',
                        re.I)
 DBAPI_MODULES = ('psycopg2', 'psycopg', 'sqlite3', 'pymysql', 'MySQLdb', 'cx_Oracle', 'oracledb')
+
+
+# 会把一条语句**发出去执行**的方法名（不是"能不能看见内容"，那是另一维）
+SQL_EXEC_METHODS = {'execute', 'executescript', 'executemany', 'exec_driver_sql', 'run_sql'}
+
+
+def _derived_value(node):
+    """这一句话的值**来自运行期**，不是抄在代码里的一句现成话（第 47 轮 A2）。
+
+    第 44/45 轮把"死赋值买不到自报"堵住了（必须被 `print` 出来），但没问第二半：
+    **印出来的那句是不是从连接算出来的**。写死的 `print("[目标] 本地镜像库（sqlite）")`
+    在 `.env` 指向生产时照样印"本地镜像库" —— 屏幕上那句话与它实际写的库可以毫无关系，
+    而守卫要的就是这句话。对照组是 `run_migrations.py` 那种 `print("[库] %s" % db_kind(url))`。
+    """
+    if isinstance(node, ast.JoinedStr):            # f"[目标] {db_kind(url)}"
+        return any(isinstance(v, ast.FormattedValue) for v in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):   # "[目标] %s" % x
+        return not isinstance(node.right, ast.Constant)
+    if isinstance(node, ast.Call):                 # print(database_label(db))
+        return True
+    return isinstance(node, (ast.Name, ast.Attribute, ast.Subscript))
+
+
+def _is_dbapi_connect(func, module_names, connect_names):
+    """这个调用**是不是"开一条 DB-API 连接"**。
+
+    三种拼写都得认（第 47 轮 A3：旧判据把"叶子名"与"模块名"放在一起比，恒不成立）：
+      ① `sqlite3.connect(u)` / `s3.connect(u)`（`import sqlite3 as s3`）—— 挂在模块上的属性调用；
+      ② `connect(u)`（`from sqlite3 import connect`）—— 直接导入函数；
+      ③ `connect = sqlite3.connect; connect(u)` —— 一跳别名（`_resolve` 之后仍落到模块）。
+    """
+    if isinstance(func, ast.Attribute):
+        base = getattr(func.value, 'id', None)
+        return func.attr == 'connect' and (
+            base in DBAPI_MODULES or base in module_names)
+    if isinstance(func, ast.Name):
+        return func.id in connect_names
+    return False
+
 # 第 44 轮 A-M2/B-M2 把三张名字表补宽：`os.replace` 是最省事的"一句话换掉整个镜像"，
 # `engine_from_config` 是 alembic 自己的官方入口（`alembic/env.py:101` 就用它），
 # `create_async_engine` / `Session(bind=…)` 是同一件事的另一种写法。
@@ -475,6 +514,11 @@ def _facts(py):
     tree = ast.parse(text, filename=str(py))
     prose = _docstring_consts(tree)
     called, flags, raised, consts, direct_db = set(), set(), set(), set(), False
+    # 方向是**按赋值点**记的（第 47 轮 A1）：以前一条 proven 赋值就把整篇文件点成"方向已证明"，
+    # 于是 `if LOCAL: 钉 sqlite / else: 赋生产串` 这种 if-else 两臂能白买守卫 —— 与上一轮
+    # 修掉的三目是**同一个语义**，只是换了语句形状。现在只要有**任何一处**方向不明的赋值，
+    # 整篇就不计分（文件级 OR 换成 AND；宁可让写脚本的人把方向说成一处，也不让两臂同时存在）。
+    env_proven = env_unknown = 0
     env_written = env_written_unknown = False
     alembic = False      # `from alembic import command` / `import alembic...`
     reads_url_env = False    # 读 `DATABASE_URL` / `ALEMBIC_DATABASE_URL` 这两个名字
@@ -482,9 +526,14 @@ def _facts(py):
     builds_external_engine = False    # …且目标不是代码里写死的本地 sqlite 路径
     capabilities = set()
     printed_targets = set()
+    printed_targets_derived = set()   # 第 47 轮 A2：印了，而且那句话是从值算出来的
     called_printed = set()
     src_imports = set()
     alias = {}          # `from _db_guard import pin_local_sqlite as _pin_x` 也要认得出来
+    # 第 47 轮 A3：`dbapi_direct` 那一类以前恒空，因为判据拿"叶子名 == connect"去比模块名。
+    # 这两张表就是那条能力该有的样子：**谁**是模块、**谁**被绑成了 connect。
+    dbapi_modules, dbapi_connects = {}, set()
+    dbapi_connect_seen = opaque_sql_seen = False
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in ('_db_guard', 'sqlalchemy'):
@@ -492,6 +541,26 @@ def _facts(py):
             # 一个别名就让 `engine_from_env` 变 False（上一版只对 `_db_guard` 的名字做还原）。
             for a in node.names:
                 alias[a.asname or a.name] = a.name
+        if isinstance(node, ast.Import):
+            # `import sqlite3 as s3` ⇒ `s3.connect(...)` 与 `sqlite3.connect(...)` 同一件事。
+            # 第 47 轮 A3：`dbapi_direct` 那一类以前**恒空** —— 判据是
+            # `resolved in DBAPI_MODULES and name == 'connect'`，而 `resolved` 是被调函数的
+            # **叶子名**（`sqlite3.connect` 的叶子是 `connect`），它永远不等于模块名 `sqlite3`。
+            for a in node.names:
+                root = (a.name or '').split('.')[0]
+                if root in DBAPI_MODULES:
+                    dbapi_modules[a.asname or root] = root
+        elif isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] \
+                in DBAPI_MODULES:
+            # `from sqlite3 import connect` / `... as op`：callee 只剩一个裸名字，模块信息在 import 行上
+            for a in node.names:
+                if a.name == 'connect':
+                    dbapi_connects.add(a.asname or a.name)
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and isinstance(node.value, ast.Attribute) and node.value.attr == 'connect' \
+                and getattr(node.value.value, 'id', None) in DBAPI_MODULES:
+            dbapi_connects.add(node.targets[0].id)   # `connect = sqlite3.connect`
     # `scheme = url.split('://')[0]` 这一类"一步前驱赋值"：护栏条件里只写 `scheme.startswith(...)`
     # 时，方向信息在上一行。认一层变量赋值，别把真护栏误判成没护栏（第 44 轮 A-m1 的误报面）。
     scheme_from_name = {}
@@ -540,18 +609,52 @@ def _facts(py):
                                               'CREATE ', 'DROP ', 'INSERT ', 'UPDATE ',
                                               'DELETE ', 'TRUNCATE')):
                     capabilities.add('opaque_exec')   # 字符串里写着落笔动作：按能写处理
+            elif isinstance(node, ast.Call):
+                # `os.environ.update({"DATABASE_URL": "sqlite:///x.db"})` 与
+                # `os.environ.setdefault("DATABASE_URL", ...)` 是同一条"我自己定了方向"的
+                # 另一种拼写（第 47 轮 A7：上一版只认下标赋值 ⇒ 诚实钉成 SQLite 的脚本
+                # 反而判"没方向"，而这条路径今天 0 覆盖）。判据与上面完全同一把尺子：
+                # 值能不能证明是 sqlite。
+                f = node.func
+                if isinstance(f, ast.Attribute) and f.attr in ('update', 'setdefault') \
+                        and isinstance(f.value, ast.Attribute) and f.value.attr == 'environ':
+                    pairs = []
+                    if f.attr == 'setdefault' and len(node.args) >= 2:
+                        pairs = [(node.args[0], node.args[1])]
+                    elif f.attr == 'update' and node.args and isinstance(node.args[0], ast.Dict):
+                        pairs = [(k, v) for k, v in zip(node.args[0].keys, node.args[0].values)]
+                    for key, value in pairs:
+                        if isinstance(key, ast.Constant) and key.value in ('DATABASE_URL',
+                                                                           'LOCAL_DB_URL'):
+                            if _proves_sqlite(value, tree):
+                                env_proven += 1
+                            else:
+                                env_unknown += 1
             if name == 'add_argument':
                 flags.update(s for s in strs if s.startswith('-'))
             if resolved in ('create_all', 'drop_all'):
                 # `drop_all` 比 `create_all` 更危险，以前表里只写了 create_all（A44 M2）
                 capabilities.add('schema_ddl_call')
-            if resolved in ('execute', 'exec_driver_sql', 'text') \
+            if resolved in ('execute', 'exec_driver_sql', 'executescript', 'executemany', 'text') \
                     and any(DML_WORDS.search(s) for s in strs):
                 capabilities.add('raw_sql_write')            # 裸 SQL 写：串里有 DML/DDL 动词
             if resolved == 'to_sql':
                 capabilities.add('bulk_replace')             # df.to_sql(if_exists='replace')
-            if resolved in DBAPI_MODULES and name == 'connect':
-                capabilities.add('dbapi_direct')             # sqlite3.connect / psycopg2.connect
+            if _is_dbapi_connect(node.func, dbapi_modules, dbapi_connects):
+                # 上一版这一类**恒空**（第 47 轮 A3）：判据写的是
+                # `resolved in DBAPI_MODULES and name == 'connect'`，而 `resolved` 是被调函数的
+                # **叶子名**（`sqlite3.connect` 的叶子是 `connect`），它不可能同时等于模块名。
+                # ⇒ 全仓 0 个脚本命中，而 AGENTS 写着"落笔能力按类别枚举、每类一个合成样品
+                # 逐类钉" —— 那一类的样品其实是靠 `raw_sql_write`（串里有 DML 动词）被抓的。
+                dbapi_connect_seen = True
+            if (getattr(node.func, 'attr', None) in SQL_EXEC_METHODS
+                    or getattr(func, 'id', None) in SQL_EXEC_METHODS):
+                # 执行入口 + **参数是变量** ⇒ 语句内容我看不见，但它确实会发出去。
+                # 反向对照：`c.execute("select 1")` 这种看得见是查询的**不许**算能写
+                # （第 43 轮那条"过宽对照"仍然有效，否则所有只读脚本都被推进受管集合）。
+                if any(isinstance(a, (ast.Name, ast.Attribute, ast.Subscript, ast.Starred))
+                       for a in list(node.args) + [k.value for k in node.keywords]):
+                    opaque_sql_seen = True
             if resolved in FILE_WRITERS and any('.db' in s or '.env' in s for s in strs):
                 capabilities.add('file_overwrite')       # 覆盖 db 文件 / 重写 .env
             if resolved == 'open':
@@ -580,6 +683,13 @@ def _facts(py):
                 # "声明了目标"必须是**真会被印出来**的一行（第 44 轮 B-M5 / A-M1）：
                 # 死赋值 `LABEL = '[目标] 线上生产库'` 买不到守卫。
                 printed_targets.update(s for s in _strings_in_call(node) if s.startswith(TARGET_WORDS))
+                for a in list(node.args) + [k.value for k in node.keywords]:
+                    # 第 47 轮 A2：印了不等于"报出了目标"——写死的一句话在连生产时照样印"本地镜像库"。
+                    # 只有**这句话是从运行期的值算出来的**（f-string 挖空 / `%` 插值 / 调函数）才算自报。
+                    if _strings_of(a) and any(s.startswith(TARGET_WORDS) for s in _strings_of(a)) \
+                            and _derived_value(a):
+                        printed_targets_derived.add(next(s for s in _strings_of(a)
+                                                         if s.startswith(TARGET_WORDS)))
                 # `print(_target_line(base))` 也算：常量在 helper 的 Return 上，
                 # 但这个 helper 确实被印了出来（`push_sector_mappings_to_prod.py` 就是这个形状）。
                 for c in ast.walk(node):
@@ -632,9 +742,9 @@ def _facts(py):
                     calls = {getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
                              for n in ast.walk(node.value) if isinstance(n, ast.Call)}
                     if 'pin_local_sqlite' in calls or _proves_sqlite(node.value, tree):
-                        env_written = True
+                        env_proven += 1
                     else:
-                        env_written_unknown = True
+                        env_unknown += 1
     # 护栏 = **同一条分支**里做到四件事，而且这条分支**真的挡在危险动作前面**：
     #   ① 判断条件看的是库的方向（不是 help 文案、不是说明文、不是恒假条件）；
     #   ② 分支体的正常路径上印了 `[abort]`；③ 同一条正常路径上停下来；
@@ -708,14 +818,29 @@ def _facts(py):
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Return):
                     printed_targets.update(s for s in _strings_of(sub) if s.startswith(TARGET_WORDS))
+                    printed_targets_derived.update(
+                        s for s in _strings_of(sub) if s.startswith(TARGET_WORDS))
+    # DB-API 直连这一类要**两件一起**才算：开了一条连接 + 要么把一条看不见的语句发出去、
+    # 要么 `commit()`。只 `connect()` 然后 `execute("select 1")` 的纯读脚本不算能写
+    # （第 43 轮的过宽对照仍然算数），但 `cur.execute(sql)` 里那句变量可能是
+    # `delete from bloggers` —— 以前这一类恒空，于是这类脚本从没被问过连的是哪个库（第 47 轮 A3）。
+    if dbapi_connect_seen and (opaque_sql_seen or 'commit' in called):
+        capabilities.add('dbapi_direct')
     if direct_db:
         capabilities.add('orm_session')
+    # 第 47 轮 A1：`if LOCAL: 钉 sqlite / else: 赋生产串` 与上一轮修掉的三目是**同一个语义**，
+    # 只是换了语句形状 —— 因为 `env_written` 是"整篇文件里有没有一处证明"（文件级 OR）。
+    # 现在改成 AND：**同文件里存在任何一处方向不明的赋值 ⇒ 整篇都不算证明了方向**
+    # （脚本要把方向说清，只说一处即可；两臂并存时屏幕上跑出来的完全可以是生产串）。
+    env_written = bool(env_proven) and not env_unknown
+    env_written_unknown = bool(env_unknown)
     if builds_engine or builds_external_engine:
         capabilities.add('own_engine')
     if alembic:
         capabilities.add('alembic_import')
     return {'text': text, 'called': called, 'flags': flags, 'raised': raised,
             'refusals': refusals, 'consts': consts, 'printed_targets': printed_targets,
+            'printed_targets_derived': printed_targets_derived,
             'env_written': env_written, 'env_written_unknown': env_written_unknown,
             'direct_db': direct_db, 'src_imports': src_imports,
             'capabilities': capabilities,
@@ -775,6 +900,7 @@ def _scripts():
                             'refusals': [{'words': {'postgres', 'sqlite'}, 'line': 0,
                                           'scope': '<module>'}], 'consts': set(),
                             'printed_targets': set(),
+                            'printed_targets_derived': set(),
                             'env_written': False, 'env_written_unknown': True,
                             'direct_db': True, 'src_imports': set(), 'alembic': False,
                             'engine_from_env': True,     # 解析不了＝无法证明它不读环境
@@ -874,8 +1000,10 @@ def _says_target(f):
     f['consts'])` —— 于是 `LABEL = "[目标] 线上生产库（引擎级只读）"` 这种**从不被打印的死赋值**
     也算自报，而写侧早就只认 `printed_targets` 了。同一件事在两处各判一次、一边严一边松，
     松的那一边就是绕法。
+    第 47 轮 A2 补上另一半：**印出来还不够，那句话得是从值算出来的** ——
+    `print("[目标] 本地镜像库（sqlite）")` 写死一句话，`.env` 指向生产时它照样这么印。
     """
-    return bool(f.get('printed_targets'))
+    return bool(f.get('printed_targets_derived'))
 
 
 def _refuses_remote_without_a_flag(f):
@@ -912,7 +1040,9 @@ def _declares_http_target(f):
     `LABEL = '[目标] 线上生产库'` 是一个从不被打印的死赋值 ⇒ 操作者一个字都看不见，
     守卫却判"声明了目标"，那这条声明就只是写给判据看的。
     """
-    return bool(f.get('printed_targets'))
+    # 第 47 轮 A2 同一课：HTTP 写口的自报也要来自值（`print('[目标] %s' % _target_line(base))`），
+    # 写死一句话不能算"报出了要 POST 到哪台"。
+    return bool(f.get('printed_targets_derived'))
 
 
 # 读侧的"受管的门"：走这三把之一，目标就已经说清楚了（默认钉镜像 / 显式 --production）
@@ -1448,10 +1578,15 @@ def test_prose_cannot_buy_a_guard_signal(tmp_path, monkeypatch):
         '_x_prose_http.py': '"""推送。\n\n[目标] 线上生产库\n"""\n'
                             'import urllib.request\nurllib.request.urlopen('
                             'urllib.request.Request("http://x", method="POST"))\n',
-        # ② 的对照组：`[目标]` 是一句真 print
-        '_x_real_http_target.py': 'import urllib.request\n'
-                                  "print('[目标] http://x —— 经 HTTP 写线上')\n"
+        # ② 的对照组：`[目标]` 是一句真 print，**而且这句话是从值算出来的**
+        # （第 47 轮 A2：写死一句话不算自报 —— 见下面 `_x_literal_http_target.py`）
+        '_x_real_http_target.py': 'import urllib.request\nurl = "http://x"\n'
+                                  "print('[目标] %s —— 经 HTTP 写线上' % url)\n"
                                   'urllib.request.urlopen(urllib.request.Request("http://x", method="POST"))\n',
+        # ② 的第二种假证据：真印了，可那句话是抄死的（连的是别人的库也照样印"线上生产库"）
+        '_x_literal_http_target.py': 'import urllib.request\n'
+                                     "print('[目标] http://x —— 经 HTTP 写线上')\n"
+                                     'urllib.request.urlopen(urllib.request.Request("http://x", method="POST"))\n',
         # ③ 读侧第④档：三个信号全在 docstring / 样板句里
         '_x_prose_readonly.py': '"""只读预检。\n\npostgresql_readonly + [target] 线上生产库\n"""\n'
                                 'from sqlalchemy import create_engine\n'
@@ -1465,7 +1600,10 @@ def test_prose_cannot_buy_a_guard_signal(tmp_path, monkeypatch):
     assert prose['_x_prose_readonly.py'][3] is False, '说明文凑齐三个词就被判"读过侧的门"'
     assert prose['_x_real_ddl_guard.py'][1] is True, \
         '真护栏（条件分支里 print [abort] + 停下来）反被判没守卫 ⇒ 这条判据在误伤'
-    assert prose['_x_real_http_target.py'][2] is True, '真 print 一行 `[目标] …` 必须算声明'
+    assert prose['_x_real_http_target.py'][2] is True, '真 print 一行 `[目标 …]`（值算出来的）必须算声明'
+    assert prose['_x_literal_http_target.py'][2] is False, \
+        '写死一句 `print("[目标] …")` 也算"报出了目标" ⇒ 那句话与它实际连的库没有任何绑定'\
+        '（第 47 轮 A2）'
 
 
 _GUARD_HEADER = '''"""样品脚本（判据用）。"""
@@ -1703,12 +1841,35 @@ def test_a_direction_comes_from_a_value_not_from_a_name_or_a_sentence(tmp_path, 
                                   '    return "sqlite:///data/copy.db" if local else '
                                   '"sqlite:///data/mirror.db"\n\n'
                                   'os.environ["DATABASE_URL"] = url(bool(os.environ.get("L")))\n',
-        '_x_printed_label.py': 'print("[目标] 线上生产库（引擎级只读）")\n',
+        '_x_printed_label.py': 'print("[目标] %s" % _target_line(base))\n',
+        # 第 47 轮 A1：三目堵住了，**同一个语义换成 if/else 两条赋值**就又白买守卫
+        # （`env_written` 当时是"整篇文件里有没有一处证明"＝文件级 OR）
+        '_x_two_sites.py': 'import os\n\n\ndef go(LOCAL):\n'
+                           '    if LOCAL:\n'
+                           '        os.environ["DATABASE_URL"] = "sqlite:///data/copy.db"\n'
+                           '    else:\n'
+                           '        os.environ["DATABASE_URL"] = os.environ["PROD_DB_URL"]\n',
+        '_x_two_sites_sqlite.py': 'import os\n\n\ndef go(LOCAL):\n'
+                                  '    if LOCAL:\n'
+                                  '        os.environ["DATABASE_URL"] = "sqlite:///data/copy.db"\n'
+                                  '    else:\n'
+                                  '        os.environ["DATABASE_URL"] = "sqlite:///data/x.db"\n',
+        # 第 47 轮 A7：反向那一面 —— `os.environ.update({...})` 是真把方向钉成 SQLite，
+        # 只认下标赋值会把它判成"没方向"（闸门建成墙，误报方向一样要修）
+        '_x_env_update.py': 'import os\n'
+                            'os.environ.update({"DATABASE_URL": "sqlite:///data/x.db"})\n',
+        '_x_env_update_prod.py': 'import os\n'
+                                 'os.environ.update({"DATABASE_URL": os.environ["PROD_URL"]})\n',
+        # 第 47 轮 A2：印了，但那一句话是**抄在代码里**的 —— `.env` 指向生产时它照样印这句。
+        # 自报要的是"这句话从连接算出来"，不是"屏幕上出现过这几个字"。
+        '_x_literal_target.py': 'print("[目标] 本地镜像库（sqlite）")\n'
+                                'print("[库] 本地镜像库（sqlite）—— 引擎级只读")\n',
     }, monkeypatch)
     got = {n: scripts[n]['env_written'] for n in
            ('_x_named_mirror.py', '_x_docstring_helper.py', '_x_two_returns.py',
             '_x_real_helper.py', '_x_ternary_switch.py', '_x_env_default.py',
-            '_x_except_exit.py', '_x_both_arms_sqlite.py')}
+            '_x_except_exit.py', '_x_both_arms_sqlite.py', '_x_two_sites.py',
+            '_x_two_sites_sqlite.py', '_x_env_update.py', '_x_env_update_prod.py')}
     assert got['_x_named_mirror.py'] is False, '变量名里有 `MIRROR` 就判"方向是 sqlite"'
     assert got['_x_docstring_helper.py'] is False, '函数 docstring 里的"sqlite"判成了返回值的方向'
     assert got['_x_two_returns.py'] is False, \
@@ -1724,10 +1885,28 @@ def test_a_direction_comes_from_a_value_not_from_a_name_or_a_sentence(tmp_path, 
         '真返回 sqlite 串的 helper 被判"方向不明" ⇒ 这条判据在误伤诚实脚本'
     assert got['_x_both_arms_sqlite.py'] is True, \
         '两臂都是 sqlite 字面量的三目被判不明 ⇒ 闸门建成了墙（诚实写法也该走得通）'
+    # ↓ 第 47 轮 A1：同一个语义换个**语句形状**（if/else 两条赋值）也必须挡住
+    assert got['_x_two_sites.py'] is False, \
+        '`if LOCAL: 钉 sqlite / else: 赋生产串` 被判"方向已证明" ⇒ 文件级 OR 又回来了'
+    assert scripts['_x_two_sites.py']['env_written_unknown'] is True, \
+        '两臂之一的方向不明连"它动过连接串"都没记下来'
+    assert got['_x_two_sites_sqlite.py'] is True, \
+        '两条赋值都钉在 sqlite 上仍被判不明 ⇒ 误伤诚实脚本'
+    # ↓ 第 47 轮 A7：`os.environ.update({...})` 是同一条"我自己定了方向"的另一种拼写
+    assert got['_x_env_update.py'] is True, \
+        '`os.environ.update({"DATABASE_URL": "sqlite:///…"})` 判"没方向" ⇒ 只认下标赋值，' \
+        '诚实钉库的写法被误伤（而它恰恰是这一族里最常见的一种）'
+    assert got['_x_env_update_prod.py'] is False and \
+        scripts['_x_env_update_prod.py']['env_written_unknown'] is True, \
+        '`environ.update` 赋生产串也算证明了方向 ⇒ 新那条通道没走同一把尺子'
     dead = scripts['_x_dead_label.py']
     assert not _says_target(dead) and not _declares_http_target(dead), \
         '从不被打印的 `LABEL = "[目标] …"` 仍算"声明了目标"'
     assert _declares_http_target(scripts['_x_printed_label.py']), '真 print 出来的那一行必须算'
+    lit = scripts['_x_literal_target.py']
+    assert not _says_target(lit) and not _declares_http_target(lit), \
+        '写死一句 `[目标] 本地镜像库` 仍算"报出了目标" ⇒ 连的是生产时屏幕上那句话就是假的'\
+        '（第 47 轮 A2；对照组 `_x_printed_label.py` 是 `print("… %s" % _target_line(base))`）'
 
 
 def test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names(tmp_path, monkeypatch):
@@ -1748,6 +1927,17 @@ def test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names(tmp
         '_x_dbapi.py': 'import sqlite3\n'
                        'c = sqlite3.connect("data/fund_insight.db")\n'
                        'c.execute("delete from bloggers"); c.commit()\n',
+        # ↓ 第 47 轮 A3：`dbapi_direct` 那一类以前**恒空**（判据要求 callee 既等于 `connect`
+        # 又等于模块名），于是这四种写法都被判"不能改数据"，从没被问过连的是哪个库 ——
+        # 而 SQL 藏在变量里时，`raw_sql_write` 那条兜底也看不见动词。
+        '_x_dbapi_fromimport.py': 'from sqlite3 import connect\n\n\ndef go(p, sql):\n'
+                                  '    c = connect(p)\n    c.execute(sql)\n',
+        '_x_dbapi_func_alias.py': 'from sqlite3 import connect as op\n\n\ndef go(p, sql):\n'
+                                  '    c = op(p)\n    c.executescript(sql)\n',
+        '_x_dbapi_module_alias.py': 'import sqlite3 as s3\n\n\ndef go(p, sql):\n'
+                                    '    c = s3.connect(p)\n    c.execute(sql)\n',
+        '_x_dbapi_commit_only.py': 'import sqlite3\n\n\ndef go(url):\n'
+                                   '    c = sqlite3.connect(url)\n    c.commit()\n',
         '_x_tosql.py': 'import pandas as pd\n'
                        "def go(df):\n    return df.to_sql('predictions', engine, if_exists='replace')\n",
         '_x_file_over.py': 'import shutil\n'
@@ -1760,16 +1950,29 @@ def test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names(tmp
         '_x_read_only_query.py': 'import _db_guard\n'
                                  'e, s, label = _db_guard.read_only_connect()\n'
                                  'rows = s.execute("select 1")\n',
+        # 对照（第 47 轮 A3 的另一面）：DB-API 纯读 —— 开了连接，但发出去的语句**看得见是查询**
+        # ⇒ 不许被判成"能改数据"（否则这一类把所有只读脚本推进受管集合，那就是把闸门建成墙）
+        '_x_dbapi_readonly.py': 'import sqlite3\n\n\ndef go(p):\n'
+                                '    c = sqlite3.connect(p)\n'
+                                '    return c.execute("select id from bloggers").fetchall()\n',
     }, monkeypatch)
     capable = {n: _write_capable(f) for n, f in scripts.items()}
     for name in ('_x_create_all.py', '_x_raw_sql.py', '_x_dbapi.py', '_x_tosql.py',
-                 '_x_file_over.py', '_x_subproc_ddl.py', '_x_http_generic.py'):
+                 '_x_file_over.py', '_x_subproc_ddl.py', '_x_http_generic.py',
+                 '_x_dbapi_fromimport.py', '_x_dbapi_func_alias.py',
+                 '_x_dbapi_module_alias.py', '_x_dbapi_commit_only.py'):
         assert capable[name] is True, '%s 这类落笔能力仍然隐身' % name
     assert capable['_x_read_only_query.py'] is False, '只读查询被判成能写 ⇒ 判据过宽，会误伤'
+    assert capable['_x_dbapi_readonly.py'] is False, \
+        '看得见是 `select` 的 DB-API 纯读被判成能写 ⇒ 同一族里的过宽那一面'
     naked = [n for n, f in scripts.items() if _write_capable(f) and not _guarded(n, f)]
     assert '_x_read_only_query.py' not in naked
-    assert set(naked) == set(capable) - {'_x_read_only_query.py'}, \
-        '这些"能改数据"的样品没被抓进受管集合：%s' % sorted(set(capable) - set(naked) - {'_x_read_only_query.py'})
+    assert '_x_dbapi_readonly.py' not in naked
+    READONLY_CONTROLS = {'_x_read_only_query.py', '_x_dbapi_readonly.py'}
+    assert set(naked) == set(capable) - READONLY_CONTROLS, \
+        '这些"能改数据"的样品没被抓进受管集合：%s' % sorted(
+            set(capable) - set(naked) - READONLY_CONTROLS)
+
 
 
 def test_the_scanned_set_is_the_repository_s_not_this_disk_s():
@@ -2126,6 +2329,31 @@ def test_the_stray_probe_also_sees_async_engines_and_instance_holders(tmp_path):
     assert ok.returncode == 0, '本机 SQLite 的实例持有者也被判成远程 ⇒ 误伤：%s' % ok.stdout[-300:]
 
 
+def test_a_scan_that_cannot_finish_refuses_instead_of_warning_past(tmp_path):
+    """**整趟**散落连接扫描跑不完 ⇒ 拒跑，不是印一行警告然后继续钉库（第 47 轮 B-4）。
+
+    分两档是被教的：`_ask` 里"单个模块读不动"只印警告（Windows 的 `sys.modules` 里躺着
+    ctypes 的 DLL 对象，第一版照它的 `vars()` 直接把守卫自己弄崩、12 条用例一起红）。
+    但那一档的前提是**这一道仍然跑完了**；上一版把外层 `except` 写成
+    `print(警告); strays = []` ⇒ 扫描整体坏掉时等于"没查到别的连接"，
+    而"进程里躺着一个活着的生产会话"恰恰只能由这一趟查出来。
+    答不出就不能当没事 —— 这一条同时是那条警告分支唯一的覆盖（改之前它零覆盖）。
+    """
+    code = ('import sys\n'
+            "sys.path.insert(0, 'scripts')\n"
+            'import _db_guard\n'
+            'def boom():\n    raise RuntimeError("样品：扫描器自己坏了")\n'
+            '_db_guard._stray_remote_engines = boom\n'
+            '_db_guard.pin_local_sqlite(use_mirror_default=True)\n'
+            "print('PINNED-ANYWAY')")
+    out = _run_guard_child(code, {'DATABASE_URL': _FAKE_REMOTE,
+                                  'LOCAL_DB_URL': str(tmp_path / 'mirror.db')})
+    assert out.returncode == 4, \
+        '扫描整趟失败却继续钉库（退码 %s）：%s' % (out.returncode, out.stdout[-300:])
+    assert '整趟没跑成' in out.stdout, out.stdout
+    assert 'PINNED-ANYWAY' not in out.stdout, '拒跑了却还是把库钉上了 ⇒ 那句 [abort] 不挡流程'
+
+
 def test_the_stray_probe_never_bricks_the_door_itself(tmp_path):
     """探测"散落连接"这一步不许把守卫自己弄成故障源（第 44 轮我自己踩出来的）。
 
@@ -2286,10 +2514,43 @@ def test_migrations_are_scanned_for_data_loss_on_the_way_up(tmp_path):
         # ⑩ 少一个 downgrade：不可回滚
         '_x_no_downgrade.py': ('from alembic import op\n'
                                'def upgrade():\n    op.add_column("bloggers", None)\n'),
+        # ↓ 第 47 轮 B-1：这一轮两份报告各自点到的四种"隐身写法"。上一轮的修法是
+        # "upgrade 那一支里有没有 `op.drop_*`"，而这四种连那一支都进不去 ——
+        # 审计回的是"干净"，而 `run_migrations.py` 每次 Render 启动**先问这份判据**
+        # 再对 `.env` 那个库发 `upgrade head`（`render.yaml:11`）。
+        # ⑪ 删除动作待在**类的方法**里，`upgrade()` 只写 `Legacy().wipe()`
+        '_x_class_helper.py': ('from alembic import op\n'
+                               'class Legacy:\n    def wipe(self):\n'
+                               '        op.drop_table("prediction_change_logs")\n'
+                               'def upgrade():\n    Legacy().wipe()\n'
+                               'def downgrade():\n    pass\n'),
+        # ⑫ 改名 = 应用侧那张表就此消失（alembic 的删除方法一律 `drop_*` 前缀，
+        # 但 `rename_table` 不是"加个名字"的问题，是同一类后果）
+        '_x_rename_table.py': ('from alembic import op\n'
+                               'def upgrade():\n    op.rename_table("predictions", '
+                               '"predictions_old")\n'
+                               'def downgrade():\n    pass\n'),
+        # ⑬ 裸名字调用（`from alembic.op import drop_table` 之后直接 `drop_table(...)`）
+        '_x_bare_import_drop.py': ('from alembic.op import drop_table\n'
+                                   'def upgrade():\n    drop_table("predictions")\n'
+                                   'def downgrade():\n    pass\n'),
+        # ⑭ helper 在**别的模块**里：看得见名字、看不见函数体 ⇒ 不许当"没事"
+        '_x_cross_module.py': ('from alembic import op\nfrom ._util import wipe_everything\n'
+                               'def upgrade():\n    wipe_everything()\n'
+                               'def downgrade():\n    pass\n'),
+        # ⑮ `alter_column` 改类型/收窄长度会重写既有值 ⇒ 至少要说"看不清"
+        '_x_alter_column.py': ('from alembic import op\nimport sqlalchemy as sa\n'
+                               'def upgrade():\n    op.alter_column("predictions", '
+                               '"is_correct", type_=sa.Text, existing_type=sa.Boolean)\n'
+                               'def downgrade():\n    pass\n'),
     })
     for name in ('_x_upgrade_drops.py', '_x_raw_text_drop.py', '_x_truncate.py',
-                 '_x_fstring_drop.py', '_x_two_hop.py', '_x_module_level.py', '_x_dynamic.py'):
+                 '_x_fstring_drop.py', '_x_two_hop.py', '_x_module_level.py', '_x_dynamic.py',
+                 '_x_class_helper.py', '_x_rename_table.py', '_x_bare_import_drop.py'):
         assert made[name]['upgrade_drops'], '%s 在 upgrade 那一支删东西却没被点名 ⇒ 换这种写法就绕过' % name
+    for hidden in ('_x_cross_module.py', '_x_alter_column.py'):
+        assert made[hidden]['upgrade_unclear'], \
+            '%s 既不算命中也不算"看不清" ⇒ 审计回的是"干净"，而这一支会做什么没人知道' % hidden
     assert made['_x_variable_sql.py']['upgrade_unclear'], \
         'SQL 是个变量就当"没事" ⇒ 猜错的代价是删掉生产表'
     assert made['_x_clean.py']['upgrade_drops'] == [] and not made['_x_clean.py']['upgrade_unclear'], \

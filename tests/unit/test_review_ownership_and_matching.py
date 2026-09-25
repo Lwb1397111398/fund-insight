@@ -711,12 +711,6 @@ def _grants_immunity(root):
                         if isinstance(key, ast.Constant) and key.value in _IMMUNITY_FIELDS \
                                 and _literal_grant(key.value, node.value):
                             _hit(node.lineno)
-            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-                # 裸 SQL 的授予（列名和值都在一条字符串里，赋值/字典/关键字参数三条都看不见）
-                strs = [c.value for c in ast.walk(node.value) if isinstance(c, ast.Constant)
-                        and isinstance(c.value, str)]
-                if any(_RAW_SQL_GRANT.search(s or '') for s in strs):
-                    _hit(node.lineno)
             elif isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values):
                     if key is None or not isinstance(key, ast.Constant):
@@ -726,6 +720,16 @@ def _grants_immunity(root):
                             and _literal_grant(key.value, value):
                         _hit(node.lineno)
             elif isinstance(node, ast.Call):
+                # 裸 SQL 的授予（列名和值都在一条字符串里，赋值/字典/关键字参数三条都看不见）。
+                # 第 47 轮 A5：以前这条腿挂在 `ast.Expr` 上 —— 也就是**只有"这一句整条就是
+                # 一次调用"才算**。于是 `n = db.execute(text("UPDATE … owner_locked = true"))`、
+                # `if db.execute(...).rowcount:`、列表推导里的那一条全部隐身，
+                # 而同一轮我在 `migration_policy` 里刚把另一台扫描器从"必须是一整句"改成
+                # "看所有调用"（⑤′）。同一个缺陷类在同一个提交里留了第二现场。
+                strs = [c.value for c in ast.walk(node) if isinstance(c, ast.Constant)
+                        and isinstance(c.value, str)]
+                if any(_RAW_SQL_GRANT.search(s or '') for s in strs):
+                    _hit(node.lineno)
                 fname = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)
                 if fname in ('setattr', '__setattr__') and len(node.args) == 3:
                     field = node.args[1]
@@ -750,11 +754,21 @@ def _grants_immunity(root):
                     if kw.arg in _IMMUNITY_FIELDS and _literal_grant(kw.arg, kw.value):
                         _hit(node.lineno)
             elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-                # 批量写的数据源：`(("owner_locked", True),)` —— 字段名与授予值成对出现，
+                # 批量写的数据源：`(("owner_locked", True),)` —— 字段名与授予值**成对**出现，
                 # 即使真正的 `setattr` 在别处（列表推导里），这一对本身就是"写死要授予"。
-                strs = [c.value for c in ast.walk(node) if isinstance(c, ast.Constant)]
-                if any(isinstance(s, str) and s in _IMMUNITY_FIELDS for s in strs) and any(
-                        isinstance(v, bool) and v or v == 'owner' for v in strs):
+                # 第 47 轮 A5 两半：① 值按**真值语义**判（`("owner_locked", 1)` 与 True 同一件事，
+                # 库里读的是 `if getattr(row, 'owner_locked', None)`）；
+                # ② 但必须**成对**（第 0 位是列名、第 1 位是授予值），不能只看"这个大节点里
+                # 同时出现过列名和某个真值" —— 第一版这么写立刻冤枉了
+                # `sum(1 for m in data['mappings'] if m['owner_locked'])`（那是计数，不是授予）。
+                def _paired(element):
+                    if not isinstance(element, (ast.Tuple, ast.List)) or len(element.elts) < 2:
+                        return False
+                    field, value = element.elts[0], element.elts[1]
+                    return (isinstance(field, ast.Constant) and field.value in _IMMUNITY_FIELDS
+                            and _literal_grant(field.value, value))
+
+                if any(_paired(e) for e in node.elts):
                     _hit(node.lineno)
     return found, opaque
 
@@ -833,6 +847,29 @@ def test_only_the_registered_places_can_grant_owner_immunity(tmp_path):
                          'def grant(db):\n'
                          '    db.execute(sa.text("UPDATE sector_fund_mapping '
                          'SET owner_locked = true WHERE id = 7"))\n',
+        # ↓ 第 47 轮 A5：**同一句话换个位置**。上一版裸 SQL 那条腿挂在 `ast.Expr` 上
+        # （"这一整句必须是一次调用"），于是把返回值接走 / 放进条件 / 塞进推导式就隐身。
+        # 这正是同一个提交里我在 `migration_policy` 修掉的⑤′，第二现场。
+        '_s_sql_assigned.py': 'import sqlalchemy as sa\n\n'
+                              'def grant(db):\n'
+                              '    n = db.execute(sa.text("UPDATE sector_fund_mapping '
+                              'SET owner_locked = true"))\n    return n\n',
+        '_t_sql_in_if.py': 'import sqlalchemy as sa\n\n'
+                           'def grant(db):\n'
+                           '    if db.execute("UPDATE sector_fund_mapping '
+                           "SET reviewed_by = 'owner'\").rowcount:\n        pass\n",
+        '_u_sql_in_comprehension.py': 'import sqlalchemy as sa\n\n'
+                                      'def grant(db, ids):\n'
+                                      '    return [db.execute(sa.text("UPDATE mapping '
+                                      'SET owner_locked = true WHERE id = 7")) for i in ids]\n',
+        '_v_pairs_truthy_int.py': 'PAIRS = (("owner_locked", 1),)\n\n'
+                                  'def grant(row):\n    return [setattr(row, k, v) '
+                                  'for k, v in PAIRS]\n',
+        # 反向对照（第 47 轮 A5 的另一面）：**读**这一列来计数，不是授予。
+        # 成对判据如果退化成"这个大节点里同时出现过列名和真值"，这一条就会被冤枉。
+        '_w_counts_instead_of_granting.py': 'def stat(data):\n'
+                                            "    return sum(1 for m in data['mappings'] "
+                                            "if m['owner_locked'])\n",
         # 反向对照：与豁免无关的文件里，`setattr(obj, name, value)` 不该被问一句
         '_j_unrelated_setattr.py': 'def shape(obj, name, value):\n'
                                    '    return setattr(obj, name, value)\n',
@@ -847,13 +884,18 @@ def test_only_the_registered_places_can_grant_owner_immunity(tmp_path):
     for name in ('_a_attr.py', '_b_dict.py', '_c_setattr.py', '_d_object_setattr.py',
                  '_e_values_kw.py', '_f_module_const.py', '_g_ternary.py',
                  '_k_truthy_int.py', '_l_not_false.py', '_m_or_arm.py', '_n_annassign.py',
-                 '_o_default_arg.py', '_p_setdefault.py', '_q_subscript.py', '_r_raw_sql.py'):
+                 '_o_default_arg.py', '_p_setdefault.py', '_q_subscript.py',
+                 '_r_raw_sql.py', '_s_sql_assigned.py', '_t_sql_in_if.py',
+                 '_u_sql_in_comprehension.py', '_v_pairs_truthy_int.py'):
         assert any(name in f for f, _n in made), \
             '这些写法认不出 %s ⇒ 换这种拼写就能绕过这道棘轮' % name
     assert made.get(('sample/__init__.py', 'grant')) == 1, \
         '`__init__.py` 整族被豁免 ⇒ 而本仓的包 `__init__` 是真放代码的地方（A-M6）：%s' % sorted(made)
     assert not any('_h_moves_values.py' in f for f, _n in made), \
         '"把已有值搬过去"被判成授予 ⇒ 判据过宽，备份/序列化代码都会红：%s' % sorted(made)
+    assert not any('_w_counts_instead_of_granting.py' in f for f, _n in made), \
+        '读一列来**计数**（`sum(1 for m in rows if m["owner_locked"])`）被判成授予 ⇒ ' \
+        '成对判据退化成了"这个大节点里同时出现过列名和真值"：%s' % sorted(made)
     assert any('_i_dynamic_field.py' in pair[0] for pair in made_opaque), \
         '字段名是变量的 setattr 被静默放过 ⇒ 既不算授予也不报错，正是最该问一句的形状：%s' \
         % sorted(made_opaque)

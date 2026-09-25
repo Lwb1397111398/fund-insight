@@ -317,9 +317,14 @@ def _rewrites_by_regex(node):
         and isinstance(node.args[0].value, str) and '@' in node.args[0].value
 
 
-def _hand_rolled_sites(root, bases=('scripts', 'src')):
+def _hand_rolled_sites(root, bases=('scripts', 'src', 'alembic')):
     """找"手写剥口令"的代码位置（AST，不是文本 grep），四种写法都要认。
 
+    `alembic/` 是第 47 轮 B-2 加进来的：`alembic/env.py` 里那把 `_redact` 是这仓库的
+    **第三把**手搓尺子，而两个基目录都不含它 ⇒ 这条棘轮**结构上看不见**它，
+    于是 `?password=S3cr3tPW` 这种"口令落在 query 里"的写法原样进了 `[abort]` / `[库]`
+    那两行（后者走 stderr，直接落进 Render 日志）。上一轮那句"口令一个字符都不出现"
+    只对钉住的两份尺子成立。
     第 44 轮 A-m7：第一版只认 `x.split('@')[-1]` 一种拼写，于是换个动词（`rsplit`）、
     换个参数名（`sep='@'`）、换成 `partition`、换成 `x[x.find('@')+1:]`、或直接用正则改写
     就**绕过了棘轮** —— 而棘轮的全部意义是"下一个手抄会被点名"。
@@ -379,7 +384,14 @@ def test_no_new_hand_rolled_credential_stripping_appears(tmp_path):
     }
     for name, body in variants.items():
         (tmp_path / 'scripts' / name).write_text(body, encoding='utf-8')
+    # `alembic/` 这一档必须**真的在扫**（第 47 轮 B-2：只在 bases 里加个目录名，
+    # 而控制样品全塞在 `scripts/` 下，那"看得见 alembic"这句话还是没被验过）
+    (tmp_path / 'alembic').mkdir()
+    (tmp_path / 'alembic' / '_x_env_copy.py').write_text(
+        'def go(url):\n    return url.split("@")[-1]\n', encoding='utf-8')
     found = _hand_rolled_sites(tmp_path)
+    assert any('_x_env_copy.py' in f for f in found), \
+        '写在 `alembic/` 下的手搓剥口令没被点名 ⇒ 第三把尺子还是能隐身：%s' % sorted(found)
     for name in variants:
         hit = any(name in f for f in found)
         if name.endswith('_only_prose.py') or name in ('_x_head_not_tail.py', '_x_other_char.py'):

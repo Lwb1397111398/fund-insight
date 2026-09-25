@@ -414,7 +414,8 @@ def main():
               ' ⇒ 文档在说没跑过的话' % (len(bad), len(missing), len(sources)))
         return 3
     print('[结论] 全部对得上（条数 %d 条、数据源 %d 行都认得出来自哪个库）'
-          % (len(now), source_total))
+          '；另有 %d 条"看得见但不判"（编号列表账、基线流水），逐条列在上面'
+          % (len(now), source_total, len(unbound)))
     return 0
 
 

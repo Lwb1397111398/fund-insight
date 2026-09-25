@@ -173,15 +173,24 @@ def test_a_manifest_without_created_at_refuses_to_delete_nav(test_db, tmp_path):
     import json
     path = tmp_path / 'no-date.json'
     json.dump({'created_fund_codes': ['999002'], 'fields': ['fund_code'],
-               'rows': [{'id': row.id, 'fund_code': '515220'}]},
+               'rows': [{'id': row.id, 'fund_code': '510300'}]},
               open(str(path), 'w', encoding='utf-8'))
     out = []
     with _capture(out):
-        assert sweep.restore(test_db, str(path), apply=True) == 0
+        # 第 47 轮 B-5：`[abort]` 必须**停下来**。上一版这里返回 0（这条用例当时就是把
+        # "印了拒跑却继续跑"钉成了规矩）—— 屏幕上是一句 `[abort]`，退码是成功，
+        # 而 `--apply` 那一支还会把映射行照写回去：操作者读到 `[abort]` 会以为这一次没动。
+        rc = sweep.restore(test_db, str(path), apply=True)
     test_db.expire_all()
     joined = ''.join(out)
+    assert rc == 4, '印了 `[abort]` 却不挡流程（退码 %s）⇒ 本仓自己的定义是"[abort] + 停下来"' % rc
+    assert 'dry-run' not in joined, '一边说拒跑一边照印 dry-run 的计划 ⇒ 两句话互相打脸：%s' % joined
     assert test_db.query(FundHistory).filter_by(fund_code='999002').count() == 3, \
         '缺 created_at 却删光了净值 ⇒ "%s"' % [l for l in out if 'abort' in l]
+    test_db.refresh(row)
+    assert row.fund_code == '515220', \
+        '拒跑那一支还是把映射行写回去了（现在是 %s）⇒ "只拒绝删净值、照写行"不是不一致的一半，' \
+        '是替操作者做了他没同意的动作' % row.fund_code
     assert '[abort]' in joined and 'created_at' in joined, \
         '拒删却不说明理由（操作者会以为"已经还原干净了"）：%s' % joined
 

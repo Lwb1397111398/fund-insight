@@ -98,6 +98,13 @@ def main() -> int:
     parser.add_argument("--sqlite-path", default="data/fund_insight.db")
     parser.add_argument("--output-dir", default="backup")
     args = parser.parse_args()
+    # 这个脚本会 `sqlite3.connect(备份文件)` 并整库写进去 ⇒ 按第 47 轮补好的 `dbapi_direct`
+    # 那一类，它就是"能改数据"的（上一版这一类恒空，所以它从没被问过写的是哪个库）。
+    # 报的是**从参数算出来的那个文件**，不是抄在代码里的一句"本地镜像库" ——
+    # `--sqlite-path` 指到一份 8 月备份时，屏幕上那句话必须跟着变（第 23 轮那笔账的形状）。
+    from _db_guard import db_kind
+    print('[目标] 备份源：%s' % db_kind('sqlite:///'
+                                       + Path(args.sqlite_path).resolve().as_posix()))
     result = create_sqlite_backup(Path(args.sqlite_path), Path(args.output_dir))
     print(f"Backup: {result['backup_path']}")
     print(f"Manifest: {result['manifest_path']}")
