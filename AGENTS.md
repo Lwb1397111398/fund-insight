@@ -189,6 +189,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   今天**一条都不触发** —— 线上 `status` 存的是 `success 591 / pending 559 / failed 466`，老判据要的是
   `correct/wrong/expired` ⇒ 净效果是 **223 行"标的换了、结论还挂着"、无台账**，正是第 18 轮那族脏数据
   ⇒ **所以这次没点**。老板 09-25 的决定：破例上线一次，上线后这批**先出清单再点**。
+  **但这里我当场说错过一句，按实测更正**：345 / 223 是**旧构建那条规则**的暴露面，不是新代码的 ——
+  现在 `full_sync` 只剩"预测的 `fund_code` 为空、而它板块有基金"才关联，且必须走
+  `retag_prediction`（留台账、有结论要清、随后重算博主统计列）；生产这种行**实测 0 条**
+  （`python scripts/q.py --production "select count(*) filter (where fund_code is null or fund_code='') from predictions where is_deleted=false"` → 0）
+  ⇒ **上线本身就是拆掉这 345 条的那颗雷**，"先出清单再点"仍然照做（清单预期为空，那就把"为空"这件事
+  连同逐行回执一起报出来，而不是拿一个 0 当默认结论）。
   **上线不需要新 DDL**：`alembic/versions/` 只有 9 支，head 仍是生产 09-22 已 stamp 的
   `add_sector_mapping_keywords`，且 `python scripts/sync_db_columns.py --against-production`
   （不带 `--apply`）回 `[元数据] 模型 27 张表；库里缺 0 张` + `[ok] 列与索引都已存在`
