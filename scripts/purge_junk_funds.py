@@ -91,6 +91,24 @@ def inspect(db, codes=JUNK_CODES):
     return out
 
 
+def prediction_referrers():
+    """外键指向 `predictions.id` 的 (表, 列) —— **名单由元数据回答，不由我手抄**。
+
+    第 49 轮两席同条（A-3 / B-5 / m-1）：上一版这里写死两张表，而模型里有三处
+    `ForeignKey('predictions.id')`（台账、验证任务、还有 `prediction_groups.representative_id`）。
+    本仓对"封闭名单"的标准处置就是拿权威清单当 oracle（`git ls-files` 定义受检集合、
+    `Base.metadata` 定义表名单），抄一份名单＝"我数全了"这句话又变成散文。
+    """
+    from src.models.database import Base
+
+    out = []
+    for table in Base.metadata.tables.values():
+        for fk in table.foreign_keys:
+            if fk.column.table.name == 'predictions' and fk.column.name == 'id':
+                out.append((table.name, fk.parent.name))
+    return sorted(set(out))
+
+
 def _dependents_of(db, prediction_ids):
     """这些软删预测被谁引用着 —— **副本演练量出来的那条**：硬删预测会撞
     `prediction_change_logs.prediction_id ON DELETE RESTRICT`（改标台账本体）。
@@ -98,20 +116,26 @@ def _dependents_of(db, prediction_ids):
     看不见这张表，结局就是"计划里承诺删、执行时 IntegrityError 整批回滚"，
     而这正是动手前该回答的问题。台账是审计证据不是垃圾：有依赖就拒，
     机器不替老板决定删不掉的历史。
+
+    引用面从 `prediction_referrers()` 现取（新增一张引用 `predictions` 的表就自动被问到）。
+    **问不到的那张表按"有依赖"处理**：数不出来就整批拒，而不是回一句"干净"。
     """
     if not prediction_ids:
         return {}
     import sqlalchemy as sa
 
-    from src.models.database import PredictionChangeLog, VerificationTask
-
+    ids = list(prediction_ids)
     out = {}
-    for model, tag in ((PredictionChangeLog, 'prediction_change_logs'),
-                       (VerificationTask, 'verification_tasks')):
-        n = db.query(sa.func.count(model.__table__.columns[0])).filter(
-            model.prediction_id.in_(list(prediction_ids))).scalar() or 0
+    for table, column in prediction_referrers():
+        try:
+            n = db.execute(sa.select(sa.func.count()).select_from(
+                sa.table(table, sa.column(column))).where(
+                sa.column(column).in_(ids))).scalar()
+        except Exception as exc:          # 表不存在 / 列名漂了 / 权限不够
+            out['%s（问不到，按有依赖处理）' % table] = '%s：%s' % (type(exc).__name__, exc)
+            continue
         if n:
-            out[tag] = int(n)
+            out[table] = int(n)
     return out
 
 
@@ -245,6 +269,18 @@ def restore(db, payload_path, apply=False, restore_owner_immunity=False):
             print('[拒还] %s %s：带老板署名/锁定，免疫只能由老板在页面上重新盖'
                   '（要连它一起还原请加 --restore-owner-immunity）'
                   % (entry['table'], payload.get('sector_name') or payload.get('fund_code')))
+            refused += 1
+            continue
+        if entry['table'] == 'predictions' and payload.get('is_correct') is not None:
+            # 清单是**外部输入**：手写一份带 `is_correct` 的备份，就等于在
+            # `PredictionVerifyService.verify_prediction` 之外落一条结论 ——
+            # 不动 `verify_score` / `verify_history` / `blogger_stats`，正是第 24 轮
+            # "五处互相打脸"那一族。本工具自己产的备份不会出现这种行（`plan()` 先整批拒），
+            # 所以这一格只在"载荷是外来的"时开；撤结论请走验证侧的还原工具。
+            print('[拒还] predictions id=%s：载荷带着结论（is_correct=%s）。'
+                  '还原只恢复被删的行，不在验证服务之外下结论 —— '
+                  '要撤/改结论请用 scripts/revert_degenerate_verdicts.py 或页面重验'
+                  % (payload.get('id'), payload.get('is_correct')))
             refused += 1
             continue
         exists = None

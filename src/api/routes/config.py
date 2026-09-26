@@ -1438,8 +1438,11 @@ def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Op
             values['is_fetchable'] = False      # 镜像不变量：verdict 否 ⇒ 列必须 False
         # 外键保障：sector_fund_mapping.fund_code 指向 fund_info，先补最小档案再改映射
         # （复用 PUT/POST 同一个 helper，别再抄一份）
+        # `identity_checked=True`：上面那三条"不许进门"的判断已经把这行的身份问过一遍，
+        # 这里再探一次就是每行两次外网（145 行的回写会变成十几分钟）。
         created_archive = service.ensure_fund_info_exists(
-            values.get('fund_code'), values.get('fund_name'), sector)
+            values.get('fund_code'), values.get('fund_name'), sector,
+            identity_checked=True)
         if row is None:
             row = SectorFundMapping(sector_name=sector,
                                     fund_code=values.get('fund_code'))

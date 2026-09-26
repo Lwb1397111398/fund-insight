@@ -399,3 +399,84 @@ def test_a_dead_prediction_with_a_change_log_is_never_dropped(test_db):
     actions, blockers = purge.plan(rows, drop_dead_predictions=True)
     assert blockers and not actions, '台账还引用着却仍把预测排进删除动作 ⇒ 计划说了做不到的事'
     assert 'prediction_change_logs' in blockers[0] and '改指' in blockers[0], blockers
+
+
+def test_the_dependency_list_is_read_from_the_schema_not_copied_by_hand(test_db):
+    """第 49 轮 A-3 / B-5：上一版 `_dependents_of` 手抄两张表，而模型里有**三处**
+    `ForeignKey('predictions.id')` —— 漏掉的那条正是 `prediction_groups.representative_id`
+    （分组查询不过滤 `is_deleted`，回收站里那条完全可以某个组的代表行）。
+
+    现在名单由元数据回答。三格一起钉：
+    ① 三条外键都要在（漏一条就红）；② **临时现造**一张引用 `predictions` 的表，
+    里面有行 ⇒ 必须被 `_dependents_of` 点名（空判：不点名说明它还是只问已知那两张）；
+    ③ 数不出来的表 ⇒ 按"有依赖"处理，不许回一句干净（fail-open 那一族）。
+    """
+    import sqlalchemy as sa
+    from sqlalchemy import ForeignKey, MetaData, Table, Column, Integer
+
+    from src.models.database import Base, Blogger, Prediction
+
+    refs = dict(purge.prediction_referrers())
+    assert refs.get('prediction_groups') == 'representative_id', \
+        '元数据里的第三条引用（prediction_groups.representative_id）没被问 ⇒ 名单又变成手抄的：%s' % refs
+    assert {'prediction_change_logs', 'verification_tasks'} <= set(refs), refs
+
+    b = Blogger(name='依赖探针博主', platform='weibo')
+    test_db.add(b)
+    test_db.flush()
+    dead = Prediction(blogger_id=b.id, post_id=1, sector='半导体', fund_code='512480',
+                      prediction_type='up', prediction_date=date(2026, 1, 5), is_deleted=True)
+    test_db.add(dead)
+    test_db.commit()
+
+    probe = Table('pytest_predictions_ref_probe', MetaData(),
+                  Column('id', Integer, primary_key=True),
+                  Column('prediction_id', Integer, ForeignKey('predictions.id')))
+    probe.to_metadata(Base.metadata)
+    test_db.execute(sa.text('create table pytest_predictions_ref_probe '
+                            '(id integer primary key, prediction_id integer)'))
+    test_db.execute(sa.text('insert into pytest_predictions_ref_probe values (1, :i)'),
+                    {'i': dead.id})
+    test_db.commit()
+    try:
+        found = purge._dependents_of(test_db, [dead.id])
+        assert 'pytest_predictions_ref_probe' in found, \
+            '现造的引用表没被点名 ⇒ 引用面仍是写死的那两张：%s' % sorted(found)
+
+        # ③ 问不到 ⇒ 按有依赖处理（把这张表从库里撤掉，元数据却还说它在）
+        test_db.execute(sa.text('drop table pytest_predictions_ref_probe'))
+        test_db.commit()
+        blind = purge._dependents_of(test_db, [dead.id])
+        assert any('问不到' in k for k in blind), \
+            '表读不到却回"没有依赖" ⇒ 这就是第 47 轮那条"看不见当没事"：%s' % sorted(blind)
+    finally:
+        Base.metadata.remove(probe)
+
+
+def test_restore_refuses_a_payload_that_brings_its_own_verdict(test_db, tmp_path):
+    """外部备份不许在验证服务之外落一条结论（第 49 轮 B-5 第二格）。
+
+    `is_correct` 的唯一写入口是 `PredictionVerifyService.verify_prediction`；
+    还原工具直接 `db.add(model(**payload))` 会落一条"有结论、没分数、没历史、没重算统计"的行
+    —— 第 24 轮那五处互相打脸就是这么来的。同一份载荷去掉那一列必须照常还原（闸不是墙）。
+    """
+    import json
+    import os
+
+    def dump_with(**extra):
+        row = {'id': 777, 'post_id': 1, 'blogger_id': 1, 'sector': '半导体',
+               'fund_code': '512480', 'prediction_type': 'up', 'is_deleted': True,
+               'prediction_date': '2026-01-05', 'target_date': '2026-02-05'}
+        row.update(extra)
+        path = os.path.join(str(tmp_path), 'pred-%s.json' % ('judged' if extra else 'plain'))
+        with io.open(path, 'w', encoding='utf-8') as fh:
+            json.dump([{'table': 'predictions', 'row': row}], fh)
+        return path
+
+    assert purge.restore(test_db, dump_with(is_correct=True), apply=True) == (0, 0, 1), \
+        '带着结论的载荷被还原了 ⇒ 还原工具成了第二个下结论的入口'
+    assert test_db.query(Prediction).filter_by(id=777).first() is None
+
+    assert purge.restore(test_db, dump_with(), apply=True) == (1, 0, 0), \
+        '不带结论的行必须照常还原，否则这条拒只是装样子'
+    assert test_db.query(Prediction).filter_by(id=777).first() is not None

@@ -20,7 +20,7 @@
 import ipaddress
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, Iterable, List, Optional
 
 FLOAT_TOL = 1e-6
@@ -212,10 +212,19 @@ def nav_freshness(db, today=None) -> Dict:
     不能让它把截止日推到将来）；② 落后天数按 `current_as_of()`（北京自然日）现算；
     ③ `nav_future_rows` 单数"日期晚于今天"的行 —— 写侧门 `usable_history_rows` 只挡新增
     （同步从不覆盖已有行），存量残留就靠这一列露出来（`scripts/drop_future_nav_rows.py` 点名清）。
+
+    第 49 轮三席共同点到、这一版补上的第四件事：**只报全表最晚那一行会说反话**。
+    生产实测（2026-09-26 只读）：195 只有净值的基金里只有 **1 只**落在 09-25 —— 就是那只
+    会预签发净值的货币基金 `000725 大成添利宝货币B`，而 40 只停在 09-19 之前（最旧 2018-01-26）。
+    所以"落后 1 天、不告警"这句话是**一只基金替 194 只代言**。现在加两列按覆盖面判：
+    `nav_used_funds`（**活预测真正引用到**、且有净值行的代码数）与 `nav_used_stale_funds`
+    （其中最后一笔早于 `today - NAV_LAG_WARN_DAYS` 的只数），外加 `nav_used_as_of`
+    ＝这批代码"最后一笔"的**中位日期**。`nav_stale` 从此判"全表截止日落后 **或** 引用的标的里
+    有停更的"，阈值仍然只有 `NAV_LAG_WARN_DAYS` 一处。
     """
     from sqlalchemy import func
 
-    from src.models.database import FundHistory
+    from src.models.database import FundHistory, Prediction
     from src.services.prediction_lifecycle import current_as_of
 
     if today is None:
@@ -225,11 +234,33 @@ def nav_freshness(db, today=None) -> Dict:
     future = db.query(func.count(FundHistory.nav_date)).filter(
         FundHistory.nav_date > today).scalar()
     lag = (today - cutoff).days if cutoff else None
+
+    used_codes = {c for (c,) in db.query(Prediction.fund_code).filter(
+        Prediction.is_deleted == False,          # noqa: E712
+        Prediction.fund_code.isnot(None)).distinct().all() if (c or '').strip()}
+    lasts = sorted(d for (d,) in db.query(func.max(FundHistory.nav_date)).filter(
+        FundHistory.nav_date <= today,
+        FundHistory.fund_code.in_(used_codes)).group_by(FundHistory.fund_code).all() if d)
+    # 阈值仍然只有 `NAV_LAG_WARN_DAYS` 一处："停更面"用它换算成同一天，不另定第二个数。
+    before = today - timedelta(days=NAV_LAG_WARN_DAYS)
+    stale_n = len([d for d in lasts if d < before])
+    # 中位数而不是最值：一只会预签发净值的货币基金可以替 194 只说"我很新"（第 49 轮三席同条）。
+    # 反过来"引用面过半停更"才算整座库旧了 —— 少数停更靠把**只数报出来**让老板看见，不靠喊。
+    median = lasts[len(lasts) // 2] if lasts else None
+    used_stale = bool(median is not None and median < before)
+    lag_stale = bool(lag is not None and lag >= NAV_LAG_WARN_DAYS)
     return {
         'nav_as_of': cutoff.isoformat() if cutoff else None,
         'nav_lag_days': lag,
+        # `nav_lag_stale` ＝"全表截止日自己就旧了"；`nav_stale` ＝"要么它旧了、要么引用面过半停更"。
+        # 页面不许自己比大小（第 48 轮立的规矩），所以两件事都由这里给布尔。
+        'nav_lag_stale': lag_stale,
         'nav_future_rows': int(future or 0),
-        'nav_stale': bool(lag is not None and lag >= NAV_LAG_WARN_DAYS),
+        'nav_used_funds': len(lasts),
+        'nav_used_stale_funds': stale_n,
+        'nav_used_stale_before': before.isoformat(),
+        'nav_used_as_of': median.isoformat() if median else None,
+        'nav_stale': bool(lag_stale or used_stale),
     }
 
 
@@ -242,9 +273,14 @@ def nav_freshness_notice(fresh: Dict):
     if not fresh.get('nav_as_of'):
         return '库里没有任何不晚于今天的净值行 ⇒ 准确率没有输入，先跑基金更新'
     parts = []
-    if fresh.get('nav_stale'):
+    if fresh.get('nav_lag_days') is not None and fresh['nav_lag_days'] >= NAV_LAG_WARN_DAYS:
         parts.append('最后一笔净值 %s，已落后 %d 天（阈值 %d 天）⇒ 页面那个准确率是按这批旧净值算的'
                      % (fresh['nav_as_of'], fresh['nav_lag_days'], NAV_LAG_WARN_DAYS))
+    stale_n = int(fresh.get('nav_used_stale_funds') or 0)
+    if stale_n:
+        parts.append('活预测引用的 %d 只标的里有 %d 只最后一笔早于 %s ⇒ 这批结论没有新输入'
+                     % (int(fresh.get('nav_used_funds') or 0), stale_n,
+                        fresh.get('nav_used_stale_before') or fresh['nav_as_of']))
     if fresh.get('nav_future_rows'):
         parts.append('另有 %d 行净值日期晚于今天（未计入截止日），要清用 scripts/drop_future_nav_rows.py'
                      % fresh['nav_future_rows'])

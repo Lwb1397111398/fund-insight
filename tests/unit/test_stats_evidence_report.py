@@ -5,7 +5,7 @@
 """
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -387,18 +387,73 @@ def test_the_staleness_threshold_lives_in_exactly_one_place(env):
 
     同一笔净值（09-23）在两个"今天"下必须一个说旧、一个说不旧 —— 边界值本身被钉住，
     而不是钉住某句文案里的数字。
+    第 49 轮把断言从 `nav_stale` 换成 `nav_lag_stale`：这个夹具里**引用面**本来就全旧，
+    合成判据 `nav_stale` 在这里恒为真，用它比边界等于什么都没测（三席同条的那个缺陷
+    正是"用一个恒真的合成值替两个来源下结论"）。
     """
     from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_freshness
 
+    assert 1 <= NAV_LAG_WARN_DAYS <= 10, \
+        '阈值被改大（400 也"合法"）时这道门永不响，而上面两条断言会跟着它一起自圆其说'
     _client, db = env
     db.add(FundHistory(fund_code='510050', nav_date=date(2026, 9, 23), nav=1.0))
     db.commit()
     just_under = nav_freshness(db, date(2026, 9, 23 + NAV_LAG_WARN_DAYS - 1))
     at_the_line = nav_freshness(db, date(2026, 9, 23 + NAV_LAG_WARN_DAYS))
     assert just_under['nav_lag_days'] == NAV_LAG_WARN_DAYS - 1
-    assert just_under['nav_stale'] is False, '差一天就到阈值 ⇒ 还不该喊（周末 + 节假日是常态）'
+    assert just_under['nav_lag_stale'] is False, '差一天就到阈值 ⇒ 还不该喊（周末 + 节假日是常态）'
     assert at_the_line['nav_lag_days'] == NAV_LAG_WARN_DAYS
-    assert at_the_line['nav_stale'] is True, '到阈值必须报旧：这是页面上那句"已落后"的唯一依据'
+    assert at_the_line['nav_lag_stale'] is True, '到阈值必须报旧：这是页面上那句"已落后"的唯一依据'
+
+
+def test_one_fresh_fund_must_not_speak_for_the_whole_book(env):
+    """第 49 轮 A-2 / B-2 / B(78)-M-1 三席同条：生产 195 只有净值的基金里只有 **1 只**
+    落在 09-25 —— 就是那只预签发净值的货币基金 `000725`，而 40 只停在 09-19 之前。
+    旧写法 `max(nav_date)` 让那一行替 194 只说"落后 1 天、不告警"。
+
+    这里把同一个形状造出来：**一只新 + 引用面其余全旧** ⇒ 截止日仍然是新的（那是事实），
+    但停更只数必须报出来，过半时 `nav_stale` 必须翻。反向对照：全引用面都新 ⇒ 不许喊。
+    """
+    from sqlalchemy import delete
+
+    from src.services.verdict_evidence import nav_freshness, nav_freshness_notice
+
+    _client, db = env
+    today = date(2026, 9, 26)
+    # 夹具只引用 2 只基金，而"中位数"在偶数只时取的是偏新那一头 ⇒ 造不出"过半停更"。
+    # 所以这里自己再补两只被引用的标的（测试要的是形状，不是夹具恰好有几只）。
+    for extra in ('000725', '159915'):
+        db.add(Prediction(blogger_id=1, post_id=1, sector='半导体', fund_code=extra,
+                          prediction_type='up', prediction_date=today - timedelta(days=40),
+                          target_date=today - timedelta(days=5)))
+    db.commit()
+    codes = sorted({c for (c,) in db.query(Prediction.fund_code).filter(
+        Prediction.is_deleted == False,          # noqa: E712
+        Prediction.fund_code.isnot(None)).all() if (c or '').strip()})
+    assert len(codes) >= 3, '夹具要有 ≥3 只被引用的基金才造得出"过半停更"（今天 %d 只）' % len(codes)
+    db.execute(delete(FundHistory))
+    db.add(FundHistory(fund_code=codes[0], nav_date=today - timedelta(days=1), nav=1.0))
+    for c in codes[1:]:
+        db.add(FundHistory(fund_code=c, nav_date=date(2020, 12, 8), nav=1.0))
+    db.commit()
+
+    rep = nav_freshness(db, today)
+    assert rep['nav_as_of'] == (today - timedelta(days=1)).isoformat(), rep
+    assert rep['nav_lag_stale'] is False, '全表最晚那一行确实是新的 —— 这句不能撒谎，也不该喊'
+    assert rep['nav_used_funds'] == len(codes), rep
+    assert rep['nav_used_stale_funds'] == len(codes) - 1, \
+        '停更只数必须逐只数出来（引用面过半旧了 ⇒ 页面要说）'
+    assert rep['nav_stale'] is True, '引用面过半停更时合成判据必须翻，否则三席点名的那句谎还在'
+    notice = nav_freshness_notice(rep)
+    assert notice and str(len(codes) - 1) in notice and '早于' in notice, notice
+
+    db.execute(delete(FundHistory))
+    for c in codes:
+        db.add(FundHistory(fund_code=c, nav_date=today - timedelta(days=1), nav=1.0))
+    db.commit()
+    fresh = nav_freshness(db, today)
+    assert fresh['nav_used_stale_funds'] == 0 and fresh['nav_stale'] is False, fresh
+    assert nav_freshness_notice(fresh) is None, '引用面都新还喊 ⇒ 这句话会变成噪音'
 
 
 def test_the_daily_log_says_the_same_thing_the_page_does():
@@ -420,3 +475,60 @@ def test_the_daily_log_says_the_same_thing_the_page_does():
     empty = nav_freshness_notice({'nav_as_of': None, 'nav_lag_days': None,
                                   'nav_future_rows': 0, 'nav_stale': False})
     assert empty and '没有' in empty, '净值一行都没有时必须说话，不许静默'
+
+
+def _notice_is_spoken(script, helper):
+    """`X = helper(...)` 之后必须真被**说出口**（"算了但没说"＝没接线）。
+
+    出口两种：CLI 脚本走 `print`（stdout 就是它的日志），跑批走 `logger.*`。
+    两种都认，否则要么误伤体检命令、要么放过"算了不印"。"""
+    import ast
+    import io
+
+    tree = ast.parse(io.open(script, encoding='utf-8').read())
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        called = [n for n in ast.walk(node) if isinstance(n, ast.Call)
+                  and getattr(n.func, 'id', '') == helper]
+        if not called:
+            continue
+        names = set()
+        for assign in ast.walk(node):
+            if isinstance(assign, ast.Assign) and assign.value in called:
+                names |= {t.id for t in ast.walk(assign.targets[0]) if isinstance(t, ast.Name)}
+        for stmt in ast.walk(node):
+            if not isinstance(stmt, ast.Call) or not stmt.args:
+                continue
+            sink = getattr(stmt.func, 'attr', '') if isinstance(stmt.func, ast.Attribute) else ''
+            owner = getattr(stmt.func.value, 'id', '') if isinstance(stmt.func, ast.Attribute) else ''
+            if isinstance(stmt.func, ast.Name):
+                sink, owner = stmt.func.id, ''
+            if owner in ('logger', 'logging') and sink not in ('warning', 'info', 'error'):
+                continue
+            if owner != '' and sink == '':
+                continue
+            if owner == '' and sink != 'print':
+                continue
+            for arg in stmt.args:
+                if any(isinstance(t, ast.Name) and t.id in names for t in ast.walk(arg))                         or any(isinstance(t, ast.Call) and t in called for t in ast.walk(arg)):
+                    return True
+    return False
+
+
+def test_the_cron_runner_actually_prints_the_nav_notice():
+    """第 49 轮 A-4：那句"每日跑批日志与页面说同一句话"以前只是**散文**。
+
+    上面那条用例名字叫"日志"，实际只拿四个手搓字典调 `nav_freshness_notice` ——
+    把 `run_scheduled_tasks.py` 里那三行删掉，全套一千多条用例一条都不红。
+    而老板不在页面上时，Render Cron 日志是唯一看得见"数旧了"的地方。
+    所以这里判的是**接线**：算过 ⇒ 必须交给 logger 说出口
+    （`audit_verdict_evidence.py` 那句 `[净值新鲜度]` 同样零覆盖，一起钉）。
+    """
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    runner = os.path.join(root, 'scripts', 'run_scheduled_tasks.py')
+    audit = os.path.join(root, 'scripts', 'audit_verdict_evidence.py')
+    assert _notice_is_spoken(runner, 'nav_freshness_notice'),         '跑批算了净值新鲜度却没把它交给 logger ⇒ 页面之外没人说这句话，那条承诺是空的'
+    assert _notice_is_spoken(audit, 'nav_freshness_notice'),         '体检命令印不出这句话 ⇒ `--production` 那条可复现命令答不了"净值旧不旧"'

@@ -1710,28 +1710,55 @@ def test_no_new_class_name_is_used_without_being_defined():
 def test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran():
     """净值停在十一天前时，页面那行"截至 <今天>"会替旧数据撒谎（第 48 轮 A-9 / B-8）。
 
-    判据形态：在 node 里**执行页面那份 `navFreshNote`**，喂五种真实形状。
+    判据形态：在 node 里**执行页面那份 `navFreshNote`**，喂六种真实形状。
     文本断言在这里毫无价值 —— 把 `lag >= 4` 改成 `lag >= 400` 页面照旧一句"净值截至 X"，
     而文字判据看不见任何变化（这一族的标准死法）。
+
+    第 49 轮两处改动一起反映在这里：① 页面读的是 `nav_lag_stale`（全表截止日旧不旧）
+    与 `nav_used_stale_funds`（引用面几只停更），不再读那个会把两件事混成一团的 `nav_stale`；
+    ② 旧写法里 `pick(null)` 那一档**从页面上走不到**（两个调用点都在
+    `v-if="evidenceReport"` 那一支里），第 34 轮的规矩是"不可达的防御分支不许算一种结局"
+    ⇒ 撤掉它，换成真正可达的"对端是旧构建、响应里根本没有这个键"（A-8）。
     """
     if not NODE:
         pytest.skip('本机没有 node')
     out = _run_page_js("""
 const pick = (report) => { evidenceReport.value = report; return navFreshNote(); };
 const cases = {
-  noReport: pick(null),
-  noNavAtAll: pick({nav_as_of: null, nav_lag_days: null, nav_future_rows: 0, nav_stale: false}),
-  fresh: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_future_rows: 0, nav_stale: false}),
-  stale: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_future_rows: 0, nav_stale: true}),
-  futureOnly: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_future_rows: 4, nav_stale: true}),
-  // 阈值只有一个出处（后端 NAV_LAG_WARN_DAYS）：页面必须照 `nav_stale` 说，不自己比大小。
-  serverSaysFresh: pick({nav_as_of: '2026-09-23', nav_lag_days: 3, nav_future_rows: 0, nav_stale: false}),
+  noNavAtAll: pick({nav_as_of: null, nav_lag_days: null, nav_lag_stale: false,
+                    nav_future_rows: 0, nav_used_funds: 0, nav_used_stale_funds: 0,
+                    nav_used_stale_before: '2026-09-22', nav_stale: false}),
+  oldBuild: pick({judged: 1191}),
+  fresh: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_lag_stale: false,
+               nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 0,
+               nav_used_stale_before: '2026-09-22', nav_stale: false}),
+  stale: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_lag_stale: true,
+               nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 40,
+               nav_used_stale_before: '2026-09-09', nav_stale: true}),
+  futureOnly: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_lag_stale: true,
+                    nav_future_rows: 4, nav_used_funds: 195, nav_used_stale_funds: 40,
+                    nav_used_stale_before: '2026-09-09', nav_stale: true}),
+  // 阈值只有一个出处（后端 NAV_LAG_WARN_DAYS）：页面必须照 `nav_lag_stale` 说，不自己比大小。
+  serverSaysFresh: pick({nav_as_of: '2026-09-23', nav_lag_days: 3, nav_lag_stale: false,
+                         nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 0,
+                         nav_used_stale_before: '2026-09-19', nav_stale: false}),
+  // 第 49 轮三席同条：全表最晚那一行是新的一天，但引用面有停更的 —— 只数必须说出来。
+  oneFundSpeaksForAll: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_lag_stale: false,
+                             nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 40,
+                             nav_used_stale_before: '2026-09-22', nav_stale: false}),
 };
 console.log(JSON.stringify(cases));
 """, [_decl(_html(), 'navFreshNote = () =>')])
-    assert '净值截至' not in out['noReport'] and '没取到' in out['noReport'], out['noReport']
-    assert '没取到' in out['noNavAtAll'] and 'null' not in out['noNavAtAll'], out['noNavAtAll']
+    assert '没有任何不晚于今天的净值行' in out['noNavAtAll'] and 'null' not in out['noNavAtAll'], \
+        out['noNavAtAll']
+    assert '旧构建' in out['oldBuild'], '接口没有这个键（对端是旧版）不许被说成"库里没净值"：%s' % out['oldBuild']
     assert out['fresh'] == '净值截至 2026-09-25', '当天的数据不许喊落后（喊早了老板会开始忽略这条提示）'
     assert '落后' not in out['serverSaysFresh'], '页面自己比大小 = 第二把尺子：%s' % out['serverSaysFresh']
     assert '落后 13 天' in out['stale'] and '旧净值' in out['stale'], out['stale']
+    assert '40 只' in out['stale'] and '早于 2026-09-09' in out['stale'], \
+        '引用面停更只数必须与"落后几天"同时说，否则又回到一句乐观话：%s' % out['stale']
     assert '另有 4 行' in out['futureOnly'], '预签发的未来净值行必须看得见（存量脏数据不能静默回来）'
+    assert ('40 只' in out['oneFundSpeaksForAll'] and '落后' not in out['oneFundSpeaksForAll']
+            and '别被它骗' in out['oneFundSpeaksForAll']), \
+        '一只新基金替 194 只代言时，页面必须报出停更只数、还要说明那句"截至 X"是哪一只（第 49 轮 A-2 / B-2）：%s' \
+        % out['oneFundSpeaksForAll']

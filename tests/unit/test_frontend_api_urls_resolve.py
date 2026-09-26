@@ -41,15 +41,20 @@ def _normalize(raw):
     return '/' + '/'.join(s for s in path.split('/') if s)
 
 
-def _frontend_urls():
+def _frontend_urls(files=None):
     """返回 [(文件相对路径, 原始串, 归一化路径)]，只收 `/api` 开头的字面量。"""
     found = []
-    for fp in _web_files():
+    for fp in (files if files is not None else _web_files()):
         with io.open(fp, encoding='utf-8', errors='replace') as fh:
             text = fh.read()
         for m in _LITERAL.finditer(text):
             raw = m.group(1)
-            rel = os.path.relpath(fp, ROOT).replace('\\', '/')
+            # 跨盘符时 relpath 会抛 ValueError（本机 tmp 在 C:、仓库在 E:），
+            # 而"控制断言用临时文件喂抽取器"这条路正是要能走 —— 报不出相对路径就退回文件名。
+            try:
+                rel = os.path.relpath(fp, ROOT).replace('\\', '/')
+            except ValueError:
+                rel = os.path.basename(fp)
             found.append((rel, raw, _normalize(raw)))
     return found
 
@@ -65,9 +70,17 @@ def _registered_segment_lists():
 
 
 def _segment_matches(front, back):
-    # 任一边是"整段变量"就算对得上：前端 `${id}` ↔ 路由 `{id}`，反向也一样。
-    if front.startswith('{') or back.startswith('{'):
+    """只有**后端那一格是参数**才算通配。
+
+    第 49 轮 B 席量到旧写法反了一面：`front.startswith('{')` 让"前端是 `${id}`"
+    对**任何**同长度路由都算命中 —— `/api/bloggers/${id}` 归一后撞上的其实是
+    `/api/bloggers/top`，于是"删除博主"打一条已被删掉的路由（真 404）而闸报绿。
+    前端那一格是变量时，只能配后端也是变量（下一行），不能配字面量。
+    """
+    if back.startswith('{'):
         return True
+    if front.startswith('{'):
+        return False
     return front == back
 
 
@@ -112,3 +125,39 @@ def test_placeholders_and_query_strings_are_stripped_the_same_way():
     assert _normalize('/api/funds?group_by_sector=false&skip=${skip}') == '/api/funds'
     assert _normalize('/api/predictions/${prediction.id}') == '/api/predictions/{x}'
     assert _normalize('/api/viewpoints/tasks/${t.value.task_id}/retry') == '/api/viewpoints/tasks/{x}/retry'
+
+
+def test_a_variable_segment_only_buys_a_match_against_a_route_parameter():
+    """第 49 轮 B-1 的那一格：`/api/bloggers/${id}` 曾撞上 `/api/bloggers/top` 而判"命中"。
+
+    旧写法 `front.startswith('{')` 让**前端是变量**这一格对任何字面量路由都放行，
+    于是"路由被删了两个月"这种事实正好从闸眼里过去。两侧都要判：
+    没有参数路由兜着 ⇒ 必须红；有了 ⇒ 必须放行（闸不是墙）。
+    """
+    reg_no_param = [('api', 'bloggers'), ('api', 'bloggers', 'top'), ('api', 'posts', '{post_id}')]
+    planted = [('web/index.html', '/api/bloggers/${id}', '/api/bloggers/{x}')]
+    assert _unmatched(planted, reg_no_param), \
+        '后端根本没有 /api/bloggers/{id}，闸却说命中 ⇒ 通配那一臂还在白买'
+    assert not _unmatched(planted, reg_no_param + [('api', 'bloggers', '{blogger_id}')]), \
+        '路由补回来后仍报红 ⇒ 这条闸会逼人把它关掉'
+
+
+def test_the_extractor_itself_catches_a_url_written_in_a_temp_file(tmp_path):
+    """A-6 的那一格：控制断言必须过**抽取器**，不能只喂手搓三元组。
+
+    旧控制断言把 planted 直接写进 `_unmatched` ⇒ 它证明的是"匹配器有牙"，
+    抽取器坏一半（少收一个文件、漏一种写法）仍然全绿，而地板值 60 离真值 88
+    意味着可以静默丢掉 27 条 URL。这里现造一条**模板串写法**的字面量，
+    要求它被 `_frontend_urls` 收进来、并被 `_unmatched` 点名。
+    """
+    plant = tmp_path / 'planted.js'
+    plant.write_text(
+        "const u = `/api/no-such-route-in-this-repo/${id}`;\n"
+        "const v = '/api/also-not-registered';\n", encoding='utf-8')
+    items = _frontend_urls([str(plant)])
+    paths = {p for _, _, p in items}
+    assert '/api/no-such-route-in-this-repo/{x}' in paths, \
+        '模板串里的 /api 没被抽出来 ⇒ 抽取器看不见这种写法'
+    assert '/api/also-not-registered' in paths
+    assert len(_unmatched(items, _registered_segment_lists())) == 2, \
+        '两条都不存在的 URL 没被全部点名 ⇒ 这把尺子是空的'

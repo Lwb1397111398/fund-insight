@@ -151,12 +151,21 @@ def main():
               % (judged_n, correct_n, now_pct, stale_n, low, high, high - low))
         print(' 引用准确率时必须连这个区间一起引用：单报一个小数点就是在假装精度。')
         # 第 48 轮 A-9 / B-8：净值停在十一天前时，"截至 <今天>"那行会替旧数据撒谎。
-        # 这句必须印出来 —— 页面上那一截灰字与这里读的是同一份报告，两边说的话要一样。
+        # 第 49 轮 A-4 补第二半：这句话**必须来自 `nav_freshness_notice`**（页面与每日跑批
+        # 读的都是它）。以前这里自己拼"落后 N 天"，等于第三把尺子 —— 阈值改了它不跟。
+        from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_freshness_notice
+
         if rep['nav_as_of']:
-            print('[净值新鲜度] 最后一笔净值 %s（落后 %s 天）；库里另有 %d 行净值日期晚于今天'
-                  % (rep['nav_as_of'], rep['nav_lag_days'], rep['nav_future_rows']))
+            print('[净值新鲜度] 最后一笔净值 %s（落后 %s 天，阈值 %d 天）；'
+                  '活预测引用面 %d 只标的里 %d 只最后一笔早于 %s；库里另有 %d 行净值日期晚于今天'
+                  % (rep['nav_as_of'], rep['nav_lag_days'], NAV_LAG_WARN_DAYS,
+                     rep['nav_used_funds'], rep['nav_used_stale_funds'],
+                     rep['nav_used_stale_before'], rep['nav_future_rows']))
         else:
             print('[净值新鲜度] 库里一行净值都没有 ⇒ 截止日无从谈起，先跑基金更新')
+        _notice = nav_freshness_notice(rep)
+        if _notice:
+            print('[该报警的那半] %s' % _notice)
         judged_all, blind_n, blind_codes = unmapped_codes(db)
         print('[体检覆盖面] 已判结论 %d 条里 %d 条挂的代码在 sector_fund_mapping 里'
               '**根本没有行** ⇒ 身份体检对它们没有意见，既不会被判不可服务、'

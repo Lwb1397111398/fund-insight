@@ -227,16 +227,29 @@ class SectorFundService:
                 db.close()
 
     def ensure_fund_info_exists(self, fund_code: str, fund_name: str = None,
-                                sector_type: str = None) -> bool:
-        """保存映射前确保 fund_info 里存在该基金档案。
+                                sector_type: str = None,
+                                identity_checked: bool = False) -> bool:
+        """保存映射前确保 fund_info 里存在该基金档案 —— **档案落笔的唯一咽喉，所以身份门也在这里**。
 
         sector_fund_mapping.fund_code 有外键指向 fund_info.fund_code，
         若用户为一个尚不在基金库里的代码保存映射，直接写会报
         FOREIGN KEY constraint failed。这里先补一条最小档案
         （代码+名称+板块），净值/历史由后续基金同步任务补全。
 
+        第 49 轮两席共同指出：老板要的是"以后不会再有错误机制产生这种无效数据"，
+        而那道门上一批装在 `LLMAnalyzer._save_fund_mapping` 上 —— 那个函数自 `9c598cf`
+        起在 `src/` 里**零调用方**，真正活着的建档点是本方法（`config.py` 三处路由 +
+        agent + `full_sync` 都调它）。判据直接调私有方法 ⇒ 绿灯替死代码作保，
+        而页面上填一个股票代码时**档案先落库、身份门后判**。现在门挪到这里，一处管住所有 caller。
+
+        Args:
+            identity_checked: 已过身份门的调用方（如 agent 的 T2、`update_mapping` 那一支）
+                显式传 True 旁路，避免同一次保存重复打接口。默认 False ⇒ 建之前先问
+                "这码是不是基金"，判"不是基金"就不建（`_manual_identity_verdict` 失败开放：
+                站点抖动/查不到一律按没结论处理，不挡正常保存）。
+
         Returns:
-            True 表示本次新建了档案，False 表示已存在或未提供代码。
+            True 表示本次新建了档案，False 表示已存在、未提供代码或**被身份门拒建**。
         """
         code = (fund_code or '').strip()
         if not code:
@@ -247,6 +260,17 @@ class SectorFundService:
             exists = db.query(FundInfo.fund_code).filter(FundInfo.fund_code == code).first()
             if exists:
                 return False
+
+            if not identity_checked:
+                # 探针是网络活（名册首次 30s、单码 10s×3）：先结束只读事务再探，
+                # 否则生产连接池上会挂出几分钟的 `idle in transaction`
+                # （与 `update_mapping` 同一把姿势，见那个函数里的注释）。
+                name, sector = (fund_name or '').strip(), sector_type
+                db.rollback()
+                accusation, _verdict = _manual_identity_verdict(code, name, sector or '')
+                if accusation:
+                    logger.info('[基金档案] 拒建 %s（%s）：%s', code, name or '无名', accusation)
+                    return False
 
             db.add(FundInfo(
                 fund_code=code,

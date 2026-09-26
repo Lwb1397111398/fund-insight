@@ -192,3 +192,16 @@ def create_blogger(
     }
 
 
+@router.delete("/{blogger_id}")
+def delete_blogger(blogger_id: int, db: Session = Depends(get_db)):
+    """删除博主（只删"名下没有帖子/预测/观点"的那种，有包袱就拒绝并说出包袱是什么）。
+
+    `2c227c9`（2026-07-26 清理 41 个未使用端点）把这条路由删了，前端那句
+    `axios.delete('/api/bloggers/${id}')` 没跟上 ⇒ 老板两个月来点"删除"拿到的是
+    404 + "删除失败: Not Found"，而 `safe_delete` 一直在服务层没人调。
+    这里刻意**不做级联**：连带删掉帖子与预测是另一种破坏力，那是老板的决定项。
+    """
+    ok, message = BloggerService(db).safe_delete(blogger_id)
+    return {"success": ok, "message": message}
+
+

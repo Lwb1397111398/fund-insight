@@ -2461,15 +2461,22 @@ const fetchWeChatBatch = async () => {
                 };
                 const spanText = () => evidenceReport.value ? (evidenceReport.value.span_low_pct + '%~' + evidenceReport.value.span_high_pct + '%') : '-';
                 // 净值新鲜度（第 48 轮 A-9 / B-8：生产净值停在 09-13 十天没人知道，而页面那行
-                // "截至 <今天>"会替它撒谎）。取不到日期不许报 0、也不许干脆不写这一截。
+                // "截至 <今天>"会替它撒谎）。第 49 轮三席又指出更坏的一面：**全表最晚那一行**
+                // 可以由一只会预签发净值的货币基金代言，所以"引用了 N 只、其中 M 只停更"必须一起说。
+                // 取不到日期不许报 0、也不许干脆不写这一截。
                 const navFreshNote = () => {
                     const r = evidenceReport.value;
-                    if (!r) return '净值截止日没取到';
-                    if (!r.nav_as_of) return '净值截止日没取到（库里一行净值都没有？）';
+                    // 两个调用点都在 `v-if="evidenceReport"` 那一支里 ⇒ `!r` 走不到，不留死分支
+                    //（第 34 轮的规矩："不可达的防御分支不许算成一种结局"）。
+                    if (!('nav_as_of' in r)) return '这个版本的接口没有净值新鲜度 ⇒ 线上可能是旧构建';
+                    if (!r.nav_as_of) return '库里没有任何不晚于今天的净值行 ⇒ 准确率没有输入，先跑基金更新';
                     let text = '净值截至 ' + r.nav_as_of;
                     // "算不算旧"是后端一个数（verdict_evidence.NAV_LAG_WARN_DAYS），页面不另定阈值：
                     // 页面与每日跑批必须对同一件事说一样的话。
-                    if (r.nav_stale) text += '，已落后 ' + r.nav_lag_days + ' 天 ⇒ 上面的准确率是按这批旧净值算的';
+                    if (r.nav_lag_stale) text += '，已落后 ' + r.nav_lag_days + ' 天 ⇒ 上面的准确率是按这批旧净值算的';
+                    else if (r.nav_used_stale_funds > 0) text += '（全表最晚的一行是新的，别被它骗）';
+                    if (r.nav_used_stale_funds > 0) text += '；活预测引用的 ' + r.nav_used_funds + ' 只里有 '
+                        + r.nav_used_stale_funds + ' 只最后一笔早于 ' + r.nav_used_stale_before + ' ⇒ 这批结论没有新输入';
                     if (r.nav_future_rows > 0) text += '；另有 ' + r.nav_future_rows + ' 行净值日期晚于今天，未计入截止日';
                     return text;
                 };

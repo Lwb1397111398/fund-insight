@@ -89,3 +89,49 @@ def test_limit_is_honoured_and_zero_verified_bloggers_never_divide_by_zero(db):
     assert len(out['data']) == 2
     assert all(r['hit_verified'] >= 5 for r in out['data'])
     assert '零结论' not in [r['name'] for r in out['data']], '0 分母不该上榜（更不该除零）'
+
+
+def test_the_delete_route_the_page_calls_is_actually_registered():
+    """`2c227c9` 删了这条路由、前端没跟上 ⇒ 老板点「删除」两个月拿到的是 404。
+
+    页面 `web/index.html` 里那句 `axios.delete(`/api/bloggers/${id}`)` 只要还在，
+    后端就必须注册 `DELETE /api/bloggers/{blogger_id}`。这条判据问的是**注册没注册**，
+    不是"函数能不能跑"——上一族的教训（"唯一入口这句话必须有测试钉着"）。
+    """
+    from fastapi.routing import APIRoute
+
+    from src.api.main import app
+
+    hit = [r for r in app.routes if isinstance(r, APIRoute)
+           and r.path == '/api/bloggers/{blogger_id}' and 'DELETE' in r.methods]
+    assert hit, '页面打的 DELETE /api/bloggers/{id} 没注册 ⇒ 按钮就是 404'
+
+
+def test_delete_refuses_to_take_a_blogger_with_luggage(db):
+    """三种结局各说各话：不存在 / 有包袱（不许级联删）/ 真删掉。
+
+    返回体必须带 `success` 与 `message`：前端第 32 轮起判的是
+    "200 + success:false 也算一次失败"，只回 200 不回原话等于让老板看见"删好了"。
+    """
+    from src.api.routes.bloggers import delete_blogger
+    from src.models.database import Post
+
+    missing = delete_blogger(blogger_id=9999, db=db)
+    assert missing['success'] is False and '不存在' in missing['message'], missing
+
+    b = Blogger(name='有包袱', platform='weibo')
+    db.add(b)
+    db.flush()
+    db.add(Post(blogger_id=b.id, content='一篇没删的帖子', source_url='https://x.invalid/1',
+                     post_date=date.today()))
+    db.commit()
+    refused = delete_blogger(blogger_id=b.id, db=db)
+    assert refused['success'] is False and '帖子' in refused['message'], refused
+    assert db.get(Blogger, b.id) is not None, '被拒绝的删除不许已经把博主删掉'
+
+    clean = Blogger(name='干净的', platform='weibo')
+    db.add(clean)
+    db.commit()
+    done = delete_blogger(blogger_id=clean.id, db=db)
+    assert done['success'] is True, done
+    assert db.get(Blogger, clean.id) is None, '说删掉了却没删'
