@@ -90,3 +90,30 @@ def test_two_calibers_differ_on_the_same_rows_by_design(db):
     assert (hit['hit_verified'], hit['hit_correct']) == (4, 3), hit        # 3/4 = 75%
     assert (stats['total_predictions'], stats['correct_predictions']) == (2, 2), stats
     assert stats['accuracy_rate'] == pytest.approx(100.0), stats
+
+
+def test_a_blogger_with_only_recycle_bin_predictions_is_not_a_foreign_key_crash(test_db):
+    """第 50 轮 A 席 MINOR-5：`safe_delete` 以前只数 `is_deleted=false` 的预测，
+    于是"名下只剩回收站"的博主会过掉三道门、在 `db.delete` 时撞 FK ——
+    老板看到的是一句 `删除失败: FOREIGN KEY constraint failed`，而不是"先清回收站"。
+    """
+    from src.models.database import Post
+    from src.services.blogger_service import BloggerService
+
+    b = Blogger(name='只有回收站', platform='weibo')
+    test_db.add(b)
+    test_db.flush()
+    post = Post(blogger_id=b.id, content='一篇', source_url='https://x.invalid/2',
+                post_date=date.today())
+    test_db.add(post)
+    test_db.flush()
+    test_db.add(Prediction(blogger_id=b.id, post_id=post.id, sector='半导体',
+                           fund_code='512480', prediction_type='up',
+                           prediction_date=date.today() - timedelta(days=30),
+                           is_deleted=True))
+    test_db.commit()
+
+    ok, message = BloggerService(test_db).safe_delete(b.id)
+    assert ok is False, '回收站里还有预测（外键指着它）却允许硬删博主 ⇒ 必撞 FK'
+    assert '回收站' in message, message
+    assert test_db.query(Blogger).filter_by(id=b.id).first() is not None

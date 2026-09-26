@@ -132,11 +132,29 @@ def _dependents_of(db, prediction_ids):
                 sa.table(table, sa.column(column))).where(
                 sa.column(column).in_(ids))).scalar()
         except Exception as exc:          # 表不存在 / 列名漂了 / 权限不够
-            out['%s（问不到，按有依赖处理）' % table] = '%s：%s' % (type(exc).__name__, exc)
+            # 值必须是 `None`（"数不出来"），不能塞字符串 —— 消费侧 `plan()` 按 `%d 行` 格式化，
+            # 塞字符串会让整批删除动作在**打印拒绝理由时**崩掉（第 50 轮 A 席 MAJOR-1 实测：
+            # `TypeError: %d format: a real number is required, not str`）。方向还是 fail-closed，
+            # 但一台只会崩的守卫等于没有守卫。
+            out['%s（问不到，按有依赖处理）' % table] = None
+            out.setdefault('_why', {})[table] = '%s：%s' % (type(exc).__name__, exc)
             continue
         if n:
             out[table] = int(n)
     return out
+
+
+def describe_dependents(deps):
+    """把 `_dependents_of` 的结果排成一句人话，**"数不出来"那一档不许把打印弄崩**。"""
+    bits = []
+    for k, v in sorted(deps.items()):
+        if k == '_why':
+            continue
+        bits.append('%s %s' % (k, '行数是**问不出来的**（按有依赖处理）' if v is None else '%d 行' % v))
+    why = deps.get('_why') or {}
+    if why:
+        bits.append('问不到的原因：%s' % '；'.join('%s→%s' % (k, v) for k, v in sorted(why.items())))
+    return '、'.join(bits)
 
 
 def plan(rows, allow_dead_predictions=False, allow_owner_rows=False,
@@ -174,7 +192,7 @@ def plan(rows, allow_dead_predictions=False, allow_owner_rows=False,
                                 '动审计台账）⇒ 本工具不删。可行的路是把这条预测的标的**改指**到'
                                 '有效基金（保留台账），或老板明确要清台账后另做一步'
                                 % (r['fund_code'], r['dead_predictions'],
-                                   '、'.join('%s %d 行' % (k, v) for k, v in sorted(deps.items()))))
+                                   describe_dependents(deps)))
                 continue
             for pid in r.get('dead_prediction_ids') or []:
                 actions.append(('prediction', pid, r['fund_code'], '', 0))

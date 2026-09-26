@@ -775,9 +775,14 @@ class FundDataManager:
             # `update_fund_info`）是同一条形状的另一条活路 —— 货币基金会给预签发的净值行
             # （000725 实测在 09-25 给出 09-26/09-27），照抄就把档案头推到将来。
             if is_future_nav(nav_date):
-                logger.warning('[净值门] %s 的档案头日期 %s 晚于今天 ⇒ 不回写，保留现有档案头',
+                # 日期在未来 ⇒ **数也不能要**：预签发的那笔净值挂到旧日期下，
+                # 比"日期与数一起在未来"更难看出来（第 50 轮 A 席 MINOR-3；
+                # 页面与 LLM 读的就是 `latest_nav + nav_date` 这一对）。
+                logger.warning('[净值门] %s 的档案头日期 %s 晚于今天 ⇒ 日期与净值都不回写，保留现有档案头',
                                fund_code, nav_date)
                 nav_date = fund.nav_date if fund else None
+                day_growth = fund.day_growth if fund else None
+                info['nav'] = fund.latest_nav if fund else None
             
             if fund:
                 if info.get('fund_name'):

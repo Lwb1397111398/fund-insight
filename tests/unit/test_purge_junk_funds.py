@@ -480,3 +480,22 @@ def test_restore_refuses_a_payload_that_brings_its_own_verdict(test_db, tmp_path
     assert purge.restore(test_db, dump_with(), apply=True) == (1, 0, 0), \
         '不带结论的行必须照常还原，否则这条拒只是装样子'
     assert test_db.query(Prediction).filter_by(id=777).first() is not None
+
+
+def test_an_unreadable_dependency_refuses_without_crashing_the_plan(test_db, monkeypatch):
+    """第 50 轮 A 席 MAJOR-1：上一版把"数不出来"的**字符串**当值塞进依赖表，
+    而 `plan()` 按 `%d 行` 格式化 ⇒ 在**打印拒绝理由那一刻**整批崩（`TypeError`）。
+    方向本来就是 fail-closed，但一台只会崩的守卫等于没有守卫。
+    """
+    code = 'ZZZNOPE'
+    _junk_with_dead_prediction(test_db, code)
+    pid = purge.inspect(test_db, (code,))[0]['dead_prediction_ids'][0]
+    # 只替换这一条码的依赖查询结果：真实触发它需要"表读不到"（权限/缺表），
+    # 这里要判的是消费侧能不能吃下这个形状。
+    monkeypatch.setattr(purge, '_dependents_of', lambda db, ids: {
+        'prediction_groups（问不到，按有依赖处理）': None,
+        '_why': {'prediction_groups': 'OperationalError: no such table'}})
+    rows = purge.inspect(test_db, (code,))
+    actions, blockers = purge.plan(rows, drop_dead_predictions=True)
+    assert not actions, '数不出来却还是把预测排进硬删 ⇒ "不知道"被当成"没有"'
+    assert blockers and '问不到' in str(blockers), blockers

@@ -238,15 +238,24 @@ class SectorFundService:
 
         第 49 轮两席共同指出：老板要的是"以后不会再有错误机制产生这种无效数据"，
         而那道门上一批装在 `LLMAnalyzer._save_fund_mapping` 上 —— 那个函数自 `9c598cf`
-        起在 `src/` 里**零调用方**，真正活着的建档点是本方法（`config.py` 三处路由 +
-        agent + `full_sync` 都调它）。判据直接调私有方法 ⇒ 绿灯替死代码作保，
-        而页面上填一个股票代码时**档案先落库、身份门后判**。现在门挪到这里，一处管住所有 caller。
+        起在 `src/` 里**零调用方**，判据还直接调私有方法 ⇒ 绿灯替死代码作保，
+        而页面上填一个股票代码时**档案先落库、身份门后判**。现在门挪到这里。
+
+        **措辞边界（第 50 轮两席又抓到同一种过头，别再写满）**：本方法是
+        "页面保存/编辑映射"与"审计回写"这条咽喉的门（`grep -rn ensure_fund_info_exists src/`
+        只命中 `config.py` 的三处路由），**不是"所有 caller 的咽喉"** —— 全仓往 `fund_info`
+        写行的活路有 9 处：agent 自己 `db.add(FundInfo(...))`（`sector_fund_agent.py:634`）、
+        `full_sync` 两处（`fund_sync_manager.py:270/628`）、`fund_api.py:791`、
+        `fund_service.py:460`、`data_portability_service.py:477`。那几处各自另有尺子
+        （agent 的 T2 判股票即拒、`full_sync` 只在基金域答得出时才建），今天没证据显示它们
+        在产生新垃圾档案 —— 但**别人的尺子不算这道门**。
 
         Args:
-            identity_checked: 已过身份门的调用方（如 agent 的 T2、`update_mapping` 那一支）
-                显式传 True 旁路，避免同一次保存重复打接口。默认 False ⇒ 建之前先问
-                "这码是不是基金"，判"不是基金"就不建（`_manual_identity_verdict` 失败开放：
-                站点抖动/查不到一律按没结论处理，不挡正常保存）。
+            identity_checked: **已过身份门的调用方**显式传 True 才旁路（今天全仓只有一处：
+                `config.py` 的审计回写，它上面三条"不许进门"的判断已经把这一行问过了）。
+                默认 False ⇒ 建之前先问"这码是不是基金"，判"不是基金"就不建
+                （`_manual_identity_verdict` 失败开放：站点抖动/查不到一律按没结论处理，
+                不挡正常保存）。旁路不许由"代码看起来像基金"推出来。
 
         Returns:
             True 表示本次新建了档案，False 表示已存在、未提供代码或**被身份门拒建**。

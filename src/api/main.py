@@ -278,7 +278,8 @@ def health_check():
         db.execute(text("SELECT 1"))
     finally:
         db.close()
-    return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
+    return {"status": "ok", "timestamp": datetime.now(BEIJING).isoformat(),
+            "db_type": DB_TYPE, "version": "2.0.0"}
 
 
 # 北京时刻，带偏移：Render 没设 TZ，裸 `datetime.now()` 在那台机器上就是 UTC 无时区串

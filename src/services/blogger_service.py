@@ -187,10 +187,16 @@ class BloggerService(BaseService[Blogger]):
         if not blogger:
             return False, "博主不存在"
 
-        # 检查关联的预测记录
+        # 检查关联的预测记录：**回收站里的那些也要数** —— `predictions.blogger_id` 是外键，
+        # 只数 `is_deleted=false` 会放行一次"看着没包袱、实际必撞 FK"的删除
+        # （第 50 轮 A 席 MINOR-5：那种情况下老板看到的是一条 `FOREIGN KEY constraint failed` 死路，
+        # 而不是"请先清理回收站"这句人话）。`prediction_groups.representative_id` 同理指向预测。
         prediction_count = self.db.query(func.count(Prediction.id)).filter(
+            Prediction.blogger_id == blogger_id
+        ).scalar() or 0
+        dead_predictions = self.db.query(func.count(Prediction.id)).filter(
             Prediction.blogger_id == blogger_id,
-            Prediction.is_deleted == False
+            Prediction.is_deleted == True          # noqa: E712
         ).scalar() or 0
 
         # 检查关联的帖子
@@ -207,7 +213,9 @@ class BloggerService(BaseService[Blogger]):
         # 构建错误信息
         issues = []
         if prediction_count > 0:
-            issues.append(f"{prediction_count} 条预测记录")
+            issues.append(f"{prediction_count} 条预测记录"
+                          + (f"（其中回收站里还挂着 {dead_predictions} 条，要清的是回收站）"
+                             if dead_predictions else ""))
         if post_count > 0:
             issues.append(f"{post_count} 篇帖子")
         if viewpoint_count > 0:

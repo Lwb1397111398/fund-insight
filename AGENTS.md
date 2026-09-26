@@ -996,18 +996,30 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   名册查无，但基金域自证（`verify_fund_fetchable` / `get_fund_domain_name`）逐个答 `ok=True` 并给出
   官方名、各带 20 行净值 ⇒ 那 5 只是**真基金顶着股票名或空名**；而 S6 那 6 个码
   （`603758/600189/152788/HYNX/SBSP76/ign`）两根轴都答不出 ⇒ 才是真非基金。
-  所以"生产 9 行指向非基金"那句要拆成"6 行非基金 + 3 行名字错的真基金"。
+  所以"生产 9 行指向非基金"那句要拆成"6 行非基金 + 3 行名字错的真基金"；
+  **09-26 又量一次，名字这一层比那句更宽**：`fund_info` 165 行里 **23 行的名字 ≠ 名册官方名**，
+  其中 **5 行**（`000530 冰山冷热 / 000970 中科三环 / 001309 德明利 / 002354 天娱数科 / 002900 哈三联`，
+  各带 59/27/27/53/33 行**真净值**）是"真基金码挂着深市股票名"，另 **4 行**
+  （`000938 / 002154 / 002261 / 002413`）名册查无但基金域答得出 ⇒ 共 **9 行改名欠账**（任务 #86；
+  工具 `--rename-to-official` 对生产**主动拒绝改名**，所以这不是"等一次跑批"，是决定项）。
   **来源侧那道门装在咽喉上，不是装在那条死路上**（第 49 轮 A-1 / B-4 返修）：
   上一批我把门写在 `LLMAnalyzer._save_fund_mapping` 里，而那个函数自 `9c598cf`（2026-09-21
   "板块→基金改 agent 闭环"）起在 `src/` 里**零调用方** —— 判据还直接 `object.__new__` 调这个
-  私有方法，于是绿灯替死代码作保；真正活着的建档点是 `SectorFundService.ensure_fund_info_exists`
-  （`config.py` 三处路由 + agent + `full_sync` 都调它），页面上填一个股票代码时
-  **档案先落库、身份门后判**。现在门在这唯一咽喉上：判"这码不是基金"就不建档案（`unknown` /
-  探针坏了照旧放行，失败开放），已过门的调用方显式传 `identity_checked=True`（只审计回写那一处），
-  探针排在 `db.rollback()` 之后 —— 不把生产事务压在网络上（`update_mapping` 早就这么做）。
+  私有方法，于是绿灯替死代码作保；页面上填一个股票代码时**档案先落库、身份门后判**。
+  门现在在 `SectorFundService.ensure_fund_info_exists`：判"这码不是基金"就不建档案（`unknown` /
+  探针坏了照旧放行，失败开放），已过门的调用方显式传 `identity_checked=True`（今天真值只有
+  审计回写那一处），探针排在 `db.rollback()` 之后 —— 不把生产事务压在网络上（`update_mapping` 早就这么做）。
+  **但它不是"所有 caller 的咽喉"，这句我上一版写过头了**（第 50 轮两席同条，实测复核过）：
+  `grep -rn "ensure_fund_info_exists" src/` 只命中 `config.py:1443/1701/1747` 三处路由；
+  而全仓能往 `fund_info` 写行的活路是 **9 处** —— agent 走 `sector_fund_agent.py:622` 自己
+  `db.add(FundInfo(...))`、`full_sync` 走 `fund_sync_manager.py:270/628`、另有
+  `fund_api.py:791`、`fund_service.py:460`、`data_portability_service.py:477`。
+  那几处各自有**另一把尺子**（agent 的 T2 `verify()` 判股票即拒、`full_sync` 只在基金域答得出时才建档），
+  今天没有证据显示它们在产生新垃圾档案 —— **但把别人的尺子算成这道门，下一轮就会漏**。
   `_save_fund_mapping` 连同它的三条用例已删（同 `PredictionService.verify()` 的先例）。
   **推论写给下一轮**：一条"从此有闸"的承诺，判据必须**从路由/服务层打进去**；
   直接调私有方法的用例只能证明"这函数会自检"，证明不了"有人走这条路"。
+
 - **下结论（写 `Prediction.is_correct`）在代码里只有一个入口**：
   `PredictionVerifyService.verify_prediction`。**措辞边界**（第 26 轮被抓到说过头）：
   `/api/config/import` 的**合并模式**仍能按整行列插 `is_correct`（`config.py` 里只有
