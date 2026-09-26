@@ -237,6 +237,38 @@ def get_post(post_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.patch("/{post_id}")
+def update_post(post_id: int, req: PostUpdate, db: Session = Depends(get_db)):
+    """改帖子的标题 / 正文 / 日期 / 来源链接（页面上「编辑 → 保存」打的就是这一条）。
+
+    这一条自 `2c227c9`（2026-07-26「清理 41 个未使用端点」）起就没有路由了，而前端
+    `web/post-manager.js` 一直在 `axios.patch('/api/posts/{id}')` ⇒ 老板点"保存"两个月来
+    收到的是 405，横幅只写着"保存失败"。同一次清理删掉的 `DELETE /api/bloggers/{id}`
+    第 50 轮已经查回（任务 #90），这一条是那一刀的另一半。
+    服务层 `PostService.update_post_fields` 与 `PostUpdate` 一直活着（带"有预测的帖子
+    只能改标题与链接"那道门），所以这里只补路由那一层，不在路由里重写规则。
+    """
+    values = req.model_dump(exclude_unset=True)
+    if not values:
+        return {"success": False, "message": "没有要改的字段"}
+    try:
+        post = PostService(db).update_post_fields(post_id, values)
+    except ValueError as exc:
+        # 这条拒绝走 200 + success:false：前端 `catch` 只能看到 "Request failed with
+        # status code 400"，那句"只能修改标题和来源链接"就丢了（第 32 轮那条推论：
+        # 200 + success:false 也算一次失败，但前提是原因到了屏幕上）。
+        return {"success": False, "message": str(exc)}
+    if post is None:
+        return {"success": False, "message": f"帖子 {post_id} 不存在"}
+    return {
+        "success": True,
+        "message": "已更新帖子：%s" % (post.title or post_id),
+        "data": {"id": post.id, "title": post.title, "source_url": post.source_url,
+                 "post_date": post.post_date.isoformat() if post.post_date else None,
+                 "analyzed": bool(post.analyzed)},
+    }
+
+
 @router.delete("/{post_id}")
 def delete_post(
     post_id: int,

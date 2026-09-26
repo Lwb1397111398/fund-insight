@@ -278,7 +278,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1126 passed / 16 skipped / 0 failed**（555.30 秒）。
+⚠ **上面这两个数是 `f693cd3` 那一刻的**：第 51 轮两份复评（A=55 / B=63）之后的返修又动了用例（新增 1 个文件 3 条），
+  最后一次改用例之后**还没**重跑两个口径 ⇒ 复跑前把这两个数当"过期"用（规矩：数字与用例改动必须在同一个提交里）。
+- `pytest tests/unit -q` → **1126 passed / 16 skipped / 0 failed**（555.30 秒，`f693cd3`）。
 - `pytest tests/ -q`（含 integration/services）→ **1135 passed / 16 skipped / 0 failed**（541.41 秒）。
   （上一基线 1123/1132 → 本批 **1126/1135：+3 条**，全在 `test_fund_info_archive_gate.py`（4 → 7）：一条"夹具自己必须真的拒悬空写"的控制断言（上一批的 `create_engine('sqlite:///:memory:')` 默认不开外键 ⇒ "档案被拒建、映射行却改到那个码上"这个形状在绿灯里过；镜像开 FK 会 `IntegrityError`，生产 `pg_constraint` 查该表外键 **0 行**于是静默留脏，两个库各坏一种）、一条"拒改必须一个字都不动旧标的"、一条"同一次保存身份门只被问一次"（数的是桩收到的代码列表，不是"有调用"）。另有一条改契约不增条数：`test_sector_mapping_api.py` 里"指控 ⇒ 行保留标不可服务"改成"指控且无档案 ⇒ 整行不建 + 理由回给调用方"，并补一句为什么第 7 轮那半在这里做不到。净值那两档的变异 2 处新增、3 处原有锚点跟着改形状（`python scripts/mutation_proof_frontend.py --list` 看末行，别抄这里），本轮复跑 `nav_staleness` / `stale_coverage` / `median_date` / `majority_staleness` 四组共 5 处全 RED、CONTROL 全绿。）
   （上一批：上一基线 1106/1115 → 那批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。

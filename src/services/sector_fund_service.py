@@ -444,6 +444,13 @@ class SectorFundService:
             ).first()
             if not mapping:
                 return None
+            if fund_code is not None and not fund_code.strip():
+                # 空串以前算"改标的"：探针查不到东西（= 没意见）、`ensure_fund_info_exists`
+                # 对空码直接 return False，于是映射被写成 `fund_code=''` ⇒ 生产（实测没有那条
+                # 外键）当场多一行"板块没有标的"、回执还是 success:true「已更新映射」，
+                # 镜像则回一句 FOREIGN KEY 原文（第 51 轮 A-3）。空标的不是"改"，是用法错。
+                logger.info('[板块映射] 拒改 %s：新的标的代码是空的', mapping.sector_name)
+                return None
 
             # 体检结论的输入是 (代码, 名字, 板块)：换代码**或**换名字都让旧结论失效，
             # 退回"从未体检"（NULL 仍可服务），等下一轮体检重新证。

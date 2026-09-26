@@ -1701,7 +1701,7 @@
                         <button class="action-btn small" @click="loadSectorMappings(null)" :style="{ background: mappingFilter === null ? '#1890ff' : '#f5f5f5', color: mappingFilter === null ? '#fff' : '#666' }">全部</button>
                         <button class="action-btn small" @click="loadSectorMappings(false)" :style="{ background: mappingFilter === false ? '#faad14' : '#f5f5f5', color: mappingFilter === false ? '#fff' : '#666' }">待审查</button>
                         <button class="action-btn small" @click="loadSectorMappings(true)" :style="{ background: mappingFilter === true ? '#52c41a' : '#f5f5f5', color: mappingFilter === true ? '#fff' : '#666' }">已审查</button>
-                        <button v-if="sectorMappings.unreviewed_count > 0" class="action-btn small" @click="batchReviewAll" style="background: #52c41a; color: #fff;">全部标记已审查</button>
+                        <button v-if="!viewErrors.mappings && sectorMappings.unreviewed_count > 0" class="action-btn small" @click="batchReviewAll" style="background: #52c41a; color: #fff;">全部标记已审查</button>
                         <button class="action-btn small" @click="aiBatchMatch('pending')" :disabled="aiBatch.running" style="background: #13c2c2; color: #fff;">{{ aiBatch.running ? 'AI 匹配中 ' + aiBatch.done + '/' + aiBatch.total : 'AI 匹配待审查' }}</button>
                         <button class="action-btn small" @click="aiBatchMatch('gap')" :disabled="aiBatch.running" style="background: #08979c; color: #fff;">AI 补齐缺失板块</button>
                         <button class="action-btn small" @click="verifyAllFunds" :disabled="verifyAllVerifying" style="background: #722ed1; color: #fff;">{{ verifyAllVerifying ? '验证中…' : '验证全部抓取' }}</button>

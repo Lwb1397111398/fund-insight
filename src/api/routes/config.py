@@ -1395,8 +1395,12 @@ def _audit_apply_row(db: Session, service, row, sector: str, values: dict) -> Op
         # 库里本来就没名字：先补名字再谈回写，否则这行同样永远过不了体检。
         return 'row_has_no_fund_name'
     # 探测是网络活：一次一码，行数由脚本的 --limit 控制；只在真要写时打
+    # 探针的存名要回落到库里的现值：「没给这一列就不动现值」是本函数的既有契约，而
+    # 存名为空时 `arbitrate_mapping` 连问都不问就答"没意见"⇒ 载荷少给一列就把身份门整块
+    # 关掉（第 51 轮 A-2：股票代码于是能铸出一条无名 `fund_info` 档案，正是 S6 在清的形状）。
+    probe_name = values.get('fund_name') or (row.fund_name if row else None)
     accusation, _identity = _manual_identity_verdict(
-        values.get('fund_code'), values.get('fund_name'), sector)
+        values.get('fund_code'), probe_name, sector)
     if accusation:
         return 'identity_unproven:%s' % accusation[:120]
     if row is None:
@@ -1680,6 +1684,12 @@ def _mapping_review_tail(result: dict) -> str:
     return '已看过；老板署名与体检免疫需要点"审查"并明确确认'
 
 
+_MAPPING_SAVE_REFUSAL = (
+    "保存被拒：这一行没过身份体检门。常见原因是想换成的代码在基金域查无此码"
+    "（多半是股票）⇒ 既不会建基金档案，也不会把这行改到它上面；另一种是该行标的"
+    "已被判不可服务，不能只改名字就回到已审查。")
+
+
 @router.put("/sector-mappings/{mapping_id}")
 def update_sector_mapping(mapping_id: int, update: MappingUpdate,
                           owner_confirm: bool = False,
@@ -1711,9 +1721,7 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate,
             # 走到这里只剩一种可能：门禁拒了（`映射不存在` 在上面已经单独回过）。
             # 以前这句话把两件事混成一句"映射不存在，或……"，老板照着前半句去找行、找不到。
             return {"success": False,
-                    "message": "保存被拒：这一行没过身份体检门。常见原因是想换成的代码在基金域"
-                               "查无此码（多半是股票）⇒ 既没建基金档案，也不会把这行改到它上面；"
-                               "另一种是该行标的已被判不可服务，不能只改名字就回到已审查。"}
+                    "message": _MAPPING_SAVE_REFUSAL}
 
         # 级联清理冲突
         if result.get('sector_name') and result.get('fund_code'):
@@ -1771,8 +1779,7 @@ def create_sector_mapping(mapping: MappingCreate, owner_confirm: bool = False,
                 # 门禁拒绝不能报成"更新成功"（前端会显示"已更新映射"）
                 return {
                     "success": False,
-                    "message": "更新被拒绝：该行身份体检不通过（股票名/同码别的基金）。"
-                               "请改基金代码，或先重新验证抓取。",
+                    "message": _MAPPING_SAVE_REFUSAL,
                     "data": None
                 }
             if result.get('sector_name') and result.get('fund_code'):
@@ -1848,6 +1855,11 @@ def create_sector_mapping(mapping: MappingCreate, owner_confirm: bool = False,
             reviewed=True,
             verify_message=None,
             is_fetchable=None,
+            # 第 51 轮 B-13：这一支以前把 `owner_confirm` 丢了 —— 方向是保守的（不会白送
+            # 免疫），但对"老板已明确确认"这个输入是静默 no-op。与 `update_mapping` 同口径：
+            # 署名与锁定一起给，没确认就只是"看过"。
+            reviewed_by='owner' if owner_confirm else 'manual',
+            owner_locked=bool(owner_confirm),
         )
         db.add(new_mapping)
         db.commit()
