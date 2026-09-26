@@ -443,16 +443,20 @@ def test_one_fresh_fund_must_not_speak_for_the_whole_book(env):
     assert rep['nav_used_funds'] == len(codes), rep
     assert rep['nav_used_stale_funds'] == len(codes) - 1, \
         '停更只数必须逐只数出来（引用面过半旧了 ⇒ 页面要说）'
-    assert rep['nav_stale'] is True, '引用面过半停更时合成判据必须翻，否则三席点名的那句谎还在'
+    assert rep['nav_used_stale_majority'] is True, \
+        '引用面过半停更时这一档必须翻（第 50 轮 A-MINOR-1：上一版把它折进没人读的 `nav_stale`）'
+    assert rep['nav_used_as_of'] == date(2020, 12, 8).isoformat(), \
+        '中位日期必须报出来：只有停更只数，老板还是不知道这批数旧到什么程度'
     notice = nav_freshness_notice(rep)
     assert notice and str(len(codes) - 1) in notice and '早于' in notice, notice
+    assert '中位停在 2020-12-08' in notice and '过半标的停更' in notice, notice
 
     db.execute(delete(FundHistory))
     for c in codes:
         db.add(FundHistory(fund_code=c, nav_date=today - timedelta(days=1), nav=1.0))
     db.commit()
     fresh = nav_freshness(db, today)
-    assert fresh['nav_used_stale_funds'] == 0 and fresh['nav_stale'] is False, fresh
+    assert fresh['nav_used_stale_funds'] == 0 and fresh['nav_used_stale_majority'] is False, fresh
     assert nav_freshness_notice(fresh) is None, '引用面都新还喊 ⇒ 这句话会变成噪音'
 
 
@@ -465,16 +469,31 @@ def test_the_daily_log_says_the_same_thing_the_page_does():
     from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_freshness_notice
 
     assert nav_freshness_notice({'nav_as_of': '2026-09-25', 'nav_lag_days': 1,
-                                 'nav_future_rows': 0, 'nav_stale': False}) is None
+                                 'nav_future_rows': 0, 'nav_used_stale_funds': 0}) is None
     stale = nav_freshness_notice({'nav_as_of': '2026-09-13', 'nav_lag_days': 13,
-                                  'nav_future_rows': 0, 'nav_stale': True})
+                                  'nav_future_rows': 0, 'nav_used_stale_funds': 0})
     assert '落后 13 天' in stale and str(NAV_LAG_WARN_DAYS) in stale, stale
     future = nav_freshness_notice({'nav_as_of': '2026-09-25', 'nav_lag_days': 1,
-                                   'nav_future_rows': 4, 'nav_stale': False})
+                                   'nav_future_rows': 4, 'nav_used_stale_funds': 0})
     assert '4 行' in future and 'drop_future_nav_rows' in future, future
     empty = nav_freshness_notice({'nav_as_of': None, 'nav_lag_days': None,
-                                  'nav_future_rows': 0, 'nav_stale': False})
+                                  'nav_future_rows': 0, 'nav_used_stale_funds': 0})
     assert empty and '没有' in empty, '净值一行都没有时必须说话，不许静默'
+    # 引用面那一档的强弱来自后端那颗布尔（这里不自己比大小），两档都要说话：
+    # 只数不给中位日期＝老板不知道旧到什么程度；把"未过半"喊成"整座库都旧了"＝噪音。
+    some = nav_freshness_notice({'nav_as_of': '2026-09-25', 'nav_lag_days': 1,
+                                 'nav_future_rows': 0, 'nav_used_funds': 195,
+                                 'nav_used_stale_funds': 40, 'nav_used_stale_before': '2026-09-22',
+                                 'nav_used_as_of': '2026-09-24',
+                                 'nav_used_stale_majority': False})
+    assert '40 只' in some and '中位停在 2026-09-24' in some and '未过半' in some, some
+    most = nav_freshness_notice({'nav_as_of': '2026-09-25', 'nav_lag_days': 1,
+                                 'nav_future_rows': 0, 'nav_used_funds': 195,
+                                 'nav_used_stale_funds': 120, 'nav_used_stale_before': '2026-09-22',
+                                 'nav_used_as_of': '2026-09-10',
+                                 'nav_used_stale_majority': True})
+    assert '中位停在 2026-09-10' in most and '过半标的停更' in most, most
+    assert '未过半' not in most, most
 
 
 def _notice_is_spoken(script, helper):

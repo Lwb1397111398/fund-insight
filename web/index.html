@@ -2475,8 +2475,14 @@ const fetchWeChatBatch = async () => {
                     // 页面与每日跑批必须对同一件事说一样的话。
                     if (r.nav_lag_stale) text += '，已落后 ' + r.nav_lag_days + ' 天 ⇒ 上面的准确率是按这批旧净值算的';
                     else if (r.nav_used_stale_funds > 0) text += '（全表最晚的一行是新的，别被它骗）';
-                    if (r.nav_used_stale_funds > 0) text += '；活预测引用的 ' + r.nav_used_funds + ' 只里有 '
-                        + r.nav_used_stale_funds + ' 只最后一笔早于 ' + r.nav_used_stale_before + ' ⇒ 这批结论没有新输入';
+                    if (r.nav_used_stale_funds > 0) {
+                        text += '；活预测引用的 ' + r.nav_used_funds + ' 只里有 '
+                            + r.nav_used_stale_funds + ' 只最后一笔早于 ' + r.nav_used_stale_before;
+                        // 只数不给日期＝老板还是不知道旧到什么程度；强弱那一档也由后端给布尔
+                        text += '，引用面中位停在 ' + (r.nav_used_as_of || '未记录');
+                        text += r.nav_used_stale_majority ? ' ⇒ 过半标的停更，整座库都旧了，去基金页点一次更新'
+                            : ' ⇒ 未过半，但这一批标的的结论没有新输入';
+                    }
                     if (r.nav_future_rows > 0) text += '；另有 ' + r.nav_future_rows + ' 行净值日期晚于今天，未计入截止日';
                     return text;
                 };

@@ -216,11 +216,17 @@ def nav_freshness(db, today=None) -> Dict:
     第 49 轮三席共同点到、这一版补上的第四件事：**只报全表最晚那一行会说反话**。
     生产实测（2026-09-26 只读）：195 只有净值的基金里只有 **1 只**落在 09-25 —— 就是那只
     会预签发净值的货币基金 `000725 大成添利宝货币B`，而 40 只停在 09-19 之前（最旧 2018-01-26）。
-    所以"落后 1 天、不告警"这句话是**一只基金替 194 只代言**。现在加两列按覆盖面判：
-    `nav_used_funds`（**活预测真正引用到**、且有净值行的代码数）与 `nav_used_stale_funds`
-    （其中最后一笔早于 `today - NAV_LAG_WARN_DAYS` 的只数），外加 `nav_used_as_of`
-    ＝这批代码"最后一笔"的**中位日期**。`nav_stale` 从此判"全表截止日落后 **或** 引用的标的里
-    有停更的"，阈值仍然只有 `NAV_LAG_WARN_DAYS` 一处。
+    所以"落后 1 天、不告警"这句话是**一只基金替 194 只代言**。现在加三列按覆盖面判：
+    `nav_used_funds`（**活预测真正引用到**、且有净值行的代码数）、`nav_used_stale_funds`
+    （其中最后一笔早于 `today - NAV_LAG_WARN_DAYS` 的只数）与 `nav_used_as_of`
+    ＝这批代码"最后一笔"的**中位日期**。阈值仍然只有 `NAV_LAG_WARN_DAYS` 一处。
+
+    **第 50 轮 A-MINOR-1 改的是这一族最容易长出来的东西：没人读的合成判据。** 上一版这里
+    把两件事折成一个 `nav_stale = 全表旧 or 中位旧`，而页面/日志各读自己那半 ⇒ 那个布尔
+    零消费者，"过半"这一档等于白算。现在两轴各自给布尔、每一颗都有人读：
+    `nav_lag_stale`（全表截止日旧不旧）与 `nav_used_stale_majority`（引用面中位旧不旧），
+    中位日期本身也一起回给页面与日志 —— 不合并，因为"其中一面旧"这一句话既没说清哪一面、
+    也没说清有多旧，而页面上那句话的读者要的正是要不要重跑基金更新。
     """
     from sqlalchemy import func
 
@@ -252,15 +258,15 @@ def nav_freshness(db, today=None) -> Dict:
     return {
         'nav_as_of': cutoff.isoformat() if cutoff else None,
         'nav_lag_days': lag,
-        # `nav_lag_stale` ＝"全表截止日自己就旧了"；`nav_stale` ＝"要么它旧了、要么引用面过半停更"。
-        # 页面不许自己比大小（第 48 轮立的规矩），所以两件事都由这里给布尔。
+        # 两轴各一颗布尔，各自有人读（页面读 `nav_lag_stale`、引用面那句的强弱读
+        # `nav_used_stale_majority`）；不合并成一颗"总开关"——第 50 轮 A-MINOR-1 的账。
         'nav_lag_stale': lag_stale,
         'nav_future_rows': int(future or 0),
         'nav_used_funds': len(lasts),
         'nav_used_stale_funds': stale_n,
         'nav_used_stale_before': before.isoformat(),
         'nav_used_as_of': median.isoformat() if median else None,
-        'nav_stale': bool(lag_stale or used_stale),
+        'nav_used_stale_majority': used_stale,
     }
 
 
@@ -278,9 +284,16 @@ def nav_freshness_notice(fresh: Dict):
                      % (fresh['nav_as_of'], fresh['nav_lag_days'], NAV_LAG_WARN_DAYS))
     stale_n = int(fresh.get('nav_used_stale_funds') or 0)
     if stale_n:
-        parts.append('活预测引用的 %d 只标的里有 %d 只最后一笔早于 %s ⇒ 这批结论没有新输入'
-                     % (int(fresh.get('nav_used_funds') or 0), stale_n,
-                        fresh.get('nav_used_stale_before') or fresh['nav_as_of']))
+        # 强弱两档由后端那颗布尔决定（阈值只有一个出处、这里不自己比大小），
+        # 这句话只负责把它翻成人话，并把"中位停在哪一天"一起报出来 ——
+        # 只数停更只数不给日期，老板还是不知道这批数旧到什么程度。
+        clause = ('活预测引用的 %d 只标的里有 %d 只最后一笔早于 %s，引用面中位停在 %s'
+                  % (int(fresh.get('nav_used_funds') or 0), stale_n,
+                     fresh.get('nav_used_stale_before') or fresh['nav_as_of'],
+                     fresh.get('nav_used_as_of') or '未记录'))
+        parts.append(clause + (' ⇒ 过半标的停更：整座库的净值都旧了，得跑一次基金更新'
+                               if fresh.get('nav_used_stale_majority')
+                               else ' ⇒ 未过半，但这一批标的的结论没有新输入'))
     if fresh.get('nav_future_rows'):
         parts.append('另有 %d 行净值日期晚于今天（未计入截止日），要清用 scripts/drop_future_nav_rows.py'
                      % fresh['nav_future_rows'])

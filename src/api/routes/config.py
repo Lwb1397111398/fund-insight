@@ -1690,15 +1690,15 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate,
     try:
         service = get_sector_fund_service(db)
 
-        # 外键保障：改绑到新基金代码时，若该代码不在 fund_info 先补最小档案
-        # （先确认映射存在，避免为不存在的映射创建孤儿基金档案）
+        # 先确认映射存在，避免为不存在的映射创建孤儿基金档案。
+        # 补档案这一步**不再在这里做**：`update_mapping` 自己会在身份证明之后补
+        # （带 `identity_checked=True`），路由在这里先调一次等于同一次保存打两圈外网。
         if update.fund_code:
             exists = db.query(SectorFundMapping.id).filter(
                 SectorFundMapping.id == mapping_id
             ).first()
             if not exists:
                 return {"success": False, "message": "映射不存在"}
-            service.ensure_fund_info_exists(update.fund_code, update.fund_name)
 
         result = service.update_mapping(
             mapping_id=mapping_id,
@@ -1708,8 +1708,12 @@ def update_sector_mapping(mapping_id: int, update: MappingUpdate,
         )
 
         if not result:
+            # 走到这里只剩一种可能：门禁拒了（`映射不存在` 在上面已经单独回过）。
+            # 以前这句话把两件事混成一句"映射不存在，或……"，老板照着前半句去找行、找不到。
             return {"success": False,
-                    "message": "映射不存在，或身份体检不通过（不可服务的行不能只改名字就回到已审查）"}
+                    "message": "保存被拒：这一行没过身份体检门。常见原因是想换成的代码在基金域"
+                               "查无此码（多半是股票）⇒ 既没建基金档案，也不会把这行改到它上面；"
+                               "另一种是该行标的已被判不可服务，不能只改名字就回到已审查。"}
 
         # 级联清理冲突
         if result.get('sector_name') and result.get('fund_code'):
@@ -1741,10 +1745,11 @@ def create_sector_mapping(mapping: MappingCreate, owner_confirm: bool = False,
     from src.services.sector_fund_service import get_sector_fund_service
 
     try:
+        # 补档案不在这里做（以前在这里）：走 `update_mapping` 那一支时它自己会在
+        # 身份证明之后补，路由先补一次＝同一次保存打两圈外网；走新建那一支时
+        # **必须先过身份门再补**，否则判"不是基金"的代码已经落进 `fund_info` 了
+        # （第 49 轮 A-1 / B-4 那批垃圾档案的成因）。
         service = get_sector_fund_service(db)
-
-        # 外键保障：基金代码不在 fund_info 时先补最小档案，避免 FK 报错
-        service.ensure_fund_info_exists(mapping.fund_code, mapping.fund_name, mapping.sector_name)
 
         # 检查是否已存在同板块的 DB 映射
         # active 优先：同板块可能残留被级联清理置为 inactive 的历史行，
@@ -1819,13 +1824,30 @@ def create_sector_mapping(mapping: MappingCreate, owner_confirm: bool = False,
             mapping.fund_name = official
         accusation, _identity = _manual_identity_verdict(
             mapping.fund_code, mapping.fund_name, mapping.sector_name)
+        if accusation:
+            # 新建这一支没有"旧标的"可留：判"不是基金"就整行不建。以前按第 7 轮的契约
+            # 建一行"未审查 + 不可服务"的映射留着，可它的 `fund_code` 在 `fund_info` 里
+            # 没有行（档案刚被同一道门拒建）⇒ 镜像上外键直接拒（回给老板的是一句
+            # `IntegrityError` 原文），而生产**没有那条外键**、于是静默攒下一行指向
+            # 查无此码的映射。两头都不是第 7 轮那句话的意思，所以当场拒、理由回给用户。
+            return {
+                "success": False,
+                "message": "拒建映射：%s → %s（%s）：%s" % (
+                    mapping.sector_name, mapping.fund_code, mapping.fund_name or '未填名',
+                    accusation),
+                "data": None
+            }
+        # 门过了才补档案，并复用刚这一次判定（`identity_checked=True`）：
+        # `sector_fund_mapping.fund_code` 有外键，没有档案的行在镜像上根本进不去。
+        service.ensure_fund_info_exists(mapping.fund_code, mapping.fund_name,
+                                        mapping.sector_name, identity_checked=True)
         new_mapping = SectorFundMapping(
             sector_name=mapping.sector_name,
             fund_code=mapping.fund_code,
             fund_name=mapping.fund_name or '',
-            reviewed=not accusation,
-            verify_message=accusation or None,
-            is_fetchable=False if accusation else None,
+            reviewed=True,
+            verify_message=None,
+            is_fetchable=None,
         )
         db.add(new_mapping)
         db.commit()

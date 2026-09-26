@@ -60,9 +60,19 @@ def _fake_arbitrate(monkeypatch, verdict, official=None, reason='桩', raises=Fa
 @pytest.mark.parametrize('verdict', ['not_a_fund', 'code_is_other_fund',
                                      'wrong_code', 'not_fetchable'])
 def test_stock_like_code_is_not_allowed_to_become_immune(test_db, monkeypatch, verdict):
-    """四类"查到了且不对"的结论：不置审查、不锁老板，并当场写成不可服务。"""
+    """四类"查到了且不对"的结论：不置审查、不锁老板，并当场写成不可服务。
+
+    **这一支只覆盖"那个代码在 `fund_info` 里已经有档案"的情形**（第 50 轮自查出的那条分叉）：
+    `sector_fund_mapping.fund_code` 有外键指向 `fund_info`，档案被身份门拒建时代码**不能**落库
+    ⇒ 那种形状是"整笔拒改"，判据在 `test_fund_info_archive_gate.py`（那边的夹具自己开了
+    `PRAGMA foreign_keys`，本文件的 `test_db` 没开 —— 正因为没开，上一批"悬空写"才能在这里全绿）。
+    这里先造一只**已经存在的垃圾档案**（真基金码挂着股票名那一批的形状），考察的是
+    "指控落库时这一行必须被降级、不许带免疫、读路径必须查不到它"。
+    """
     _fake_arbitrate(monkeypatch, verdict, official='大成添利宝货币B')
     row = _mapping(test_db, 'T-手改股票', '000725', '京东方Ａ')
+    test_db.add(FundInfo(fund_code='600519', fund_name='贵州茅台'))
+    test_db.commit()
     service = SectorFundService(test_db)
     result = service.update_mapping(row.id, fund_code='600519', fund_name='贵州茅台')
 

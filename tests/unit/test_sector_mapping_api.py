@@ -554,8 +554,14 @@ def test_a_code_the_fund_domain_does_not_know_cannot_be_created(tmp_path, monkey
 
 
 def test_created_row_takes_no_immunity_when_the_probe_accuses(tmp_path, monkeypatch):
-    """补到了名字但身份体检指控（股票名挂在基金码上）⇒ 落库必须是**未审查 + 不可服务 + 有理由**。"""
-    from src.models.database import SectorFundMapping
+    """补到了名字但身份体检指控（股票名挂在基金码上）⇒ **整行不建**，理由回给调用方。
+
+    第 7 轮的旧契约是"落库但未审查 + 不可服务"，第 50 量出它做不到：档案被同一道门拒建，
+    那一行的 `fund_code` 就是悬空引用 —— 镜像上 FK 直接拒（老板看到的是一句
+    `IntegrityError` 原文），生产（实测没有这条 FK）静默留下一行指向查无此码的映射。
+    "不建"同时满足这一条原本要钉的两件事：没有免疫可白送，也没有脏行可留。
+    """
+    from src.models.database import FundInfo, SectorFundMapping
     sf = _database(tmp_path)
 
     import importlib
@@ -566,18 +572,18 @@ def test_created_row_takes_no_immunity_when_the_probe_accuses(tmp_path, monkeypa
                         lambda code, name, sector='': ('名字对不上：600519 在基金域不是这只', None))
     app, client = _client(monkeypatch, sf)
     body = _post_create(client, {"sector_name": "测试白酒创建", "fund_code": "600519"}).json()
-    assert body.get("success") is True, body
+    assert body.get("success") is False, \
+        '被身份指控的股票码还是建出了映射（这一族的原罪）：%s' % body
+    assert '名字对不上' in (body.get('message') or ''), \
+        '拒建必须把理由回给老板，而不是吞掉输入：%s' % body
     db = sf()
     try:
-        row = db.query(SectorFundMapping).filter_by(sector_name='测试白酒创建').one()
-        got = (row.reviewed, row.is_fetchable, row.verify_message,
-               getattr(row, 'owner_locked', None), getattr(row, 'reviewed_by', None))
+        assert db.query(SectorFundMapping).filter_by(
+            sector_name='测试白酒创建').count() == 0, '回了 success:false，行还是落库了'
+        assert db.query(FundInfo).filter_by(fund_code='600519').count() == 0, \
+            '映射没建却先补了基金档案 ⇒ 垃圾码又回来了'
     finally:
         db.close()
-    assert got[0] is False, '被指控的行拿到 reviewed=True：%s' % (got,)
-    assert got[1] is False, '被指控的行仍被当成可服务：%s' % (got,)
-    assert got[2] and '名字对不上' in got[2], '理由没落库：%s' % (got,)
-    assert not got[3] and got[4] != 'owner', '创建路径白送了老板免疫（#20 那条唯一入口）：%s' % (got,)
 
 
 def test_a_clean_probe_creation_still_does_not_grant_owner_immunity(tmp_path, monkeypatch):

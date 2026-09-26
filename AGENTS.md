@@ -273,12 +273,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 16:53（北京），**第 50 轮返修四批（`39a9abe` / `1d729d4` / `b2d1ba1` / `7c142fe`：删除博主的路由、净值新鲜度按引用面、建档身份门搬到咽喉、依赖面从元数据现推，加上一处我自己造出来的崩溃与三处写过头的文档）**之后，
+最近一次核对（2026-09-26 17:5x（北京），**第 50 轮 A 席两条 MINOR 收尾 + 一条我自己量出来的 MAJOR**（身份门拒建档案之后映射行悬空：镜像撞外键、生产根本没这条外键于是静默留脏 ⇒ 整笔拒改；补档案挪到身份门之后 ⇒ 一次保存只探一次；`nav_stale` 那颗没人读的合成布尔撤掉、换成两轴各一颗布尔 + 引用面中位日期进页面/日志/体检命令）之后，
+最后一次核对（上一批：2026-09-26 16:53（北京），**第 50 轮返修四批（`39a9abe` / `1d729d4` / `b2d1ba1` / `7c142fe`：删除博主的路由、净值新鲜度按引用面、建档身份门搬到咽喉、依赖面从元数据现推，加上一处我自己造出来的崩溃与三处写过头的文档）**之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1123 passed / 16 skipped / 0 failed**（662.87 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1132 passed / 16 skipped / 0 failed**（639.97 秒）。
+- `pytest tests/unit -q` → **1126 passed / 16 skipped / 0 failed**（555.30 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1135 passed / 16 skipped / 0 failed**（541.41 秒）。
+  （上一基线 1123/1132 → 本批 **1126/1135：+3 条**，全在 `test_fund_info_archive_gate.py`（4 → 7）：一条"夹具自己必须真的拒悬空写"的控制断言（上一批的 `create_engine('sqlite:///:memory:')` 默认不开外键 ⇒ "档案被拒建、映射行却改到那个码上"这个形状在绿灯里过；镜像开 FK 会 `IntegrityError`，生产 `pg_constraint` 查该表外键 **0 行**于是静默留脏，两个库各坏一种）、一条"拒改必须一个字都不动旧标的"、一条"同一次保存身份门只被问一次"（数的是桩收到的代码列表，不是"有调用"）。另有一条改契约不增条数：`test_sector_mapping_api.py` 里"指控 ⇒ 行保留标不可服务"改成"指控且无档案 ⇒ 整行不建 + 理由回给调用方"，并补一句为什么第 7 轮那半在这里做不到。净值那两档的变异 2 处新增、3 处原有锚点跟着改形状（`python scripts/mutation_proof_frontend.py --list` 看末行，别抄这里），本轮复跑 `nav_staleness` / `stale_coverage` / `median_date` / `majority_staleness` 四组共 5 处全 RED、CONTROL 全绿。）
+  （上一批：上一基线 1106/1115 → 那批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。
   （上一基线 1106/1115 → 本批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。
   分布是 `git diff --name-only 9c143fa..HEAD -- tests/` 逐个文件数 `^def test_` 前后相减量出来的（复核就这一条命令）：
   `test_fund_info_archive_gate.py` **新建 +4**（建档身份门从路由/服务层打进去：股票码拒建档、真基金照建、
@@ -301,7 +304,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   必须对上 `app.routes` 注册的那 94 条路由 —— 不抄第二份路由清单；两条控制断言 + 归一化自己的账，
   边界：只判路径不判方法）；
   ③ `test_stats_evidence_report.py` +5 / `test_frontend_cold_start.py` +1（净值新鲜度
-  `nav_as_of`/`nav_lag_days`/`nav_future_rows`/`nav_stale` 要钉住的四点：截止日不许被预签发的未来行顶上去、
+  `nav_as_of`/`nav_lag_days`/`nav_future_rows`/`nav_used_stale_majority` 要钉住的四点：截止日不许被预签发的未来行顶上去、
   落后天数按北京 `as_of` 现算、阈值只在 `NAV_LAG_WARN_DAYS` 一处（页面不许自己比大小）、
   每日跑批日志与页面说同一句话，判据在 node 里跑 `navFreshNote` 真源码，配 **4 处变异全 RED**）；
   ④ `test_purge_junk_funds.py` +3（`--drop-dead-predictions` 的动作/备份/还原与"带结论不许删"，

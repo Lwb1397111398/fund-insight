@@ -439,8 +439,17 @@ MUTATIONS = [
      "else if (false) text += '（全表最晚的一行是新的，别被它骗）'", False),
     ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
      'stale_coverage_count_goes_silent', HTML,
-     "if (r.nav_used_stale_funds > 0) text += '；活预测引用的 '",
-     "if (false) text += '；活预测引用的 '", False),
+     "if (r.nav_used_stale_funds > 0) {",
+     "if (false) {", False),
+    # 第 50 轮 A-MINOR-1 新接的两根线也要有会红的判据：中位日期与"过没过半"那一档。
+    ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
+     'median_date_buys_itself_the_wrong_ruler', HTML,
+     "'，引用面中位停在 ' + (r.nav_used_as_of || '未记录');",
+     "'，引用面中位停在 ' + r.nav_used_stale_before;", False),
+    ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
+     'majority_staleness_never_escalates', HTML,
+     "r.nav_used_stale_majority ? ' ⇒ 过半标的停更",
+     "false ? ' ⇒ 过半标的停更", False),
 ]
 
 

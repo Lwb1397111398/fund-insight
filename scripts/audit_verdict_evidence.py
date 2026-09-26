@@ -157,10 +157,13 @@ def main():
 
         if rep['nav_as_of']:
             print('[净值新鲜度] 最后一笔净值 %s（落后 %s 天，阈值 %d 天）；'
-                  '活预测引用面 %d 只标的里 %d 只最后一笔早于 %s；库里另有 %d 行净值日期晚于今天'
+                  '活预测引用面 %d 只标的里 %d 只最后一笔早于 %s（中位停在 %s，%s）；'
+                  '库里另有 %d 行净值日期晚于今天'
                   % (rep['nav_as_of'], rep['nav_lag_days'], NAV_LAG_WARN_DAYS,
                      rep['nav_used_funds'], rep['nav_used_stale_funds'],
-                     rep['nav_used_stale_before'], rep['nav_future_rows']))
+                     rep['nav_used_stale_before'], rep['nav_used_as_of'] or '未记录',
+                     '过半停更' if rep['nav_used_stale_majority'] else '未过半',
+                     rep['nav_future_rows']))
         else:
             print('[净值新鲜度] 库里一行净值都没有 ⇒ 截止日无从谈起，先跑基金更新')
         _notice = nav_freshness_notice(rep)

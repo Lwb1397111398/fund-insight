@@ -1719,6 +1719,8 @@ def test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran():
     ② 旧写法里 `pick(null)` 那一档**从页面上走不到**（两个调用点都在
     `v-if="evidenceReport"` 那一支里），第 34 轮的规矩是"不可达的防御分支不许算一种结局"
     ⇒ 撤掉它，换成真正可达的"对端是旧构建、响应里根本没有这个键"（A-8）。
+    第 50 轮 A-MINOR-1 再补两样：引用面的**中位日期**（只报只数不知道旧到什么程度）与
+    `nav_used_stale_majority` 那档强弱（"未过半"不许喊成"整座库都旧了"，反之也不许吞）。
     """
     if not NODE:
         pytest.skip('本机没有 node')
@@ -1727,25 +1729,41 @@ const pick = (report) => { evidenceReport.value = report; return navFreshNote();
 const cases = {
   noNavAtAll: pick({nav_as_of: null, nav_lag_days: null, nav_lag_stale: false,
                     nav_future_rows: 0, nav_used_funds: 0, nav_used_stale_funds: 0,
-                    nav_used_stale_before: '2026-09-22', nav_stale: false}),
+                    nav_used_stale_before: '2026-09-22', nav_used_as_of: null,
+                    nav_used_stale_majority: false}),
   oldBuild: pick({judged: 1191}),
   fresh: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_lag_stale: false,
                nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 0,
-               nav_used_stale_before: '2026-09-22', nav_stale: false}),
+               nav_used_stale_before: '2026-09-22', nav_used_as_of: '2026-09-25',
+               nav_used_stale_majority: false}),
   stale: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_lag_stale: true,
                nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 40,
-               nav_used_stale_before: '2026-09-09', nav_stale: true}),
+               nav_used_stale_before: '2026-09-09', nav_used_as_of: '2026-08-30',
+               nav_used_stale_majority: true}),
   futureOnly: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_lag_stale: true,
                     nav_future_rows: 4, nav_used_funds: 195, nav_used_stale_funds: 40,
-                    nav_used_stale_before: '2026-09-09', nav_stale: true}),
+                    nav_used_stale_before: '2026-09-09', nav_used_as_of: '2026-08-30',
+                    nav_used_stale_majority: true}),
   // 阈值只有一个出处（后端 NAV_LAG_WARN_DAYS）：页面必须照 `nav_lag_stale` 说，不自己比大小。
   serverSaysFresh: pick({nav_as_of: '2026-09-23', nav_lag_days: 3, nav_lag_stale: false,
                          nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 0,
-                         nav_used_stale_before: '2026-09-19', nav_stale: false}),
+                         nav_used_stale_before: '2026-09-19', nav_used_as_of: '2026-09-23',
+                         nav_used_stale_majority: false}),
   // 第 49 轮三席同条：全表最晚那一行是新的一天，但引用面有停更的 —— 只数必须说出来。
   oneFundSpeaksForAll: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_lag_stale: false,
                              nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 40,
-                             nav_used_stale_before: '2026-09-22', nav_stale: false}),
+                             nav_used_stale_before: '2026-09-22', nav_used_as_of: '2026-09-24',
+                             nav_used_stale_majority: false}),
+  // 同一根轴的另一档：过半停更 ⇒ 这句话要升级，而"截至 09-25"那行还是事实（不许改口说落后）。
+  majorityStale: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_lag_stale: false,
+                       nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 120,
+                       nav_used_stale_before: '2026-09-22', nav_used_as_of: '2026-09-10',
+                       nav_used_stale_majority: true}),
+  // 后端没给中位日期（引用面一只基金都没查到）⇒ 不许渲染成 undefined。
+  noMedian: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_lag_stale: false,
+                  nav_future_rows: 0, nav_used_funds: 195, nav_used_stale_funds: 12,
+                  nav_used_stale_before: '2026-09-22', nav_used_as_of: null,
+                  nav_used_stale_majority: false}),
 };
 console.log(JSON.stringify(cases));
 """, [_decl(_html(), 'navFreshNote = () =>')])
@@ -1762,3 +1780,10 @@ console.log(JSON.stringify(cases));
             and '别被它骗' in out['oneFundSpeaksForAll']), \
         '一只新基金替 194 只代言时，页面必须报出停更只数、还要说明那句"截至 X"是哪一只（第 49 轮 A-2 / B-2）：%s' \
         % out['oneFundSpeaksForAll']
+    assert '中位停在 2026-09-24' in out['oneFundSpeaksForAll'] \
+        and '未过半' in out['oneFundSpeaksForAll'], \
+        '停更只数必须配中位日期与"过没过半"那一档（第 50 轮 A-MINOR-1）：%s' % out['oneFundSpeaksForAll']
+    assert '中位停在 2026-09-10' in out['majorityStale'] and '过半标的停更' in out['majorityStale'] \
+        and '未过半' not in out['majorityStale'], \
+        '引用面过半停更时这句话必须升级成"整座库都旧了"，同时"净值截至 09-25"仍是事实：%s' % out['majorityStale']
+    assert 'undefined' not in out['noMedian'] and '中位停在 未记录' in out['noMedian'], out['noMedian']

@@ -242,18 +242,20 @@ class SectorFundService:
         而页面上填一个股票代码时**档案先落库、身份门后判**。现在门挪到这里。
 
         **措辞边界（第 50 轮两席又抓到同一种过头，别再写满）**：本方法是
-        "页面保存/编辑映射"与"审计回写"这条咽喉的门（`grep -rn ensure_fund_info_exists src/`
-        只命中 `config.py` 的三处路由），**不是"所有 caller 的咽喉"** —— 全仓往 `fund_info`
-        写行的活路有 9 处：agent 自己 `db.add(FundInfo(...))`（`sector_fund_agent.py:634`）、
-        `full_sync` 两处（`fund_sync_manager.py:270/628`）、`fund_api.py:791`、
-        `fund_service.py:460`、`data_portability_service.py:477`。那几处各自另有尺子
+        "页面保存/编辑映射"与"审计回写"这条咽喉的门，**不是"所有 caller 的咽喉"** ——
+        往 `fund_info` 写行的活路不止这里（agent 自己 `db.add(FundInfo(...))`、
+        `full_sync`、`fund_api`、`fund_service`、`data_portability_service` 都写）。
+        有几处、分别是谁，用 `grep -rn ensure_fund_info_exists src/` 与
+        `grep -rn FundInfo. src/` 现量，**别在这一段抄数字**。那几处各自另有尺子
         （agent 的 T2 判股票即拒、`full_sync` 只在基金域答得出时才建），今天没证据显示它们
         在产生新垃圾档案 —— 但**别人的尺子不算这道门**。
 
         Args:
-            identity_checked: **已过身份门的调用方**显式传 True 才旁路（今天全仓只有一处：
-                `config.py` 的审计回写，它上面三条"不许进门"的判断已经把这一行问过了）。
-                默认 False ⇒ 建之前先问"这码是不是基金"，判"不是基金"就不建
+            identity_checked: **已过身份门的调用方**显式传 True 才旁路 —— 今天两处：
+                `config.py` 的审计回写（它上面三条"不许进门"的判断已经把这一行问过了）、
+                本模块 `update_mapping`（它刚用同一个判据探过一次，再探就是同一次保存
+                打两圈外网 —— 第 50 轮 A-MINOR-2）。默认 False ⇒ 建之前先问
+                "这码是不是基金"，判"不是基金"就不建
                 （`_manual_identity_verdict` 失败开放：站点抖动/查不到一律按没结论处理，
                 不挡正常保存）。旁路不许由"代码看起来像基金"推出来。
 
@@ -458,6 +460,24 @@ class SectorFundService:
                 db.rollback()
                 accusation, identity = _manual_identity_verdict(
                     probe_code, probe_name, sector_name)
+                if not accusation:
+                    # 档案在这里补，不再由 PUT/POST 路由先补一次：路由那一次调用带着**自己的**
+                    # 身份门 ⇒ 同一次保存打两圈外网（第 50 轮 A-MINOR-2）。传
+                    # `identity_checked=True` 是因为这一行刚刚才被同一个判据问过一遍。
+                    self.ensure_fund_info_exists(probe_code, probe_name, sector_name,
+                                                 identity_checked=True)
+                if accusation and db.query(FundInfo.fund_code).filter(
+                        FundInfo.fund_code == probe_code).first() is None:
+                    # 判"不是基金"⇒ 档案被拒建 ⇒ 这个码**不能**落到映射行上：
+                    # `sector_fund_mapping.fund_code → fund_info` 的外键在镜像上真生效
+                    # （`_create_sqlite_engine` 开了 `PRAGMA foreign_keys`）⇒ 写下去是
+                    # IntegrityError，而**生产库里压根没有这条约束**（2026-09-26 只读量过）
+                    # ⇒ 写下去静默留下一行指向查无此码的映射。两个结局都不接受，所以整笔拒改。
+                    # 不顺手把旧标的标成"不可服务"：那一行指的是**上一只**基金，
+                    # 老板打错一个码不该让一个正常板块失去标的（读路径会立刻查不到这个板块）。
+                    logger.info('[板块映射] 拒改标的 %s → %s：%s',
+                                mapping.fund_code, probe_code, accusation)
+                    return None
             if changed:
                 mapping.is_fetchable = None
                 mapping.evidence = _drop_identity_evidence(mapping.evidence)
