@@ -1,0 +1,12 @@
+id	sector_name	fund_code	fund_name	reviewed	reviewed_by	owner_locked	is_active
+11	核聚变	159886	富国中证核电ETF159886	True			True
+28	中科三环	000970	中科三环	True			True
+43	德明利	001309	德明利	True			True
+47	京A	000725	京东方Ａ	True			True
+49	水晶	002273	水晶光电	True			True
+54	制冷剂	000530	冰山冷热	True			True
+57	华为概念	159565	华夏中证华为产业链 ETF	True			True
+60	应用	159819	华安中证信息技术应用创新产业指数发起式A	True			True
+63	天娱数科	002354	天娱数科	True			True
+101	液冷	000530	冰山冷热	False			True
+105	哈三联	002900	哈三联	False			True

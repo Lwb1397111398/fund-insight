@@ -1,0 +1,90 @@
+[
+ {
+  "id": 28,
+  "sector_name": "中科三环",
+  "from_code": "000970",
+  "from_name": "中科三环",
+  "to_code": "516780",
+  "to_name": "稀土ETF华泰柏瑞",
+  "reviewed": true,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 43,
+  "sector_name": "德明利",
+  "from_code": "001309",
+  "from_name": "德明利",
+  "to_code": "512760",
+  "to_name": "芯片ETF国泰",
+  "reviewed": true,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 47,
+  "sector_name": "京A",
+  "from_code": "000725",
+  "from_name": "京东方Ａ",
+  "to_code": "012765",
+  "to_name": "广发大盘价值混合A",
+  "reviewed": true,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 49,
+  "sector_name": "水晶",
+  "from_code": "002273",
+  "from_name": "水晶光电",
+  "to_code": "159325",
+  "to_name": "半导体ETF南方",
+  "reviewed": true,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 54,
+  "sector_name": "制冷剂",
+  "from_code": "000530",
+  "from_name": "冰山冷热",
+  "to_code": "159870",
+  "to_name": "化工ETF鹏华",
+  "reviewed": true,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 63,
+  "sector_name": "天娱数科",
+  "from_code": "002354",
+  "from_name": "天娱数科",
+  "to_code": "515070",
+  "to_name": "人工智能ETF华夏",
+  "reviewed": true,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 101,
+  "sector_name": "液冷",
+  "from_code": "000530",
+  "from_name": "冰山冷热",
+  "to_code": "159775",
+  "to_name": "电池ETF建信",
+  "reviewed": false,
+  "reviewed_by": null,
+  "owner_locked": false
+ },
+ {
+  "id": 105,
+  "sector_name": "哈三联",
+  "from_code": "002900",
+  "from_name": "哈三联",
+  "to_code": "512170",
+  "to_name": "医疗ETF华宝",
+  "reviewed": false,
+  "reviewed_by": null,
+  "owner_locked": false
+ }
+]

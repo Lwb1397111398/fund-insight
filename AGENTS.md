@@ -273,13 +273,27 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 13:28（北京），**第 49 轮整批（#46 密钥闸 + #47 前端路径闸 + 净值新鲜度 + S6 的 C 与 `--drop-dead-predictions` + LLM 建档身份门 + 档案工具能安全对生产）**之后，
+最近一次核对（2026-09-26 16:53（北京），**第 50 轮返修四批（`39a9abe` / `1d729d4` / `b2d1ba1` / `7c142fe`：删除博主的路由、净值新鲜度按引用面、建档身份门搬到咽喉、依赖面从元数据现推，加上一处我自己造出来的崩溃与三处写过头的文档）**之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1106 passed / 16 skipped / 0 failed**（595.56 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1115 passed / 16 skipped / 0 failed**（607.90 秒）。
-  （上一基线 1086/1095 → 本批 1106/1115：**+20 条**，分布与"为什么"——
+- `pytest tests/unit -q` → **1123 passed / 16 skipped / 0 failed**（662.87 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1132 passed / 16 skipped / 0 failed**（639.97 秒）。
+  （上一基线 1106/1115 → 本批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。
+  分布是 `git diff --name-only 9c143fa..HEAD -- tests/` 逐个文件数 `^def test_` 前后相减量出来的（复核就这一条命令）：
+  `test_fund_info_archive_gate.py` **新建 +4**（建档身份门从路由/服务层打进去：股票码拒建档、真基金照建、
+  `identity_checked` 旁路、已存在档案不许重复探）、`test_purge_junk_funds.py` **+3**（引用面来自元数据、
+  外部载荷带 `is_correct` 就拒还、**"数不出来"那条形状不许把 `plan()` 的打印弄崩** —— 这一格是第 50 轮
+  A 席抓到我上一版只断言了键名、绕过了消费侧）、`test_bloggers_top_route.py` **+2**（`DELETE` 路由真注册 +
+  三种结局各说各话）、`test_frontend_api_urls_resolve.py` **+2**（通配那一臂删掉后：现造的不存在路径必须红、
+  且**过抽取器**不走手搓三元组）、`test_nav_future_row_gate.py` **+2**（净值日期 11 处落笔点的登记名单 +
+  临时现造一处必须被量到）、`test_no_secrets_in_tracked_files.py` **+2**（形状与真值拆两条 + 占位符只判凭据组）、
+  `test_production_hardening.py` **+2**（错误细节按 `DB_TYPE` 不按 `APP_ENV`、`started_at` 带偏移）、
+  `test_stats_evidence_report.py` **+2**（一只新基金不许替引用面代言、跑批/体检的告警"算了必须说出口"）、
+  `test_blogger_hit_rate_map.py` **+1**（回收站行也要数，不然删博主撞 FK）；
+  `test_llm_analyzer_cache.py` **−3**（死函数 `_save_fund_mapping` 连它的三条绿灯一起删）。）
+  （第 49 轮那批：1086/1095 → 1106/1115，**+20 条**，分布与"为什么"——
+
   ① `tests/unit/test_no_secrets_in_tracked_files.py` 新增 **3**（任务 #46：`.env` 真值 + 6 种凭据形状
   扫 `git ls-files`，只报"哪个文件、哪一类"绝不打印命中内容；两条控制断言里有一条专门钉
   "第一版形状正则漏了 `?` ⇒ 整条恒空而主用例全绿"这件事，同族教训又复现了一次）；
@@ -889,7 +903,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   边界：`purge_junk_funds.py --restore-owner-immunity` 那一腿是**载荷驱动**的（值不是字面量），
   这条扫不到，由 `test_purge_junk_funds.py::test_restore_refuses_to_regrant_owner_immunity` 钉。
 - **博主榜那一列"存活命中率"从此有用例了**（第 28 轮 F-M-1）：
-  `tests/unit/test_blogger_hit_rate_map.py` 三条钉 `src/api/routes/bloggers.py:_hit_rate_map`。
+  `tests/unit/test_blogger_hit_rate_map.py` 4条钉 `src/api/routes/bloggers.py:_hit_rate_map`。
   此前全仓对它零覆盖：把判据 `Prediction.is_deleted == False` 反向改成 `== True`
   （＝只算回收站），`pytest tests/ -q` **854 条全绿** —— 而这一列正是老板判断"谁可信"的依据。
   其中一条用例同时钉住**两个口径本就该不同**：同一批数据，命中率 3/4=75%，
