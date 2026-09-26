@@ -1,6 +1,7 @@
 """
 Render 部署优化测试
 """
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -130,3 +131,39 @@ def test_static_assets_have_cache_headers(monkeypatch):
         cache = got.headers.get("Cache-Control", "")
         assert "max-age" not in cache, "%s 被强缓存了：%s" % (url, cache)
         assert "no-cache" in cache, "%s 至少要 no-cache，实际：%s" % (url, cache)
+
+
+def test_health_detail_says_which_build_is_running(monkeypatch):
+    """"线上跑的是哪一版"必须有接口能答，而不是靠人去比对页面指纹。
+
+    2026-09-25 那天量出来线上是 8 月 6 日的构建、本地领先 113 个提交，而在此之前
+    文档里每一句"页面上看得见"都没被送达过 —— 这个问题的代价是几轮返工。
+    取不到提交号时必须老实写 `unknown`，**不许拿 `version: 2.0.0` 那种静态串充数**
+    （那正是这次要修的毛病：一个看起来像版本号的字符串，谁看了都以为知道答案了）。
+    """
+    from datetime import datetime as _dt
+
+    from fastapi.testclient import TestClient
+    from src.api.main import app
+
+    monkeypatch.setenv("ACCESS_PASSWORD", AUTH_HEADERS["X-Access-Password"])
+    client = TestClient(app)
+
+    monkeypatch.delenv('RENDER_GIT_COMMIT', raising=False)
+    monkeypatch.delenv('RENDER_GIT_BRANCH', raising=False)
+    body = client.get("/api/health/detail", headers=AUTH_HEADERS).json()
+    assert body['git_commit'] == 'unknown' and body['git_commit_source'] == 'unavailable', body
+    assert body['git_branch'] == 'unknown'
+    _dt.fromisoformat(body['started_at'])          # 必须是能解析的时刻
+    assert body['uptime_seconds'] >= 0
+
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'a9bdef30d409a4b64795e615fe5b32b47f8a93d8')
+    monkeypatch.setenv('RENDER_GIT_BRANCH', 'main')
+    body = client.get("/api/health/detail", headers=AUTH_HEADERS).json()
+    assert body['git_commit'] == 'a9bdef30d409', body      # 截到 12 位，够用且不会被当成完整 sha
+    assert body['git_commit_source'] == 'RENDER_GIT_COMMIT'
+    assert body['git_branch'] == 'main'
+    # 这条出口也不许变成泄密面：任何一处都不许出现连接串或口令
+    blob = json.dumps(body, ensure_ascii=False)
+    for needle in ('postgres', 'password', AUTH_HEADERS['X-Access-Password']):
+        assert needle not in blob, '健康详情泄露了 %r' % needle

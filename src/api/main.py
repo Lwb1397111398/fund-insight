@@ -281,6 +281,29 @@ def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
 
 
+_BOOT_AT = datetime.now()      # 进程导入时刻：uvicorn 重启它才归零 ⇒ "部署生效没有"的直接信号
+
+
+def _build_identity() -> dict:
+    """线上到底跑的是哪一版 —— 这个项目为这个问题付过两次账（09-25 那次量出线上是 8 月 6 日的构建、
+    落后 113 个提交，而那之前所有人都按"线上＝最近改完的那一版"说话）。判"部署生效没有"不该靠
+    比对页面指纹：Render 会把 Git 的提交号注入运行时环境，直接报出来。
+
+    取不到就老实写 `unknown`（本机跑 `python -m src` 时就是这个值），
+    绝不印一个看起来像版本号的字符串来充数 —— 那正是这次要修的毛病。
+    """
+    commit = (os.getenv('RENDER_GIT_COMMIT') or '').strip()
+    branch = (os.getenv('RENDER_GIT_BRANCH') or '').strip()
+    return {
+        'git_commit': commit[:12] or 'unknown',
+        'git_branch': branch or 'unknown',
+        'git_commit_source': 'RENDER_GIT_COMMIT' if commit else 'unavailable',
+        # 进程启动时刻与已运行秒数：部署成功的直接信号就是它归零重来
+        'started_at': _BOOT_AT.isoformat(),
+        'uptime_seconds': int((datetime.now() - _BOOT_AT).total_seconds()),
+    }
+
+
 @app.get("/api/health/detail")
 def health_detail():
     from src.models.database import DB_TYPE, SessionLocal
@@ -297,6 +320,7 @@ def health_detail():
         "status": "ok" if database_ok else "degraded",
         "timestamp": datetime.now().isoformat(),
         "version": "2.0.0",
+        **_build_identity(),
         "app_env": os.getenv("APP_ENV", "development"),
         "db_type": DB_TYPE,
         "database_ok": database_ok,

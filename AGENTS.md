@@ -273,13 +273,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 12:56（北京），**第 49 轮整批（#46 密钥闸 + #47 前端路径闸 + 净值新鲜度 + S6 的 C 与 `--drop-dead-predictions` + LLM 建档身份门 + 档案工具能安全对生产）**之后，
+最近一次核对（2026-09-26 13:28（北京），**第 49 轮整批（#46 密钥闸 + #47 前端路径闸 + 净值新鲜度 + S6 的 C 与 `--drop-dead-predictions` + LLM 建档身份门 + 档案工具能安全对生产）**之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1105 passed / 16 skipped / 0 failed**（551.07 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1114 passed / 16 skipped / 0 failed**（473.65 秒）。
-  （上一基线 1086/1095 → 本批 1105/1114：**+19 条**，分布与"为什么"——
+- `pytest tests/unit -q` → **1106 passed / 16 skipped / 0 failed**（595.56 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1115 passed / 16 skipped / 0 failed**（607.90 秒）。
+  （上一基线 1086/1095 → 本批 1106/1115：**+20 条**，分布与"为什么"——
   ① `tests/unit/test_no_secrets_in_tracked_files.py` 新增 **3**（任务 #46：`.env` 真值 + 6 种凭据形状
   扫 `git ls-files`，只报"哪个文件、哪一类"绝不打印命中内容；两条控制断言里有一条专门钉
   "第一版形状正则漏了 `?` ⇒ 整条恒空而主用例全绿"这件事，同族教训又复现了一次）；
@@ -298,7 +298,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `_manual_identity_verdict`，判"不是基金"拒建、判"没意见"照建 —— 两侧都钉）；
   `test_audit_fund_info_identity.py` +2（`--production` 四道拒：非 PostgreSQL / 要改名 / 缺确认词 /
   **旗子与实际连接不一致**，第 ④ 条只认进程里那个 engine 真正绑在哪台；外加一条"计划回执要数得出
-  列出的行数"—— dry-run 列了 10 行 `[可补]` 却印"补上 0 行"是说反话）。
+  列出的行数"—— dry-run 列了 10 行 `[可补]` 却印"补上 0 行"是说反话）；
+  ⑥ `test_deployment_optimization.py` +1：**线上跑的是哪一版从此有接口可答**
+  （`/api/health/detail` 多出 `git_commit` / `git_branch` / `git_commit_source` / `started_at` /
+  `uptime_seconds`，取自 Render 注入的 `RENDER_GIT_COMMIT`；取不到就写 `unknown`，
+  不许拿 `version: 2.0.0` 那种静态串冒充答案）。这条判据同时钉"这个出口不许泄露连接串/口令"，
+  顺带改正 `DEPLOYMENT.md` 一句会坑人的话：`/api/health/detail` **要带口令**
+  （线上实测不带口令回 401，旧文档写的是"健康检查不需要访问密码"）。
   **同一批还做了一件不在用例数里的**：`scripts/audit_verdict_evidence.py` 的 `accuracy_span` 改成
   返回整份 `span_report()`（脚本里不留第二份算式），并多印一行 `[净值新鲜度]`。）
   （上一基线 1085/1094 → 本批 1086/1095：+1 条 = `test_every_list_fetch_point_asks_the_wake_gate_before_giving_up`
