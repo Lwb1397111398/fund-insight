@@ -203,6 +203,30 @@ def span_report(db) -> Dict:
 NAV_LAG_WARN_DAYS = 4
 
 
+def nav_stop_note(nav_date, today=None):
+    """**单只**基金的净值停更说明（页面逐行读它；阈值仍然只有 `NAV_LAG_WARN_DAYS` 一处）。
+
+    为什么要有这一句：老板那条"不要产生无法更新的基金"，实测形状是基金页上一行
+    "净值截至 2020-12-08"或干脆空白（`003033` / `603758`，2026-09-26 生产只读）——
+    看起来像我们的更新坏了，实际是源端不再给这只产品发净值。话得由后端算好给出去，
+    页面不许自己拿日期比大小（那条规矩在净值新鲜度上已经立过一次）。
+    """
+    from src.services.prediction_lifecycle import current_as_of
+
+    if nav_date is None:
+        return {'lag_days': None,
+                'note': '库里一条净值都没有 ⇒ 这只标的取不到净值，任何预测都无法在它身上验证'}
+    if hasattr(nav_date, 'date'):
+        nav_date = nav_date.date()
+    today = today or current_as_of()
+    lag = (today - nav_date).days
+    if lag < NAV_LAG_WARN_DAYS:
+        return None
+    return {'lag_days': lag,
+            'note': '最后一笔净值停在 %s（已经 %d 天没有新行）⇒ 这只标的源端不更新，'
+                    '别把预测绑在它身上' % (nav_date, lag)}
+
+
 def nav_freshness(db, today=None) -> Dict:
     """净值本身停在哪一天（第 48 轮 A-9 / B-8 那条产品账，**唯一出处**）。
 

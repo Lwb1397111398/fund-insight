@@ -59,7 +59,7 @@ def _service(db, monkeypatch, availability):
                         lambda *a, **k: False, raising=True)
     svc = PredictionVerifyService(db)
     monkeypatch.setattr(type(svc), 'match_fund_for_prediction',
-                        lambda self, p: ('HOLD01', '重问锁基金'))
+                        lambda self, p: (p.fund_code, p.fund_name))
     monkeypatch.setattr(type(svc), '_check_fund_data_availability',
                         lambda self, **kw: dict(availability))
     return svc
@@ -194,6 +194,72 @@ def test_the_batch_receipt_says_why_a_row_was_not_verified(test_db, monkeypatch)
     assert held.id in reasons, '被压住的预测既不在队列里、也不在回执里 = 没人知道它去哪了'
     assert '结构性不可验' in reasons[held.id]
     assert held.id not in {r['prediction_id'] for r in result['data']['results']}
+
+
+def test_a_live_fund_with_a_history_gap_is_never_closed(test_db, monkeypatch):
+    """反面对照（最贵的一格）：库里这只基金**最近还在发净值**、只是缺中间那段 ⇒ 只锁不关。
+
+    少了这道对照，"我们自己几天没同步"就会被读成"产品停更"，
+    于是批量验证会替老板把他本可以验证的预测关掉。
+    """
+    from src.models.database import FundHistory
+
+    p = _seed(test_db, target=TODAY - timedelta(days=3),
+              next_verify=TODAY - timedelta(days=1), fund_code='LIVE01')
+    test_db.add(FundHistory(fund_code='LIVE01', nav_date=TODAY - timedelta(days=2),
+                            nav=1.5))
+    test_db.commit()
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'no_source_history', 'message': '这段没有'})
+
+    result = svc.verify_prediction(p.id)
+
+    test_db.refresh(p)
+    assert result['closed_as_unverifiable'] is False
+    assert p.is_deleted is False, '最近还在发净值的产品不许被当成停更关掉'
+    assert p.next_verify_date == TODAY + timedelta(days=unverifiable_retry_days())
+
+
+def test_the_second_structural_answer_on_a_dead_target_closes_the_row(test_db, monkeypatch):
+    """第二次答"没有" + 库里最后一条净值早于窗口 ⇒ 收进回收站：原因写清、可恢复、不写结论。"""
+    from src.models.database import FundHistory, PredictionChangeLog
+
+    p = _seed(test_db, target=TODAY - timedelta(days=3),
+              next_verify=TODAY - timedelta(days=1), fund_code='DEAD01')
+    test_db.add(FundHistory(fund_code='DEAD01', nav_date=TODAY - timedelta(days=400),
+                            nav=1.02))
+    test_db.commit()
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'no_source_history', 'message': '这段没有'})
+
+    result = svc.verify_prediction(p.id)
+
+    test_db.refresh(p)
+    assert result['closed_as_unverifiable'] is True and result['held_until'] is None
+    assert p.is_deleted is True and p.deleted_by == 'system'
+    assert '回收站' in p.delete_reason and '不计入准确率' in p.delete_reason
+    assert p.is_correct is None, '关闭不是判错：一个结论都不许写'
+    # 留痕：台账里能翻到这一笔是谁动的、动之前长什么样
+    logs = test_db.query(PredictionChangeLog).filter(
+        PredictionChangeLog.prediction_id == p.id).all()
+    assert logs and logs[-1].source == 'system'
+    # 活跃面彻底干净：既不在到期队列，也不在"结构性不可验"那一档
+    assert p.id not in {x.id for x in filter_due_for_verify(test_db, as_of=TODAY)}
+    assert p.id not in {x.id for x in filter_unverifiable(test_db, as_of=TODAY)}
+
+
+def test_the_close_decision_reads_both_conditions_not_just_the_answer(test_db):
+    """那条升级规则的边界：缺任一个条件都不许关（四次调用把两条门各拆一次）。"""
+    stale = dict(verdict_reason='no_source_history',
+                 previous_hold=TODAY - timedelta(days=1),
+                 local_latest_nav=TODAY - timedelta(days=400),
+                 window_start=TODAY - timedelta(days=3), today=TODAY)
+    assert lc.should_close_as_stale_target(**stale) is True
+    assert lc.should_close_as_stale_target(**{**stale, 'previous_hold': None}) is False
+    assert lc.should_close_as_stale_target(**{**stale, 'verdict_reason': 'insufficient_points'}) is False
+    # 库里最后一条正好落在窗口起点那天 ⇒ 不是"窗口之前就没发过"，不关
+    assert lc.should_close_as_stale_target(
+        **{**stale, 'local_latest_nav': TODAY - timedelta(days=3)}) is False
 
 
 def test_when_the_nav_arrives_the_lock_is_taken_off(test_db, monkeypatch):

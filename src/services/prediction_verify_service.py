@@ -1131,22 +1131,50 @@ class PredictionVerifyService:
             # 来的预测重问一遍（任务 #8：到期队列里的噪音）。锁到哪天由凭据 TTL 决定，
             # 到点自动回队 ⇒ 不是终态、更不写 is_correct。
             held_until = None
+            closed_as = None
             if data_check.get('reason') == 'no_source_history':
-                from src.services.prediction_lifecycle import apply_unverifiable_hold
-                held_until = apply_unverifiable_hold(prediction, as_of=today)
-                try:
-                    self.db.commit()
-                except Exception as hold_error:
-                    logger.warning('[Verify] 预测 %s 重问锁写入失败: %s', prediction_id, hold_error)
-                    self.db.rollback()
-                    held_until = None
+                from src.services.prediction_lifecycle import (
+                    apply_unverifiable_hold, close_as_stale_target_note,
+                    should_close_as_stale_target,
+                )
+                previous_hold = prediction.next_verify_date
+                # 库里这只代码最后一条净值在哪天：这是"它停更了"与"我们没同步"的分界，
+                # 少了它就只能靠日历猜（第 23 轮那种把镜像坏了说成产品坏了的错）。
+                newest = self.db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code).order_by(
+                    FundHistory.nav_date.desc()).first()
+                latest_nav = self._as_date(newest[0]) if newest else None
+                if should_close_as_stale_target(
+                        verdict_reason=data_check.get('reason'),
+                        previous_hold=previous_hold,
+                        local_latest_nav=latest_nav,
+                        window_start=nav_start_date,
+                        today=today):
+                    # 同一个窗口第二次被源端答"没有"，且这只产品从窗口开始之前就没再发过净值
+                    # ⇒ 判不了是永久事实，不是"再等等"。收进回收站（带原因、可恢复、不写结论）。
+                    from src.services.prediction_service import PredictionService
+                    note = close_as_stale_target_note(prediction, latest_nav, nav_start_date)
+                    if PredictionService(self.db).close_as_unverifiable(prediction.id, note):
+                        closed_as = note
+                else:
+                    held_until = apply_unverifiable_hold(prediction, as_of=today)
+                    try:
+                        self.db.commit()
+                    except Exception as hold_error:
+                        logger.warning('[Verify] 预测 %s 重问锁写入失败: %s',
+                                       prediction_id, hold_error)
+                        self.db.rollback()
+                        held_until = None
             message = data_check['message']
             if held_until:
                 message += f'（已压到 {held_until.isoformat()} 再问，期间不重复占用验证）'
+            if closed_as:
+                message += '（' + closed_as + '）'
             return {
                 "success": False,
                 "message": message,
                 "held_until": held_until.isoformat() if held_until else None,
+                "closed_as_unverifiable": bool(closed_as),
                 "data": {
                     "fund_code": fund_code,
                     "fund_name": fund_name,

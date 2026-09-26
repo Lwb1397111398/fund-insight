@@ -551,3 +551,54 @@ def test_the_cron_runner_actually_prints_the_nav_notice():
     audit = os.path.join(root, 'scripts', 'audit_verdict_evidence.py')
     assert _notice_is_spoken(runner, 'nav_freshness_notice'),         '跑批算了净值新鲜度却没把它交给 logger ⇒ 页面之外没人说这句话，那条承诺是空的'
     assert _notice_is_spoken(audit, 'nav_freshness_notice'),         '体检命令印不出这句话 ⇒ `--production` 那条可复现命令答不了"净值旧不旧"'
+
+
+def test_a_stopped_target_says_so_on_its_own_row(env, monkeypatch):
+    """基金页**每一行**要自己说清"源端不更新"，别让老板把停更当成我们的更新坏了。
+
+    生产实测（2026-09-26，`GET /api/funds` 同源）：`003033` 那行显示"末条净值停在
+    2020-12-08"、`603758` 干脆空白 —— 这两行读起来都像任务失败了，而真实原因是
+    源端不再给这两只产品发净值。
+    顺带钉住"阈值只有一个出处"：把 `NAV_LAG_WARN_DAYS` 改掉，这一行的说法必须跟着改
+    （页面/服务里再藏一个 4，这条立刻红）。
+    """
+    from src.models.database import FundInfo
+    from src.services.prediction_lifecycle import current_as_of
+
+    client, db = env
+    today = current_as_of()
+    db.add_all([
+        FundInfo(fund_code='003033', fund_name='南方荣冠定开混合',
+                 nav_date=date(2020, 12, 8), latest_nav=1.173),
+        FundInfo(fund_code='510300', fund_name='沪深300ETF',
+                 nav_date=today - timedelta(days=1), latest_nav=4.1),
+        FundInfo(fund_code='603758', fund_name='秦安股份'),
+    ])
+    db.commit()
+
+    def rows():
+        body = client.get('/api/funds', headers=HEADERS).json()
+        return {f['fund_code']: f
+                for g in body['data'] for f in (g.get('funds') or [])}
+
+    r = rows()
+    assert '2020-12-08' in (r['003033']['nav_stop_note'] or ''), '停更的那行没说话'
+    assert '不更新' in r['003033']['nav_stop_note']
+    assert r['510300']['nav_stop_note'] is None, '昨天还有净值的被叫停更 ⇒ 这道门是墙'
+    assert '一条净值都没有' in (r['603758']['nav_stop_note'] or '')
+
+    monkeypatch.setattr('src.services.verdict_evidence.NAV_LAG_WARN_DAYS', 99999)
+    assert rows()['003033']['nav_stop_note'] is None,                 '改掉那一个阈值页面这行还是旧话 ⇒ 它自己藏了第二个数'
+
+
+def test_the_stopped_note_counts_days_against_the_beijing_clock(monkeypatch):
+    """落后天数按北京自然日现算，不许写死日期、也不许拿 UTC 的"今天"。"""
+    from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_stop_note
+
+    today = date(2026, 9, 26)
+    assert nav_stop_note(today - timedelta(days=NAV_LAG_WARN_DAYS - 1), today=today) is None
+    just = nav_stop_note(today - timedelta(days=NAV_LAG_WARN_DAYS), today=today)
+    assert just and just['lag_days'] == NAV_LAG_WARN_DAYS
+    assert str(today - timedelta(days=NAV_LAG_WARN_DAYS)) in just['note']
+    empty = nav_stop_note(None, today=today)
+    assert empty and '一条净值都没有' in empty['note']

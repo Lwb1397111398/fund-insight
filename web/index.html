@@ -351,7 +351,11 @@
                                     </td>
                                     <td><span class="status-badge"
                                             :class="p.lifecycle_status === 'archived' ? 'status-failed' : p.verification_result === 'correct' ? 'status-success' : p.verification_result === 'wrong' ? 'status-failed' : 'status-pending'">{{
-                                            p.lifecycle_status === 'archived' ? '已归档' : p.prediction_type === 'flat' ? '观望' : p.verification_result === 'correct' ? '正确' : p.verification_result === 'wrong' ? '错误' : '待验证' }}</span></td>
+                                            p.lifecycle_status === 'archived' ? '已归档' : p.prediction_type === 'flat' ? '观望' : p.verification_result === 'correct' ? '正确' : p.verification_result === 'wrong' ? '错误' : '待验证' }}</span>
+                                        <!-- 回收站里的每一条都要说清是谁、为什么放进来的：
+                                             系统关闭的（标的停更、判不了）与老板手动归档是两件不同的事，
+                                             只写"已归档"等于没解释，他会以为还有一批等着处理。 -->
+                                        <div v-if="p.is_deleted && p.delete_reason" class="text-xs text-tertiary">{{ p.delete_reason }}</div></td>
                                     <td>
                                         <div class="row-actions">
                                             <button class="row-btn primary" @click="viewPredictionDetail(p.id)">详情</button>
@@ -537,7 +541,9 @@
                             <tbody>
                                 <tr v-for="f in filteredFunds" :key="f.id">
                                     <td>{{ f.fund_code }}</td>
-                                    <td>{{ f.fund_name }}</td>
+                                    <td>{{ f.fund_name }}
+                                        <div v-if="f.nav_stop_note" class="text-xs text-tertiary">{{ f.nav_stop_note }}</div>
+                                    </td>
                                     <td>{{ f.sector_type || '-' }}</td>
                                     <td>{{ f.latest_nav || '-' }}</td>
                                     <td :style="{ color: (f.day_growth || 0) >= 0 ? '#52c41a' : '#ff4d4f' }">{{

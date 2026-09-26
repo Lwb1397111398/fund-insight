@@ -11,6 +11,7 @@ import threading
 
 from .base import BaseService
 from src.models.database import FundInfo, FundHistory, Prediction
+from src.services.verdict_evidence import nav_stop_note
 
 # 基金更新锁，防止重复执行
 # ⚠️ 注意：这是单进程保护机制，多进程部署时无效
@@ -345,6 +346,7 @@ class FundService(BaseService[FundInfo]):
                     }
                 
                 history = history_map.get(f.fund_code, [])
+                stop = nav_stop_note(f.nav_date)
                 fund_data = {
                     "id": f.id,
                     "fund_code": f.fund_code,
@@ -353,6 +355,7 @@ class FundService(BaseService[FundInfo]):
                     "sector_type": f.sector_type,
                     "latest_nav": f.latest_nav,
                     "nav_date": f.nav_date.isoformat() if f.nav_date else None,
+                    "nav_stop_note": (stop or {}).get('note'),
                     "day_growth": f.day_growth,
                     "week_growth": f.week_growth,
                     "month_growth": f.month_growth,
@@ -392,6 +395,7 @@ class FundService(BaseService[FundInfo]):
             result = []
             for f in funds:
                 history = history_map.get(f.fund_code, [])
+                stop = nav_stop_note(f.nav_date)
                 fund_data = {
                     "id": f.id,
                     "fund_code": f.fund_code,
@@ -400,6 +404,7 @@ class FundService(BaseService[FundInfo]):
                     "sector_type": f.sector_type,
                     "latest_nav": f.latest_nav,
                     "nav_date": f.nav_date.isoformat() if f.nav_date else None,
+                    "nav_stop_note": (stop or {}).get('note'),
                     "day_growth": f.day_growth,
                     "week_growth": f.week_growth,
                     "month_growth": f.month_growth,

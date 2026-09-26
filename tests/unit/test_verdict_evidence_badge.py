@@ -112,6 +112,77 @@ def test_retag_without_change_is_a_no_op(test_db):
     assert prediction.is_correct is True, '无事也要清结论就是数据破坏'
 
 
+def test_retag_refuses_to_bind_onto_a_target_that_stopped_publishing(test_db, capsys):
+    """不许把预测改到"净值覆盖不了这段窗口"的标的上 —— 那等于当场制造一条验不了的预测。
+
+    生产实测（2026-09-26，q.py --production 只读）：`003033` 末条净值停在 2020-12-08，
+    却有 37 条活预测挂在它身上，台账里 57 行 `action=maintenance_sync /
+    source=sector_mapping` ⇒ 就是这条改标路把它们绑上去的。
+    """
+    prediction = _seed_verified_prediction(test_db)
+    test_db.add(FundHistory(fund_code='003033', nav_date=date(2020, 12, 8), nav=1.173))
+    test_db.commit()
+
+    cleared = FundSyncManager.retag_prediction(
+        test_db, prediction, '003033', '南方荣冠定开混合', source='sector_mapping')
+    test_db.commit()
+
+    assert cleared is False
+    test_db.refresh(prediction)
+    assert prediction.fund_code == '512010', '拒了却已经写进行 ⇒ 这句拒绝是摆设'
+    assert prediction.is_correct is True
+    assert test_db.query(PredictionChangeLog).filter(
+        PredictionChangeLog.prediction_id == prediction.id).count() == 0
+    said = capsys.readouterr().out
+    assert '003033' in said and '2020-12-08' in said, '拒了却不说是哪只、为什么 ⇒ 静默'
+
+
+def test_a_target_without_any_nav_rows_is_still_bindable(test_db):
+    """新档案一条净值都还没有（刚建档、还没同步过）⇒ 不能当成"停更"拦掉。
+
+    这是防止上面那道门建成墙：真正常的第一次关联就走这条路。
+    """
+    prediction = _seed_verified_prediction(test_db)
+    assert FundSyncManager.retag_prediction(
+        test_db, prediction, '510300', '沪深300ETF', source='unit-test') is True
+    test_db.commit()
+    test_db.refresh(prediction)
+    assert prediction.fund_code == '510300'
+
+
+def test_the_stopped_target_ruler_has_exactly_one_implementation():
+    """"这段净值会不会再来"这把尺子只许有一处实现（改标、验证器、收口脚本共用）。
+
+    第 45 轮那条老账：**"唯一入口"这句话没有测试钉着，下一轮就会多一个入口** ——
+    我这一批就先在自己新写的脚本里抄了一份 `latest >= start`，被这条判据当场点红。
+    """
+    import ast
+
+    def calls_ruler(path, func_name):
+        tree = ast.parse(open(path, encoding='utf-8').read())
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == func_name), None)
+        assert fn is not None, '%s 里找不到 %s()' % (path, func_name)
+        called = {getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
+                  for n in ast.walk(fn) if isinstance(n, ast.Call)}
+        compares = [n for n in ast.walk(fn) if isinstance(n, ast.Compare)
+                    and isinstance(n.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+                    and {'local_latest_nav', 'latest', 'start', 'window_start'} &
+                    {getattr(x, 'id', '') for x in ast.walk(n)}]
+        return 'nav_cannot_cover_window' in called, compares
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(here))
+    lifecycle = os.path.join(root, 'src', 'services', 'prediction_lifecycle.py')
+    script = os.path.join(root, 'scripts', 'close_unknowable_predictions.py')
+
+    used, own = calls_ruler(lifecycle, 'should_close_as_stale_target')
+    assert used and not own, '验证器自己不问尺子、改在自己函数里比日期 ⇒ 第二把尺子'
+    used, own = calls_ruler(script, 'plan')
+    assert used, '存量收口脚本没走那把尺子 ⇒ 两边的"关不关"会各自漂'
+    assert not own, '脚本里又手写了一遍日期比较 ⇒ 一处改了另一处不会跟着改'
+
+
 def _bulk_write_hits(node, column):
     """`query.update(<dict>)` / `.values(...)` 的**参数位**上有没有这一列 —— 三种 key 写法都要认。
 

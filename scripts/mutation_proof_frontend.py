@@ -394,6 +394,16 @@ MUTATIONS = [
      'unverifiable_row_stops_saying_when_it_asks_again', HTML,
      """<span v-if="p.lifecycle === 'unverifiable'" class="text-xs text-tertiary">· 数据源给不出这段，{{ p.next_verify_date }} 自动重问</span>""",
      """<span v-if="p.lifecycle === '__never_matches__'" class="text-xs text-tertiary">· 数据源给不出这段，{{ p.next_verify_date }} 自动重问</span>""", False),
+    # 回收站那条原因同样要有变异：把它换成一个永不成立的条件，行就只剩"已归档"三个字
+    ('test_the_recycle_bin_says_why_each_row_was_archived',
+     'archive_reason_stops_being_read', HTML,
+     'v-if="p.is_deleted && p.delete_reason"',
+     'v-if="p.is_deleted && p.reason_never_set"', False),
+    # 基金页那一行的"源端停更"：把整句拿掉，接口还在给这句话、屏幕上却没有读者
+    ('test_a_stopped_fund_explains_itself_on_its_own_row',
+     'stopped_fund_note_never_reaches_the_screen', HTML,
+     '<div v-if="f.nav_stop_note" class="text-xs text-tertiary">{{ f.nav_stop_note }}</div>',
+     '', False),
     # 第 40 轮 A-M1：evidence 取失败必须把上一轮的区间放下（不清旧报告 = 那句红字永远渲染不出来）
     ('test_the_evidence_line_does_not_keep_yesterdays_report_on_a_failed_refresh',
      'evidence_keeps_stale_report', HTML,

@@ -126,6 +126,55 @@ def is_held_unverifiable(prediction: Prediction, as_of: Optional[date] = None) -
             and not getattr(prediction, "is_deleted", False))
 
 
+def should_close_as_stale_target(*, verdict_reason: Optional[str],
+                                 previous_hold: Optional[date],
+                                 local_latest_nav: Optional[date],
+                                 window_start: Optional[date],
+                                 today: Optional[date] = None) -> bool:
+    """这条预测要不要从"重问锁"升级成**关闭**（标的已经停更，永远问不出答案）。
+
+    两个条件必须同时成立，缺一个都不许关（关 = 从活跃列表消失，代价比锁大得多）：
+    ① **同一个窗口已经问过两次、两次都被数据源答"没有"**：`previous_hold` 是上一轮留下的
+       重问日，只有它已经过去（≤ 今天）才说明这次是回队之后的第二次答案。一次答"没有"
+       可能撞上源端抽风；`no_source_history` 本身又只在"源端真答了 0 条"时才出现
+       （传输失败/限流一律不记凭据，见 `backfill_proofs` 第 B-1 条），所以两次答案
+       是两次独立的、来自源端的否定。
+    ② **这只产品在我们库里连窗口开始之后都没发过一条净值**：`local_latest_nav < window_start`
+       ⇒ 它不是"最近几天没同步"，是从头到尾就没 publish 过这段。少了这一条，
+       我们自己同步掉几天就可能把一条本可验证的预测关掉（第 23 轮那种"把镜像坏了当产品坏了"的坑）。
+    """
+    if verdict_reason != 'no_source_history':
+        return False
+    today = _as_date(today) or current_as_of()
+    prev = _as_date(previous_hold)
+    if prev is None or prev > today:
+        return False                      # 第一次判出来：只锁，不动行
+    return nav_cannot_cover_window(local_latest_nav, window_start)
+
+
+def nav_cannot_cover_window(local_latest_nav: Optional[date],
+                            window_start: Optional[date]) -> bool:
+    """这把标的的净值**覆盖不了**这段窗口 —— 库里末条净值早于窗口起点。
+
+    只此一处实现：验证器判"要不要关"、`retag_prediction` 判"能不能往上绑"、存量收口脚本
+    判"这一行进不进计划"，三处问的都是同一句话。同步只补**没有的日期**、从不覆盖已有行，
+    所以末条停在窗口之前 = 源端不再给这只产品发新行，等下去也不会有答案。
+    两个日期任一说不清 ⇒ 返回 False（不敢下结论，交回给"继续问"那条路）。
+    """
+    latest, start = _as_date(local_latest_nav), _as_date(window_start)
+    return latest is not None and start is not None and latest < start
+
+
+def close_as_stale_target_note(prediction: Prediction, latest_nav: Optional[date],
+                               window_start: Optional[date]) -> str:
+    """关闭时写给老板看的那句话：说清为什么判不了、去哪找、对准确率有什么影响。"""
+    return ('标的 %s 的数据源给不出这段净值（库里最后一条净值停在 %s，窗口从 %s 起），'
+            '已问过两次仍无答案 ⇒ 无法判定，既不算判对也不算判错，不计入准确率；'
+            '记录已放入回收站，可随时恢复'
+            % (getattr(prediction, 'fund_code', '') or '未知',
+               _as_date(latest_nav) or '未记录', _as_date(window_start) or '未记录'))
+
+
 def apply_unverifiable_hold(prediction: Prediction, as_of: Optional[date] = None) -> date:
     """验证器判定"已问过数据源、它给不出这段净值"后，把这条压到重问日。
 

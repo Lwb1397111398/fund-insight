@@ -55,6 +55,23 @@ class FundSyncManager:
 
         if pred.fund_code == new_code and pred.fund_name == new_name:
             return False
+        # 不许把预测绑到"净值覆盖不了这段窗口"的标的上。生产实测那 15 条验不了的预测
+        # 不是随机来的：台账里 57 行 action=maintenance_sync / source=sector_mapping，
+        # 全是这条改标路把 003033（末条净值停在 2020-12-08）、508031（停在 2026-06-30）
+        # 这类**源端已停更**的产品盖到了活预测身上 ⇒ 到期必然判不出来。
+        # 尺子只有一把：`nav_cannot_cover_window`（验证器判"要不要关"问的是同一句话）。
+        # 库里一条净值都没有 ⇒ 不下结论（新档案刚建、还没同步过是常态），交回正常流程。
+        newest_nav = (db.query(FundHistory.nav_date)
+                      .filter(FundHistory.fund_code == new_code)
+                      .order_by(FundHistory.nav_date.desc()).first())
+        from src.services.prediction_lifecycle import nav_cannot_cover_window
+        if nav_cannot_cover_window(newest_nav[0] if newest_nav else None,
+                                   pred.prediction_date):
+            print('[跳过改标] 预测 %s 不绑 %s：它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
+                  ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测'
+                  % (getattr(pred, 'id', '?'), new_code,
+                     newest_nav[0], pred.prediction_date))
+            return False
         before = snapshot_prediction(pred)
         # 判据只有一份（`has_verdict_trace`）：以前这里只看 is_correct，
         # 维护服务那边看 verify_count/status/is_expired ⇒ "改标必清结论"有漏网的一条

@@ -468,12 +468,33 @@ class PredictionService(BaseService[Prediction]):
         ).first()
         if not prediction:
             return False
+        return self._soft_archive(prediction, reason='manual_archive', source='user')
 
+    def close_as_unverifiable(self, prediction_id: int, reason: str) -> bool:
+        """把一条**永远判不出来**的预测收进回收站（标的已停更，数据源给不出那段净值）。
+
+        为什么不新开一个"已关闭"状态：回收站是现成的、有原因、可一键恢复、
+        且所有活跃查询默认就把它排除在外 —— 老板要的"打开后看不到任何还挂着没验的预测"
+        靠它一次到位，不需要新列（新列＝一次生产迁移）。
+        与 `delete_prediction` **共用同一条归档咽喉**（快照 → 归档 → 重算统计 → 台账 → 提交），
+        区别只有两点：来源写 `system`（不是老板手点）、原因写那句给人看的话。
+        **`is_correct` 一个字都不动** ⇒ 它既不进判对也不进判错，准确率不受影响。
+        """
+        prediction = self.db.query(Prediction).filter(
+            Prediction.id == prediction_id,
+            Prediction.is_deleted == False,
+        ).first()
+        if not prediction:
+            return False
+        return self._soft_archive(prediction, reason=reason, source='system')
+
+    def _soft_archive(self, prediction: Prediction, *, reason: str, source: str) -> bool:
+        """归档那条预测的唯一实现：手动归档与系统关闭都走这里（别在这里开第二条旁路）。"""
         before_state = snapshot_prediction(prediction)
         prediction.is_deleted = True
         prediction.deleted_at = datetime.now()
-        prediction.deleted_by = "user"
-        prediction.delete_reason = "manual_archive"
+        prediction.deleted_by = source
+        prediction.delete_reason = reason
         prediction.restore_before = date.today() + timedelta(days=30)
         try:
             self.db.flush()
@@ -482,7 +503,7 @@ class PredictionService(BaseService[Prediction]):
                 self.db,
                 prediction,
                 action="archived",
-                source="user",
+                source=source,
                 before_state=before_state,
             )
             self.db.commit()

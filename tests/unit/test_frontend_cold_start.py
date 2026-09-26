@@ -1810,3 +1810,30 @@ def test_the_structurally_unverifiable_queue_is_counted_and_explained():
     assert "predictionFilters.lifecycle = 'unverifiable'" in script
     # 口径灰字里要有它 —— 只写在 title 上等于手机上没写
     assert '「结构性不可验」= 已按区间问过数据源' in html
+
+
+def test_the_recycle_bin_says_why_each_row_was_archived():
+    """回收站里每条都要写明"是谁、为什么放进来的"。
+
+    系统关闭的（标的停更、判不了）与老板手动归档是两件不同的事；只写"已归档"
+    等于让他猜，他会以为还有一批等着处理 —— 正是他这次点名不想要的东西。
+    """
+    html = INDEX_HTML.read_text(encoding='utf-8')
+
+    assert 'p.is_deleted && p.delete_reason' in html
+    assert '{{ p.delete_reason }}' in html
+
+
+def test_a_stopped_fund_explains_itself_on_its_own_row():
+    """基金页那一行必须把"源端停更"说到屏幕上（不是 title、不是只存在于接口里）。
+
+    生产实测（2026-09-26）：`003033` 末条净值停在 2020-12-08、`603758` 一条净值都没有，
+    而基金表**连净值日期这一列都没有** ⇒ 老板看到的只是一个数字或一个 `-`，
+    读起来像我们的更新坏了。后端算好那句话（阈值只 `NAV_LAG_WARN_DAYS` 一处），
+    页面只负责把它摆出来 —— 这里判的就是"摆没摆"。
+    """
+    html = INDEX_HTML.read_text(encoding='utf-8')
+
+    assert 'f.nav_stop_note' in html, '接口给了这句话，页面没读 ⇒ 老板还是看不见'
+    assert '{{ f.nav_stop_note }}' in html
+    assert html.count('nav_stop_note') >= 2, '只剩一处 ⇒ 多半是 v-if 没配插值，那句话不会显示'

@@ -218,9 +218,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   会把行压到重问日（生产实测 15 行 `next_verify_date=2026-09-29`），于是
   `GET /api/predictions?lifecycle=unverifiable` 印 `due: 0 / unverifiable: 15`，
   页面上「待验证到期」不再是"每次点都白跑 15 条然后还是 15 条"。
-  线上 `/api/stats/evidence` 现在印
-  `已判 1190 / 判对 644 = 54.12%、⚠ 419、区间 33.68% → 34.37%~69.58%、as_of 2026-09-26`
-  —— 与本机的 `scripts/audit_verdict_evidence.py --production` 同源同数（两条独立路径互相印证）。
+  线上 `/api/stats/evidence` 与 `python scripts/audit_verdict_evidence.py --production` 同源同数
+  （两条独立路径互相印证），2026-09-26 23:3x 实测印
+  `已判 1191 / 判对 644 = 54.07%、⚠ 419、区间 34.34% ~ 69.52%`；页面另一侧
+  `GET /api/predictions?lifecycle=due` 当场回 `due: 0 / unverifiable: 0 / all: 1601`。
+  **这两个数每天在动，别抄这里的文本，跑命令。**
   **两条要说清的**：① 那 131 条"关联"没动任何预测（`prediction_change_logs` 当天新增 0 行），
   但其中一条分支会给 `fund_info.sector_type` 补空值 ⇒ 这类副作用要写进预检清单；
   ② 上游会给**预签发的未来净值行**（实测 `000725` 货币B 在 09-25 给了 09-26/09-27，07-31 给过 08-01/08-02），
@@ -280,7 +282,20 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 21:38（北京），**任务 #8：「结构性不可验」从此是一个会自愈的持久状态**——
+最近一次核对（2026-09-26 23:35（北京），**任务 #8 的第二半 + #100/#102：判不了的第二轮不再留在页面上，
+而"会验不了的绑标"这条路当场断掉**——
+验证器第二次判出 `no_source_history`、且**库里末条净值早于窗口起点**（＝这只产品的源端已经不给这段
+发净值，任何一次同步都补不到）时，走 `PredictionService.close_as_unverifiable`：进回收站、
+`deleted_by='system'`、`delete_reason` 写清"已问过两次仍无答案 ⇒ 既不算判对也不算判错、不计入准确率、
+可随时恢复"，台账 `action='archived'` 一并留下；只判过一次、或末条净值还在窗口之后（真在等的）⇒ 仍然只上重问锁。
+一次性收存量用 `scripts/close_unknowable_predictions.py`（默认 dry-run、真写要 `--apply --confirm
+CLOSE-UNVERIFIABLE`、先 `backup/close-unknowable-*.json` 再逐行回执、`--restore-from` 默认也是 dry-run；
+关闭条件与验证器**共用同一把尺子**，不在脚本里留第二份判据）。生产已用它收掉 15 行（`003033`×14 / `002413`×1）。
+同批把**来路**也断了：`retag_prediction` 不再允许把预测绑到"净值覆盖不了这段窗口"的标的上
+（生产台账 57 行 `maintenance_sync/sector_mapping` 就是那 15 条的制造机制），基金页每一行按
+`NAV_LAG_WARN_DAYS` 这**一个**阈值自己说明"源端停更/一条净值都没有"，不再让停更产品长得像我们更新坏了。
+接在任务 #8 第一半（重问锁 + 页面「结构性不可验」那一档）之后，
+最后一次核对（上一批：2026-09-26 21:38（北京），**任务 #8：「结构性不可验」从此是一个会自愈的持久状态**——
 验证器判出 `no_source_history`（真按区间问过数据源、它给不出这段净值）时，把行上那根从来没被读过的
 `next_verify_date` 写成"今天 + 凭据 TTL + 1 天"：`classify` 报 `unverifiable`、到期队列与页面「待验证到期」
 把它减出去、另开一档「结构性不可验」报条数（两个数加起来仍等于全部到期未判），到重问日自己回队，
@@ -290,9 +305,31 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1144 passed / 16 skipped / 0 failed**（660.23 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1153 passed / 16 skipped / 0 failed**（430.41 秒）。
-  （上一基线 1130/1139 → 本批 **1144/1153：+14 条 / 两个口径同增**，任务 #8 那一批：
+- `pytest tests/unit -q` → **1160 passed / 16 skipped / 0 failed**（795.32 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1169 passed / 16 skipped / 0 failed**（838.10 秒）。
+  （上一基线 1144/1153 → 本批 **1160/1169：+16 条 / 两个口径同增**，任务 #8 第二半 + 生产量到的那条机制账：
+  新文件 `test_close_unknowable_predictions.py` 当场收集 **6** 条（关闭必须不写 `is_correct` 且台账记
+  `source='system'`；三条**反面对照**——"净值刚补到窗口附近"、"源端答不出（`None`）"、"源端还答得出行"
+  都不许关；还原默认 dry-run 再真还原；CLI 缺确认词与 `--production` 指向不对各退 4）；
+  `test_structurally_unverifiable_hold.py` 7 → 10 个 `def`、`--collect-only -q` 从 13 到 **16**
+  （+3 条走"第二次才关"那条链：活基金有历史缺口**永不**被关、停更标的第二次答"没有"才关、
+  关闭决定读**两个**条件不是只读那一句答复）；
+  `test_verdict_evidence_badge.py` **+3**（改标**不许**把预测绑到"净值覆盖不了这段窗口"的标的上——
+  生产实测 `003033` 末条 2020-12-08 还压着 37 条活预测、台账 57 行 `maintenance_sync/sector_mapping`，
+  这就是那 15 条验不了的预测的来路；对照组"一条净值都没有的新档案"**照绑**，防这道门建成墙；
+  再加一条 AST 判据：**这把尺子只许有一处实现**，验证器与收口脚本都必须调
+  `nav_cannot_cover_window`，自己比日期就红）；
+  `test_stats_evidence_report.py` **+2**（基金页**每一行**自己说"源端停更"，而且把
+  `NAV_LAG_WARN_DAYS` 改掉那一行的说法必须跟着变 ⇒ 页面与服务里都不许藏第二个数）；
+  `test_frontend_cold_start.py` **+2**（回收站那一行必须把 `delete_reason` 说到屏幕上，不只是存在库里；
+  `nav_stop_note` 光有 `v-if` 没有插值也算没显示）。
+  变异：`python scripts/mutation_proof_frontend.py --only unverifiable` / `--only archive_reason` /
+  `--only stopped_fund_note` 全 RED、CONTROL 全绿（条数一律 `--list` 看末行）。
+  **本批我自己抓到自己的两处**（都由新判据当场点红）：① 我在收口脚本里手写了一份 `latest >= start`，
+  被刚写下的"只许一处实现"那条点红 —— 第 44 轮那道棘轮第二次逮到作者本人；
+  ② 同一脚本的探针缓存**按 `(code,start,end)` 写、按 `code` 读** ⇒ 命中永远为空、"同一窗口只问一次"
+  那句注释是假的（生产那次因此白打 15 次接口）。）
+  （再上一基线 1130/1139 → 那批 **1144/1153：+14 条 / 两个口径同增**，任务 #8 那一批：
   新文件 `test_structurally_unverifiable_hold.py` 当场收集 **13** 条（含"排期不许越过目标日"那条
   按 7 个周期展开；`--collect-only -q` 数），含两条**反面对照**——"没问过的失败（`insufficient_points`）
   不许被锁"与"两档必须互斥、两个数加起来等于全部到期未判"，以及一条第一次走到的旧接线
@@ -1033,6 +1070,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   拿历史截图/旧导出的准确率数字做对比前先确认是哪一批。
 - **改标的只允许一个入口**：`FundSyncManager.retag_prediction()`。它留痕（无 run_id 会自动生成，
   保证能被 `restore_prediction_batch` 整批还原）、必要时清结论、并登记受影响博主以便重算统计列。
+  **它同时是"不许把预测绑到验不了的标的上"那一道门**（2026-09-26 任务 #100）：目标代码在本库的
+  **最后一笔净值早于这条预测的窗口起点** ⇒ 不绑、并当场说出是哪只、停在哪天（尺子只有
+  `prediction_lifecycle.nav_cannot_cover_window` 一处，验证器判"要不要关"问的是同一句话）。
+  起因是生产实测：`003033`（末条净值 2020-12-08）上压着 37 条活预测，台账 57 行
+  `action=maintenance_sync / source=sector_mapping` ⇒ 那批"到期永远判不出来"的行是**这条改标路**
+  造出来的，不是随机坏的。**一条净值都没有 ⇒ 不拦**（新档案还没同步过是常态，拦了就是把门建成墙）。
   `tests/unit/test_verdict_evidence_badge.py::test_no_new_direct_fund_code_writes_appear`
   用 AST 扫 `src/` 里所有 `X.fund_code = ...` 赋值，新增站点会让它变红。
   为什么这么严：第 18 轮实测，`POST /api/funds/update-all`（页面上一个按钮）会按
