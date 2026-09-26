@@ -530,6 +530,14 @@ IMMUNITY_GRANT_SITES = {
     ('src/services/sector_fund_service.py', 'mark_reviewed_by_id'): 2,    # 页面逐行审查
     ('src/services/sector_fund_service.py', 'batch_mark_reviewed'): 2,    # 页面批量审查
     ('src/services/sector_fund_service.py', 'update_mapping'): 2,         # 页面编辑保存
+    # 第 51 轮 B-13：新建那一支以前把 `owner_confirm` 静默丢掉（不白送免疫，但Explicit 令牌
+    # 被吞）⇒ 现在按 `update_mapping` 同口径落署名与锁定，显式令牌就是查询参数
+    # `?owner_confirm=true`；行为判据在 tests/unit/test_sector_mapping_api.py 的
+    # `test_the_create_route_grants_immunity_only_with_the_explicit_token`（两档都钉）。
+    # 条数是 **1** 而不是 2：扫描器认"写死的授予值"，`'owner'` 字面量算一处，
+    # `owner_locked=bool(owner_confirm)` 的值来自参数（看不见真值）⇒ 按第 46 轮那条边界
+    # "值的来路看不见就不算写死"，它不进这一格，由下面那条行为判据两档一起钉。
+    ('src/api/routes/config.py', 'create_sector_mapping'): 1,           # 页面新建映射
     ('scripts/seed_owner_proxies.py', 'main'): 2,                        # `--owner-confirm SEED-PROXY`
 }
 _IMMUNITY_FIELDS = {'owner_locked': (True,), 'reviewed_by': ('owner',)}

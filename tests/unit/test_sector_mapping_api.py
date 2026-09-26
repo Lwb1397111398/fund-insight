@@ -712,3 +712,41 @@ def test_verify_fund_endpoint_reports_what_the_probe_said(tmp_path, monkeypatch)
     assert set(body['data']) == real_keys, \
         '路由改了形（少了/多了键）：页面按 `d.ok` 读，改形就等于把两个验证按钮永久变成"验证失败"'
     assert body['data'] == probe_return, '路由不该加工探针的结论：%s' % body['data']
+
+
+def test_the_create_route_grants_immunity_only_with_the_explicit_token(tmp_path, monkeypatch):
+    """新建映射这一支的老板免疫只认 `owner_confirm`，两档都得钉（第 51 轮 B-13）。
+
+    上一版它把参数**静默丢掉**了：不白送免疫（方向保守），但老板明确确认过一次却什么都不落、
+    回执还写着"已创建映射"。现在与 `update_mapping` 同口径：署名与锁定一起给、一起不给。
+    姿势：直接打路由函数（`TestClient` 那一层要 `X-Access-Password`，判据挂在外面的话
+    拿到的会是 401/503 的 body，测的就不是这一条规矩了）。
+    """
+    from src.api.routes import config as cfg
+    from src.models.database import FundInfo, SectorFundMapping
+
+    monkeypatch.setattr('src.services.sector_fund_service._manual_identity_verdict',
+                        lambda code, name, sector='': (None, None))
+    sf = _database(tmp_path)
+
+    def _make(sector, owner_confirm):
+        db = sf()
+        try:
+            if not db.query(FundInfo).filter_by(fund_code='512480').first():
+                db.add(FundInfo(fund_code='512480', fund_name='半导体ETF'))
+                db.commit()
+            res = cfg.create_sector_mapping(
+                cfg.MappingCreate(sector_name=sector, fund_code='512480',
+                                  fund_name='半导体ETF'),
+                owner_confirm=owner_confirm, db=db)
+            assert res['success'] is True, res
+            row = db.query(SectorFundMapping).filter_by(sector_name=sector).one()
+            return row.reviewed, bool(row.owner_locked), row.reviewed_by
+        finally:
+            db.close()
+
+    got = _make('T-新建无令牌', False)
+    assert got[0] is True and not got[1] and got[2] != 'owner',         '没给显式令牌却落了老板署名/锁定：%s' % (got,)
+    got2 = _make('T-新建带令牌', True)
+    assert got2[1] is True and got2[2] == 'owner',         '老板显式确认过新建这一行，参数却被静默丢掉（回执还写着"已创建映射"）：%s' % (got2,)
+    assert got2[0] is True, '给了令牌却不审查：%s' % (got2,)
