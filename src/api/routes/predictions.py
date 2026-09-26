@@ -239,13 +239,16 @@ def sync_sector_mapping(
 
 
 def _count_due_predictions(db: Session, today: date) -> int:
-    """统计真正可批量验证的预测：只包含预测周期已结束的记录。"""
-    return db.query(Prediction).filter(
-        Prediction.status == 'pending',
-        Prediction.is_deleted == False,
-        Prediction.prediction_type != 'flat',
-        Prediction.target_date <= today
-    ).count()
+    """页面上那个按钮的分母：**与批次跑的队列同一把尺子**。
+
+    旧写法自己抄了一套条件（`status == 'pending'` + 目标日到期），而批次实际走
+    `filter_due_for_verify`（`is_correct is null` + 重问锁 + 排除 flat）⇒ 两个数天生
+    会对不上，进度条的 `X / total` 与"还有几条没跑到"都跟着说谎。`status` 还是历史
+    遗留列（生产实测 success 591 / pending 559 / failed 466，与"已判/未判"不是一回事）。
+    """
+    from src.services.prediction_lifecycle import filter_due_for_verify
+
+    return len(filter_due_for_verify(db, as_of=today))
 
 
 def _due_skipped_predictions(db: Session, today: date) -> list:
@@ -305,7 +308,11 @@ def verify_all_predictions(background_tasks: BackgroundTasks, db: Session = Depe
     if status["in_progress"]:
         return {"success": True, "message": "验证正在进行中，请稍候...", "data": status}
 
-    today = date.today()
+    # 与批次同一个"今天"：`verify_all_pending` 用北京时区的 `current_as_of()`，
+    # 这里用 `date.today()` 会在 UTC 与北京交界的那几小时数出另一个队列。
+    from src.services.prediction_lifecycle import current_as_of
+
+    today = current_as_of()
     pending_count = _count_due_predictions(db, today)
 
     if pending_count == 0:

@@ -219,10 +219,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   `GET /api/predictions?lifecycle=unverifiable` 印 `due: 0 / unverifiable: 15`，
   页面上「待验证到期」不再是"每次点都白跑 15 条然后还是 15 条"。
   线上 `/api/stats/evidence` 与 `python scripts/audit_verdict_evidence.py --production` 同源同数
-  （两条独立路径互相印证），2026-09-26 23:3x 实测印
-  `已判 1191 / 判对 644 = 54.07%、⚠ 419、区间 34.34% ~ 69.52%`；页面另一侧
+  （两条独立路径互相印证），2026-09-27 04:22（北京）实测印
+  `已判 1191 / 判对 638 = 53.57%、⚠ 265（22.3%）、区间 41.39% ~ 63.64%`；页面另一侧
   `GET /api/predictions?lifecycle=due` 当场回 `due: 0 / unverifiable: 0 / all: 1601`。
   **这两个数每天在动，别抄这里的文本，跑命令。**
+  ⚠ 从 419 掉到 265 不是"证据自己复现了"，是**任务 #101 那一次「按板块对齐标的」**（09-26 18:33，
+  `run_id=ui-sync-20260926-183329`）把 320 条换到了给得出这段窗口净值的标的上、其中 239 条旧结论被清掉重判、
+  6 条因标的给不出证据当场没绑（逐行原因在回执 `skipped_unservable_details`，还原走
+  `scripts/restore_prediction_batch.py`）；随后 `update-all`（净值末条到今天、失败 1 只 = `603758`）
+  + `verify-all`（239 条全判出来）。清掉的那 6 条判对/判错都算过一遍 ⇒ 判对从 644 变 638 是**这次重判的结果**，
+  不是数据回补。桶的构成也从 `verdict_under_other_fund 220` 掉到 88（这正是那条族的本体）。
   **两条要说清的**：① 那 131 条"关联"没动任何预测（`prediction_change_logs` 当天新增 0 行），
   但其中一条分支会给 `fund_info.sector_type` 补空值 ⇒ 这类副作用要写进预检清单；
   ② 上游会给**预签发的未来净值行**（实测 `000725` 货币B 在 09-25 给了 09-26/09-27，07-31 给过 08-01/08-02），
@@ -282,7 +288,49 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-27 02:14（北京），**任务 #105 + #103/#104：改标那道证据门改成问「验证器判得出来吗」，
+最近一次核对（2026-09-27 04:19（北京），**任务 #107 + #106：验证批次改问"心跳"，回执只数真的动了的行**——
+先纠我自己一句说错的话：我上一轮汇报说"verify-all 报 completed 却有 30 条从没被跑过"。**这是错的**，
+错在我拿**中途轮询**的 `209 / 239` 当终态。真去读 `batch_analysis_tasks`（只读，219/220 两行）看到的是
+219：`total 239 / processed 239 / failed 0`、18:44:01→19:18:35（**34.5 分钟**）；220：19:16:02→19:18:36。
+⇒ 那 30 条只是还没轮到，而**这两行重叠在跑才是缺陷**：`PredictionVerifyTask._is_stale` 拿
+`started_at`（永不推进）当超时参照 ⇒ 第 30 分钟 `status()` 把还在推进的批次标成 failed、
+`in_progress` 翻 false、按钮解锁 ⇒ 第二批并发写同一批预测的结论。兄弟两支
+（`post_analysis_service.heal_stale_job` / `viewpoint_workflow_service.heal_stale_task`）**早就是心跳语义**
+（`updated_at or started_at or created_at`，注释还写明"绝不能误杀仍在推进的慢任务"），只有预测这一支漂了两个月。
+连带纠一处文档谎话：`预测验证与准确率统计.md` 那句"靠进程锁 + advisory lock 保证同时只有一个批量进程"
+已被这两行台账证伪（advisory lock 是事务级、`start()` 一 commit 就放开；`_PROCESS_LOCK` 也只覆盖 `start()`）。
+四处改动：① `_is_stale` 改问最后一条心跳（真卡在某条上 30 分钟仍会判死，那才是要判死的形状）；
+② `finish()` 只在回执**真的带了数**时才改写计数 —— 崩在半路那一支只填 message，旧写法三个
+`int(... or 0)` 把已推进的 209/239 抹成 0 ⇒ "跑了 209 条然后断"与"一条没跑"在台账上长成同一个样子；
+③ `_serialize` 补 `not_processed`，并把"这一批队列里 N 条、只跑到 M 条 ⇒ 还有 K 条没验证（原因）"
+拼进页面那一栏已经在读的 `failure_summary`（不新接模板，避免"接口有字段≠老板看得见"）；
+④ 按钮的分母 `_count_due_predictions` 原来自己抄了一套 `status == 'pending'` + 目标日，而批次实际走
+`filter_due_for_verify`（`is_correct is null` + 重问锁）⇒ 现在直接数同一个队列，"今天"也从
+`date.today()` 换成北京 `current_as_of()`（生产此刻 `status` 与 `is_correct` 恰好逐档对得上：
+pending↔未判 410、success 638 / failed 553↔已判 1191，所以今天两个数一样 —— **那是巧合不是等价**）。
+#106 那三处同类：`retag_prediction` 的 bool 分不清"没动/被拒/动了"，所以 `sync_missing_funds` 里两处
+`linked += 1` 与 `sync_predictions_by_sector_mapping` 的 `predictions_updated += 1` 会把拒掉的行算成做了事
+⇒ 新增公用的 `retag_gap(db, pred, code) -> (理由 / None, 证据)`（**窗口判据在整个同步器里只此一处调用，
+且必须待在 `retag_gap` 里**，AST 钉住、只数真的调用不数注释），拒了的行进 `skipped_unservable` 桶并带人话原因，
+`update-all` 那句成功消息把这条数说出来。要说清：`sync_predictions_by_sector_mapping` 在 `src/` 里
+**零调用方**（`grep -rn` 只命中定义那行）⇒ 按仓库规矩**不给死路写绿灯判据**，判据都落在活的 `sync_missing_funds` 上。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间机器安静）：
+
+- `pytest tests/unit -q` → **1179 passed / 16 skipped / 0 failed**（604.13 秒）。
+- `pytest tests/ -q` → **1188 passed / 16 skipped / 0 failed**（560.61 秒）。
+  （上一基线 1172/1181 → 本批 **1179/1188：+7 条 / 两个口径同增**：
+  `test_prediction_verify_batch_task.py` +4（还在推进的慢批次不许判死、跑不够要报出条数、
+  崩了的批次要留住进展、分母与队列同一把尺子）+ `test_fund_sync_missing_funds.py` +3
+  （被证据门拒的行不许算进"关联 N 个"、能出证据的照常绑上、唯一出处那条 AST）。
+  **两条改契约不增条数**：`test_prediction_verify_batch_task.py::test_prediction_verify_task_replaces_stale_running_task`
+  与 `test_stuck_task_and_fund_speed.py::test_status_marks_stale_running_task_failed` —— 它们的样品原来只把
+  `started_at` 挪到 31 分钟前，那在新语义下正是"跑了很久但仍在推进"，所以样品改成连心跳一起挪；
+  另有一条**被我自己的重构打红**：`test_the_evidence_gate_is_wired_into_both_the_move_and_the_preview`
+  原来断言 `retag_prediction` 函数体里出现 `target_cannot_evidence_window`，而我把这一跳收进 `retag_gap`
+  ⇒ 判据跟着改判**两跳**（少任何一跳都红；掏空 `retag_gap` 复跑 3 failed，已实测）。
+  变异：本次 5 处手工变异全 RED（心跳改回 `started_at` / `finish` 改回无条件归零 / `not_processed` 那一支
+  改 `if False` / 证据门那一支改 `if False` / `retag_gap` 掏空），跑完逐文件回读比对还原字节一致。）
+  （上一批：2026-09-27 02:14（北京），**任务 #105 + #103/#104：改标那道证据门改成问「验证器判得出来吗」，
 而 dry-run 与实跑从此是同一个数**——
 在生产上点了一次「按板块对齐标的」的预览，回执说「将更新 326 个预测」；拿只读连接按验证器自己的那两把尺子
 （窗口内 ≥ `VERIFY_MIN_DATA_POINTS` 个点、终点距目标日 ≤ `VERIFY_MAX_END_NAV_AGE_DAYS` 天，见

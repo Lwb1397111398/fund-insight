@@ -71,11 +71,16 @@ def test_prediction_verify_task_finish_is_persisted(test_db):
 def test_prediction_verify_task_replaces_stale_running_task(test_db):
     from src.services.prediction_verify_task import PredictionVerifyTask
 
+    # 心跳语义：判死问的是"最后一次进展离现在多久"（`updated_at`），
+    # 所以样品必须把**心跳**也摆到 31 分钟前 —— 只挪 started_at 的是"跑了很久但还在推进"，
+    # 那一支由下面 test_a_slow_batch_that_keeps_ticking_is_not_declared_dead 负责。
+    long_ago = datetime.now() - timedelta(minutes=31)
     stale = BatchAnalysisTask(
         task_type="predictions",
         status="running",
         total_count=5,
-        started_at=datetime.now() - timedelta(minutes=31),
+        started_at=long_ago,
+        updated_at=long_ago,
     )
     test_db.add(stale)
     test_db.commit()
@@ -86,7 +91,116 @@ def test_prediction_verify_task_replaces_stale_running_task(test_db):
     assert started["success"] is True
     assert started["data"]["task_id"] != stale.id
     assert stale.status == "failed"
-    assert "超时" in stale.error_message
+    assert "没有新的进展" in stale.error_message
+
+
+def test_a_slow_batch_that_keeps_ticking_is_not_declared_dead(test_db):
+    """跑了 35 分钟、每条都在推进的批次，不许被当成僵尸。
+
+    生产实测（`batch_analysis_tasks` 219，2026-09-26）：239 条跑了 34.5 分钟，
+    旧写法拿**永不推进**的 `started_at` 当参照 ⇒ 第 30 分钟 `status()` 把它标成 failed、
+    `in_progress` 翻 false、按钮解锁，19:16 于是真起了第二批（220），
+    两批并发写同一批预测的结论。帖子/观点两支早就是心跳语义，这一支是异类。
+    """
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    slow = BatchAnalysisTask(
+        task_type="predictions", status="running", total_count=239,
+        processed_count=209, success_count=209,
+        started_at=datetime.now() - timedelta(minutes=35),
+        updated_at=datetime.now() - timedelta(seconds=20),   # 上一条刚跑完
+    )
+    test_db.add(slow)
+    test_db.commit()
+
+    status = PredictionVerifyTask(stale_after=timedelta(minutes=30)).status(db=test_db)
+    second = PredictionVerifyTask(stale_after=timedelta(minutes=30)).start(total=1, db=test_db)
+
+    assert status["in_progress"] is True, '还在推进的批次被判死 ⇒ 按钮会放行第二批并发写结论'
+    assert slow.status == "running"
+    assert second["success"] is False, '第二批必须被拒（同一把锁还在原批次手里）'
+
+
+def test_a_finished_batch_reports_the_rows_it_never_reached(test_db):
+    """跑完但没跑够的那一批，必须从状态里看得见，不许长得像"全部验证完成"。"""
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    task = PredictionVerifyTask()
+    started = task.start(total=239, db=test_db)
+    task_id = started["data"]["task_id"]
+    task.update_progress(209, 209, 0, db=test_db, task_id=task_id)
+    # 回执说只跑了 209 条（崩在半路 / 队列与分母对不上），failed_count 还是 0
+    task.finish({"success": True, "message": "验证完成",
+                 "data": {"total": 239, "success_count": 209, "failed_count": 0}},
+                db=test_db, task_id=task_id)
+
+    status = PredictionVerifyTask().status(db=test_db)
+
+    assert status["not_processed"] == 30
+    assert status["failure_summary"] and "还有 30 条没验证" in status["failure_summary"], \
+        '页面上"上次验证未成功原因"那一栏不许对 30 条沉默'
+
+
+def test_a_crashed_batch_keeps_the_progress_it_made(test_db):
+    """崩在半路的回执只有一句话、没有数 —— 那更不许把已经跑掉的 209 条抹成 0。"""
+    from src.services.prediction_verify_task import PredictionVerifyTask
+
+    task = PredictionVerifyTask()
+    started = task.start(total=239, db=test_db)
+    task_id = started["data"]["task_id"]
+    task.update_progress(209, 209, 0, db=test_db, task_id=task_id)
+    task.finish({"success": False, "message": "后台验证失败: 连接断了"},
+                db=test_db, task_id=task_id)
+
+    status = PredictionVerifyTask().status(db=test_db)
+
+    assert status["processed_count"] == 209, '台账把"跑了 209 条然后断"记成"一条都没跑"'
+    assert status["not_processed"] == 30
+    assert "还有 30 条没验证" in status["failure_summary"]
+    assert "连接断了" in status["failure_summary"] or status["last_result"]["message"]
+
+
+def test_the_button_counts_the_same_queue_the_batch_runs(test_db):
+    """页面上那个按钮的分母，必须与批次实际跑的队列是**同一把尺子**。
+
+    旧写法自己抄了一套（`status == 'pending'` + 目标日到期），而批次走
+    `filter_due_for_verify`（`is_correct is null` + 重问锁）⇒ 进度条 `X / total`
+    与 `not_processed` 都跟着那个假分母说谎。`status` 还是历史遗留列
+    （生产 09-25 实测 success 591 / pending 559 / failed 466，与"已判/未判"不是一回事）。
+    """
+    from datetime import date
+
+    from src.api.routes.predictions import _count_due_predictions
+    from src.services.prediction_lifecycle import filter_due_for_verify
+    from src.models.database import Blogger, Post
+
+    today = date(2026, 9, 26)
+    blogger = Blogger(name="测试博主", platform="eastmoney")
+    test_db.add(blogger)
+    test_db.flush()
+    post = Post(blogger_id=blogger.id, title="测试", content="内容", post_date=today)
+    test_db.add(post)
+    test_db.flush()
+    test_db.add_all([
+        # 正常到期：两把尺子都该认
+        Prediction(post_id=post.id, blogger_id=blogger.id, prediction_type="up",
+                   prediction_date=today - timedelta(days=30), target_date=today,
+                   status="pending", is_deleted=False),
+        # 被重问锁压着（结构性不可验）：批次不跑它，旧分母却照样算进去
+        Prediction(post_id=post.id, blogger_id=blogger.id, prediction_type="up",
+                   prediction_date=today - timedelta(days=30), target_date=today,
+                   status="pending", is_deleted=False,
+                   next_verify_date=today + timedelta(days=3)),
+        # 已经有结论、`status` 却还挂着 pending：旧分母算它，批次不跑
+        Prediction(post_id=post.id, blogger_id=blogger.id, prediction_type="up",
+                   prediction_date=today - timedelta(days=30), target_date=today,
+                   status="pending", is_deleted=False, is_correct=True),
+    ])
+    test_db.commit()
+
+    assert _count_due_predictions(test_db, today) == len(
+        filter_due_for_verify(test_db, as_of=today)) == 1, \
+        '分母与队列又分成两套 ⇒ 进度条与"还有几条没跑到"会一起说谎'
 
 
 def test_count_due_predictions_excludes_future_targets(test_db):

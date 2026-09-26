@@ -35,6 +35,25 @@ class FundSyncManager:
             return None
 
     @staticmethod
+    def retag_gap(db: Session, pred, new_code: str,
+                  evidence: tuple = None) -> tuple:
+        """问一次"这只标的给不给得出这段窗口的净值证据"，回 `(拦下的理由 / None, 证据)`。
+
+        存在的理由是**回执不许自己编第二套原因**：`retag_prediction` 只回一个 bool，
+        而"已经是这个标的"与"被证据门拒了"共用同一个 False（见它的 docstring），
+        所以调用方想知道"为什么没动"只能问这把尺子。把 `(理由, 证据)` 一起交出：
+        证据递给 `retag_prediction`，同一批行就不会问两次、两次答案还不一样。
+        """
+        from src.services.prediction_lifecycle import (
+            target_cannot_evidence_window, window_evidence)
+
+        if evidence is None:
+            evidence = window_evidence(db, new_code, pred.prediction_date,
+                                       pred.target_date)
+        return target_cannot_evidence_window(
+            evidence[0], evidence[1], pred.prediction_date, pred.target_date), evidence
+
+    @staticmethod
     def retag_prediction(db: Session, pred, new_code: str, new_name: str, *,
                          source: str = 'fund_sync', run_id: str = None,
                          touched_bloggers: set = None,
@@ -70,14 +89,7 @@ class FundSyncManager:
         # 都没有 ⇒ 不下结论（新档案刚建、还没同步过是常态），交回正常流程。
         # `evidence` 是批量调用方（「按板块对齐标的」）预先读好的那一份，
         # 不传才自己查一次 —— 预览与实跑因此问的是同一句话、给出同一个数。
-        from src.services.prediction_lifecycle import (
-            target_cannot_evidence_window, window_evidence)
-
-        if evidence is None:
-            evidence = window_evidence(db, new_code, pred.prediction_date,
-                                       pred.target_date)
-        gap = target_cannot_evidence_window(
-            evidence[0], evidence[1], pred.prediction_date, pred.target_date)
+        gap, _ = FundSyncManager.retag_gap(db, pred, new_code, evidence)
         if gap:
             print('[跳过改标] 预测 %s 不绑 %s：%s'
                   % (getattr(pred, 'id', '?'), new_code, gap))
@@ -203,8 +215,9 @@ class FundSyncManager:
             {
                 "checked": 检查的预测数,
                 "added": 添加的基金数,
-                "linked": 关联的预测数,
+                "linked": 关联的预测数（**只数真的绑上了的**）,
                 "already_ok": 标的本来就对、这一轮一个字都没写的预测数,
+                "skipped_unservable": 板块有基金但那只标的给不出这段窗口的净值证据 ⇒ 没绑,
                 "skipped": 跳过的（同类型已有）,
                 "failed": 失败的,
                 "details": [详细操作记录]
@@ -214,6 +227,7 @@ class FundSyncManager:
             "checked": 0,
             "added": 0,
             "linked": 0, "already_ok": 0,
+            "skipped_unservable": 0,
             "skipped": 0,
             "failed": 0,
             "details": []
@@ -253,9 +267,23 @@ class FundSyncManager:
                 # 带 run_id + 重算统计的 PredictionMaintenanceService.sync_sector_mappings。
                 fund = existing_sectors[sector]
                 if not pred.fund_code:
+                    # 先问一次证据门，再决定"关联"这件事算不算数：
+                    # `retag_prediction` 的返回值分不清"没动"与"动过了"（见上面的 docstring），
+                    # 以前这里无条件 `linked += 1` ⇒ 回执把被拒的行也说成"关联了 N 个预测"。
+                    blocker, evidence = self.retag_gap(db, pred, fund.fund_code)
+                    if blocker:
+                        result["skipped_unservable"] += 1
+                        result["details"].append({
+                            "prediction_id": pred.id,
+                            "action": "跳过",
+                            "fund_code": fund.fund_code,
+                            "reason": blocker
+                        })
+                        continue
                     self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
                                           source='fund_sync_link',
-                                          touched_bloggers=touched_bloggers)
+                                          touched_bloggers=touched_bloggers,
+                                          evidence=evidence)
                     result["linked"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
@@ -359,11 +387,25 @@ class FundSyncManager:
                     existing_fund_codes[fund.fund_code] = fund
 
                     # 关联预测（同样走统一入口，别绕过留痕与清结论）
+                    result["added"] += 1      # 档案已经落库，这一句与绑不绑无关
+                    blocker, evidence = self.retag_gap(db, pred, fund.fund_code)
+                    if blocker:
+                        # 档案是刚建的、库里只有这 30 天 ⇒ 已经收口的窗口永远补不到，
+                        # 绑过去等于亲手造一条"到期也判不出来"的预测。基金照留，
+                        # 只是这一条预测不绑它。
+                        result["skipped_unservable"] += 1
+                        result["details"].append({
+                            "prediction_id": pred.id,
+                            "action": "跳过",
+                            "fund_code": fund.fund_code,
+                            "reason": blocker
+                        })
+                        continue
                     self.retag_prediction(db, pred, fund.fund_code, fund.fund_name,
                                           source='fund_sync_new_fund',
-                                          touched_bloggers=touched_bloggers)
+                                          touched_bloggers=touched_bloggers,
+                                          evidence=evidence)
 
-                    result["added"] += 1
                     result["linked"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
@@ -527,9 +569,10 @@ class FundSyncManager:
         Returns:
             {
                 "total_mappings": 映射数,
-                "predictions_updated": 预测更新数,
+                "predictions_updated": 预测更新数（**只数真的换了标的的**）,
                 "predictions_unchanged": 预测未变数,
                 "predictions_no_mapping": 预测无映射数,
+                "predictions_skipped_unservable": 映射挑的那只标的给不出这段窗口的净值证据 ⇒ 没改,
                 "funds_added": 新增基金数,
                 "funds_sector_updated": 基金板块更新数,
                 "verified_reset": 已验证重置数,
@@ -545,6 +588,7 @@ class FundSyncManager:
             "predictions_updated": 0,
             "predictions_unchanged": 0,
             "predictions_no_mapping": 0,
+            "predictions_skipped_unservable": 0,
             "funds_added": 0,
             "funds_sector_updated": 0,
             "verified_reset": 0,
@@ -608,9 +652,24 @@ class FundSyncManager:
             old_name = pred.fund_name
 
             # 更新预测的基金关联：走统一入口（留痕 + 清掉旧标的判出的结论）
+            # 这一支原来把 `retag_prediction` 的返回值当"改标成功了没"用，而它分不清
+            # "没动"与"动过了" ⇒ 被证据门拒了的行照样进 `predictions_updated`（第 51 轮 B-2
+            # 同一族的另一半）。先问同一把尺子，拒了就单列一条、给出人话原因。
+            blocker, evidence = self.retag_gap(db, pred, mapping['code'])
+            if blocker:
+                result["predictions_skipped_unservable"] += 1
+                result["details"].append({
+                    "prediction_id": pred.id,
+                    "sector": sector,
+                    "old_fund": f"{old_name}({old_code})" if old_code else "无",
+                    "new_fund": f"{mapping['name']}({mapping['code']})",
+                    "reason": blocker
+                })
+                continue
             cleared_verdict = self.retag_prediction(
                 db, pred, mapping['code'], mapping['name'],
-                source='fund_sync_sector_map', touched_bloggers=touched_bloggers)
+                source='fund_sync_sector_map', touched_bloggers=touched_bloggers,
+                evidence=evidence)
             result["predictions_updated"] += 1
 
             detail = {
@@ -754,6 +813,12 @@ class FundSyncManager:
             if sync_report.get("already_ok"):
                 # "另有 N 条本来就对"必须单独说：不说的话这一堆会被读成"推进了 N 条"
                 success_msg += f"另有 {sync_report['already_ok']} 条标的本来就是它、未做任何改动，"
+            if sync_report.get("skipped_unservable"):
+                # 同一族：没绑上的行必须报数并给出人话原因，否则"关联 0 个"看着像失败、
+                # "关联 5 个"看着像全做完了（第 51 轮 B-2 的另一半）
+                success_msg += (f"另有 {sync_report['skipped_unservable']} 条没绑："
+                                f"板块那只标的给不出这段窗口的净值证据，绑过去会变成到期也判不了"
+                                f"的预测，逐条原因见明细，")
             success_msg += f"更新 {update_report['updated']} 个基金"
 
             if failed_funds:

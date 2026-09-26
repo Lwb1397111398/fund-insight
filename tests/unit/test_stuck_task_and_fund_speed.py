@@ -14,15 +14,23 @@ from src.services.fund_service import FundService
 
 
 def test_status_marks_stale_running_task_failed(test_db):
-    """status() 必须自愈超时任务，否则前端永远停在"验证中"。"""
+    """status() 必须自愈超时任务，否则前端永远停在"验证中"。
+
+    心跳语义（2026-09-26 生产实测改的）：判死问的是"最后一次进展离现在多久"，
+    所以样品把 `updated_at` 也摆到 31 分钟前 —— 只挪 `started_at` 的那种是
+    "跑了很久但每条都在推进"，那一支**不许**被判死
+    （见 `test_prediction_verify_batch_task.py::test_a_slow_batch_that_keeps_ticking_is_not_declared_dead`）。
+    """
     from src.services.prediction_verify_task import PredictionVerifyTask
 
+    long_ago = datetime.now() - timedelta(minutes=31)
     stale = BatchAnalysisTask(
         task_type="predictions",
         status="running",
         total_count=188,
         processed_count=0,
-        started_at=datetime.now() - timedelta(minutes=31),
+        started_at=long_ago,
+        updated_at=long_ago,
     )
     test_db.add(stale)
     test_db.commit()
@@ -32,7 +40,7 @@ def test_status_marks_stale_running_task_failed(test_db):
 
     assert status["in_progress"] is False
     assert stale.status == "failed"
-    assert "超时" in (stale.error_message or "")
+    assert "没有新的进展" in (stale.error_message or "")
 
 
 def test_status_keeps_fresh_running_task_in_progress(test_db):

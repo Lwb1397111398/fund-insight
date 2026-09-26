@@ -214,7 +214,12 @@ def test_the_evidence_gate_is_wired_into_both_the_move_and_the_preview():
 
     called, consts = facts(os.path.join('src', 'fund', 'fund_sync_manager.py'),
                            'retag_prediction')
-    assert 'target_cannot_evidence_window' in called, '动手那一侧没接证据门'
+    # 2026-09-26 起"动手那一侧"接的是 `retag_gap`（回执也要问同一把尺子拿原因），
+    # 所以这条判两跳：`retag_prediction` 必须调 `retag_gap`，`retag_gap` 必须调那把尺子。
+    # 少任何一跳都红 —— 只判第一跳的话，把 `retag_gap` 掏空成直接返回 None 也能过。
+    assert 'retag_gap' in called, '动手那一侧不再问 retag_gap ⇒ 证据门与回执会各说一套'
+    gap_called, _ = facts(os.path.join('src', 'fund', 'fund_sync_manager.py'), 'retag_gap')
+    assert 'target_cannot_evidence_window' in gap_called, '证据门从 retag_gap 里掉了'
     assert 'VERIFY_MIN_DATA_POINTS' not in consts and 'VERIFY_MAX_END_NAV_AGE_DAYS' not in consts, \
         '改标处自己比阈值 ⇒ 验证器改了门不跟着改'
 
