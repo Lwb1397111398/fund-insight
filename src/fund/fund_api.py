@@ -770,6 +770,14 @@ class FundDataManager:
             day_growth = actual_day_growth if actual_day_growth is not None else info.get('day_growth')
             if actual_nav_date:
                 nav_date = actual_nav_date
+            # 档案头不许是"还没到的那一天"。第 49 轮 A 席量到：那道 `is_future_nav` 的门以前
+            # 只挂在 `update_all_funds_info` 一个 caller 上，而这里（`scheduler.py` 每天调
+            # `update_fund_info`）是同一条形状的另一条活路 —— 货币基金会给预签发的净值行
+            # （000725 实测在 09-25 给出 09-26/09-27），照抄就把档案头推到将来。
+            if is_future_nav(nav_date):
+                logger.warning('[净值门] %s 的档案头日期 %s 晚于今天 ⇒ 不回写，保留现有档案头',
+                               fund_code, nav_date)
+                nav_date = fund.nav_date if fund else None
             
             if fund:
                 if info.get('fund_name'):

@@ -51,8 +51,9 @@ uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
 
 | 变量 | 说明 |
 | --- | --- |
-| `PYTHON_VERSION` | Render 当前为 `3.10.12` |
-| `APP_ENV` | `production` |
+| `PYTHON_VERSION` | **这个值对现有服务没生效过**：2026-09-25 第一次部署失败时 Render 实际在跑 3.14.3，而 Blueprint 里钉的是 3.10.12。解释器现在由仓库里的 `.python-version`（`3.12.10`）钉；仪表板里这一项要么别填、要么填同一个值（填了旧值会盖过仓库）。 |
+| `APP_ENV` | 文档一直写 `production`，但 **2026-09-26 实测线上 `app_env=development`** ⇒ 那个变量在服务上根本没设。这一差不是好看与否的问题：`GET /api/stats` 那道"生产不外泄错误细节"的门以前就问的是它，恒为假 ⇒ 一次抛错会把 `str(e)` + 完整堆栈发进手机 WebView。该判据已改成**问连的是哪个库**（本地 sqlite 才给堆栈），所以这个变量设不设都不再决定这条；但它仍是运维面上一个"文档说有的东西其实没有"的例子。 |
+
 | `DATABASE_URL` | Supabase/PostgreSQL 连接串，secret |
 | `ACCESS_PASSWORD` | API 访问密码，secret |
 | `CORS_ORIGINS` | 生产域名，例如 `https://fund-insight.onrender.com` |
@@ -262,6 +263,8 @@ GET /api/health/detail
 - **跑的是哪一版**：`git_commit` / `git_branch` / `git_commit_source`（来自 Render 注入的
   `RENDER_GIT_COMMIT`、`RENDER_GIT_BRANCH`；本机跑就是 `unknown` + `unavailable`），
   加 `started_at` / `uptime_seconds`（进程导入时刻 ⇒ 部署成功的直接信号就是它归零）。
+  `started_at` **带 `+08:00` 偏移**（北京）：Render 没配 TZ，裸墙上时钟在那台机器上是 UTC，
+  曾经印成"05:31 启动"而北京其实是 13:31 —— 这个字段唯一的用途就是拿它对时刻，差八小时就等于逼人心算。
   为什么要加：2026-09-25 量出来线上是 8 月 6 日的构建、本地领先 113 个提交，而那之前
   文档里每一句"页面上看得见"都没被送达过 —— 判"部署生效没有"以前只能人比对页面指纹
   （`curl …/index.html | md5sum` 对 `git show HEAD:web/index.html`），
@@ -272,8 +275,12 @@ GET /api/health/detail
 # 线上是哪一版（要带口令；口令只从 .env 取，不进命令行历史也不回显）
 PW="$(grep -m1 '^ACCESS_PASSWORD=' .env | cut -d= -f2- | tr -d '\r')"
 curl -s -H "X-Access-Password: $PW" https://fund-insight.onrender.com/api/health/detail \
-  | python -c "import json,sys; d=json.load(sys.stdin); print(d['git_branch'], d['git_commit'], d['git_commit_source'], d['uptime_seconds'])"
+  | python -c "import json,sys; d=json.load(sys.stdin); print(d['git_branch'], d['git_commit'], d['git_commit_source'], d['started_at'], d['uptime_seconds'], 'app_env=' + d['app_env'])"
 ```
+
+`app_env` 也在这一行里打出来，就是为了下一轮部署后**当场看见**"那个变量到底设了没有"
+（2026-09-26 实测它是 `development`，而文档写的是 `production` —— 这种差只有在出口上摆出来才会被注意到）。
+
 
 ## 常见运维命令
 
