@@ -8,7 +8,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import os
 import sys
@@ -281,7 +281,11 @@ def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat(), "db_type": DB_TYPE, "version": "2.0.0"}
 
 
-_BOOT_AT = datetime.now()      # 进程导入时刻：uvicorn 重启它才归零 ⇒ "部署生效没有"的直接信号
+# 北京时刻，带偏移：Render 没设 TZ，裸 `datetime.now()` 在那台机器上就是 UTC 无时区串
+# —— 线上实测 `started_at=2026-09-26T05:31:44` 而北京是 13:31。这个字段唯一的用途就是
+# 拿它对"部署生效没有"的时刻，差八小时等于逼读的人自己心算（同仓 `current_as_of()` 早就为这件事改过一遍）。
+BEIJING = timezone(timedelta(hours=8))
+_BOOT_AT = datetime.now(BEIJING)      # 进程导入时刻：uvicorn 重启它才归零 ⇒ "部署生效没有"的直接信号
 
 
 def _build_identity() -> dict:
@@ -300,7 +304,9 @@ def _build_identity() -> dict:
         'git_commit_source': 'RENDER_GIT_COMMIT' if commit else 'unavailable',
         # 进程启动时刻与已运行秒数：部署成功的直接信号就是它归零重来
         'started_at': _BOOT_AT.isoformat(),
-        'uptime_seconds': int((datetime.now() - _BOOT_AT).total_seconds()),
+        # 两边都必须带同一个偏移：`_BOOT_AT` 现在是北京（aware），
+        # 拿裸 `datetime.now()`（naive）去减会直接 TypeError —— 这条出口别把自己弄崩。
+        'uptime_seconds': int((datetime.now(BEIJING) - _BOOT_AT).total_seconds()),
     }
 
 

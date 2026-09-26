@@ -32,6 +32,22 @@ def _no_roster_download(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _archive_identity_gate_stubbed(monkeypatch):
+    """第 49 轮新增的**建档身份门**会让 `ensure_fund_info_exists` 打外网 ⇒ 这里成桩。
+
+    门搬到 `SectorFundService.ensure_fund_info_exists` 之后（A-1 / B-4：以前装在
+    `LLMAnalyzer._save_fund_mapping` 那条死路上），realign / upgrade 这些"顺手补档案"的
+    路径都会经过它 ⇒ 真探针被 conftest 的网络闸打回 `BlockedRealHttp`。
+    这一族用例测的是 realign 的挑选与还原，不是那道门；门的判据在
+    `tests/unit/test_fund_info_archive_gate.py`（那里不打桩，走真实返回值形状）。
+    """
+    import src.services.sector_fund_service as sfs
+
+    monkeypatch.setattr(sfs, '_manual_identity_verdict', lambda code, name, sector: (None, None))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clean_service_cache():
     """`SectorFundService._cache` 是类属性：不清就会把上一个测试的映射漏给下一个。"""
     from src.services.sector_fund_service import SectorFundService

@@ -151,7 +151,11 @@ def test_stats_error_hides_traceback_in_production(monkeypatch):
         def get_all_stats(self):
             raise RuntimeError("boom")
 
-    monkeypatch.setenv("APP_ENV", "production")
+    # 第 49 轮 #88：这道门从此**问连的是哪个库**，不再问 `APP_ENV`
+    # （Render 没设那个变量 ⇒ 线上 `app_env=development`，旧判据在生产恒为假）。
+    # 两件事一起钉：给不给堆栈只看 DB 类型；把 `APP_ENV` 故意写反也不许改变结论。
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setattr('src.models.database.DB_TYPE', 'postgresql')
     monkeypatch.setattr(stats, "StatsService", BrokenStatsService)
 
     result = stats.get_stats(db=object())
@@ -176,3 +180,47 @@ def test_postgres_pool_settings_default_to_render_safe_values(monkeypatch):
     assert settings["max_overflow"] == 2
     assert settings["pool_recycle"] == 120
     assert settings["pool_timeout"] == 30
+
+
+def _exploding_stats(monkeypatch):
+    """让 `GET /api/stats` 抛一条"异常文本里带连接串与口令"的错 —— 用来验它会不会被发出去。"""
+    import src.api.routes.stats as st
+
+    class Boom:
+        def __init__(self, db):
+            pass
+
+        def get_all_stats(self):
+            raise RuntimeError('boom postgresql://svc:%s@db.invalid/proddb' % 'S3cr3tPW')
+
+    monkeypatch.setattr(st, 'StatsService', Boom)
+    return st
+
+
+def test_a_crash_on_the_live_database_never_ships_a_traceback(monkeypatch):
+    """第 49 轮 #88：那道门以前问 `APP_ENV`，而 **Render 没设它** —— 线上
+    `/api/health/detail` 实测 `app_env=development` ⇒ 判据恒为假，一次抛错就把
+    `str(e)` + 完整堆栈（含文件路径、SQL、可能含连接串）发进老板的手机 WebView。
+    现在问的是**连的是哪个库**：本地 sqlite 才给堆栈（开发要用），PostgreSQL 不给。
+    """
+    st = _exploding_stats(monkeypatch)
+
+    monkeypatch.setattr('src.models.database.DB_TYPE', 'postgresql')
+    out = st.get_stats(db=None)
+    assert out['success'] is False
+    assert 'traceback' not in out, '生产把堆栈发出去了'
+    assert 'S3cr3tPW' not in str(out) and 'db.invalid' not in str(out), \
+        '错误响应里带着异常原文 ⇒ 连接串/口令会随它进浏览器：%s' % out
+
+    monkeypatch.setattr('src.models.database.DB_TYPE', 'sqlite')
+    dev = st.get_stats(db=None)
+    assert 'traceback' in dev and 'boom' in dev['error'], \
+        '本地排查被一起关掉了 ⇒ 这句"生产才藏"变成了谁也拿不到细节'
+
+
+def test_boot_identity_carries_an_explicit_offset():
+    """`started_at` 唯一的用途是拿它对"部署生效没有"的时刻 ⇒ 不带偏移的裸墙上时钟
+    在 Render 上就是 UTC，读的人会差八小时（同仓为 `date.today()` 付过一次账）。"""
+    detail_time = __import__('src.api.main', fromlist=['_build_identity'])._build_identity()['started_at']
+    assert detail_time.endswith('+08:00'), \
+        'started_at 没带时区 ⇒ 线上印的比北京早 8 小时：%s' % detail_time

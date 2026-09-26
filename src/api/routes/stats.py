@@ -2,8 +2,6 @@
 统计路由
 处理数据统计相关的 API 请求
 """
-import os
-
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -20,7 +18,12 @@ def get_stats(db: Session = Depends(get_db)):
         service = StatsService(db)
         return service.get_all_stats()
     except Exception as e:
-        if os.getenv("APP_ENV", "development").lower() == "production":
+        # 问"连的是哪个库"，不问 `APP_ENV`：Render 那个服务**没设** APP_ENV，
+        # 线上 `/api/health/detail` 实测 `app_env=development` ⇒ 旧写法在生产恒为假，
+        # 一次抛错就把 `str(e)` + 完整 traceback 发进老板的手机 WebView。
+        from src.models.database import DB_TYPE
+
+        if DB_TYPE != "sqlite":
             return {"success": False, "error": "统计数据获取失败"}
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
