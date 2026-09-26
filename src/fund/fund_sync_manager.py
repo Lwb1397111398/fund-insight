@@ -177,6 +177,7 @@ class FundSyncManager:
                 "checked": 检查的预测数,
                 "added": 添加的基金数,
                 "linked": 关联的预测数,
+                "already_ok": 标的本来就对、这一轮一个字都没写的预测数,
                 "skipped": 跳过的（同类型已有）,
                 "failed": 失败的,
                 "details": [详细操作记录]
@@ -185,7 +186,7 @@ class FundSyncManager:
         result = {
             "checked": 0,
             "added": 0,
-            "linked": 0,
+            "linked": 0, "already_ok": 0,
             "skipped": 0,
             "failed": 0,
             "details": []
@@ -246,7 +247,11 @@ class FundSyncManager:
                     # 基金已存在，更新sector_type
                     if not existing.sector_type:
                         existing.sector_type = sector
-                    result["linked"] += 1
+                    # 这一支对 `predictions` **一个字都没写** —— 标的本来就是它。以前它和
+                    # 真走了 `retag_prediction` 那两支一起加进 `linked`，回执于是把"什么都没做"
+                    # 报成"关联了 N 个预测"（第 51 轮 B-2：页面上那个按钮的回执今天 131 条
+                    # 全部来自这一支，两库实测真关联 0 条）。
+                    result["already_ok"] += 1
                     result["details"].append({
                         "prediction_id": pred.id,
                         "action": "关联",
@@ -719,6 +724,9 @@ class FundSyncManager:
             success_msg = f"同步完成：检测 {match_report['total_predictions']} 个预测，"
             success_msg += f"新增 {sync_report['added']} 个基金，"
             success_msg += f"关联 {sync_report['linked']} 个预测，"
+            if sync_report.get("already_ok"):
+                # "另有 N 条本来就对"必须单独说：不说的话这一堆会被读成"推进了 N 条"
+                success_msg += f"另有 {sync_report['already_ok']} 条标的本来就是它、未做任何改动，"
             success_msg += f"更新 {update_report['updated']} 个基金"
 
             if failed_funds:
