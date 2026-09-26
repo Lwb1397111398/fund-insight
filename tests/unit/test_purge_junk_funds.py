@@ -303,3 +303,99 @@ def test_the_production_flag_has_teeth_and_the_check_runs_before_any_write():
     assert commits, 'main() 里没有写动作 ⇒ 这条"排在写之前"的判据是空判'
     assert min(checks) < min(commits), \
         '方向闸排在第一次写之后 ⇒ 它拦不住它说要拦的那件事（%s vs %s）' % (checks, commits)
+
+
+def _junk_with_dead_prediction(db, code, judged=False):
+    """造一个"只有回收站行挂着"的垃圾码：这正是生产上 603758 的形状。"""
+    from src.models.database import Blogger, Post
+    blogger = Blogger(name='硬删博主', platform='wechat')
+    db.add(blogger)
+    db.flush()
+    post = Post(blogger_id=blogger.id, content='硬删帖子', post_date=date(2026, 2, 5))
+    db.add(post)
+    db.flush()
+    _add_fund(db, code)
+    extra = {'is_correct': False, 'verify_count': 1} if judged else {}
+    db.add(Prediction(post_id=post.id, blogger_id=blogger.id, fund_code=code,
+                      fund_name='X', prediction_type='up', sector='测试',
+                      prediction_date=date(2026, 2, 5), prediction_period='1周',
+                      target_date=date(2026, 2, 12), is_deleted=True, **extra))
+    db.commit()
+
+
+def test_dropping_dead_predictions_plans_backs_up_and_restores_in_dependency_order(test_db, tmp_path):
+    """老板 2026-09-23 选的就是这条："先备份再硬删那条预测，然后一起删码"。
+
+    三件事一起钉：① 不给旗子仍然整批拒；② 给了旗子要把它排进动作、并抄进**同一份**备份，
+    且备份里 `predictions` 必须排在 `fund_info` **之后**（先插子表会撞 posts/bloggers 外键，
+    第 33 轮在另一把删数据脚本上踩过"按备份原序插＝先子后父"）；③ 删完能按这份备份还原回来。
+    """
+    import json as _json
+    _junk_with_dead_prediction(test_db, 'ZZZ020')
+    rows = purge.inspect(test_db, ('ZZZ020',))
+    assert rows[0]['dead_predictions'] == 1 and len(rows[0]['dead_prediction_ids']) == 1
+    actions, blockers = purge.plan(rows)
+    assert blockers and not actions, '不给旗子就放行 ⇒ 留下指向空档案的可恢复行'
+
+    actions, blockers = purge.plan(rows, drop_dead_predictions=True)
+    assert not blockers and [a[0] for a in actions] == ['prediction', 'fund_info'], actions
+
+    dump = tmp_path / 'purge-with-predictions.json'
+    dump.write_text(_json.dumps(purge._dump_rows(test_db, ('ZZZ020',), True),
+                                ensure_ascii=False, default=str), encoding='utf-8')
+    tables = [e['table'] for e in _json.loads(dump.read_text(encoding='utf-8'))]
+    assert 'predictions' in tables, tables
+    assert tables.index('predictions') > tables.index('fund_info'), \
+        '还原顺序错了：预测排在档案前面会撞外键 ⇒ %s' % tables
+
+    the_id = rows[0]['dead_prediction_ids'][0]
+    test_db.query(Prediction).filter(Prediction.id == the_id).delete(synchronize_session=False)
+    test_db.query(FundInfo).filter_by(fund_code='ZZZ020').delete(synchronize_session=False)
+    test_db.commit()
+    assert test_db.query(Prediction).filter(Prediction.id == the_id).first() is None
+    done, failed, refused = purge.restore(test_db, str(dump), apply=True)
+    assert (failed, refused) == (0, 0), '还原本身失败了却像成功：done=%s failed=%s refused=%s' % (
+        done, failed, refused)
+    back = test_db.query(Prediction).filter(Prediction.id == the_id).first()
+    assert back is not None and back.is_deleted is True and back.fund_code == 'ZZZ020', \
+        '备份里有这行，还原却没把它插回来'
+    assert test_db.query(FundInfo).filter_by(fund_code='ZZZ020').first() is not None
+
+
+def test_a_judged_recycle_bin_prediction_is_never_hard_deleted(test_db):
+    """带结论的软删行是审计证据，不是垃圾：`--drop-dead-predictions` 也不许把它删掉。
+
+    反向对照：老口子 `--allow-dead-predictions`（明知有软删行仍然只删档案）必须还能过，
+    否则这两条旗子的区别就只写在注释里。
+    """
+    _junk_with_dead_prediction(test_db, 'ZZZ021', judged=True)
+    rows = purge.inspect(test_db, ('ZZZ021',))
+    assert rows[0]['dead_predictions_judged'] == 1, '预检数不清"带结论的那几条"'
+    actions, blockers = purge.plan(rows, drop_dead_predictions=True)
+    assert blockers and not actions, '带已判结论的回收站行被硬删 ⇒ 结论证据永久消失'
+    assert '结论' in blockers[0], blockers
+    actions, blockers = purge.plan(rows, allow_dead_predictions=True)
+    assert not blockers and [a[0] for a in actions] == ['fund_info']
+
+
+def test_a_dead_prediction_with_a_change_log_is_never_dropped(test_db):
+    """2026-09-26 副本演练量出来的真缺陷：硬删那条预测撞 `prediction_change_logs` 的
+    `ON DELETE RESTRICT` 外键 —— 旧写法在**计划里承诺"删 1 行软删预测"，执行时才发现做不到**，
+    整批回滚（备份已经落盘，但一次失败的删除没人想复盘）。
+
+    现在动手前就拒，并且把可行的路说清：改指到有效基金（保留台账），或老板明确要清台账。
+    """
+    from src.models.database import PredictionChangeLog
+    _junk_with_dead_prediction(test_db, 'ZZZ022')
+    pid = purge.inspect(test_db, ('ZZZ022',))[0]['dead_prediction_ids'][0]
+    test_db.add(PredictionChangeLog(prediction_id=pid, action='retag', source='sync',
+                                    changed_fields=['fund_code'],
+                                    before_state={'fund_code': 'OLD'},
+                                    after_state={'fund_code': 'ZZZ022'}))
+    test_db.commit()
+
+    rows = purge.inspect(test_db, ('ZZZ022',))
+    assert rows[0]['dead_prediction_dependents'] == {'prediction_change_logs': 1}, rows[0]
+    actions, blockers = purge.plan(rows, drop_dead_predictions=True)
+    assert blockers and not actions, '台账还引用着却仍把预测排进删除动作 ⇒ 计划说了做不到的事'
+    assert 'prediction_change_logs' in blockers[0] and '改指' in blockers[0], blockers

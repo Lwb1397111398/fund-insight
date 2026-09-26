@@ -59,7 +59,8 @@ def run_daily_tasks() -> dict:
             from datetime import datetime, timedelta
 
             from src.models.database import SessionLocal
-            from src.services.verdict_evidence import stale_counts
+            from src.services.verdict_evidence import (
+                nav_freshness, nav_freshness_notice, stale_counts)
 
             db = SessionLocal()
             try:
@@ -74,6 +75,7 @@ def run_daily_tasks() -> dict:
                 never_audited = db.query(SectorFundMapping).filter(
                     SectorFundMapping.is_active == True,             # noqa: E712
                     SectorFundMapping.verified_at.is_(None)).count()
+                fresh = nav_freshness(db)
             finally:
                 db.close()
             total = sum(counts.values())
@@ -97,9 +99,16 @@ def run_daily_tasks() -> dict:
                     "（那个脚本自己的净值新鲜度阈值是 NAV_STALE_DAYS，与这里无关）",
                     ('无记录' if age_days is None else '%d 天' % age_days),
                     never_audited, len(stamps) + never_audited, stale_limit)
+            # 净值停更（第 48 轮 A-9 / B-8）：页面已经会说这句话，日志也必须说 ——
+            # 老板不在页面上时，Render Cron 日志是唯一看得见"数旧了"的地方。
+            notice = nav_freshness_notice(fresh)
+            if notice:
+                logger.warning("净值新鲜度：%s", notice)
             return {"success": True, "stale_total": total, "stale_by_kind": counts,
                     "identity_audit_age_days": age_days,
-                    "mapping_rows_never_audited": never_audited}
+                    "mapping_rows_never_audited": never_audited,
+                    "nav_freshness": fresh}
+
 
         run_step("verdict_evidence_audit", _verdict_evidence_audit)
         # 观点每日汇总：默认关闭，生产确认 Supabase 备份后设 ENABLE_VIEWPOINT_SUMMARY=true

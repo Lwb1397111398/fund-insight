@@ -178,7 +178,8 @@ def span_report(db) -> Dict:
         kind = statuses.get(r.id)
         by_kind[kind] = by_kind.get(kind, 0) + 1
     pct = lambda n: round(100.0 * n / judged, 2) if judged else 0.0
-    return {
+    today = current_as_of()
+    report = {
         'judged': judged,
         'correct': correct,
         'accuracy_pct': pct(correct),
@@ -191,9 +192,63 @@ def span_report(db) -> Dict:
         # 统一走 `current_as_of()`（北京时间自然日）：第 24 轮评审指出 Render 没设 TZ，
         # `date.today()` 在 UTC 下每天会有 8 小时显示"截至昨天"，而这个字段存在的理由
         # 恰恰是"数字必须带截止日"。
-        'as_of': current_as_of().isoformat(),
+        'as_of': today.isoformat(),
         'database': database_label(db),
+        **nav_freshness(db, today),
     }
+    return report
+
+
+# 落后几天才算"旧"：周末 + 一天节假日是常态，喊早了老板会开始忽略这条提示（页面与日任务共用这一个数）。
+NAV_LAG_WARN_DAYS = 4
+
+
+def nav_freshness(db, today=None) -> Dict:
+    """净值本身停在哪一天（第 48 轮 A-9 / B-8 那条产品账，**唯一出处**）。
+
+    为什么必须有：准确率停在"截至 09-13"的净值上时，页面那行"截至 <今天>"会**替它撒谎** ——
+    截止日是今天，用来判结论的净值却是十一天前的，而全仓没有一条命令量这件事。
+    三条口径：① 截止日只认**不晚于今天**的最后一笔（上游会给货币基金预签发明天的净值，
+    不能让它把截止日推到将来）；② 落后天数按 `current_as_of()`（北京自然日）现算；
+    ③ `nav_future_rows` 单数"日期晚于今天"的行 —— 写侧门 `usable_history_rows` 只挡新增
+    （同步从不覆盖已有行），存量残留就靠这一列露出来（`scripts/drop_future_nav_rows.py` 点名清）。
+    """
+    from sqlalchemy import func
+
+    from src.models.database import FundHistory
+    from src.services.prediction_lifecycle import current_as_of
+
+    if today is None:
+        today = current_as_of()
+    cutoff = db.query(func.max(FundHistory.nav_date)).filter(
+        FundHistory.nav_date <= today).scalar()
+    future = db.query(func.count(FundHistory.nav_date)).filter(
+        FundHistory.nav_date > today).scalar()
+    lag = (today - cutoff).days if cutoff else None
+    return {
+        'nav_as_of': cutoff.isoformat() if cutoff else None,
+        'nav_lag_days': lag,
+        'nav_future_rows': int(future or 0),
+        'nav_stale': bool(lag is not None and lag >= NAV_LAG_WARN_DAYS),
+    }
+
+
+def nav_freshness_notice(fresh: Dict):
+    """把 `nav_freshness()` 折成一句给人看的话；不需要说时返回 None。
+
+    为什么放在服务层：每日跑批（Render Cron 日志）与页面要说同一件事，判据得长在同一处。
+    净值从没更新过（`nav_as_of` 为空）时**不许**沉默 —— 那正是"库里一行净值都没有"。
+    """
+    if not fresh.get('nav_as_of'):
+        return '库里没有任何不晚于今天的净值行 ⇒ 准确率没有输入，先跑基金更新'
+    parts = []
+    if fresh.get('nav_stale'):
+        parts.append('最后一笔净值 %s，已落后 %d 天（阈值 %d 天）⇒ 页面那个准确率是按这批旧净值算的'
+                     % (fresh['nav_as_of'], fresh['nav_lag_days'], NAV_LAG_WARN_DAYS))
+    if fresh.get('nav_future_rows'):
+        parts.append('另有 %d 行净值日期晚于今天（未计入截止日），要清用 scripts/drop_future_nav_rows.py'
+                     % fresh['nav_future_rows'])
+    return '；'.join(parts) if parts else None
 
 
 _DSN_KEEP_KEYS = ('host', 'hosts', 'port', 'dbname', 'database')

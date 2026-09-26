@@ -1705,3 +1705,33 @@ def test_no_new_class_name_is_used_without_being_defined():
     assert banner, '博主榜那条失败横幅不见了（那 A-M2 就没修）'
     assert all(tok in defined for tok in banner.group(1).split()), \
         '博主榜失败横幅用的类名查无定义：%s' % banner.group(1)
+
+
+def test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran():
+    """净值停在十一天前时，页面那行"截至 <今天>"会替旧数据撒谎（第 48 轮 A-9 / B-8）。
+
+    判据形态：在 node 里**执行页面那份 `navFreshNote`**，喂五种真实形状。
+    文本断言在这里毫无价值 —— 把 `lag >= 4` 改成 `lag >= 400` 页面照旧一句"净值截至 X"，
+    而文字判据看不见任何变化（这一族的标准死法）。
+    """
+    if not NODE:
+        pytest.skip('本机没有 node')
+    out = _run_page_js("""
+const pick = (report) => { evidenceReport.value = report; return navFreshNote(); };
+const cases = {
+  noReport: pick(null),
+  noNavAtAll: pick({nav_as_of: null, nav_lag_days: null, nav_future_rows: 0, nav_stale: false}),
+  fresh: pick({nav_as_of: '2026-09-25', nav_lag_days: 1, nav_future_rows: 0, nav_stale: false}),
+  stale: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_future_rows: 0, nav_stale: true}),
+  futureOnly: pick({nav_as_of: '2026-09-13', nav_lag_days: 13, nav_future_rows: 4, nav_stale: true}),
+  // 阈值只有一个出处（后端 NAV_LAG_WARN_DAYS）：页面必须照 `nav_stale` 说，不自己比大小。
+  serverSaysFresh: pick({nav_as_of: '2026-09-23', nav_lag_days: 3, nav_future_rows: 0, nav_stale: false}),
+};
+console.log(JSON.stringify(cases));
+""", [_decl(_html(), 'navFreshNote = () =>')])
+    assert '净值截至' not in out['noReport'] and '没取到' in out['noReport'], out['noReport']
+    assert '没取到' in out['noNavAtAll'] and 'null' not in out['noNavAtAll'], out['noNavAtAll']
+    assert out['fresh'] == '净值截至 2026-09-25', '当天的数据不许喊落后（喊早了老板会开始忽略这条提示）'
+    assert '落后' not in out['serverSaysFresh'], '页面自己比大小 = 第二把尺子：%s' % out['serverSaysFresh']
+    assert '落后 13 天' in out['stale'] and '旧净值' in out['stale'], out['stale']
+    assert '另有 4 行' in out['futureOnly'], '预签发的未来净值行必须看得见（存量脏数据不能静默回来）'

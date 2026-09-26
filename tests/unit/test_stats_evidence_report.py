@@ -333,3 +333,90 @@ def test_the_page_shows_the_numbers_as_text_not_only_a_title():
     assert 'sectorMappings.owner_confirmed_count' in text
     assert 'sectorMappings.reviewed_unconfirmed_count' in text
 
+
+
+def _as_of(monkeypatch, day):
+    """把"今天"钉住：落后天数必须相对**北京自然日**算，相对墙上时钟就跑哪天红哪天。"""
+    monkeypatch.setattr('src.services.prediction_lifecycle.current_as_of', lambda: day)
+
+
+def test_the_report_also_says_how_fresh_the_nav_data_is(env, monkeypatch):
+    """第 48 轮 A-9 / B-8：生产净值停在 09-13 十二天，全仓没有一条命令量它，页面也不说。
+
+    `as_of` 是"今天"，净值却是十二天前 —— 那行灰字因此替旧数据撒谎。
+    现在同一份报告必须带上"最后一笔净值是哪天、落后几天"。
+    """
+    _client, db = env
+    _as_of(monkeypatch, date(2026, 6, 20))
+    rep = span_report(db)
+    assert rep['nav_as_of'] == '2026-06-08', rep
+    assert rep['nav_lag_days'] == 12, '落后天数必须由 as_of 与最后一笔净值现算'
+    assert rep['nav_future_rows'] == 0
+
+
+def test_future_nav_rows_are_counted_but_never_become_the_cutoff(env, monkeypatch):
+    """上游会给货币基金预签发明天的净值行（000725 实测）。
+
+    截止日必须**只看到今天为止**，而"有几行写在将来"要单独数出来 ——
+    写侧已有 `usable_history_rows` 挡新增，这一列是存量残留的可见口。
+    """
+    _client, db = env
+    db.add(FundHistory(fund_code='000725', nav_date=date(2026, 6, 27), nav=1.0))
+    db.commit()
+    _as_of(monkeypatch, date(2026, 6, 20))
+    rep = span_report(db)
+    assert rep['nav_as_of'] == '2026-06-08', '未来的行不能当截止日'
+    assert rep['nav_lag_days'] == 12
+    assert rep['nav_future_rows'] == 1, '预签发的行必须被数出来，而不是悄悄把截止日推到未来'
+
+
+def test_an_empty_nav_table_reports_no_freshness_instead_of_zero(env):
+    """"没有净值"与"净值停在 1970-01-01"是两件事：缺数据时这两个字段必须是 null，不能报 0 天。"""
+    from sqlalchemy import delete
+
+    _client, db = env
+    db.execute(delete(FundHistory))
+    db.commit()
+    rep = span_report(db)
+    assert rep['nav_as_of'] is None and rep['nav_lag_days'] is None, rep
+    assert rep['nav_future_rows'] == 0
+
+
+def test_the_staleness_threshold_lives_in_exactly_one_place(env):
+    """页面与每日跑批都不许自己比大小 ⇒ 阈值只在 `NAV_LAG_WARN_DAYS` 出现一次。
+
+    同一笔净值（09-23）在两个"今天"下必须一个说旧、一个说不旧 —— 边界值本身被钉住，
+    而不是钉住某句文案里的数字。
+    """
+    from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_freshness
+
+    _client, db = env
+    db.add(FundHistory(fund_code='510050', nav_date=date(2026, 9, 23), nav=1.0))
+    db.commit()
+    just_under = nav_freshness(db, date(2026, 9, 23 + NAV_LAG_WARN_DAYS - 1))
+    at_the_line = nav_freshness(db, date(2026, 9, 23 + NAV_LAG_WARN_DAYS))
+    assert just_under['nav_lag_days'] == NAV_LAG_WARN_DAYS - 1
+    assert just_under['nav_stale'] is False, '差一天就到阈值 ⇒ 还不该喊（周末 + 节假日是常态）'
+    assert at_the_line['nav_lag_days'] == NAV_LAG_WARN_DAYS
+    assert at_the_line['nav_stale'] is True, '到阈值必须报旧：这是页面上那句"已落后"的唯一依据'
+
+
+def test_the_daily_log_says_the_same_thing_the_page_does():
+    """每日跑批（Render Cron 日志）与页面必须说同一句话 —— 判据打在服务层那一份上。
+
+    老板不在页面上时，日志是唯一看得见"数旧了"的地方；而"没话说"必须真的是没事，
+    不是把条件写反了（`if not notice` 那一族）。
+    """
+    from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_freshness_notice
+
+    assert nav_freshness_notice({'nav_as_of': '2026-09-25', 'nav_lag_days': 1,
+                                 'nav_future_rows': 0, 'nav_stale': False}) is None
+    stale = nav_freshness_notice({'nav_as_of': '2026-09-13', 'nav_lag_days': 13,
+                                  'nav_future_rows': 0, 'nav_stale': True})
+    assert '落后 13 天' in stale and str(NAV_LAG_WARN_DAYS) in stale, stale
+    future = nav_freshness_notice({'nav_as_of': '2026-09-25', 'nav_lag_days': 1,
+                                   'nav_future_rows': 4, 'nav_stale': False})
+    assert '4 行' in future and 'drop_future_nav_rows' in future, future
+    empty = nav_freshness_notice({'nav_as_of': None, 'nav_lag_days': None,
+                                  'nav_future_rows': 0, 'nav_stale': False})
+    assert empty and '没有' in empty, '净值一行都没有时必须说话，不许静默'

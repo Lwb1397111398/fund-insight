@@ -59,8 +59,11 @@ def inspect(db, codes=JUNK_CODES):
             Prediction.is_correct != None).scalar() or 0
         # 软删的预测也算：`predictions.fund_code` 上没有外键，删掉档案就是留一条
         # 指向不存在基金的"可恢复行"——回收站里打开它就是 500
-        dead_pred = db.query(sa.func.count(Prediction.id)).filter(
-            Prediction.fund_code == code, Prediction.is_deleted == True).scalar() or 0  # noqa: E712
+        dead = db.query(Prediction.id, Prediction.is_correct).filter(
+            Prediction.fund_code == code, Prediction.is_deleted == True).all()  # noqa: E712
+        dead_pred = len(dead)
+        dead_ids = [int(i) for i, _v in dead]
+        dead_judged = sum(1 for _i, v in dead if v is not None)
         nav_rows = db.query(sa.func.count(FundHistory.fund_code)).filter(
             FundHistory.fund_code == code).scalar() or 0
         retry_rows = db.query(sa.func.count(FundSyncRetry.fund_code)).filter(
@@ -81,15 +84,48 @@ def inspect(db, codes=JUNK_CODES):
             'fund_code': code, 'fund_name': (info.fund_name if info else None),
             'in_fund_info': info is not None, 'live_predictions': live_pred,
             'verified_predictions': verified_pred, 'dead_predictions': dead_pred,
+            'dead_prediction_ids': dead_ids, 'dead_predictions_judged': dead_judged,
+            'dead_prediction_dependents': _dependents_of(db, dead_ids),
             'nav_rows': nav_rows, 'retry_rows': retry_rows, 'mappings': siblings,
         })
     return out
 
 
-def plan(rows, allow_dead_predictions=False, allow_owner_rows=False):
+def _dependents_of(db, prediction_ids):
+    """这些软删预测被谁引用着 —— **副本演练量出来的那条**：硬删预测会撞
+    `prediction_change_logs.prediction_id ON DELETE RESTRICT`（改标台账本体）。
+
+    看不见这张表，结局就是"计划里承诺删、执行时 IntegrityError 整批回滚"，
+    而这正是动手前该回答的问题。台账是审计证据不是垃圾：有依赖就拒，
+    机器不替老板决定删不掉的历史。
+    """
+    if not prediction_ids:
+        return {}
+    import sqlalchemy as sa
+
+    from src.models.database import PredictionChangeLog, VerificationTask
+
+    out = {}
+    for model, tag in ((PredictionChangeLog, 'prediction_change_logs'),
+                       (VerificationTask, 'verification_tasks')):
+        n = db.query(sa.func.count(model.__table__.columns[0])).filter(
+            model.prediction_id.in_(list(prediction_ids))).scalar() or 0
+        if n:
+            out[tag] = int(n)
+    return out
+
+
+def plan(rows, allow_dead_predictions=False, allow_owner_rows=False,
+         drop_dead_predictions=False):
     """把现状变成可执行动作；任何一条安全条件不满足就整批拒绝（而不是静默跳过那一行）。
 
     删除顺序 `retry → mapping → fund_info`：前两张表都对外键指向 `fund_info`。
+    `predictions` 没有外键，所以"删了档案、回收站里留一条可恢复行"这件事没人拦 ——
+    两条过法含义完全不同，别混：
+    * `--allow-dead-predictions`：知道有软删预测仍然删档案（**留着孤儿行**，老板没选这条）；
+    * `--drop-dead-predictions`：先把这些**从未判过**的软删预测硬删（并进同一份备份，
+      `--restore-from` 一次能还原），再删档案。带着 `is_correct` 结论的一律拒绝，
+      那种行是审计对象不是垃圾（要撤结论请走验证侧的还原工具，不在这里）。
     """
     actions, blockers = [], []
     for r in rows:
@@ -101,9 +137,27 @@ def plan(rows, allow_dead_predictions=False, allow_owner_rows=False):
             blockers.append('%s：活预测 %d / 净值 %d 行 ⇒ 不许删'
                             % (r['fund_code'], r['live_predictions'], r['nav_rows']))
             continue
-        if r['dead_predictions'] and not allow_dead_predictions:
+        if r['dead_predictions'] and drop_dead_predictions:
+            if r.get('dead_predictions_judged'):
+                blockers.append('%s：回收站里 %d 条软删预测中有 %d 条带着已判结论 ⇒ '
+                                '本工具不硬删带结论的行（那是审计证据，不是垃圾）'
+                                % (r['fund_code'], r['dead_predictions'],
+                                   r['dead_predictions_judged']))
+                continue
+            deps = r.get('dead_prediction_dependents') or {}
+            if deps:
+                blockers.append('%s：那 %d 条软删预测被 %s 引用着（外键 RESTRICT，删预测会连带'
+                                '动审计台账）⇒ 本工具不删。可行的路是把这条预测的标的**改指**到'
+                                '有效基金（保留台账），或老板明确要清台账后另做一步'
+                                % (r['fund_code'], r['dead_predictions'],
+                                   '、'.join('%s %d 行' % (k, v) for k, v in sorted(deps.items()))))
+                continue
+            for pid in r.get('dead_prediction_ids') or []:
+                actions.append(('prediction', pid, r['fund_code'], '', 0))
+        elif r['dead_predictions'] and not allow_dead_predictions:
             blockers.append('%s：回收站里还有 %d 条软删预测挂着这个码（predictions 无外键，'
-                            '删完就是指向空档案的可恢复行）⇒ 要过先加 --allow-dead-predictions'
+                            '删完就是指向空档案的可恢复行）⇒ 要过先加 --allow-dead-predictions，'
+                            '要连预测一起硬删（并备份）用 --drop-dead-predictions'
                             % (r['fund_code'], r['dead_predictions']))
             continue
         owner_rows = [m for m in r['mappings'] if m['owner_locked'] or m['reviewed_by'] == 'owner']
@@ -121,13 +175,17 @@ def plan(rows, allow_dead_predictions=False, allow_owner_rows=False):
     return actions, blockers
 
 
-def _dump_rows(db, codes):
+def _dump_rows(db, codes, drop_predictions=False):
     """把**将要被删的每一行**原样抄一份（列名→值），供 `--restore-from` 逐列写回。
 
     不含 `fund_history`：净值行 > 0 是阻断条件，这个工具永远不会删净值，
     抄它只会把备份撑大（第 25 轮 A 的 MINOR：按 codes 抄会连"根本没进动作清单"的行也抄走）。
+    `predictions` 只在 `--drop-dead-predictions` 下抄，而且**排在最后**：还原是按备份顺序
+    插行的，先插预测会撞 `posts`/`bloggers` 的外键（第 33 轮在另一把删数据脚本上踩过
+    "按备份原序插＝先子后父"的禁忌序）。
     """
-    from src.models.database import FundInfo, FundSyncRetry, SectorFundMapping
+    from src.models.database import (FundInfo, FundSyncRetry, Prediction,
+                                     SectorFundMapping)
 
     out = []
     for c in codes:
@@ -137,6 +195,13 @@ def _dump_rows(db, codes):
                 out.append({'table': tag,
                             'row': {col.name: getattr(row, col.name)
                                     for col in model.__table__.columns}})
+    if drop_predictions:
+        for row in db.query(Prediction).filter(
+                Prediction.fund_code.in_(list(codes)),
+                Prediction.is_deleted == True).all():      # noqa: E712
+            out.append({'table': 'predictions',
+                        'row': {col.name: getattr(row, col.name)
+                                for col in Prediction.__table__.columns}})
     return out
 
 
@@ -146,7 +211,10 @@ def _dump_rows(db, codes):
 # 唯一约束，而末尾只有一次 commit ⇒ 整批回滚，还原在最需要它的场景下失灵。
 BUSINESS_KEYS = {'fund_info': ('fund_code',),
                  'sector_fund_mapping': ('sector_name', 'fund_code'),
-                 'fund_sync_retry': ('fund_code', 'retry_type')}
+                 'fund_sync_retry': ('fund_code', 'retry_type'),
+                 # 一条预测的业务身份 = 哪篇帖子、哪位博主、哪只标的、哪天许的愿。
+                 # 不用 `id`：删完之后那个 id 可能已经发给新行（上面注释里那种失灵）。
+                 'predictions': ('post_id', 'blogger_id', 'fund_code', 'prediction_date')}
 
 
 def restore(db, payload_path, apply=False, restore_owner_immunity=False):
@@ -158,10 +226,11 @@ def restore(db, payload_path, apply=False, restore_owner_immunity=False):
       那两处剔掉同两列的规则自相矛盾。要还原必须显式 `--restore-owner-immunity`。
     * 逐行 SAVEPOINT：一行失败不影响其它行，且回执说清哪几行没进去、为什么。
     """
-    from src.models.database import FundInfo, FundSyncRetry, SectorFundMapping
+    from src.models.database import (FundInfo, FundSyncRetry, Prediction,
+                                     SectorFundMapping)
 
     models = {'fund_info': FundInfo, 'sector_fund_mapping': SectorFundMapping,
-              'fund_sync_retry': FundSyncRetry}
+              'fund_sync_retry': FundSyncRetry, 'predictions': Prediction}
     rows = json.load(io.open(payload_path, encoding='utf-8'))
     planned, skipped, refused, failed = [], 0, 0, 0
     for entry in rows:
@@ -299,7 +368,10 @@ def main():
     ap.add_argument('--production', action='store_true', help='显式对生产执行（默认本地镜像）')
     ap.add_argument('--codes', help='逗号分隔，覆盖默认那 6 个')
     ap.add_argument('--allow-dead-predictions', action='store_true',
-                    help='明知该码还挂着软删预测仍然删（默认拒绝）')
+                    help='明知该码还挂着软删预测仍然删（默认拒绝，会留孤儿行）')
+    ap.add_argument('--drop-dead-predictions', action='store_true',
+                    help='先把这些**从未判过**的软删预测硬删（与档案并进同一份备份，'
+                         '--restore-from 一次还原）再删档案；带结论的软删行一律拒绝')
     ap.add_argument('--allow-owner-rows', action='store_true',
                     help='明知映射行是老板署名/锁定的仍然删（默认拒绝）')
     ap.add_argument('--restore-from', help='按备份 JSON 还原（默认 dry-run）')
@@ -362,21 +434,30 @@ def main():
 
         rows = inspect(db, codes)
         for r in rows:
+            tail = ''
+            if r['mappings']:
+                tail = '  ' + json.dumps([m['sector'] for m in r['mappings']],
+                                         ensure_ascii=False)
+            if r['dead_predictions_judged']:
+                tail += '  其中带结论 %d 条' % r['dead_predictions_judged']
+            if r['dead_prediction_dependents']:
+                tail += '  台账引用 %s' % r['dead_prediction_dependents']
             print('  %-8s %-14s fund_info=%s 活预测=%d 已判=%d 回收站=%d 净值=%d 重试=%d 映射=%d%s'
                   % (r['fund_code'], (r['fund_name'] or '')[:14], r['in_fund_info'],
                      r['live_predictions'], r['verified_predictions'], r['dead_predictions'],
-                     r['nav_rows'], r['retry_rows'], len(r['mappings']),
-                     '' if not r['mappings'] else '  ' + json.dumps(
-                         [m['sector'] for m in r['mappings']], ensure_ascii=False)))
-        actions, blockers = plan(rows, args.allow_dead_predictions, args.allow_owner_rows)
+                     r['nav_rows'], r['retry_rows'], len(r['mappings']), tail)
+                  )
+        actions, blockers = plan(rows, args.allow_dead_predictions, args.allow_owner_rows,
+                                 args.drop_dead_predictions)
         if blockers:
             print('[abort] 有 %d 个码不满足安全条件，整批不动：%s' % (len(blockers), blockers))
             return 5
-        print('[计划] 将删除 %d 行同步重试 + %d 行映射 + %d 行 fund_info'
-              '（顺序按外键：retry/mapping → fund_info）'
+        print('[计划] 将删除 %d 行同步重试 + %d 行映射 + %d 行 fund_info + %d 行软删预测'
+              '（顺序按外键：retry/mapping → fund_info；预测排在最后还原）'
               % (sum(1 for a in actions if a[0] == 'fund_sync_retry'),
                  sum(1 for a in actions if a[0] == 'mapping'),
-                 sum(1 for a in actions if a[0] == 'fund_info')))
+                 sum(1 for a in actions if a[0] == 'fund_info'),
+                 sum(1 for a in actions if a[0] == 'prediction')))
         for kind, ident, code, sector, others in actions:
             print('   - %-15s %s %s%s' % (kind, code, ident,
                                           ('（板块 %s，同板块另有 %d 行在用）' % (sector, others))
@@ -392,13 +473,20 @@ def main():
         dump = os.path.join(ROOT, 'backup', 'purge-junk-%s.json' % stamp)
         os.makedirs(os.path.dirname(dump), exist_ok=True)
         # 备份必须先落盘再动手：删完就没有第二次机会（本仓库为"删了才发现要回滚"付过账）
-        rows_bak = _dump_rows(db, codes)
+        rows_bak = _dump_rows(db, codes, args.drop_dead_predictions)
         io.open(dump, 'w', encoding='utf-8').write(
             json.dumps(rows_bak, ensure_ascii=False, indent=1, default=str))
         print('[ok] 被删的行已备份：%s（%d 行，还原用 --restore-from 该文件）' % (dump, len(rows_bak)))
 
         for code in codes:
-            from src.models.database import FundSyncRetry
+            from src.models.database import FundSyncRetry, Prediction
+            if args.drop_dead_predictions:
+                # 只删**软删且从未判过**的那些（plan 已经把带结论的行挡在门外）。
+                # 先删预测再删档案：predictions 没有外键，反过来留的就是指向空档案的可恢复行。
+                db.query(Prediction).filter(
+                    Prediction.fund_code == code,
+                    Prediction.is_deleted == True,                    # noqa: E712
+                    Prediction.is_correct.is_(None)).delete()
             db.query(FundSyncRetry).filter(FundSyncRetry.fund_code == code).delete()
             db.query(SectorFundMapping).filter(
                 SectorFundMapping.fund_code == code).delete()
@@ -406,12 +494,15 @@ def main():
         db.commit()
 
         after = inspect(db, codes)
-        left = [r for r in after if r['in_fund_info'] or r['mappings'] or r['retry_rows']]
+        left = [r for r in after if r['in_fund_info'] or r['mappings'] or r['retry_rows']
+                or (args.drop_dead_predictions and r['dead_predictions'])]
         if left:
-            print('[warn] 仍有残留：%s' % [(r['fund_code'], len(r['mappings'])) for r in left])
+            print('[warn] 仍有残留：%s' % [(r['fund_code'], len(r['mappings']),
+                                           r['dead_predictions']) for r in left])
             return 3
-        print('[ok] 这些码的 fund_info、映射行与同步重试行已删除；'
-              '还原：python scripts/purge_junk_funds.py --restore-from %s' % dump)
+        print('[ok] 这些码的 fund_info、映射行与同步重试行已删除%s；'
+              '还原：python scripts/purge_junk_funds.py --restore-from %s'
+              % ('（含那批软删预测）' if args.drop_dead_predictions else '', dump))
         return 0
     except Exception as exc:
         db.rollback()

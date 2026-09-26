@@ -86,11 +86,11 @@
                         <template v-if="evidenceReport.judged">
                         已判 {{ evidenceReport.judged }} 条，其中 <span style="color:#d46b08;">⚠ {{ evidenceReport.stale_evidence }} 条（{{ evidenceReport.stale_pct }}%）端点净值今天已复现不出来</span>
                         ⇒ 准确率只能按区间看：<strong>{{ spanText() }}</strong>
-                        · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}
+                        · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }} · {{ navFreshNote() }}
                         </template>
                         <!-- 一条已判结论都没有时，"0.0%~0.0%"会被读成"准确率为零"。 -->
                         <template v-else>
-                        这个库还没有已判结论，准确率暂无意义 · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}
+                        这个库还没有已判结论，准确率暂无意义 · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }} · {{ navFreshNote() }}
                         </template>
                     </div>
                     <div v-else class="text-xs" style="color:#bfbfbf; margin: 2px 0 8px 0;">
@@ -1543,7 +1543,7 @@
                     <template v-if="evidenceReport && evidenceReport.judged">
                         已判 {{ evidenceReport.judged }} 条，其中 <span style="color:#d46b08;">⚠ {{ evidenceReport.stale_evidence }} 条（{{ evidenceReport.stale_pct }}%）</span>
                         端点净值今天复现不出来 ⇒ 准确率按区间看 <strong>{{ spanText() }}</strong>
-                        · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }}<br>
+                        · {{ evidenceReport.database }} · 截至 {{ evidenceReport.as_of }} · {{ navFreshNote() }}<br>
                     </template>
                     <template v-else-if="evidenceError">结论证据体检拉取失败（{{ evidenceError }}），下面的数没有区间可看。<button class="action-btn small" @click="fetchEvidence">重试</button><br></template>
                     <template v-else-if="!evidenceReport">结论证据体检数据尚未取到；准确率按区间看才诚实。<br></template>
@@ -2460,6 +2460,19 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const spanText = () => evidenceReport.value ? (evidenceReport.value.span_low_pct + '%~' + evidenceReport.value.span_high_pct + '%') : '-';
+                // 净值新鲜度（第 48 轮 A-9 / B-8：生产净值停在 09-13 十天没人知道，而页面那行
+                // "截至 <今天>"会替它撒谎）。取不到日期不许报 0、也不许干脆不写这一截。
+                const navFreshNote = () => {
+                    const r = evidenceReport.value;
+                    if (!r) return '净值截止日没取到';
+                    if (!r.nav_as_of) return '净值截止日没取到（库里一行净值都没有？）';
+                    let text = '净值截至 ' + r.nav_as_of;
+                    // "算不算旧"是后端一个数（verdict_evidence.NAV_LAG_WARN_DAYS），页面不另定阈值：
+                    // 页面与每日跑批必须对同一件事说一样的话。
+                    if (r.nav_stale) text += '，已落后 ' + r.nav_lag_days + ' 天 ⇒ 上面的准确率是按这批旧净值算的';
+                    if (r.nav_future_rows > 0) text += '；另有 ' + r.nav_future_rows + ' 行净值日期晚于今天，未计入截止日';
+                    return text;
+                };
                 const fetchBloggers = async () => {
                     try {
                         const res = await withWakeRetry(() => axios.get('/api/bloggers'));
@@ -3261,7 +3274,7 @@ const fetchWeChatBatch = async () => {
                     serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,
                     bloggersError, bloggersStale, statsError, statVal, numOrDash, viewErrors, emptyText,
                     taskStalled, stallText, adviceError, aliasError, configError, testDataError, topNote,
-                    fetchStats, spanText, fetchEvidence,
+                    fetchStats, spanText, navFreshNote, fetchEvidence,
                     bloggers,
                     posts, postMeta, postFilters, analysisJob, postAnalysisRunning,
                     predictions, predictionFilter, predictionMeta, predictionFilters, filteredPredictions,

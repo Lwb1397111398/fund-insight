@@ -94,19 +94,17 @@ def accuracy_span(db):
 
     区间的两端是两个极端假设：**这批结论全部判错** vs **全部判对**。
     真值落在里面，但今天没有人能定到小数点 —— 谁引用准确率，谁就得连区间一起说。
-    返回 (已判条数, 现在算出的判对数, 现在百分比, 下界, 上界, 其中失效条数)。
+    返回整份 `span_report()`（第 49 轮起不再拆成六个位置值：多一个字段——净值新鲜度——
+    不必再动一次签名，也不会在脚本里留第二份算式）。
 
     口径与 `audit()` 同一份（`has_verdict`），不另起一套（第 19 轮 MINOR-7：
     两把尺子今天都为 1110，但"今天恰好相等"不等于可以各写一份）。
     """
-    from src.models.database import Prediction
     # 判据不在本文件里：唯一出处是 `verdict_evidence.span_report()`，页面 /api/stats/evidence
     # 读的也是它。以前脚本自己算一份、服务算一份，"报错了库"那种事故就是这么来的。
     from src.services.verdict_evidence import span_report
 
-    rep = span_report(db)
-    return (rep['judged'], rep['correct'], rep['accuracy_pct'],
-            rep['span_low_pct'], rep['span_high_pct'], rep['stale_evidence'])
+    return span_report(db)
 
 
 def unmapped_codes(db):
@@ -144,12 +142,21 @@ def main():
               % (judged, bad, 100.0 * bad / max(1, judged)))
         for kind, n in sorted(buckets.items(), key=lambda kv: -kv[1]):
             print('   %-24s %4d  例如 %s' % (kind, n, samples[kind]))
-        judged_n, correct_n, now_pct, low, high, stale_n = accuracy_span(db)
+        rep = accuracy_span(db)
+        judged_n, correct_n, now_pct = rep['judged'], rep['correct'], rep['accuracy_pct']
+        low, high, stale_n = rep['span_low_pct'], rep['span_high_pct'], rep['stale_evidence']
         print('\n[准确率只能当区间报] 已判 %d 条、现在落库判对 %d 条 = %.2f%%；'
               '其中 %d 条端点证据今天复现不出来 ⇒ 把这批按"全判错/全判对"两个极端算，'
               '区间 %.2f%% ~ %.2f%%（宽度 %.2f 个百分点）。'
               % (judged_n, correct_n, now_pct, stale_n, low, high, high - low))
         print(' 引用准确率时必须连这个区间一起引用：单报一个小数点就是在假装精度。')
+        # 第 48 轮 A-9 / B-8：净值停在十一天前时，"截至 <今天>"那行会替旧数据撒谎。
+        # 这句必须印出来 —— 页面上那一截灰字与这里读的是同一份报告，两边说的话要一样。
+        if rep['nav_as_of']:
+            print('[净值新鲜度] 最后一笔净值 %s（落后 %s 天）；库里另有 %d 行净值日期晚于今天'
+                  % (rep['nav_as_of'], rep['nav_lag_days'], rep['nav_future_rows']))
+        else:
+            print('[净值新鲜度] 库里一行净值都没有 ⇒ 截止日无从谈起，先跑基金更新')
         judged_all, blind_n, blind_codes = unmapped_codes(db)
         print('[体检覆盖面] 已判结论 %d 条里 %d 条挂的代码在 sector_fund_mapping 里'
               '**根本没有行** ⇒ 身份体检对它们没有意见，既不会被判不可服务、'

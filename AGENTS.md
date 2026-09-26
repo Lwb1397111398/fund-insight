@@ -270,12 +270,28 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 09:5x（北京），**#58 三个列表取数点铺唤醒门**那一批之后，
+最近一次核对（2026-09-26 11:40（北京），**第 49 轮那批（#46 密钥闸 + #47 前端路径闸 + 净值新鲜度 + S6 的 C 与 `--drop-dead-predictions`）**之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1086 passed / 16 skipped / 0 failed**（590.41 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1095 passed / 16 skipped / 0 failed**（550.98 秒）。
+- `pytest tests/unit -q` → **1102 passed / 16 skipped / 0 failed**（637.30 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1111 passed / 16 skipped / 0 failed**（459.15 秒）。
+  （上一基线 1086/1095 → 本批 1102/1111：**+16 条**，分布与"为什么"——
+  ① `tests/unit/test_no_secrets_in_tracked_files.py` 新增 **3**（任务 #46：`.env` 真值 + 6 种凭据形状
+  扫 `git ls-files`，只报"哪个文件、哪一类"绝不打印命中内容；两条控制断言里有一条专门钉
+  "第一版形状正则漏了 `?` ⇒ 整条恒空而主用例全绿"这件事，同族教训又复现了一次）；
+  ② `tests/unit/test_frontend_api_urls_resolve.py` 新增 **4**（任务 #47：前端 88 条 `/api` 字面量
+  必须对上 `app.routes` 注册的那 94 条路由 —— 不抄第二份路由清单；两条控制断言 + 归一化自己的账，
+  边界：只判路径不判方法）；
+  ③ `test_stats_evidence_report.py` +5 / `test_frontend_cold_start.py` +1（净值新鲜度
+  `nav_as_of`/`nav_lag_days`/`nav_future_rows`/`nav_stale` 要钉住的四点：截止日不许被预签发的未来行顶上去、
+  落后天数按北京 `as_of` 现算、阈值只在 `NAV_LAG_WARN_DAYS` 一处（页面不许自己比大小）、
+  每日跑批日志与页面说同一句话，判据在 node 里跑 `navFreshNote` 真源码，配 **4 处变异全 RED**）；
+  ④ `test_purge_junk_funds.py` +3（`--drop-dead-predictions` 的动作/备份/还原与"带结论不许删"，
+  外加一条**副本演练逼出来的**：`prediction_change_logs.prediction_id` 是 `ON DELETE RESTRICT` ⇒
+  旧写法"计划里承诺删、执行时 IntegrityError 整批回滚"，现在动手前数依赖并整批拒）。
+  **同一批还做了一件不在用例数里的**：`scripts/audit_verdict_evidence.py` 的 `accuracy_span` 改成
+  返回整份 `span_report()`（脚本里不留第二份算式），并多印一行 `[净值新鲜度]`。）
   （上一基线 1085/1094 → 本批 1086/1095：+1 条 = `test_every_list_fetch_point_asks_the_wake_gate_before_giving_up`
   （在 node 里跑三个 manager 的真实源码、数 `withWakeRetry` 被调几次；摘掉一处立刻红，已实测）。）
   （上一基线 1073/1082 → 本批 1085/1094：**+12 条 = 本批 9 条 + 前两笔提交欠跑数的 3 条**
@@ -335,7 +351,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   import _db_guard as g; print(g.machine_name('sqlite+aiosqlite:///data/fund_insight.db'))"`）、
   B-6（`q.py` 的 sqlite 腿仍只有 `mode=ro`，没 `PRAGMA query_only`）、B-7（`audit_doc_claims`
   当场只判 3 条账）。转去做产品那一半：#51 生产区间没有可跑命令、#58 三个列表取数点没铺
-  `withWakeRetry`、生产净值落后的监控与页面可见（第 48 轮 A-9 / B-8 同条：净值停在 2026-09-13）。）
+  `withWakeRetry`、生产净值落后的监控与页面可见（第 48 轮 A-9 / B-8 同条：净值停在 2026-09-13）。
+  **这三条到 2026-09-26 全部关掉**：#51 走 `audit_verdict_evidence.py --production`（只读门）、
+  #58 三个 manager 都过注入的唤醒门（node 里数调用次数）、净值新鲜度进了 `span_report()`
+  与页面灰字与 Cron 日志（阈值只在 `verdict_evidence.NAV_LAG_WARN_DAYS` 一处）。）
   （上一基线 1067/1076 → 本批 1070/1079：+3 条 —— `test_script_db_guards.py` 的
   "整趟散落连接扫描跑不完就不许钉库"（第 47 轮 B-4 那一支以前 0 覆盖）、
   `test_mutation_lock.py` 的"默认 locale 下第二个会话不许崩"（A4）、

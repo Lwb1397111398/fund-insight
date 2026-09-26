@@ -416,6 +416,19 @@ MUTATIONS = [
      'bloggers_notice_class_stops_being_defined', HTML,
      '<div v-if="bloggersError" class="text-xs"',
      '<div v-if="bloggersError" class="notice-inline error"', False),
+    ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
+     'nav_staleness_never_warns', HTML,
+     'if (r.nav_stale) text +=', 'if (false) text +=', False),
+    ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
+     'nav_staleness_warns_for_the_wrong_reason', HTML,
+     'if (r.nav_stale) text +=', 'if (r.nav_future_rows) text +=', False),
+    ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
+     'nav_future_rows_go_silent', HTML,
+     'if (r.nav_future_rows > 0)', 'if (false)', False),
+    ('test_the_nav_freshness_note_says_what_the_data_is_not_the_date_we_ran',
+     'missing_nav_reported_as_a_date_anyway', HTML,
+     "if (!r.nav_as_of) return '净值截止日没取到（库里一行净值都没有？）';",
+     "if (!r.nav_as_of) return '净值截至（未记录）';", False),
 ]
 
 
