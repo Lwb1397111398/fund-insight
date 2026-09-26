@@ -13,7 +13,7 @@ from datetime import date, datetime
 from sqlalchemy.orm import Session
 
 from src.models.database import FundInfo, FundHistory, Prediction, SectorFundMapping, SessionLocal
-from src.fund.fund_api import fund_api
+from src.fund.fund_api import fund_api, is_future_nav
 from src.fund.fund_auto_manager import fund_auto_manager
 
 
@@ -400,8 +400,15 @@ class FundSyncManager:
                     fund.day_growth = fund_info.get('day_growth', fund.day_growth)
 
                     # 使用实际净值日期（jzrq），而不是 date.today()
+                    # 但也**不能是还没到的那天**：2026-09-25 那次同步里 000725（大成添利宝货币B）
+                    # 的上游 jzrq 直接给 09-27 ⇒ 档案头自己声称"我有 09-27 的净值"。
+                    # 历史行走取数入口那道门（`usable_history_rows`），档案头是同一件事，
+                    # 所以共用同一个谓词，不再写第二份比较。
                     parsed_nav_date = self._parse_nav_date(fund_info.get('nav_date'))
-                    if parsed_nav_date:
+                    if parsed_nav_date and is_future_nav(parsed_nav_date):
+                        print(f"[FundSync] 基金 {fund.fund_code} 上游给的净值日期 {parsed_nav_date} "
+                              f"晚于今天 ⇒ 档案头日期保持不动（现为 {fund.nav_date}）")
+                    elif parsed_nav_date:
                         fund.nav_date = parsed_nav_date
 
                     # 更新历史净值表

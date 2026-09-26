@@ -74,6 +74,46 @@ def jaccard_name(a, b) -> float:
     return round(len(ca & cb) / len(ca | cb), 4)
 
 
+def is_future_nav(day, today=None) -> bool:
+    """这一行的净值日期是不是"还没到"（按北京时间自然日，与 `current_as_of()` 同一把尺子）。"""
+    if not isinstance(day, date):
+        return False
+    if today is None:
+        from src.services.prediction_lifecycle import current_as_of
+        today = current_as_of()
+    return day > today
+
+
+def usable_history_rows(fund_code: str, rows: List[Dict], today=None) -> List[Dict]:
+    """上游给的净值行进库前的"防未来函数"门 —— **只在取数入口这一处实现**。
+
+    为什么必须有（2026-09-25 实测）：`000725`（大成添利宝货币B，货币型）的东财 lsjz 直接把
+    `FSRQ` 签成 09-26 / 09-27，而那天是 09-25 ⇒ 一次「更新基金净值」就往生产 `fund_history`
+    写了 2 条晚于当天的行，并把 `fund_info.nav_date` 也写成 09-27。验证侧从第 13 轮起就有
+    "不取目标日之后的行情"这道门，**入库侧一直没有** —— 于是脏数据是从写入那一刻进来的，
+    而不是从判定那一刻。
+
+    三个 `FundHistory(...)` 写入点（`fund_api.update_fund_history`、`fund_api` 的回填腿、
+    `fund_sync_manager._update_fund_history`）都在两个取数入口下游，所以门加在入口，
+    不复制三份。丢掉几条必须说出来：静默丢弃和不丢一样难查。
+    """
+    kept = [r for r in rows if not is_future_row(r, today)]
+    dropped = len(rows) - len(kept)
+    if dropped:
+        logger.warning('[净值门] %s 上游给了 %d 条晚于 %s 的净值行，已丢弃不入库：%s'
+                       % (fund_code, dropped,
+                          today if today is not None else '今天（北京）',
+                          ', '.join(sorted({str(r.get('date')) for r in rows if is_future_row(r, today)}))))
+    return kept
+
+
+def is_future_row(row: Dict, today=None) -> bool:
+    day = row.get('date') if isinstance(row, dict) else None
+    if isinstance(day, datetime):
+        day = day.date()
+    return is_future_nav(day, today)
+
+
 class FundAPI:
     """天天基金API封装"""
     
@@ -243,7 +283,7 @@ class FundAPI:
             else:
                 logger.warning(f"基金 {fund_code} API返回数据格式异常")
             
-            return results
+            return usable_history_rows(fund_code, results)
 
         except Exception as e:
             logger.error(f"获取基金{fund_code}历史数据失败: {e}")
@@ -366,7 +406,8 @@ class FundAPI:
                 break
 
         # 循环走完却没置 complete ⇒ 翻页触顶、区间没问完，同样按"没问到"处理
-        return results if complete else None
+        # 回填腿也过同一道净值门（入口只此两处，三个写入点都在下游）
+        return usable_history_rows(fund_code, results) if complete else None
 
     def verify_fund_fetchable(self, fund_code: str, input_name: Optional[str] = None,
                              probe_stock: bool = False, fill_name: bool = True) -> Dict:

@@ -215,9 +215,16 @@ def test_missing_total_count_still_pages_to_the_end():
     """
     from src.fund.fund_api import FundAPI
 
+    # 窗口锚在"真实今天的昨天"而不是写死日期：入库侧新加的净值门
+    # （`usable_history_rows`：`nav_date > 今天（北京）` 一律不入库）会把样品里
+    # "还没到的那天"滤掉 —— 写死 2026-09-01~10-20 的窗口一旦跨过今天，这条判数就会
+    # 从 47 变成 26，量的就不再是"翻页有没有到底"了。
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=46)
+
     def page(n, offset):
         return {'Data': {'LSJZList': [
-            {'FSRQ': (date(2026, 9, 1) + timedelta(days=offset + i)).isoformat(),
+            {'FSRQ': (start + timedelta(days=offset + i)).isoformat(),
              'DWJZ': '1.0', 'JZZZL': '0'} for i in range(n)]}}
 
     api = FundAPI.__new__(FundAPI)
@@ -226,7 +233,7 @@ def test_missing_total_count_still_pages_to_the_end():
     api.headers = {}
     api.timeout = 5
     api.history_url = 'http://example.invalid'
-    rows = api.get_fund_history_range('510300', date(2026, 9, 1), date(2026, 10, 20))
+    rows = api.get_fund_history_range('510300', start, end)
     assert sess.calls == 3, '没 TotalCount 就只翻了一页'
     assert rows is not None and len(rows) == 47
 

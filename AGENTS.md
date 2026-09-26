@@ -204,6 +204,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   未删预测 1616、已判 1057（判对 591）、到期未判 **149**，末次验证 09-13 15:23，而
   `GET /api/predictions/verify-all/status` 仍停在 `total 83 / processed 65 / success 62`
   ⇒ 那一次批量验证**中途断了没人接手**（净值停在 09-13 的原因老板已答过：一直是手点，见上面那条）。
+- **上面那笔"净值落后"的账已经在 2026-09-25 夜结掉**（上线后我自己调的接口，没让老板点）：
+  `POST /api/funds/update-all` 回执"检测 1616 个预测、新增 0 只基金、关联 131、更新 156 只、失败 6 只
+  （就是 S6 那 6 个垃圾码）"，`fund_history` 9541 → 10882 行、末条净值到 **2026-09-25**；
+  随后 `POST /api/predictions/verify-all` 把已判从 **1057 推到 1190**（判对 591 → 644），
+  到期未判 149 → 16。线上 `/api/stats/evidence` 现在印
+  `已判 1190 / 判对 644 = 54.12%、⚠ 419、区间 33.68% → 34.37%~69.58%、as_of 2026-09-26`
+  —— 与本机的 `scripts/audit_verdict_evidence.py --production` 同源同数（两条独立路径互相印证）。
+  **两条要说清的**：① 那 131 条"关联"没动任何预测（`prediction_change_logs` 当天新增 0 行），
+  但其中一条分支会给 `fund_info.sector_type` 补空值 ⇒ 这类副作用要写进预检清单；
+  ② 上游会给**预签发的未来净值行**（实测 `000725` 货币B 在 09-25 给了 09-26/09-27，07-31 给过 08-01/08-02），
+  入库侧以前没门 ⇒ 现在门在 `src/fund/fund_api.py:usable_history_rows`（判据
+  `tests/unit/test_nav_future_row_gate.py`），存量残留用 `scripts/drop_future_nav_rows.py`
+  点名删（默认 dry-run、真删要 `--apply --confirm DROP-FUTURE-NAV --json 备份`；
+  2026-09-26 已删生产 4 行并把档案头从 09-27 倒回 09-25，删后 ⚠ 419 一条没涨）。
+  **同步只补没有的日期、不覆盖已有行**（覆盖就是 `nav_rewritten` 那族 ⚠ 的成因）⇒ 提前签发的行
+  一旦落下就永远不会自纠，"日期被追平"不等于没问题，这类数据必须点名清。
 - **第一次真尝试上线（21:44 推 ⇒ 22:0x 部署）失败了，而且日志第一句本来就会骗人**：
   应用在**导入阶段**就死在 `src/models/database.py`，印的是
   `RuntimeError: DATABASE_URL is PostgreSQL, but psycopg2 is not installed; refusing to fall back to SQLite.`
@@ -254,12 +270,24 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-25 22:2x（北京），第 48 轮返修之后的**产品批**（#51 结掉 + 部署失败后的一处报错改正）之后，
+最近一次核对（2026-09-26 00:5x（北京），**净值写入门 + 生产清理工具**那一批之后（第 48 轮产品批 #51/#58 之前的那批是 1073/1082），
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1073 passed / 16 skipped / 0 failed**（736.11 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1082 passed / 16 skipped / 0 failed**（598.94 秒）。
+- `pytest tests/unit -q` → **1085 passed / 16 skipped / 0 failed**（382.16 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1094 passed / 16 skipped / 0 failed**（357.36 秒）。
+  （上一基线 1073/1082 → 本批 1085/1094：**+12 条 = 本批 9 条 + 前两笔提交欠跑数的 3 条**
+  （那 3 条是"驱动名钉死"、"requirements 上界"、"体检脚本递 `--production` 到门口" ——
+  每一笔提交都该带一次跑数，这里又欠了一次，记在案上而不是当成 0）。本批 9 条分布在
+  `test_nav_future_row_gate.py` 新增 3 条（真起 sqlite 走 `update_fund_history` 的"提前签发行不许入库" +
+  "丢弃必须说出来、条数要点名" + "两个取数入口与档案头都过同一道门"的 AST 接线判据，含"今天/昨天的行不许误伤"
+  的防过宽对照）、`test_drop_future_nav_rows.py` 新增 6 条（dry-run 一行不删、没备份就拒删、
+  点名日期库里没有就拒跑、确认词排在连库之前、档案头倒回真实末条、`--dates` 并入删除集）。
+  当场复核这两份文件的条数：`python -m pytest tests/unit/test_nav_future_row_gate.py --collect-only -q`
+  印 3、`... test_drop_future_nav_rows.py --collect-only -q` 印 6。
+  本批另外两处是**改已有判据的样品**，不另起条数：`test_backfill_negative_proof.py` 的翻页判据把
+  窗口从写死 `2026-09-01~10-20` 改成锚在"真实昨天往前 47 天" —— 不是我改坏了老判据，是**我新加的净值门
+  会把样品里"还没到的那天"滤掉**，写死的窗口跨过今天之后，它量的就不再是"翻页有没有到底"（47→26 那次红是它替我盯住我）。）
   （上一基线 1072/1081 → 本批 1073/1082：+1 条 —— `test_database_url_routing.py` 的
   "驱动坏了要说出坏在哪"（见下面 `S6-上线前检查单.md` §0 那次部署失败那一条）。
   同批还做了两件不增条数的事：① `scripts/audit_verdict_evidence.py` 改走只读门并加 `--production`
