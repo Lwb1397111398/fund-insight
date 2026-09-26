@@ -305,9 +305,9 @@ CLOSE-UNVERIFIABLE`、先 `backup/close-unknowable-*.json` 再逐行回执、`--
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1160 passed / 16 skipped / 0 failed**（795.32 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1169 passed / 16 skipped / 0 failed**（838.10 秒）。
-  （上一基线 1144/1153 → 本批 **1160/1169：+16 条 / 两个口径同增**，任务 #8 第二半 + 生产量到的那条机制账：
+- `pytest tests/unit -q` → **1161 passed / 16 skipped / 0 failed**（1150.02 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1170 passed / 16 skipped / 0 failed**（1075.17 秒）。
+  （上一基线 1144/1153 → 本批 **1161/1170：+17 条 / 两个口径同增**，任务 #8 第二半 + 生产量到的那条机制账：
   新文件 `test_close_unknowable_predictions.py` 当场收集 **6** 条（关闭必须不写 `is_correct` 且台账记
   `source='system'`；三条**反面对照**——"净值刚补到窗口附近"、"源端答不出（`None`）"、"源端还答得出行"
   都不许关；还原默认 dry-run 再真还原；CLI 缺确认词与 `--production` 指向不对各退 4）；
@@ -323,6 +323,11 @@ CLOSE-UNVERIFIABLE`、先 `backup/close-unknowable-*.json` 再逐行回执、`--
   `NAV_LAG_WARN_DAYS` 改掉那一行的说法必须跟着变 ⇒ 页面与服务里都不许藏第二个数）；
   `test_frontend_cold_start.py` **+2**（回收站那一行必须把 `delete_reason` 说到屏幕上，不只是存在库里；
   `nav_stop_note` 光有 `v-if` 没有插值也算没显示）。
+  上面那条 +16 之外另有 `test_prediction_maintenance.py` **+1**（「按板块对齐标的」的预览**不许**随预测条数线性查库：
+  生产实测同一趟本地镜像 3.5 秒、线上 **100 秒零字节**（curl 连上、请求发完、拿不到响应），
+  根因是循环里每条没直接命中的预测各查一次 `sector_alias` ＝ 900+ 次远程往返；
+  判据形状是"从 5 条加到 405 条，**语句条数必须一模一样**"，退回旧写法实测 11 → 411 条点红。
+  修完镜像同一趟 3.5 秒 → **0.4 秒**）。
   变异：`python scripts/mutation_proof_frontend.py --only unverifiable` / `--only archive_reason` /
   `--only stopped_fund_note` 全 RED、CONTROL 全绿（条数一律 `--list` 看末行）。
   **本批我自己抓到自己的两处**（都由新判据当场点红）：① 我在收口脚本里手写了一份 `latest >= start`，

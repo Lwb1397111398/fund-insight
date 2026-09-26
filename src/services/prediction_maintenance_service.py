@@ -178,12 +178,17 @@ class PredictionMaintenanceService:
         predictions = self.db.query(Prediction).filter(
             Prediction.is_deleted == False,
         ).order_by(Prediction.id.asc()).all()
+        # 别名**一次读全表**再在内存里查。以前每条没直接命中的预测都单独查一次库 ——
+        # 生产实测（2026-09-26）这一趟本地 3.5 秒、线上 100 秒不返回（curl 拿到 0 字节），
+        # 差的就是 900+ 次远程往返。语义不变：仍是"本次跑批现读"，不吃进程内那份可能过期的缓存。
+        alias_targets = {a.alias_name: a.sector_name
+                         for a in self.db.query(SectorAlias).all()}
         candidates = []
         unchanged = 0
         no_mapping = 0
         for prediction in predictions:
             sector = prediction.sector or prediction.sector_type
-            mapping = self._lookup_mapping(sector_map, sector)
+            mapping = self._lookup_mapping(sector_map, sector, alias_targets)
             if not mapping:
                 no_mapping += 1
                 continue
@@ -302,11 +307,14 @@ class PredictionMaintenanceService:
             return bool(getattr(mapping, 'reviewed', False))
         return confidence >= min_confidence
 
-    def _lookup_mapping(self, sector_map: Dict, sector: Optional[str]) -> Optional[SectorFundMapping]:
+    def _lookup_mapping(self, sector_map: Dict, sector: Optional[str],
+                        alias_targets: Optional[Dict] = None) -> Optional[SectorFundMapping]:
         """先精确命中，再走板块别名/归一化，避免同义板块漏改。
 
-        别名直接查库，不用 `sector_fund_map._load_db_aliases()` 的进程内缓存——
+        别名从**库里**读，不用 `sector_fund_map._load_db_aliases()` 的进程内缓存 ——
         那个缓存可能在本次跑批之前就是空的，会让刚写入的别名"看不见"。
+        `alias_targets` 是调用方一次读全表拿到的那份（生产实测每条预测各查一次会把这个
+        按钮拖到 100 秒不返回）；没给才自己查一次，语义仍是"本次现读"。
         """
         if not sector:
             return None
@@ -318,10 +326,11 @@ class PredictionMaintenanceService:
             normalized = normalize_sector_name(sector)
             if normalized in sector_map:
                 return sector_map[normalized]
-            alias = self.db.query(SectorAlias).filter(
-                SectorAlias.alias_name == sector).first()
-            if alias and alias.sector_name in sector_map:
-                return sector_map[alias.sector_name]
+            if alias_targets is None:
+                alias_targets = {a.alias_name: a.sector_name
+                                 for a in self.db.query(SectorAlias).all()}
+            if alias_targets.get(sector) in sector_map:
+                return sector_map[alias_targets[sector]]
         except Exception:
             return None
         return None

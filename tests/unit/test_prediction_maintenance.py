@@ -354,3 +354,59 @@ def test_mapping_execute_route_requires_confirmation(test_db):
         )
 
     assert exc.value.status_code == 403
+
+
+def _counted_statements(db):
+    """数一段代码里**真的发出几条 SQL** —— 生产慢下来的唯一可见形状就是它。"""
+    from contextlib import contextmanager
+    from sqlalchemy import event
+
+    engine = db.get_bind()
+    counter = {'n': 0}
+
+    def _hit(conn, cursor, statement, parameters, context, executemany):
+        counter['n'] += 1
+
+    @contextmanager
+    def scope():
+        event.listen(engine, 'before_cursor_execute', _hit)
+        try:
+            yield counter
+        finally:
+            event.remove(engine, 'before_cursor_execute', _hit)
+    return scope()
+
+
+def test_the_mapping_preview_does_not_query_the_database_per_prediction(test_db):
+    """「按板块对齐标的」的预览**不许**随预测条数线性查库。
+
+    生产实测（2026-09-26）：同一趟代码在本地镜像 3.5 秒，在线上 **100 秒零字节**
+    （`curl` 连上、请求发完、拿不到响应）⇒ 老板点这个按钮就是干等。
+    根因是循环里每条没直接命中的预测各查一次 `sector_alias`（900+ 次远程往返）。
+    判据形状：把预测从 5 条加到 405 条，**语句条数必须一模一样**。
+    """
+    blogger, post = _blogger_post(test_db, 'N+1 测试博主')
+    test_db.add(SectorFundMapping(sector_name='白酒', fund_code='NEW01',
+                                  fund_name='新标的', is_active=True, reviewed=True,
+                                  reviewed_by='owner', owner_locked=True))
+    test_db.commit()
+
+    def seed(count):
+        for i in range(count):
+            _prediction(test_db, blogger, post, fund_code='X%04d' % i,
+                        sector='没有映射的板块')
+        test_db.commit()
+
+    seed(5)
+    svc = PredictionMaintenanceService(test_db)
+    with _counted_statements(test_db) as small:
+        first = svc.sync_sector_mappings(dry_run=True)
+    seed(400)
+    with _counted_statements(test_db) as big:
+        second = svc.sync_sector_mappings(dry_run=True)
+
+    assert small['n'] == big['n'], (
+        '预览从 %d 条语句涨到 %d 条 ⇒ 循环里在按行查库（线上就是 100 秒不返回那一族）'
+        % (small['n'], big['n']))
+    assert first['would_update'] == second['would_update'] == 0
+    assert second['predictions_no_mapping'] >= 400, '没走到"别名查不到"那一支 ⇒ 这条判据是空转'
