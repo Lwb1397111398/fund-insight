@@ -1057,7 +1057,13 @@ class PredictionVerifyService:
         period_days = self.parse_period_days(prediction.prediction_period)
         config = self.get_verify_config(period_days)
         
-        today = date.today()
+        # "今天"必须与到期队列同一把时钟：队列、分类、净值新鲜度一律按北京日
+        # （`current_as_of`），而这里以前是 `date.today()` —— Render 的容器是 UTC，
+        # 北京 00:00~08:00 手点"验证全部"时它比队列少一天 ⇒ 上一轮那把锁会被读成
+        # "还没到点"，重问日白白错开一天（第 52 轮 B-3：本机永远看不到这一格，
+        # 因为这台机器就在 +8 上）。
+        from src.services.prediction_lifecycle import current_as_of
+        today = current_as_of()
         target_date = prediction.target_date
         
         if target_date:
@@ -1125,18 +1131,19 @@ class PredictionVerifyService:
         )
 
         if not data_check['available']:
-            # 「已问过、数据源答这段没有」是**结构性**结论（reason 已在
-            # `_check_fund_data_availability` 里分过档：抖动/没问过都不会走到这一个）。
-            # 给它一把重问锁，否则 Cron 与页面上每一次"验证全部"都为同一批永远问不出
-            # 来的预测重问一遍（任务 #8：到期队列里的噪音）。锁到哪天由凭据 TTL 决定，
-            # 到点自动回队 ⇒ 不是终态、更不写 is_correct。
+            # 「已问过、数据源答这段没有」与「目标日没有独立净值」是**结构性**结论
+            # （reason 已在 `_check_fund_data_availability` 里分过档：抖动/没问过都不会
+            # 走到这一个）。给它一把重问锁，否则 Cron 与页面上每一次"验证全部"都为
+            # 同一批永远问不出来的预测重问一遍（任务 #8：到期队列里的噪音；
+            # 2026-09-27 镜像上那两条"周六目标日"就是这一档漏掉的）。
+            # 锁到哪天由凭据 TTL 决定，到点自动回队 ⇒ 不是终态、更不写 is_correct。
             held_until = None
             closed_as = None
-            if data_check.get('reason') == 'no_source_history':
-                from src.services.prediction_lifecycle import (
-                    apply_unverifiable_hold, close_as_stale_target_note,
-                    should_close_as_stale_target,
-                )
+            from src.services.prediction_lifecycle import (
+                apply_unverifiable_hold, close_as_stale_target_note,
+                is_structural_verdict, should_close_as_stale_target,
+            )
+            if is_structural_verdict(data_check.get('reason')):
                 previous_hold = prediction.next_verify_date
                 # 库里这只代码最后一条净值在哪天：这是"它停更了"与"我们没同步"的分界，
                 # 少了它就只能靠日历猜（第 23 轮那种把镜像坏了说成产品坏了的错）。
@@ -1144,9 +1151,11 @@ class PredictionVerifyService:
                     FundHistory.fund_code == fund_code).order_by(
                     FundHistory.nav_date.desc()).first()
                 latest_nav = self._as_date(newest[0]) if newest else None
+                archived = False
                 if should_close_as_stale_target(
                         verdict_reason=data_check.get('reason'),
                         previous_hold=previous_hold,
+                        target_date=target_date,
                         local_latest_nav=latest_nav,
                         window_start=nav_start_date,
                         today=today):
@@ -1154,9 +1163,13 @@ class PredictionVerifyService:
                     # ⇒ 判不了是永久事实，不是"再等等"。收进回收站（带原因、可恢复、不写结论）。
                     from src.services.prediction_service import PredictionService
                     note = close_as_stale_target_note(prediction, latest_nav, nav_start_date)
-                    if PredictionService(self.db).close_as_unverifiable(prediction.id, note):
+                    archived = PredictionService(self.db).close_as_unverifiable(prediction.id, note)
+                    if archived:
                         closed_as = note
-                else:
+                if not archived:
+                    # 没关成就照样上锁。上一版这里是一条 else，于是"该关但关不成"
+                    # （归档咽喉拒了、行已不在活跃面等）既不锁也不报 ⇒ 每一批都重问它一次、
+                    # 每一次又试关一次，回执上既没有 held_until 也没有 closed_as（第 52 轮 A-6）。
                     held_until = apply_unverifiable_hold(prediction, as_of=today)
                     try:
                         self.db.commit()

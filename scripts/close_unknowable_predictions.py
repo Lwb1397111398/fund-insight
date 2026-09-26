@@ -47,10 +47,10 @@ def _today_beijing():
 
 
 def plan(db, today):
-    """列出候选：到期未判 && 源端这个窗口答 0 条 && 库里这只代码最后一条净值早于窗口起点。"""
+    """列出候选：到期未判 && 源端这个窗口答 0 条 && 库里末条净值早于窗口起点 && 这条行以前被锁过（第二次）。"""
     from src.models.database import FundHistory, Prediction
-    from src.services.prediction_lifecycle import (close_as_stale_target_note,
-                                                   nav_cannot_cover_window)
+    from src.services.prediction_lifecycle import (
+        close_as_stale_target_note, nav_cannot_cover_window, was_locked_previously)
 
     rows = (db.query(Prediction)
             .filter(Prediction.is_deleted == False,          # noqa: E712
@@ -83,16 +83,27 @@ def plan(db, today):
         newest = db.query(FundHistory.nav_date).filter(
             FundHistory.fund_code == code).order_by(FundHistory.nav_date.desc()).first()
         latest = newest[0] if newest else None
-        if got or not nav_cannot_cover_window(latest, start):
+        if got:
             skipped.append((p.id, code,
-                            '源端给了 %d 条或库里最后一条 %s 不早于窗口起点 %s ⇒ 还在等'
-                            % (len(got), latest, start)))
+                            '源端这段给了 %d 条 ⇒ 是本地没补到，不是它没有' % len(got)))
+            continue
+        if not nav_cannot_cover_window(latest, start):
+            skipped.append((p.id, code,
+                            '库里最后一条 %s 不早于窗口起点 %s ⇒ 还在等' % (latest, start)))
+            continue
+        asked = 2 if was_locked_previously(p.next_verify_date, end) else 1
+        if asked < 2:
+            # 与验证器共用同一把尺子（`was_locked_previously`）：第一次问出来只配上锁、
+            # 不配关。上一版这里直接关，还给行写上"已问过两次"⇒ 那句话是写多的
+            # （2026-09-27 镜像实测：脚本收掉的 5 行 `next_verify_date` 全部 ≤ 目标日）。
+            skipped.append((p.id, code,
+                            '行上没有结构性重问锁 ⇒ 这是第一次问出来，按验证器同一条判据只该上锁'))
             continue
         out.append({'prediction_id': p.id, 'fund_code': code, 'fund_name': p.fund_name,
                     'blogger_id': p.blogger_id, 'target_date': str(end),
                     'window_start': str(start), 'local_latest_nav': str(latest),
                     'source_rows': len(got),
-                    'note': close_as_stale_target_note(p, latest, start)})
+                    'note': close_as_stale_target_note(p, latest, start, asked_times=asked)})
     return out, skipped
 
 

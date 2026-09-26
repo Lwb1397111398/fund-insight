@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """`close_unknowable_predictions.py` 的判据（把"永远判不出来"的预测收进回收站）。
 
-要钉住的是**两条证据都要在场**这件事：
-① 现场问数据源、这个窗口答 **0 条**；② 库里这只代码最后一条净值**早于窗口起点**。
+要钉住的是**三条证据都要在场**这件事：
+① 现场问数据源、这个窗口答 **0 条**；② 库里这只代码最后一条净值**早于窗口起点**；
+③ 这条行**以前被结构性重问锁压过**（`was_locked_previously`，与验证器同一把尺子）——
+脚本这一次现问才算第二次，回收站里那句"已问过两次"才写得出口（第 52 轮 A-4 实测：
+旧写法收掉的 5 行全都从没被锁过，那句话是写多的）。
 只中一条就不许关 —— 少了 ①会把一次接口抖动当成产品停更，少了 ②会把**我们自己没同步**
 说成产品停更（那正是第 23 轮那种把镜像坏了当库坏了的错，代价是老板本可以验证的预测被关掉）。
 另外钉三件收尾的事：默认 dry-run 一行都不动、缺确认词在连库之前就退出、
@@ -20,7 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SCRIPT = os.path.join(ROOT, 'scripts', 'close_unknowable_predictions.py')
 
 
-def _seed(db, *, code, target_offset, nav_back_days, pred_type='up'):
+def _seed(db, *, code, target_offset, nav_back_days, pred_type='up', held=False):
     from src.models.database import Blogger, FundHistory, Post, Prediction
 
     blogger = db.query(Blogger).filter(Blogger.name == '关闭判据博主').first()
@@ -38,6 +41,10 @@ def _seed(db, *, code, target_offset, nav_back_days, pred_type='up'):
                    prediction_date=today - timedelta(days=40), prediction_period='1个月',
                    target_date=today - timedelta(days=target_offset), status='pending',
                    is_expired=False)
+    if held:
+        # 上一轮验证器真问过、写过一把重问锁（那根日期晚于自己的目标日 = 只有锁会写在那儿）
+        # ⇒ 脚本这一次现问才算"第二次"，那句"已问过两次"才写得出口
+        p.next_verify_date = p.target_date + timedelta(days=30)
     db.add(p)
     if nav_back_days is not None:
         db.add(FundHistory(fund_code=code, nav_date=today - timedelta(days=nav_back_days),
@@ -66,7 +73,7 @@ def _import_script():
 
 def test_both_evidences_present_closes_and_leaves_the_verdict_untouched(test_db, monkeypatch):
     mod = _import_script()
-    p = _seed(test_db, code='DEAD99', target_offset=3, nav_back_days=400)
+    p = _seed(test_db, code='DEAD99', target_offset=3, nav_back_days=400, held=True)
     _stub_source(monkeypatch, {'DEAD99': []})
 
     items, skipped = mod.plan(test_db, date.today())
@@ -83,6 +90,31 @@ def test_both_evidences_present_closes_and_leaves_the_verdict_untouched(test_db,
         PredictionChangeLog.prediction_id == p.id).order_by(
         PredictionChangeLog.id.desc()).first()
     assert log is not None and log.source == 'system'
+
+
+def test_a_row_never_locked_before_is_not_closed(test_db, monkeypatch):
+    """第三条证据：这条行**以前没被锁过** ⇒ 脚本这一问就是第一次，不关（第 52 轮 A-4）。
+
+    实测过的形状：2026-09-27 镜像上脚本收掉的 5 行 `next_verify_date` 全部 ≤ 目标日
+    （＝从没被结构性锁过），而它们回收站里那句原因统统写着"已问过两次仍无答案"。
+    判"问过几次"的尺子不许有两份 ⇒ 这里直接复用验证器那把 `was_locked_previously`。
+    """
+    mod = _import_script()
+    p = _seed(test_db, code='FIRST99', target_offset=3, nav_back_days=400)
+    _stub_source(monkeypatch, {'FIRST99': []})
+
+    items, skipped = mod.plan(test_db, date.today())
+
+    assert items == [], '第一次问出来就关 ⇒ 那句"已问过两次"又是写多的'
+    assert [s[0] for s in skipped] == [p.id] and '第一次' in skipped[0][2]
+    test_db.refresh(p)
+    assert p.is_deleted is False
+
+    from src.services.prediction_lifecycle import close_as_stale_target_note
+    twice = close_as_stale_target_note(p, None, None)
+    once = close_as_stale_target_note(p, None, None, asked_times=1)
+    assert '已问过两次' in twice, '第二次的说法不许被改掉（判据与既有回收站文案同源）'
+    assert '已问过两次' not in once and '第一次' in once, '只问过一次却写"两次" ⇒ 那句话仍然是假的'
 
 
 def test_a_recent_nav_row_means_we_are_stale_not_the_fund(test_db, monkeypatch):
@@ -118,7 +150,7 @@ def test_source_ansering_rows_keeps_the_prediction_waiting(test_db, monkeypatch)
 def test_restore_from_backup_is_dry_run_by_default(test_db, monkeypatch):
     """还原默认只报"将放回几行"；真还原要 --apply，且恢复后原因被清空（回到待验证）。"""
     mod = _import_script()
-    p = _seed(test_db, code='REST99', target_offset=3, nav_back_days=400)
+    p = _seed(test_db, code='REST99', target_offset=3, nav_back_days=400, held=True)
     _stub_source(monkeypatch, {'REST99': []})
     items, _ = mod.plan(test_db, date.today())
     path = mod.apply_close(test_db, items, date.today())

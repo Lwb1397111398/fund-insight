@@ -1810,7 +1810,10 @@ def test_the_structurally_unverifiable_queue_is_counted_and_explained():
     # 按钮走后端 lifecycle 这一档，不是页面拿全量自己再筛一遍
     assert "predictionFilters.lifecycle = 'unverifiable'" in script
     # 口径灰字里要有它 —— 只写在 title 上等于手机上没写
-    assert '「结构性不可验」= 已按区间问过数据源' in html
+    assert '「结构性不可验」= 验证器已按区间问过' in html
+    # 而且灰字/行内**不许断言是哪一种原因**：行上只有那根日期，没有 reason
+    # （第 52 轮 A-2/B-2：这一档有两半，"数据源给不出这段净值"对退化端点那半是说反的）
+    assert '数据源给不出这段' not in html, '页面又开始替某一档下结论了'
 
 
 def test_the_recycle_bin_says_why_each_row_was_archived():

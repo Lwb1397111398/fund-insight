@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from src.models.database import FundHistory
+from src.services import prediction_lifecycle as lc
 from src.services import prediction_verify_service as pvs_module
 from src.services.prediction_verify_service import PredictionVerifyService
 from src.core.config import config as app_config
@@ -66,7 +67,13 @@ def _seed_prediction(db, target_date=date(2026, 1, 10), prediction_date=date(202
 
 
 def _fix_today(monkeypatch, fixed: date):
-    """只固定 today()，不污染 ORM 比较与 isinstance。"""
+    """把"今天"钉住 —— 两把都要钉。
+
+    验证路径的 `today` 自第 52 轮 B-3 起取自 `prediction_lifecycle.current_as_of()`
+    （北京日，与到期队列同一把钟），不再取 `date.today()`（Render 容器是 UTC，
+    北京零点后八小时前它会少一天）。只钉 `date.today()` 的那版夹具，
+    对改回墙上时钟的那次回退**不会响**，所以这里两个出口一起钉。
+    """
 
     class FixedDate(date):
         @classmethod
@@ -74,6 +81,8 @@ def _fix_today(monkeypatch, fixed: date):
             return date(fixed.year, fixed.month, fixed.day)
 
     monkeypatch.setattr(pvs_module, "date", FixedDate)
+    monkeypatch.setattr(lc, "current_as_of",
+                        lambda: date(fixed.year, fixed.month, fixed.day), raising=True)
 
 
 def _add_nav(db, fund_code, fund_name, rows):
@@ -117,6 +126,36 @@ def test_weekday_wait_period_keeps_pending(test_db, monkeypatch):
     test_db.refresh(prediction)
     assert prediction.status == "pending"
     assert (prediction.verify_count or 0) == 0
+
+
+def test_the_verify_path_takes_its_today_from_the_beijing_clock(test_db, monkeypatch):
+    """验证路径的"今天"跟着北京那把钟走，不跟容器的 UTC 墙钟（第 52 轮 B-3）。
+
+    这一格本机永远看不见：这台机器就在 +8 上，两把钟给的是同一个日子 ⇒ 只有
+    **故意让它们冲突**才测得到。Render 的容器是 UTC ⇒ 北京 00:00~08:00 手点
+    "验证全部"时 `date.today()` 比到期队列少一天 ⇒ 刚写下的重问锁被读成"还没到点"，
+    重问日白白错开一天。
+    """
+    target = date(2026, 1, 9)          # 周五：目标日当天，正该"等净值"
+    _fix_today(monkeypatch, target)    # 先把两把钟都钉在目标日
+
+    class ConflictDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 9, 1)    # 墙上时钟早过等待期 ⇒ 只有代码用错钟才会看见它
+
+    monkeypatch.setattr(pvs_module, "date", ConflictDate)
+
+    prediction = _seed_prediction(test_db, target_date=target)
+    _add_nav(test_db, prediction.fund_code, prediction.fund_name,
+             [(date(2026, 1, 1), 1.00), (date(2026, 1, 7), 0.99), (date(2026, 1, 8), 1.00)])
+
+    result = PredictionVerifyService(test_db).verify_prediction(prediction.id)
+
+    assert result["success"] is False
+    assert result["data"]["data_status"]["reason"] == "waiting_target_nav", (
+        '验证路径又用回 `date.today()` 了 ⇒ 同一批数据在两把时钟下会给出两种结论：%s'
+        % result["message"])
 
 
 def test_target_nav_filled_then_completes(test_db, monkeypatch):

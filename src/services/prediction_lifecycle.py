@@ -126,29 +126,77 @@ def is_held_unverifiable(prediction: Prediction, as_of: Optional[date] = None) -
             and not getattr(prediction, "is_deleted", False))
 
 
+STRUCTURAL_VERDICT_REASONS = ('no_source_history', 'same_nav_endpoint')
+# 「问过两次 ⇒ 收进回收站」这条升级只对登记过的档位开放；其余结构性结论**只锁不关**。
+# 两张名单合起来必须逐字等于上面那条（判据 `test_the_structural_reasons_are_all_dispositioned`）
+# ⇒ 加一档不登记就红，别再让"要不要关"这句话散落到 if 里。
+CLOSABLE_VERDICT_REASONS = ('no_source_history',)
+LOCK_ONLY_VERDICT_REASONS = ('same_nav_endpoint',)
+
+
+def is_structural_verdict(verdict_reason: Optional[str]) -> bool:
+    """这条失败结论是不是"已经真问过，今天再问一遍也不会换个答案"—— 配重问锁的唯一一档。
+
+    两档都出自 `_check_fund_data_availability` 里**必须建立在证据上**的分支：
+    `no_source_history` 要求"已按区间问过数据源"（传输失败/限流一律不记凭据），
+    `same_nav_endpoint` 要求起点与终点取到同一条净值 ⇒ 涨跌幅恒为 0，方向判不出来。
+    两档**只共用"配不配锁"这一句**，不共用"能不能关"（见 `CLOSABLE_VERDICT_REASONS`）。
+    其余失败（点数不够、没档案、端点太旧、在等目标日净值）明天可能就自愈，
+    锁了它们等于亲手把一条可验的预测藏出到期队列。
+    """
+    return verdict_reason in STRUCTURAL_VERDICT_REASONS
+
+
+def was_locked_previously(previous_hold: Optional[date],
+                          target_date: Optional[date]) -> bool:
+    """这一行**以前**有没有被结构性结论锁过 —— 只有一把尺子，两处共用。
+
+    认的不是"那根日期过去了没有"，而是"它落在自己的目标日**之后**"：创建排期被
+    `test_the_creation_schedule_never_writes_a_date_after_the_target` 夹在目标日之前 ⇒
+    晚于目标日的那一天只可能由 `apply_unverifiable_hold` 写下。
+    调用方：验证器判"要不要从锁升级成关"（`should_close_as_stale_target` ①）、
+    存量收口脚本判"这句『已问过两次』到底能不能写"（第 52 轮 A-4 实测：脚本收掉的
+    5 行 `next_verify_date` 全部 ≤ 目标日，那句"两次"当时是写多的）。
+    """
+    hold, target = _as_date(previous_hold), _as_date(target_date)
+    return hold is not None and target is not None and hold > target
+
+
 def should_close_as_stale_target(*, verdict_reason: Optional[str],
                                  previous_hold: Optional[date],
+                                 target_date: Optional[date],
                                  local_latest_nav: Optional[date],
                                  window_start: Optional[date],
                                  today: Optional[date] = None) -> bool:
-    """这条预测要不要从"重问锁"升级成**关闭**（标的已经停更，永远问不出答案）。
+    """这条预测要不要从"重问锁"升级成**关闭**（永远问不出答案，代价比锁大得多）。
 
-    两个条件必须同时成立，缺一个都不许关（关 = 从活跃列表消失，代价比锁大得多）：
-    ① **同一个窗口已经问过两次、两次都被数据源答"没有"**：`previous_hold` 是上一轮留下的
-       重问日，只有它已经过去（≤ 今天）才说明这次是回队之后的第二次答案。一次答"没有"
-       可能撞上源端抽风；`no_source_history` 本身又只在"源端真答了 0 条"时才出现
-       （传输失败/限流一律不记凭据，见 `backfill_proofs` 第 B-1 条），所以两次答案
-       是两次独立的、来自源端的否定。
-    ② **这只产品在我们库里连窗口开始之后都没发过一条净值**：`local_latest_nav < window_start`
-       ⇒ 它不是"最近几天没同步"，是从头到尾就没 publish 过这段。少了这一条，
-       我们自己同步掉几天就可能把一条本可验证的预测关掉（第 23 轮那种"把镜像坏了当产品坏了"的坑）。
+    两个条件必须同时成立，缺一个都不许关（关 = 从活跃列表消失）：
+    ① 同一个窗口**上一轮真的被锁过、锁今天到点**：认的不是"这根日期过去了没有"，
+       而是"这根日期落在**自己的目标日之后**"。到期队列里的行，那根日期本来就是创建时
+       排出来的（必然 ≤ 目标日 ≤ 今天），拿"它过去了"当"问过两次"的证据 ⇒ 第一次判出
+       结构性结论就会直接进回收站，"问过两次才关"当场成谎（2026-09-27 在镜像上真跑一次批量
+       验证，那两条"周六目标日"就是这么一跳进回收站的 —— 是我自己跑出来的，不是评审发现的）。
+       创建排期被 `test_the_creation_schedule_never_writes_a_date_after_the_target`
+       夹在目标日之前 ⇒ 只有 `apply_unverifiable_hold` 会写下晚于目标日的那一天。
+    ② 这一档在 `CLOSABLE_VERDICT_REASONS` 里，且它那句"永久"拿得出**只属于它自己的**证据：
+       `no_source_history` 问 `local_latest_nav < window_start` —— 这只产品从窗口开始之前
+       就没再发过一条净值。少了这一条，我们自己同步掉几天就可能把一条本可验证的预测关掉
+       （第 23 轮那种"把镜像坏了当产品坏了"的坑）。
+       `same_nav_endpoint` **一律不关**（第 52 轮 A-1，实测过才敢这么写）：那句"起点与终点
+       是同一条净值"有两种来路 —— 目标日确实不是交易日，**或这只标的自己有数据洞**（补拉能填）。
+       库里分不开这两种：2026-09-27 在镜像上逐日数过行数，真休市的 2026-07-11（周六）
+       全库 **1** 行（货币基金照发），交易日的 2026-09-08 有 **202** 行 ⇒
+       "目标日当天全库零行"这把尺子会把周六读成洞、把洞读成休市，两种都会写进回收站。
+       关错的代价是"永久消失 + 一句假原因"，锁的代价只是"隔几天再问一次" ⇒ 只锁不关。
     """
-    if verdict_reason != 'no_source_history':
+    if verdict_reason not in CLOSABLE_VERDICT_REASONS:
         return False
     today = _as_date(today) or current_as_of()
     prev = _as_date(previous_hold)
-    if prev is None or prev > today:
-        return False                      # 第一次判出来：只锁，不动行
+    if not was_locked_previously(prev, target_date):
+        return False                      # 没锁过（那根日期是排期写的）：这是第一次问出来
+    if prev > today:
+        return False                      # 锁还没到点：不该被问到
     return nav_cannot_cover_window(local_latest_nav, window_start)
 
 
@@ -281,13 +329,26 @@ def target_cannot_evidence_window(in_window: Sequence[date],
 
 
 def close_as_stale_target_note(prediction: Prediction, latest_nav: Optional[date],
-                               window_start: Optional[date]) -> str:
-    """关闭时写给老板看的那句话：说清为什么判不了、去哪找、对准确率有什么影响。"""
+                               window_start: Optional[date],
+                               *, asked_times: int = 2) -> str:
+    """关闭时写给老板看的那句话：说清为什么判不了、去哪找、对准确率有什么影响。
+
+    只有 `CLOSABLE_VERDICT_REASONS` 那一档会走到这里，所以这句可以断言"标的停更"；
+    退化端点那一档永远不关（见 `should_close_as_stale_target` ②），别把两种原因混成一句 ——
+    把"那天没有独立净值行"写成"这只产品停更"会让人去查一只没毛病的基金。
+
+    `asked_times` 不是修辞：**"已问过两次"是一句关于发生过什么的事实陈述**。
+    验证器只在第二次问出来时才关（默认 2），而存量收口脚本是自己逐行现问一次的 ——
+    那一趟只有当行上原本就压着一把到点的重问锁时才算"第二次"（2026-09-27 镜像实测：
+    脚本收掉的 5 行 `next_verify_date` 全部 ≤ 目标日 ⇒ 那句"已问过两次"当时是写多的）。
+    """
+    asked = ('已问过两次仍无答案' if asked_times >= 2
+             else '本次现问一次它仍答没有（这条行上原先没有重问锁 ⇒ 这是第一次问出来就记录的）')
     return ('标的 %s 的数据源给不出这段净值（库里最后一条净值停在 %s，窗口从 %s 起），'
-            '已问过两次仍无答案 ⇒ 无法判定，既不算判对也不算判错，不计入准确率；'
+            '%s ⇒ 无法判定，既不算判对也不算判错，不计入准确率；'
             '记录已放入回收站，可随时恢复'
             % (getattr(prediction, 'fund_code', '') or '未知',
-               _as_date(latest_nav) or '未记录', _as_date(window_start) or '未记录'))
+               _as_date(latest_nav) or '未记录', _as_date(window_start) or '未记录', asked))
 
 
 def apply_unverifiable_hold(prediction: Prediction, as_of: Optional[date] = None) -> date:
@@ -332,7 +393,7 @@ def classify(
     4. active / due_unverified / unverifiable（按 target 是否已过、是否被重问锁压着）
 
     注：**没有**"超过 N 天不可验证"这种日历推断 —— 净值数据在就能验。
-    `unverifiable` 只由验证器真问出来的结构性结论写（`no_source_history`），
+    `unverifiable` 只由验证器真问出来的结构性结论写（哪些算，看 `is_structural_verdict`），
     并且到期自动重问（`unverifiable_retry_days`），所以它不是终态、是"今天问过了，别再白跑"。
     """
     as_of = _as_date(as_of) or current_as_of()
@@ -473,15 +534,22 @@ def due_skip_reason(prediction: Prediction, as_of: Optional[date] = None) -> Opt
 
     与 filter_due_for_verify 同口径，用于向用户解释"为什么不验证"。
     到期未验证没有"超过时间不可验证"一说——只有观望预测、以及**验证器真问过之后
-    数据源答"这段没有"**的那批会被暂时压住（到重问日自动回队）。
+    判不出结论**的那批会被暂时压住（到重问日自动回队）。
+
+    这一句**不许写"数据源给不出这段净值"**：行上只有那根日期，没有当初是哪个 reason
+    把它压住的（`predictions` 没这列，为一句文案开生产迁移不值）。被压住的原因有两档，
+    其中"起点与终点是同一条净值"的标的往往活得好好的、源端也给得出起点那条 ⇒ 那句话
+    对这一半行是说反的（第 52 轮 A-2 / B-2）。逐条真原因在批次回执
+    「上次验证未成功原因」里，那才是有 reason 的地方。
     """
     today = _as_date(as_of) or current_as_of()
     if getattr(prediction, "prediction_type", None) == "flat":
         return "中性预测（观望）不参与验证"
     if is_held_unverifiable(prediction, as_of=today):
         hold = hold_until(prediction)
-        return (f"已问过数据源，{prediction.fund_code} 在目标日那段给不出净值 ⇒ "
-                f"属结构性不可验，{hold.isoformat()} 之前不再重问（到点自动回队再问一次）")
+        return (f"验证器已按区间问过、这一轮判不出结论（哪两种原因见上方"
+                f"「上次验证未成功原因」）⇒ 属结构性不可验，{hold.isoformat()} 之前不再重问"
+                f"（到点自动回队再问一次）")
     return None
 
 
