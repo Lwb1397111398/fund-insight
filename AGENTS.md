@@ -270,12 +270,14 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 00:5x（北京），**净值写入门 + 生产清理工具**那一批之后（第 48 轮产品批 #51/#58 之前的那批是 1073/1082），
+最近一次核对（2026-09-26 09:5x（北京），**#58 三个列表取数点铺唤醒门**那一批之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1085 passed / 16 skipped / 0 failed**（382.16 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1094 passed / 16 skipped / 0 failed**（357.36 秒）。
+- `pytest tests/unit -q` → **1086 passed / 16 skipped / 0 failed**（590.41 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1095 passed / 16 skipped / 0 failed**（550.98 秒）。
+  （上一基线 1085/1094 → 本批 1086/1095：+1 条 = `test_every_list_fetch_point_asks_the_wake_gate_before_giving_up`
+  （在 node 里跑三个 manager 的真实源码、数 `withWakeRetry` 被调几次；摘掉一处立刻红，已实测）。）
   （上一基线 1073/1082 → 本批 1085/1094：**+12 条 = 本批 9 条 + 前两笔提交欠跑数的 3 条**
   （那 3 条是"驱动名钉死"、"requirements 上界"、"体检脚本递 `--production` 到门口" ——
   每一笔提交都该带一次跑数，这里又欠了一次，记在案上而不是当成 0）。本批 9 条分布在
@@ -1051,11 +1053,15 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   判据 `test_a_failed_insights_call_takes_the_four_cards_down_with_it` 跑的是 `loadViewpoints` 真实调用路径。
   六条硬规矩：① 取数点分两类钉：**`onMounted` 真会打的**是 stats / stats+evidence / bloggers /
   predictions+verify-all+status 四笔，**进视图才打的**（funds、sector-mappings、posts/predictions/
-  viewpoints 的列表）也要过 `withWakeRetry()` —— **这条承诺今天只兑现了一半**（第 40 轮 A-m7 实测：
-  `post-manager.js` 与 `viewpoint-manager.js` 里 `withWakeRetry` **0 处**，`prediction-manager.js` 只有 2 处
-  且只用在 `verify-all/status`；`fetchPosts` / `fetchPredictions` / `fetchViewpoints` 都是裸 `axios.get`）。
-  失败态本身是诚实的（`viewErrors` 会报"没取到"），但后果是** Render 睡着时这几个列表要老板自己再点一次**，
-  而另外五个取数点会自己等 90 秒 ⇒ 见任务 #58。别把"首屏六个"当成事实说（第 31 轮 B 实测 `onMounted` 只触发 4 笔）。
+  viewpoints 的列表）也要过 `withWakeRetry()`。**这条承诺以前只兑现了一半，2026-09-26 补齐（任务 #58）**：
+  第 40 轮 A-m7 实测当时 `post-manager.js` / `viewpoint-manager.js` 里 `withWakeRetry` **0 处**、
+  `prediction-manager.js` 只有 2 处且只用在 `verify-all/status`，三个列表都是裸 `axios.get`
+  ⇒ 失败态虽然诚实（`viewErrors` 会报"没取到"），但 Render 睡着时这三个列表要老板自己再点一次，
+  而另外五个取数点会自己等 90 秒 —— 同一件事两种待遇。现在三处都走注入的那把门，
+  判据 `test_every_list_fetch_point_asks_the_wake_gate_before_giving_up` **跑真实源码数调用**
+  （四次 fetch 必须记到 ≥4 次 wake，页面构造三个 manager 时都必须把门递进去；
+  把任意一处改回裸 `axios.get` 当场红 —— 已实测过一次）。
+  别把"首屏六个"当成事实说（第 31 轮 B 实测 `onMounted` 只触发 4 笔）。
   任务轮询（`post-manager.js` / `viewpoint-manager.js`）是另一条规矩：**只有 404 才允许丢任务号**，
   其余失败一律留着句柄、10 秒后再问、最多 15 分钟（`MAX_POLL_FAILURES`），停手也不删。
   上一版写的是"4xx 才算任务结束"，而 `restoreAnalysisJob()` 在 `onMounted` 里跑、**不等登录门** ⇒

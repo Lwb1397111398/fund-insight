@@ -35,6 +35,9 @@
             return d || error.response?.data?.message || error.message;
         };
 
+        // 列表取数点在实例睡着时不算"库里没有"：走 index.html 注入的那一把唤醒重试
+        // （判据只在一处，三个 manager 共用）。
+        const wake = options.withWakeRetry || (fn => fn());
         const fetchPosts = async () => {
             const params = {
                 skip: (postFilters.page - 1) * postFilters.limit,
@@ -50,7 +53,7 @@
             // 成功（把旧的失败说明清掉）、200 + success:false、抛错（原来连 catch 都没有）。
             const report = (msg) => { if (options.onFetchFailure) options.onFetchFailure('posts', msg); };
             try {
-                const res = await axios.get('/api/posts', { params });
+                const res = await wake(() => axios.get('/api/posts', { params }));
                 if (res.data.success) {
                     posts.value = res.data.data || [];
                     Object.assign(postMeta, res.data.meta || {});

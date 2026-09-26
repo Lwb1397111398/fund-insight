@@ -50,6 +50,8 @@
         const selectedSourceList = () => fetchSourceOptions
             .map((item) => item.value)
             .filter((value) => selectedSources[value]);
+        // 同 posts/predictions：列表取数点走注入进来的唤醒重试，不自己抄一份等待逻辑。
+        const wake = options.withWakeRetry || (fn => fn());
         const fetchViewpoints = async () => {
             const params = {
                 page: viewpointFilters.page,
@@ -66,7 +68,7 @@
             // 所以三种形状都得自己说一句话（第 34 轮 A-MAJOR-4 / B-MAJOR-4）。
             const report = (msg) => { if (options.onFetchFailure) options.onFetchFailure('viewpoints', msg); };
             try {
-                const response = await axios.get('/api/viewpoints', { params });
+                const response = await wake(() => axios.get('/api/viewpoints', { params }));
                 if (response.data.success) {
                     viewpoints.value = response.data.data || [];
                     Object.assign(viewpointMeta, response.data.meta || {});

@@ -747,6 +747,7 @@ const axios = { defaults: { headers: { common: {} } },
                 delete: async (u) => impl(u, null) };
 const seen = [];
 const isServiceDown = (e) => !!e && !e.response;
+let wake = 0;      // 记"列表取数有没有先问唤醒门"，见 test_every_list_fetch_point_asks_the_wake_gate
 %(src)s
 const opts = { axios, ref, reactive, computed, localStorage, alert: () => {}, confirm: () => true,
                analyzing: ref(false), onFetchFailure: (k, m) => seen.push([k, m]), isServiceDown,
@@ -777,7 +778,8 @@ def _run_manager_js(fname, factory, fetch_name, list_key):
         pytest.skip('本机没有 node')
     body = """
 (async () => {
-    const m = %(factory)s(opts);
+    const opts2 = Object.assign({}, opts, { withWakeRetry: async (fn) => { wake += 1; return await fn(); } });
+    const m = %(factory)s(opts2);
     const fetch = m['%(fetch_name)s'];
     impl = () => ({ data: { success: true, data: [], meta: { total: 5 } } });
     await fetch();
@@ -787,10 +789,34 @@ def _run_manager_js(fname, factory, fetch_name, list_key):
     try { await fetch(); } catch (e) { /* 往上抛是 loadView 的事，这里只看报没报 */ }
     impl = () => ({ data: { success: true, data: [{ id: 1 }], meta: { total: 5 } } });
     await fetch();
-    console.log('RESULT' + JSON.stringify({ seen, n: m['%(list_key)s'].value.length }));
+    console.log('RESULT' + JSON.stringify({ seen, n: m['%(list_key)s'].value.length, wake }));
 })();
 """ % {'factory': factory, 'fetch_name': fetch_name, 'list_key': list_key}
     return _run_node(body, fname)
+
+
+def test_every_list_fetch_point_asks_the_wake_gate_before_giving_up():
+    """三个列表取数点（帖子/预测/观点）都得先问 `withWakeRetry`，不许裸 `axios.get`。
+
+    这条就是任务 #58 欠的那一半：AGENTS 一直写着"取数点分两类钉，进视图才打的也要过
+    `withWakeRetry`"，而实测 `post-manager.js` / `viewpoint-manager.js` 里它是 **0 处**、
+    `prediction-manager.js` 只有 2 处且只用在 `verify-all/status` ⇒ Render 睡着时这三个列表
+    要老板自己再点一次，而另外五个取数点会自己等 90 秒。
+    判据是**跑真实源码数调用**：把 `wake(() => axios.get(...))` 改回裸 `axios.get(...)`，
+    `wake` 就变 0 ⇒ 红（不是 grep 到关键字就算）。
+    """
+    for fname, factory, fetch_name, key in (
+            ('post-manager.js', 'window.createPostManager', 'fetchPosts', 'posts'),
+            ('prediction-manager.js', 'window.createPredictionManager', 'fetchPredictions', 'predictions'),
+            ('viewpoint-manager.js', 'window.createViewpointManager', 'fetchViewpoints', 'viewpoints')):
+        out = _run_manager_js(fname, factory, fetch_name, key)
+        assert out['wake'] >= 4, '%s 的列表取数没走唤醒门（四次 fetch 只记到 %s 次）' % (
+            fname, out.get('wake'))
+    html = _html()
+    for factory in ('createPostManager', 'createViewpointManager', 'createPredictionManager'):
+        at = html.index(factory + '({')
+        block = html[at:html.index('});', at)]
+        assert 'withWakeRetry' in block, '页面构造 %s 时没把唤醒门递进去' % factory
 
 
 def test_failure_state_is_reported_and_cleared_by_the_fetch_itself():

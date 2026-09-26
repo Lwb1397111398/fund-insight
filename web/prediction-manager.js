@@ -60,7 +60,7 @@
             // 同 `post-manager.js`：翻页直连，三种形状都要有话说（第 33 轮 A-MAJOR-2）
             const report = (msg) => { if (options.onFetchFailure) options.onFetchFailure('predictions', msg); };
             try {
-                const response = await axios.get('/api/predictions', { params });
+                const response = await wake(() => axios.get('/api/predictions', { params }));
                 if (response.data.success) {
                     predictions.value = response.data.data || [];
                     Object.assign(predictionMeta, response.data.meta || {});
@@ -229,10 +229,10 @@
                 alert('验证失败: ' + errorMessage(error));
             }
         };
+        // 唤醒重试**只在这一处**接进来（`withWakeRetry` 由 index.html 注入）：
+        // 首屏取数点与翻页/筛选取数点共用同一个等待判据，别在每个函数里各抄一遍。
+        const wake = options.withWakeRetry || (fn => fn());
         const restorePredictionVerifyTask = async () => {
-            // 首屏第 6 个取数点：实例唤醒期它会和其余几个一起失败，所以走同一个
-            // `withWakeRetry`（由 index.html 注入）。判据只在一处，别在这里再抄一遍等待逻辑。
-            const wake = options.withWakeRetry || (fn => fn());
             try {
                 const response = await wake(() => axios.get('/api/predictions/verify-all/status'));
                 verifyTask.value = response.data.data || null;

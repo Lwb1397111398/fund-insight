@@ -2373,6 +2373,8 @@ const fetchWeChatBatch = async () => {
                     onPollRecovered: (label) => { delete taskStalled[label]; },
                     onFetchFailure: (key, msg) => { viewErrors[key] = msg; },
                     isServiceDown,
+                    // 帖子列表也是首屏取数点之一：睡着时不能直接摆成空表，要等一轮唤醒
+                    withWakeRetry,
                 });
                 const {
                     posts, postMeta, postFilters, newPost, postDetail, editingPost, analysisJob, postAnalysisRunning,
@@ -2390,6 +2392,8 @@ const fetchWeChatBatch = async () => {
                     onPollStalled: (label) => { taskStalled[label] = label + '的进度已停止跟踪（连续 15 分钟取不到状态）。'
                         + '任务号还留着，刷新页面会继续看；按钮已经放开，不会一直灰着。'; },
                     onPollRecovered: (label) => { delete taskStalled[label]; },
+                    // 观点列表同理：首屏取数点，睡着时要等一轮唤醒，不能直接摆成空表
+                    withWakeRetry,
                 });
                 const {
                     viewpointMeta, viewpointFilters, viewpointInsights, viewpointTask,
