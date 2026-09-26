@@ -1787,3 +1787,26 @@ console.log(JSON.stringify(cases));
         and '未过半' not in out['majorityStale'], \
         '引用面过半停更时这句话必须升级成"整座库都旧了"，同时"净值截至 09-25"仍是事实：%s' % out['majorityStale']
     assert 'undefined' not in out['noMedian'] and '中位停在 未记录' in out['noMedian'], out['noMedian']
+
+
+def test_the_structurally_unverifiable_queue_is_counted_and_explained():
+    """任务 #8：「结构性不可验」必须**在页面上有数、行上有话**，不能只是接口里的一个键。
+
+    光有后端的减法不够 —— 老板看到「待验证到期 (0)」会以为全验完了，
+    而那批只是"今天再问也不会有答案"。两条变异分别摘掉按钮里的数与行内标签，
+    都必须把这条判据点红（复跑：`python scripts/mutation_proof_frontend.py --only unverifiable`）。
+    """
+    html = INDEX_HTML.read_text(encoding='utf-8')
+    script = PREDICTION_JS.read_text(encoding='utf-8')
+
+    assert "setPredictionFilter('unverifiable')" in html
+    # 数不许写死、取不到不许渲染成 0（与全站"取不到就是 —"同一口径）
+    assert ("结构性不可验 ({{ viewErrors.predictions ? '—' : "
+            "numOrDash(predictionMeta.facets.unverifiable) }})") in html
+    # 行内要说清"为什么今天不验它、哪天再问"，日期来自接口而不是页面自己编
+    assert "p.lifecycle === 'unverifiable'" in html
+    assert '自动重问' in html and 'p.next_verify_date' in html
+    # 按钮走后端 lifecycle 这一档，不是页面拿全量自己再筛一遍
+    assert "predictionFilters.lifecycle = 'unverifiable'" in script
+    # 口径灰字里要有它 —— 只写在 title 上等于手机上没写
+    assert '「结构性不可验」= 已按区间问过数据源' in html

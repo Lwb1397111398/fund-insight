@@ -1125,15 +1125,40 @@ class PredictionVerifyService:
         )
 
         if not data_check['available']:
+            # 「已问过、数据源答这段没有」是**结构性**结论（reason 已在
+            # `_check_fund_data_availability` 里分过档：抖动/没问过都不会走到这一个）。
+            # 给它一把重问锁，否则 Cron 与页面上每一次"验证全部"都为同一批永远问不出
+            # 来的预测重问一遍（任务 #8：到期队列里的噪音）。锁到哪天由凭据 TTL 决定，
+            # 到点自动回队 ⇒ 不是终态、更不写 is_correct。
+            held_until = None
+            if data_check.get('reason') == 'no_source_history':
+                from src.services.prediction_lifecycle import apply_unverifiable_hold
+                held_until = apply_unverifiable_hold(prediction, as_of=today)
+                try:
+                    self.db.commit()
+                except Exception as hold_error:
+                    logger.warning('[Verify] 预测 %s 重问锁写入失败: %s', prediction_id, hold_error)
+                    self.db.rollback()
+                    held_until = None
+            message = data_check['message']
+            if held_until:
+                message += f'（已压到 {held_until.isoformat()} 再问，期间不重复占用验证）'
             return {
                 "success": False,
-                "message": data_check['message'],
+                "message": message,
+                "held_until": held_until.isoformat() if held_until else None,
                 "data": {
                     "fund_code": fund_code,
                     "fund_name": fund_name,
                     "data_status": data_check
                 }
             }
+
+        # 数据又够用了（历史被回补、窗口里有新行）⇒ 撤掉可能还挂着的那把重问锁，
+        # 否则这条预测会一直带着一个已经失效的"结构性不可验"标签。
+        from src.services.prediction_lifecycle import release_unverifiable_hold
+        if release_unverifiable_hold(prediction, as_of=today):
+            logger.info('[Verify] 预测 %s 净值已可判，解除重问锁', prediction_id)
 
         logger.info(f"[Verify] 预测 {prediction_id} 开始验证, 今日: {today.isoformat()}")
 

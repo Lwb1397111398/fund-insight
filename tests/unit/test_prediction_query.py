@@ -374,21 +374,37 @@ def test_default_sort_marks_lifecycle_and_days_to_target(test_db):
 
 def test_lifecycle_filter_and_facets_expose_due_queue(test_db):
     from src.services.prediction_query_service import PredictionQueryService
+    from src.services.prediction_lifecycle import apply_unverifiable_hold
 
     _seed_ordering_predictions(test_db)
     service = PredictionQueryService(test_db)
 
     due = service.search(lifecycle="due")
     upcoming = service.search(lifecycle="active")
-    unknown = service.search(lifecycle="unverifiable")  # 不再支持，回退无过滤
+    # 第 8 轮任务里"unverifiable 不再支持、回退无过滤"那一档**已经不成立**：
+    # 它现在是真的一档（验证器问过、数据源给不出 ⇒ 压到重问日）。
+    # 真正该回退无过滤的是**认不出的值**，所以对照样品换成一个假字符串。
+    nonsense = service.search(lifecycle="nonsense_queue")
 
     assert {row["fund_code"] for row in due["data"]} == {"due_old", "due_today"}
     assert {row["fund_code"] for row in upcoming["data"]} == {"upcoming_near", "upcoming_far"}
-    assert unknown["data"]  # 未知 lifecycle 不再过滤，返回全部
-    facets = due["meta"]["facets"]
-    assert facets["due"] == 2
+    assert due["data"] and service.search(lifecycle="unverifiable")["data"] == []
+    assert nonsense["data"]      # 认不出的 lifecycle 不许把列表清空
+
+    # 把其中一条压住：两档必须立刻互斥、且加起来还是那批到期未判
+    held = [p for p in test_db.query(Prediction).filter(
+        Prediction.fund_code == "due_old").all()]
+    for prediction in held:
+        apply_unverifiable_hold(prediction)
+    test_db.commit()
+    assert {row["fund_code"] for row in service.search(lifecycle="due")["data"]} == {"due_today"}
+    assert {row["fund_code"] for row in
+            service.search(lifecycle="unverifiable")["data"]} == {"due_old"}
+    facets = service.search(lifecycle="due")["meta"]["facets"]
+    assert facets["due"] == 1
+    assert facets["unverifiable"] == 1
+    assert facets["due"] + facets["unverifiable"] == 2      # 谁都没被吞掉
     assert facets["upcoming"] == 2
-    assert facets["unverifiable"] == 0
 
 
 def test_explicit_sort_options_override_due_first(test_db):

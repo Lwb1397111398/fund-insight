@@ -15,7 +15,7 @@ class PredictionQueryService:
     # 默认 due_first：到期待验证在最上面，其次即将到期，最后是已验证/无目标日
     SORT_OPTIONS = ("due_first", "target_asc", "target_desc", "latest")
     DEFAULT_SORT = "due_first"
-    LIFECYCLE_FILTERS = ("due", "active")
+    LIFECYCLE_FILTERS = ("due", "active", "unverifiable")
 
     def __init__(self, db: Session):
         self.db = db
@@ -167,13 +167,22 @@ class PredictionQueryService:
     def _lifecycle_conditions(self, lifecycle: str) -> List[Any]:
         """把 lifecycle 语义翻译成 SQL 条件（与 prediction_lifecycle 同口径）。"""
         today = current_as_of()
+        # 「被重问锁压着」= 验证器真问过、数据源答这段给不出（见 prediction_lifecycle
+        # 的 is_held_unverifiable）。这一条尺子在这里只写一遍：due 用它做减法、
+        # unverifiable 用它做加法，两边不可能各漂一次。
+        held = and_(Prediction.next_verify_date.isnot(None),
+                    Prediction.next_verify_date > today)
+        structural_base = [
+            Prediction.is_deleted.is_(False),
+            Prediction.is_correct.is_(None),
+            Prediction.prediction_type != "flat",
+            Prediction.target_date.isnot(None),
+            Prediction.target_date <= today,
+        ]
         if lifecycle == "due":
-            return [
-                Prediction.is_correct.is_(None),
-                Prediction.prediction_type != "flat",  # 观望不参与验证，不算可行动队列
-                Prediction.target_date.isnot(None),
-                Prediction.target_date <= today,
-            ]
+            return structural_base + [~held]
+        if lifecycle == "unverifiable":
+            return structural_base + [held]
         if lifecycle == "active":
             return [
                 Prediction.is_correct.is_(None),
@@ -239,6 +248,12 @@ class PredictionQueryService:
         unverified = and_(active, Prediction.is_correct.is_(None), Prediction.target_date.isnot(None))
         # 到期待验证队列不含观望预测（与 lifecycle='due' 过滤、验证队列同口径）
         unverified_actionable = and_(unverified, Prediction.prediction_type != "flat")
+        # 「结构性不可验」= 验证器真问过、数据源答这段给不出，被压到重问日之前。
+        # 它从 due 里**减出来**、单列一个数，而不是消失 —— 老板看到"到期 1 条 +
+        # 结构性 15 条"才知道今天点验证会跑到什么，而不是被一个虚高的到期数骗着白跑。
+        held = and_(Prediction.next_verify_date.isnot(None),
+                    Prediction.next_verify_date > today)
+        due_base = and_(unverified_actionable, Prediction.target_date <= today)
         row = self.db.query(
             func.count(case((active, 1))).label("all"),
             func.count(case((and_(active, Prediction.status == "pending"), 1))).label("pending"),
@@ -251,8 +266,10 @@ class PredictionQueryService:
                 and_(
                     unverified_actionable,
                     Prediction.target_date <= today,
+                    ~held,
                 ), 1))).label("due"),
             func.count(case((and_(unverified, Prediction.target_date > today), 1))).label("upcoming"),
+            func.count(case((and_(due_base, held), 1))).label("unverifiable"),
         ).one()
         return {
             "all": row.all or 0,
@@ -264,8 +281,7 @@ class PredictionQueryService:
             "archived": row.archived or 0,
             "due": row.due or 0,
             "upcoming": row.upcoming or 0,
-            # 已无「过期不可验证」概念；保留键避免前端访问 undefined
-            "unverifiable": 0,
+            "unverifiable": row.unverifiable or 0,
         }
 
     @staticmethod

@@ -251,6 +251,8 @@
                             @click="setPredictionFilter('all')">全部 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.all) }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'due' ? 'danger' : 'default'"
                             @click="setPredictionFilter('due')" title="已到目标日、仍在验证窗口内，可立即验证">待验证到期 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.due) }})</button>
+                        <button class="action-btn small" :class="predictionFilter === 'unverifiable' ? 'warning' : 'default'"
+                            @click="setPredictionFilter('unverifiable')" title="验证器已经按区间问过数据源、它答这段给不出净值 ⇒ 今天点验证也问不出来；到重问日自动回到「待验证到期」">结构性不可验 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.unverifiable) }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'upcoming' ? 'warning' : 'default'"
                             @click="setPredictionFilter('upcoming')" title="尚未到目标日">未到期 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.upcoming) }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
@@ -265,7 +267,7 @@
                         <button class="action-btn small" :class="predictionFilter === 'archived' ? 'danger' : 'default'"
                             @click="setPredictionFilter('archived')"><i class="ri-archive-line"></i> 回收站 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.archived) }})</button>
                     </div>
-                    <div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>
+                    <div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「结构性不可验」= 已按区间问过数据源、它给不出这段净值，今天点验证也问不出来，到重问日自动回到「待验证到期」；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>
                     <div class="post-filter-bar prediction-filter-bar">
                         <input v-model="predictionFilters.keyword" @keyup.enter="applyPredictionFilters" placeholder="搜索博主、基金、板块或内容">
                         <select v-model="predictionFilters.blogger_id"><option value="">全部博主</option><option v-for="b in bloggers" :key="b.id" :value="b.id">{{ b.name }}</option></select>
@@ -343,7 +345,8 @@
                                     <td>{{ p.confidence !== null && p.confidence !== undefined ? p.confidence + '%' : '-' }}</td>
                                     <td>
                                         {{ p.target_date || '-' }}
-                                        <span v-if="p.lifecycle === 'due_unverified'" class="text-xs text-danger">· 待验证</span>
+                                        <span v-if="p.lifecycle === 'unverifiable'" class="text-xs text-tertiary">· 数据源给不出这段，{{ p.next_verify_date }} 自动重问</span>
+                                        <span v-else-if="p.lifecycle === 'due_unverified'" class="text-xs text-danger">· 待验证</span>
                                         <span v-else-if="p.lifecycle === 'active' && p.days_to_target !== null" class="text-xs text-tertiary">· {{ p.days_to_target }}天后</span>
                                     </td>
                                     <td><span class="status-badge"

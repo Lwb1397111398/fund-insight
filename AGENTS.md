@@ -273,15 +273,30 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 19:46（北京），**第 51 轮两份复评（A=55 / B=63）返修**——查回被 `2c227c9`
-一起删掉的帖子编辑路由、关掉"少给一列就免检"那三道缝，接在第 50 轮那批（A 席两条 MINOR 收尾 + 一条我自己量出来的 MAJOR（身份门拒建档案之后映射行悬空：镜像撞外键、生产根本没这条外键于是静默留脏 ⇒ 整笔拒改；补档案挪到身份门之后 ⇒ 一次保存只探一次；`nav_stale` 那颗没人读的合成布尔撤掉、换成两轴各一颗布尔 + 引用面中位日期进页面/日志/体检命令）之后，
+最近一次核对（2026-09-26 21:38（北京），**任务 #8：「结构性不可验」从此是一个会自愈的持久状态**——
+验证器判出 `no_source_history`（真按区间问过数据源、它给不出这段净值）时，把行上那根从来没被读过的
+`next_verify_date` 写成"今天 + 凭据 TTL + 1 天"：`classify` 报 `unverifiable`、到期队列与页面「待验证到期」
+把它减出去、另开一档「结构性不可验」报条数（两个数加起来仍等于全部到期未判），到重问日自己回队，
+净值补上了当场撤锁；全程不写 `is_correct`、不改 `status`、不碰台账。接在第 51 轮返修（查回被 `2c227c9`
+一起删掉的帖子编辑路由、关掉"少给一列就免检"那三道缝）之后，
 最后一次核对（上一批：2026-09-26 16:53（北京），**第 50 轮返修四批（`39a9abe` / `1d729d4` / `b2d1ba1` / `7c142fe`：删除博主的路由、净值新鲜度按引用面、建档身份门搬到咽喉、依赖面从元数据现推，加上一处我自己造出来的崩溃与三处写过头的文档）**之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1130 passed / 16 skipped / 0 failed**（462.73 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1139 passed / 16 skipped / 0 failed**（502.35 秒）。
-  （上一基线 1126/1135 → 本批 **1130/1139：+4 条 / 两个口径同增**，第 51 轮返修那一批：
+- `pytest tests/unit -q` → **1144 passed / 16 skipped / 0 failed**（660.23 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1153 passed / 16 skipped / 0 failed**（430.41 秒）。
+  （上一基线 1130/1139 → 本批 **1144/1153：+14 条 / 两个口径同增**，任务 #8 那一批：
+  新文件 `test_structurally_unverifiable_hold.py` 当场收集 **13** 条（含"排期不许越过目标日"那条
+  按 7 个周期展开；`--collect-only -q` 数），含两条**反面对照**——"没问过的失败（`insufficient_points`）
+  不许被锁"与"两档必须互斥、两个数加起来等于全部到期未判"，以及一条第一次走到的旧接线
+  （`verify_all_pending` 的 `skipped` 以前因为 `filter_unverifiable` 恒为空从来没数过东西）；
+  `test_frontend_cold_start.py` **+1**（页面上有数、行上有话、按钮走后端那一档）。
+  **一条改契约不增条数**：`test_prediction_query.py` 里"`lifecycle=unverifiable` 不再支持、回退无过滤"
+  那半已经不成立 ⇒ 改成"认不出的值才回退无过滤"，并把两档互斥与加和对表钉上。
+  变异：`python scripts/mutation_proof_frontend.py --only unverifiable`（2 处）与
+  `--only queue_caliber`（口径灰字换了锚点，旧锚点必须跟着改，否则是 ANCHOR-MISS 不是绿）
+  三处全 RED、CONTROL 全绿。）
+  （上一基线 1126/1135 → 那批 **1130/1139：+4 条 / 两个口径同增**，第 51 轮返修那一批：
   新文件 `test_post_edit_route_and_empty_code_refusal.py` **+3**（① 页面上"编辑帖子"那句
   `axios.patch` 必须对上**按方法**注册的 `app.routes` —— A-1 那条 BLOCKER 的机制账；
   ② 改标题要落库、"有预测只能改标题与链接"那句拒绝要带着原因到屏幕上；③ 改绑传空白代码

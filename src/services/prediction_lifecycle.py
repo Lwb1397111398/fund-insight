@@ -7,6 +7,10 @@
 verified_* 只由 is_correct 推导，绝不由 status 推导
 （status=failed 可能表示方向判错，也可能与历史脏数据混用；
  验证尝试失败不会写 is_correct，应保持 due_unverified）。
+
+`unverifiable` 也**不是**日历推出来的：它是验证器上一次真问过数据源、
+数据源答"这段区间给不出净值"之后写下的重问锁（`next_verify_date`），
+到点自己回队 ⇒ 既不为"到期很久了"编造结论，也不让同一批白跑每一天。
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional, Sequence
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.core.config import config
@@ -85,6 +90,69 @@ def verify_window_end(target: date, max_age: Optional[int] = None) -> date:
     return target + timedelta(days=age)
 
 
+def unverifiable_retry_days() -> int:
+    """结构性不可验的重问间隔（天）。
+
+    **只有这一处定义它**，且它不是拍出来的数：数据源答"这段没有"的凭据 TTL 是
+    `backfill_proofs.EMPTY_TTL_DAYS`（空答复只信 2 天，防限流页被当成事实），
+    重问间隔取 TTL+1 ⇒ 凭据一旦过期，这条预测自己回到到期队列再问一次。
+    写在这里而不写死，是为了让"锁多久"永远跟着"凭据可信多久"走。
+
+    懒导入：本模块被 API 与脚本共读，顶层拉 `src.fund` 会把整个包 __init__ 带进来。
+    """
+    from src.fund import backfill_proofs
+
+    return int(backfill_proofs.EMPTY_TTL_DAYS) + 1
+
+
+def hold_until(prediction: Prediction) -> Optional[date]:
+    """这条预测被压到哪天不再重问；没有被压 ⇒ None（不判到期与否，由调用方看）。"""
+    return _as_date(getattr(prediction, "next_verify_date", None))
+
+
+def is_held_unverifiable(prediction: Prediction, as_of: Optional[date] = None) -> bool:
+    """已到目标日、但被验证器压着不再重问（＝结构性不可验中）。
+
+    判据是**验证器上一次真问出来的结论**（见 `apply_unverifiable_hold`），
+    不是日历推断：`next_verify_date` 由创建时的排期保证 ≤ 目标日，
+    所以"晚于今天"这个形状只可能由结构性结论写出来。
+    """
+    today = _as_date(as_of) or current_as_of()
+    target = _as_date(getattr(prediction, "target_date", None))
+    hold = hold_until(prediction)
+    return (target is not None and hold is not None
+            and target <= today and hold > today
+            and getattr(prediction, "is_correct", None) is None
+            and not getattr(prediction, "is_deleted", False))
+
+
+def apply_unverifiable_hold(prediction: Prediction, as_of: Optional[date] = None) -> date:
+    """验证器判定"已问过数据源、它给不出这段净值"后，把这条压到重问日。
+
+    返回压到的那一天。**不动 `is_correct`、不清结论** —— 它只回答"什么时候再问"，
+    不回答"预测对不对"。
+    """
+    today = _as_date(as_of) or current_as_of()
+    hold = today + timedelta(days=unverifiable_retry_days())
+    prediction.next_verify_date = hold
+    return hold
+
+
+def release_unverifiable_hold(prediction: Prediction,
+                              as_of: Optional[date] = None) -> bool:
+    """数据又够用了（补拉成功、历史被回补）⇒ 撤掉重问锁，回到正常排期。
+
+    只撤"由结构性结论写下的那一档"：`next_verify_date` 落在创建期排不出来的区间
+    （晚于今天）才撤；已经在未来的正常排期不关这条路的事。返回是否真的撤了。
+    """
+    today = _as_date(as_of) or current_as_of()
+    hold = hold_until(prediction)
+    if hold is None or hold <= today:
+        return False
+    prediction.next_verify_date = None
+    return True
+
+
 def classify(
     prediction: Prediction,
     as_of: Optional[date] = None,
@@ -97,10 +165,11 @@ def classify(
     1. deleted
     2. incomplete（无 target_date）
     3. verified_*（仅 is_correct is not None）
-    4. active / due_unverified（按 target 是否已过）
+    4. active / due_unverified / unverifiable（按 target 是否已过、是否被重问锁压着）
 
-    注：不再设「超过 N 天不可验证」的时间闸门——净值数据都在，
-    到期未验证的预测随时可以验，只是旧的排在待验证队列后面。
+    注：**没有**"超过 N 天不可验证"这种日历推断 —— 净值数据在就能验。
+    `unverifiable` 只由验证器真问出来的结构性结论写（`no_source_history`），
+    并且到期自动重问（`unverifiable_retry_days`），所以它不是终态、是"今天问过了，别再白跑"。
     """
     as_of = _as_date(as_of) or current_as_of()
 
@@ -121,7 +190,10 @@ def classify(
     if target > as_of:
         return ACTIVE
 
-    # target <= as_of：到期未验证即可验，没有「过期不可验证」
+    # target <= as_of：到期未验证即可验，没有"过期不可验证"这一说；
+    # 唯一的例外是验证器真问过、数据源答"这段给不出"⇒ 压到重问日之前不算白跑。
+    if is_held_unverifiable(prediction, as_of=as_of):
+        return UNVERIFIABLE
     return DUE_UNVERIFIED
 
 
@@ -217,6 +289,8 @@ def filter_due_for_verify(
         Prediction.target_date.isnot(None),
         Prediction.is_correct.is_(None),
         Prediction.target_date <= as_of,
+        # 被重问锁压着的先不入队（同 classify 那一支；SQL 先筛掉，省得整批拉回内存）
+        or_(Prediction.next_verify_date.is_(None), Prediction.next_verify_date <= as_of),
     ]
     if exclude_flat:
         filters.append(Prediction.prediction_type != "flat")
@@ -234,11 +308,16 @@ def due_skip_reason(prediction: Prediction, as_of: Optional[date] = None) -> Opt
     """已到期但未进入验证队列的原因；可验证时返回 None。
 
     与 filter_due_for_verify 同口径，用于向用户解释"为什么不验证"。
-    到期未验证没有「超过时间不可验证」一说——只有观望预测会被跳过。
+    到期未验证没有"超过时间不可验证"一说——只有观望预测、以及**验证器真问过之后
+    数据源答"这段没有"**的那批会被暂时压住（到重问日自动回队）。
     """
-    _ = _as_date(as_of) or current_as_of()
+    today = _as_date(as_of) or current_as_of()
     if getattr(prediction, "prediction_type", None) == "flat":
         return "中性预测（观望）不参与验证"
+    if is_held_unverifiable(prediction, as_of=today):
+        hold = hold_until(prediction)
+        return (f"已问过数据源，{prediction.fund_code} 在目标日那段给不出净值 ⇒ "
+                f"属结构性不可验，{hold.isoformat()} 之前不再重问（到点自动回队再问一次）")
     return None
 
 
@@ -248,13 +327,28 @@ def filter_unverifiable(
     *,
     max_age_days: Optional[int] = None,  # noqa: ARG001 保留签名兼容
 ) -> List[Prediction]:
-    """「永久不可验证」集合。
+    """「结构性不可验、当前被压着重问」集合。
 
-    不再按时间判定（到期再久也能验，只要净值数据在），因此恒为空。
-    保留函数与 UNVERIFIABLE 常量仅为签名兼容。
+    判据不是日历（再旧的预测只要净值在就能验），而是**验证器上一次真问过、
+    数据源答这段给不出** ⇒ 行上留下一个晚于今天的 `next_verify_date`。
+    它到点自己回到到期队列再问一次，所以这里数的是"今天别再为它白跑"，不是终态。
     """
-    _ = _as_date(as_of) or current_as_of()
-    return []
+    today = _as_date(as_of) or current_as_of()
+
+    rows = (
+        db.query(Prediction)
+        .filter(
+            Prediction.is_deleted == False,
+            Prediction.target_date.isnot(None),
+            Prediction.is_correct.is_(None),
+            Prediction.target_date <= today,
+            Prediction.next_verify_date.isnot(None),
+            Prediction.next_verify_date > today,
+        )
+        .order_by(Prediction.target_date.asc())
+        .all()
+    )
+    return [p for p in rows if classify(p, as_of=today) == UNVERIFIABLE]
 
 
 def count_by_lifecycle(

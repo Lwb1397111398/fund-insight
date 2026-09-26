@@ -381,8 +381,19 @@ MUTATIONS = [
     # 把正文那行灰字退回 title-only，就是上一轮那句假话的原形状 ⇒ 必须红。
     ('test_the_three_prediction_queues_explain_themselves_without_hover',
      'queue_caliber_moves_back_into_title', HTML,
-     '<div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>',
+     '<div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「结构性不可验」= 已按区间问过数据源、它给不出这段净值，今天点验证也问不出来，到重问日自动回到「待验证到期」；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>',
      '<div class="filter-caliber-note" title="口径：「待验证到期」= 已到目标日"></div>', False),
+    # 任务 #8：「结构性不可验」这一档必须**有数、有行内说明**。
+    # 摘掉按钮里的数 ⇒ 老板看到"到期 0 条"会以为全都验完了（那 15 条只是不再白跑）；
+    # 摘掉行内标签 ⇒ 被压住的预测看起来和普通待验证一模一样，没人知道它在等哪天。
+    ('test_the_structurally_unverifiable_queue_is_counted_and_explained',
+     'unverifiable_button_counts_a_zero_it_did_not_read', HTML,
+     "结构性不可验 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.unverifiable) }})",
+     "结构性不可验 ({{ viewErrors.predictions ? '—' : numOrDash(0) }})", False),
+    ('test_the_structurally_unverifiable_queue_is_counted_and_explained',
+     'unverifiable_row_stops_saying_when_it_asks_again', HTML,
+     """<span v-if="p.lifecycle === 'unverifiable'" class="text-xs text-tertiary">· 数据源给不出这段，{{ p.next_verify_date }} 自动重问</span>""",
+     """<span v-if="p.lifecycle === '__never_matches__'" class="text-xs text-tertiary">· 数据源给不出这段，{{ p.next_verify_date }} 自动重问</span>""", False),
     # 第 40 轮 A-M1：evidence 取失败必须把上一轮的区间放下（不清旧报告 = 那句红字永远渲染不出来）
     ('test_the_evidence_line_does_not_keep_yesterdays_report_on_a_failed_refresh',
      'evidence_keeps_stale_report', HTML,

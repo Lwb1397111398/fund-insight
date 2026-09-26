@@ -96,6 +96,7 @@
                 page: 1, status: '', result: '', direction: '', archive: 'active', lifecycle: '',
             });
             if (filter === 'due') predictionFilters.lifecycle = 'due';
+            if (filter === 'unverifiable') predictionFilters.lifecycle = 'unverifiable';
             if (filter === 'upcoming') predictionFilters.lifecycle = 'active';
             if (filter === 'pending') predictionFilters.status = 'pending';
             if (filter === 'verified') predictionFilters.status = 'verified';
