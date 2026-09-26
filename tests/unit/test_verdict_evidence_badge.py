@@ -6,16 +6,18 @@
 当天的值，例 id=1903：现挂 512170、结论却来自 512010 在 07-16 的 0.3788）。
 历轮"标量 vs 自家台账"自洽检查看不见它，因为两者是同一次验证一起写的。
 
-这里钉住三件事：
+这里钉住四件事：
 1. 判据本身（含"改标后又按新标的重验过"不能算挂错）；
 2. **改标必须同时清掉旧结论并留痕** —— 这是防复发的正解，光清理存量数据只是打地鼠；
-3. 列表接口把状态带出去（前端的 ⚠ 标记读它）。
+3. 列表接口把状态带出去（前端的 ⚠ 标记读它）；
+4. 改标那道**证据门**（任务 #100/#105）：不许把预测绑到"这段窗口它给不出净值证据"的
+   标的上 —— 那等于当场制造一条到期也判不了的预测，正是老板点名要清零的那一档。
 """
 import os
-from datetime import date
+from datetime import date, timedelta
 
 from src.models.database import (
-    Blogger, FundHistory, Prediction, PredictionChangeLog, Post)
+    Blogger, FundHistory, FundInfo, Prediction, PredictionChangeLog, Post)
 from src.fund.fund_sync_manager import FundSyncManager
 from src.services.prediction_query_service import PredictionQueryService
 from src.services.verdict_evidence import evidence_status
@@ -65,7 +67,12 @@ def _seed_verified_prediction(db):
     db.add(post)
     db.flush()
     for code, nav in (('512010', 0.3788), ('512170', 0.3335)):
-        db.add(FundHistory(fund_code=code, nav_date=D, nav=nav))
+        # 窗口内三笔：改标证据门（任务 #100）要求新标的在这段窗口里给得出
+        # `VERIFY_MIN_DATA_POINTS` 个比较点，只留 07-16 那一笔的话它当场就会拒 ——
+        # 而本函数要测的是"改标必须清结论"，不是那道门（门的判据在下面几条）。
+        for off, extra in ((8, -0.01), (4, -0.02), (0, 0.0)):
+            db.add(FundHistory(fund_code=code, nav_date=D - timedelta(days=off),
+                               nav=round(nav + extra, 4)))
     prediction = Prediction(
         post_id=post.id, blogger_id=blogger.id, fund_code='512010',
         fund_name='医药ETF', sector='医药', prediction_type='up',
@@ -181,6 +188,41 @@ def test_the_stopped_target_ruler_has_exactly_one_implementation():
     used, own = calls_ruler(script, 'plan')
     assert used, '存量收口脚本没走那把尺子 ⇒ 两边的"关不关"会各自漂'
     assert not own, '脚本里又手写了一遍日期比较 ⇒ 一处改了另一处不会跟着改'
+
+
+def test_the_evidence_gate_is_wired_into_both_the_move_and_the_preview():
+    """改标门必须有**两个**调用方，且都不许自己抄一遍验证器的两个阈值。
+
+    为什么单独一条：预览那半是 2026-09-26 补的（先前它只装在 `retag_prediction` 里，
+    dry-run 根本不经过 ⇒ 回执说 326、实跑只动 320）。"两处共用一把尺子"这句话
+    从今往后由这条钉着，少接一处就红。
+    """
+    import ast
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(here))
+
+    def facts(rel, func_name):
+        tree = ast.parse(open(os.path.join(root, rel), encoding='utf-8').read())
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == func_name), None)
+        assert fn is not None, '%s 里找不到 %s()' % (rel, func_name)
+        called = {getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
+                  for n in ast.walk(fn) if isinstance(n, ast.Call)}
+        consts = {getattr(n, 'attr', None) for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+        return called, consts
+
+    called, consts = facts(os.path.join('src', 'fund', 'fund_sync_manager.py'),
+                           'retag_prediction')
+    assert 'target_cannot_evidence_window' in called, '动手那一侧没接证据门'
+    assert 'VERIFY_MIN_DATA_POINTS' not in consts and 'VERIFY_MAX_END_NAV_AGE_DAYS' not in consts, \
+        '改标处自己比阈值 ⇒ 验证器改了门不跟着改'
+
+    called, consts = facts(os.path.join('src', 'services', 'prediction_maintenance_service.py'),
+                           'sync_sector_mappings')
+    assert 'calendar_gap' in called, '预览那一侧没接同一把尺子 ⇒ "将更新 N 条"会说谎'
+    assert 'VERIFY_MIN_DATA_POINTS' not in consts and 'VERIFY_MAX_END_NAV_AGE_DAYS' not in consts, \
+        '维护服务自己数点数 ⇒ 第二把尺子'
 
 
 def _bulk_write_hits(node, column):
@@ -546,3 +588,65 @@ def test_the_bulk_write_detector_recognises_every_spelling_we_claim():
     tree = ast.parse('prediction.is_correct = True')
     assign = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)][0]
     assert _assign_write_hits(assign, 'is_correct'), '赋值那一族整个失效：样品在骗人'
+
+
+def test_the_evidence_ruler_answers_the_verifier_s_two_questions():
+    """改标门问的就是验证器那两件事（点数、终点年龄），逐格钉住它的边界。
+
+    样品用真日历、真常量：把 `VERIFY_MIN_DATA_POINTS` / `VERIFY_MAX_END_NAV_AGE_DAYS`
+    挪一格，这张表就得跟着改 —— 页面/门里再藏一个第二个数字会立刻响。
+    """
+    from src.core.config import config
+    from src.services.prediction_lifecycle import target_cannot_evidence_window
+
+    T = date(2026, 9, 26)                      # 今天（"已到期"那一档都拿它当现算的今天）
+    start, end = date(2026, 9, 1), date(2026, 9, 20)
+    n = config.VERIFY_MIN_DATA_POINTS
+    age = config.VERIFY_MAX_END_NAV_AGE_DAYS
+    assert n >= 2 and age >= 3, '样品是按这两个值排的，改小就得重排'
+
+    cases = [
+        # 标签，窗口内净值日，库里末笔，窗口起点，目标日，期望（None=放行 / 句子里必须有的词）
+        ('净值一条都没有 ⇒ 不敢下结论（新档案还没同步过）', [], None, start, end, None),
+        ('末笔早于窗口起点 ⇒ 拒（003033 那一族）',
+         [], date(2020, 12, 8), start, end, '不会再来'),
+        ('点数刚好够、终点就是目标日 ⇒ 放行',
+         [end - timedelta(days=i) for i in range(n)], end, start, end, None),
+        ('缺点数（%d 笔 < %d）⇒ 拒' % (n - 1, n),
+         [end - timedelta(days=i) for i in range(n - 1)] or [end], end, start, end, '只发过'),
+        ('终点差 %d 天（正好在上限内）⇒ 放行' % age,
+         [start, end - timedelta(days=age)], end, start, end, None),
+        ('终点差 %d 天（越界一天）⇒ 拒' % (age + 1),
+         [start, end - timedelta(days=age + 1)], end, start, end, '终点取不到'),
+        ('窗口还没到期 ⇒ 点数不够也放行（净值本来就该在后面到）',
+         [date(2026, 12, 2)], date(2026, 12, 2),
+         date(2026, 12, 1), date(2026, 12, 8), None),
+        ('窗口起点说不清 ⇒ 不敢下结论', [end], end, None, end, None),
+    ]
+    for label, in_window, latest, s_, e_, expect in cases:
+        got = target_cannot_evidence_window(in_window, latest, s_, e_, today=T)
+        if expect is None:
+            assert got is None, '%s ⇒ 被拒了：%s' % (label, got)
+        else:
+            assert got and expect in got, '%s ⇒ 没拒，或拒了没说清（%r）' % (label, got)
+
+
+def test_retag_allows_a_target_for_a_window_that_has_not_closed_yet(test_db):
+    """未到期的一律放行：新标的还没发净值不是毛病，拦它等于把板块映射永久锁死。
+
+    与上面那条表格用例互为对照：同样一笔都嫌少的窗口，把判的日子挪到目标日之前，
+    门的答案就必须从"拒"翻成"放行"。
+    """
+    prediction = _seed_verified_prediction(test_db)
+    prediction.prediction_date = date(2026, 12, 1)
+    prediction.target_date = date(2026, 12, 8)
+    test_db.add(FundInfo(fund_code='999999', fund_name='还没开张的产品'))
+    test_db.commit()
+
+    cleared = FundSyncManager.retag_prediction(
+        test_db, prediction, '999999', '还没开张的产品', source='unit-test')
+    test_db.commit()
+    test_db.refresh(prediction)
+
+    assert prediction.fund_code == '999999', '未到期的窗口被拦 ⇒ 这道门是墙'
+    assert cleared is True, '改了标却没清结论 ⇒ 这条放行的路把旧标的的结论留下了'

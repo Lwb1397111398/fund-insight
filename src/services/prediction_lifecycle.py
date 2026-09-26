@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.core.config import config
@@ -156,13 +156,128 @@ def nav_cannot_cover_window(local_latest_nav: Optional[date],
                             window_start: Optional[date]) -> bool:
     """这把标的的净值**覆盖不了**这段窗口 —— 库里末条净值早于窗口起点。
 
-    只此一处实现：验证器判"要不要关"、`retag_prediction` 判"能不能往上绑"、存量收口脚本
-    判"这一行进不进计划"，三处问的都是同一句话。同步只补**没有的日期**、从不覆盖已有行，
+    只此一处实现这句话：验证器判"要不要关"、改标门判"这段窗口它给不给得出证据"
+    （`target_cannot_evidence_window` 的第一道）、存量收口脚本判"这一行进不进计划"，
+    三处问的都是同一句话。同步只补**没有的日期**、从不覆盖已有行，
     所以末条停在窗口之前 = 源端不再给这只产品发新行，等下去也不会有答案。
     两个日期任一说不清 ⇒ 返回 False（不敢下结论，交回给"继续问"那条路）。
     """
     latest, start = _as_date(local_latest_nav), _as_date(window_start)
     return latest is not None and start is not None and latest < start
+
+
+def nav_calendar(db: Session, codes: Iterable[str]) -> Dict[str, List[date]]:
+    """一次把若干标的的**净值日历**读出来：`代码 -> 升序净值日期列表`。
+
+    为什么要有它而不是每条预测各查一次：判"绑过去之后判得出来吗"要问窗口里有几个点、
+    终点离目标日几天，按行查就是第 51 轮"生产 100 秒不返回"那一族（那次是板块别名表）。
+    调用方把整批要用的代码一次递进来，之后每条候选只在内存里比。
+    """
+    from src.models.database import FundHistory
+
+    wanted = sorted({c for c in codes if c})
+    out: Dict[str, List[date]] = {}
+    if not wanted:
+        return out
+    for code, nav_date in db.query(FundHistory.fund_code, FundHistory.nav_date).filter(
+            FundHistory.fund_code.in_(wanted)).order_by(
+                    FundHistory.fund_code.asc(), FundHistory.nav_date.asc()).all():
+        day = _as_date(nav_date)
+        if day is not None:
+            out.setdefault(code, []).append(day)
+    return out
+
+
+def window_evidence(db: Session, fund_code: Optional[str],
+                    window_start: Optional[date],
+                    window_end: Optional[date]) -> tuple:
+    """单行版的取数：`(这段窗口里的净值日, 这只标的在库里最后一笔净值日)`。
+
+    改标门一次只判一条时用它 —— 只把窗口内那段读进内存，不把整只标的的历史搬回来。
+    批量判（「按板块对齐标的」的预览与执行）不许在循环里调它 ⇒ 用 `nav_calendar`
+    读一次、在内存里切。两条路最后都交给 `target_cannot_evidence_window` 同一把尺子。
+    """
+    from src.models.database import FundHistory
+
+    start, end = _as_date(window_start), _as_date(window_end)
+    if not fund_code or start is None:
+        return [], None
+    latest = _as_date(db.query(func.max(FundHistory.nav_date)).filter(
+        FundHistory.fund_code == fund_code).scalar())
+    upper = end or latest
+    if latest is None or upper is None or start > upper:
+        return [], latest
+    rows = db.query(FundHistory.nav_date).filter(
+        FundHistory.fund_code == fund_code,
+        FundHistory.nav_date >= start,
+        FundHistory.nav_date <= upper,
+    ).order_by(FundHistory.nav_date.asc()).all()
+    return [r[0] for r in rows], latest
+
+
+def calendar_gap(calendar: Dict[str, List[date]], code: Optional[str],
+                 window_start: Optional[date], window_end: Optional[date],
+                 today: Optional[date] = None) -> Optional[str]:
+    """从 `nav_calendar` 那份日历里回答"绑到 `code` 之后验证器判得出来吗"。
+
+    把"切片"也收在这一个地方：每个调用方自己抄一遍 `start <= d <= end`，
+    就等于每人再造一把尺子（第 47 轮那族"同一件事的两套定义"）。
+    """
+    start, end = _as_date(window_start), _as_date(window_end)
+    days = calendar.get(code) or []
+    in_window = [d for d in days if start is not None and d >= start
+                 and (end is None or d <= end)]
+    return target_cannot_evidence_window(in_window, max(days) if days else None,
+                                         window_start, window_end, today=today)
+
+
+def target_cannot_evidence_window(in_window: Sequence[date],
+                                  latest_nav: Optional[date],
+                                  window_start: Optional[date],
+                                  window_end: Optional[date],
+                                  today: Optional[date] = None) -> Optional[str]:
+    """把一条预测改标到某只标的之后，**验证器对这段窗口判得出来吗**。判得出来返回 None。
+
+    为什么第 100 轮那道门不够（这一条是 2026-09-26 在生产上量出来的）：它只问
+    "末笔净值不早于窗口起点"。`158038` 库里首笔净值是 2026-09-07、`012765` 是 2026-08-28，
+    而压在它们身上的预测窗口起点在 08-28~09-14 / 07-01 ⇒ 末笔远晚于窗口起点，那道门点头
+    放行，可验证器要的**两件事**当场就没有：窗口内 ≥ `VERIFY_MIN_DATA_POINTS` 个净值点、
+    终点距目标日 ≤ `VERIFY_MAX_END_NAV_AGE_DAYS` 天（见
+    `PredictionVerifyService._check_fund_data_availability`）。放过去的结果就是老板要清零
+    的那一档：**一条到期了却永远判不出来的预测** —— 而且它报的是 `insufficient_points`，
+    不是 `no_source_history`，所以任务 #8 那道"结构性不可验"的重问锁也不会接住它。
+
+    两个阈值都从 `config` 取（验证器用的就是这两个常量），这里不立第二个数字。
+
+    三种"不敢下结论"一律返回 None（放行，交回正常流程）：
+    ① `latest_nav` 为空 ⇒ 这只标的刚建档、还没同步过，"库里没有"不等于"永远没有"；
+    ② 窗口起点说不清 ⇒ 连要问哪段都不知道；
+    ③ 窗口**还没到期** ⇒ 净值本来就该在后面几天才到，此时点数不足不是毛病
+       （唯一例外是"末笔停在窗口开始之前"，那句才敢说它不会再来）。
+    """
+    start, end = _as_date(window_start), _as_date(window_end)
+    end = end or start
+    days = [d for d in (_as_date(x) for x in (in_window or [])) if d is not None]
+    latest = _as_date(latest_nav)
+    if start is None or latest is None:
+        return None
+    if nav_cannot_cover_window(latest, start):
+        return ('它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
+                ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测' % (latest, start))
+    if end > (_as_date(today) or current_as_of()):
+        return None                      # 还没到期：等到净值来就知道了
+    min_points = config.VERIFY_MIN_DATA_POINTS
+    if len(days) < min_points:
+        return ('这段窗口（%s~%s）里它只发过 %d 笔净值，验证器至少要 %d 个比较点'
+                ' ⇒ 绑过去会一直判不出来（挂在「到期未判」那一档）'
+                % (start, end, len(days), min_points))
+    gap = (end - max(days)).days
+    max_age = config.VERIFY_MAX_END_NAV_AGE_DAYS
+    if gap > max_age:
+        return ('目标日 %s 已经过了 %d 天，可它在这段窗口里最后一笔净值是 %s'
+                '（相差 %d 天 > %d 天上限）⇒ 终点取不到，绑过去会一直判不出来'
+                % (end, (current_as_of() - end).days, max(days), gap, max_age))
+    return None
 
 
 def close_as_stale_target_note(prediction: Prediction, latest_nav: Optional[date],

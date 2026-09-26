@@ -342,5 +342,15 @@ class PredictionQueryService:
             "verify_count": prediction.verify_count,
             "is_expired": prediction.is_expired,
             "is_deleted": prediction.is_deleted,
+            # 回收站里那一行"为什么在这里"必须跟着行走（任务 #103，浏览器上抓到的）：
+            # 模板读的是 `p.delete_reason`，而接口以前压根不给这个键 ⇒
+            # `v-if="p.is_deleted && p.delete_reason"` 那一支永远不成立，被关掉的预测在页面上
+            # 只剩"已删除"三个字 —— 老板分不出"标的停更、这段净值永远不会有"和"谁手抖删的"，
+            # 而这两件事一个该忽略、一个该还原。
+            "delete_reason": prediction.delete_reason,
+            "deleted_by": prediction.deleted_by,
+            "deleted_at": prediction.deleted_at.isoformat() if prediction.deleted_at else None,
+            "restore_before": (prediction.restore_before.isoformat()
+                               if prediction.restore_before else None),
             "created_at": prediction.created_at.isoformat() if prediction.created_at else None,
         }

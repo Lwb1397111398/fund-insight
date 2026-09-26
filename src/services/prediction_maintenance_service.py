@@ -184,8 +184,10 @@ class PredictionMaintenanceService:
         alias_targets = {a.alias_name: a.sector_name
                          for a in self.db.query(SectorAlias).all()}
         candidates = []
+        unservable = []
         unchanged = 0
         no_mapping = 0
+        pairs = []
         for prediction in predictions:
             sector = prediction.sector or prediction.sector_type
             mapping = self._lookup_mapping(sector_map, sector, alias_targets)
@@ -195,10 +197,19 @@ class PredictionMaintenanceService:
             if prediction.fund_code == mapping.fund_code:
                 unchanged += 1
                 continue
+            pairs.append((prediction, mapping, sector))
+
+        # 证据门：**预览与实跑必须问同一句话、给出同一个数**。第 100 轮那道门当时只装在
+        # `retag_prediction` 里面，而 dry-run 那支根本不调它 ⇒ 2026-09-26 生产实测
+        # 预览说「将更新 326 条」、真跑只会动 320 条，那 6 条（`158038`/`012765` 那几只
+        # 首笔净值晚于窗口的新产品）当场会变成"到期永不判"。日历一次读全，别在循环里查。
+        from src.services.prediction_lifecycle import calendar_gap, nav_calendar
+
+        calendar = nav_calendar(self.db, [m.fund_code for _, m, _ in pairs])
+        for prediction, mapping, sector in pairs:
             # "这行还挂着结论吗"只有一个判据源（`has_verdict_trace`）：这里以前自己抄了一份，
             # 与 retag 用的 `is_correct is not None` 是同一件事的两套定义（第 18 轮 M-2）。
-            was_verified = has_verdict_trace(prediction)
-            candidates.append({
+            row = {
                 "prediction": prediction,
                 "prediction_id": prediction.id,
                 "sector": sector,
@@ -206,11 +217,19 @@ class PredictionMaintenanceService:
                 "old_fund_name": prediction.fund_name,
                 "new_fund_code": mapping.fund_code,
                 "new_fund_name": mapping.fund_name,
-                "reset_verified": was_verified,
-            })
+                "reset_verified": has_verdict_trace(prediction),
+            }
+            gap = calendar_gap(calendar, mapping.fund_code,
+                               prediction.prediction_date, prediction.target_date)
+            if gap:
+                row["reason"] = gap
+                unservable.append(row)
+            else:
+                candidates.append(row)
 
         details = [
-            {key: value for key, value in candidate.items() if key != "prediction"}
+            {key: value for key, value in candidate.items()
+             if key not in ("prediction", "evidence")}
             for candidate in candidates
         ]
         result = {
@@ -223,6 +242,13 @@ class PredictionMaintenanceService:
             "predictions_updated": 0,
             "predictions_unchanged": unchanged,
             "predictions_no_mapping": no_mapping,
+            # 数出来就得说出口：这几条是"板块映射想改、但那只标的给不出证据"，
+            # 不动它们才是对的，可"预览 326 / 实跑 320"那种差值必须在回执里看得见。
+            "predictions_skipped_unservable": len(unservable),
+            "skipped_unservable_details": [
+                {key: value for key, value in row.items()
+                 if key not in ("prediction", "evidence")}
+                for row in unservable],
             "verified_reset": 0,
             "funds_added": 0,
             "funds_sector_updated": 0,
@@ -245,12 +271,22 @@ class PredictionMaintenanceService:
                 # 改标的动作整体交给唯一入口：留痕、必要时清结论、把受影响博主登记进来
                 # （原来这里自己写 `prediction.fund_code = ...` + 自己调 reset + 自己写日志，
                 #  于是"唯一入口"这句承诺有第二个例外，第 18 轮 M-2）。
-                if FundSyncManager.retag_prediction(
-                        self.db, prediction, candidate["new_fund_code"],
-                        candidate["new_fund_name"], source="sector_mapping", run_id=run_id,
-                        touched_bloggers=affected_bloggers):
-                    result["verified_reset"] += 1
+                days = calendar.get(candidate["new_fund_code"]) or []
+                was_reset = FundSyncManager.retag_prediction(
+                    self.db, prediction, candidate["new_fund_code"],
+                    candidate["new_fund_name"], source="sector_mapping", run_id=run_id,
+                    touched_bloggers=affected_bloggers,
+                    evidence=(days, max(days) if days else None))
+                # 回执只数**真的动了的行**：`retag_prediction` 那个布尔说的是"清没清结论"，
+                # 而"已经是这个标的""被证据门拒了"回的都是 False —— 拿它当"改标成功"计数
+                # 就会把什么都没做的行报成"更新 N 个预测"（第 51 轮 B-2 同一族，那次是
+                # `update-all`，这一次是这里）。判"动没动"只看行上那个代码现在是什么。
+                if prediction.fund_code != candidate["new_fund_code"]:
+                    result["predictions_skipped_unservable"] += 1
+                    continue
                 result["predictions_updated"] += 1
+                if was_reset:
+                    result["verified_reset"] += 1
 
             self.db.flush()
             for blogger_id in affected_bloggers:

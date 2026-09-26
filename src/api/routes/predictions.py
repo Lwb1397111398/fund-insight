@@ -208,6 +208,12 @@ def sync_sector_mapping(
             parts.append(f"新增 {result['funds_added']} 个基金")
         if result['funds_sector_updated'] > 0:
             parts.append(f"更新 {result['funds_sector_updated']} 个基金板块")
+        # "有几行没动"必须自己说出口：不然预览报 326、实跑只动 320，
+        # 老板看到的是一句"同步完成"，那 6 条为什么没改、改过去会变成什么，一个字都没有。
+        skipped = result.get('predictions_skipped_unservable') or 0
+        if skipped:
+            parts.append(f"{skipped} 条没动：板块映射挑的那只标的给不出这段窗口的净值证据"
+                         f"（绑过去会变成到期也判不了的预测），逐条原因见明细")
 
         if parts:
             message = f"{'预览' if dry_run else '同步'}完成：" + "，".join(parts)

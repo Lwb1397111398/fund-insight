@@ -282,8 +282,30 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 23:35（北京），**任务 #8 的第二半 + #100/#102：判不了的第二轮不再留在页面上，
-而"会验不了的绑标"这条路当场断掉**——
+最近一次核对（2026-09-27 02:14（北京），**任务 #105 + #103/#104：改标那道证据门改成问「验证器判得出来吗」，
+而 dry-run 与实跑从此是同一个数**——
+在生产上点了一次「按板块对齐标的」的预览，回执说「将更新 326 个预测」；拿只读连接按验证器自己的那两把尺子
+（窗口内 ≥ `VERIFY_MIN_DATA_POINTS` 个点、终点距目标日 ≤ `VERIFY_MAX_END_NAV_AGE_DAYS` 天，见
+`_check_fund_data_availability`）逐条量：**320 条绑过去判得出来，6 条绑过去永久判不出来**
+（要绑 `158038` 的那几条——它库里首笔净值 2026-09-07、`012765` 首笔 2026-08-28，
+而压在它们身上的预测窗口在 07-01 / 08-28~09-14）。上一批 #100 那道门只问"末笔不早于窗口起点"，
+这两只的末笔都是 09-24 ⇒ 点头放行；可验证器对这种窗口报的是 `insufficient_points`，**不是**
+`no_source_history` ⇒ 任务 #8 那档重问锁根本不接 ⇒ 六条会永远躺在「待验证到期」里，
+正是老板点名要清零的那一档。现在门换成 `target_cannot_evidence_window`（点数 + 终点年龄，
+两个阈值都从 `config` 取，门里不立第二个数字；"库里一条净值都没有""窗口起点说不清""还没到期"
+三律一律放行，防止把门修成墙），预览在建候选时就把这类行分进 `predictions_skipped_unservable`
+＋逐条 `reason`，路由那句回执从此会说"N 条没动"；计数改成**回查 `pred.fund_code` 才 +1**
+（`retag_prediction` 的布尔说的是"清没清结论"，拿它当"改标成功"就是把空操作报成做了事 ——
+第 51 轮 B-2 同一族，那一次长在 `update-all`，这一次长在 `sync_sector_mappings`，
+剩下三处同类已经立成任务 #106）。
+同批两处是**真开浏览器**照出来的，而它们一直在绿灯里被背书：#103 `prediction_query_service._serialize`
+从来不给 `delete_reason` / `deleted_by` / `deleted_at` / `restore_before` ⇒ 页面那句
+`v-if="p.is_deleted && p.delete_reason"` 恒假，回收站里"系统关掉的"与"谁手动归档的"长得一模一样
+（老判据只读 HTML 文本，结构上不可能发现这件事）；#104 逐行"源端停更"那句的参照物是**今天**
+⇒ 整库一起落后时**每一行**都在喊，真正停更的那几只反而被淹成噪声，现在比的是 `nav_reference_date`
+（库里最新一笔；`nav_freshness` 的全表截止日也改成从这一个函数拿，"库里最新一笔"从此只有一处实现）。
+接在任务 #8 第二半 + #100/#102（判不了的第二轮不再留在页面上，而"会验不了的绑标"这条路当场断掉）之后，
+最后一次核对（上一批：2026-09-26 23:35（北京），
 验证器第二次判出 `no_source_history`、且**库里末条净值早于窗口起点**（＝这只产品的源端已经不给这段
 发净值，任何一次同步都补不到）时，走 `PredictionService.close_as_unverifiable`：进回收站、
 `deleted_by='system'`、`delete_reason` 写清"已问过两次仍无答案 ⇒ 既不算判对也不算判错、不计入准确率、
@@ -305,9 +327,25 @@ CLOSE-UNVERIFIABLE`、先 `backup/close-unknowable-*.json` 再逐行回执、`--
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1161 passed / 16 skipped / 0 failed**（1150.02 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1170 passed / 16 skipped / 0 failed**（1075.17 秒）。
-  （上一基线 1144/1153 → 本批 **1161/1170：+17 条 / 两个口径同增**，任务 #8 第二半 + 生产量到的那条机制账：
+- `pytest tests/unit -q` → **1172 passed / 16 skipped / 0 failed**（598.09 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1181 passed / 16 skipped / 0 failed**（595.50 秒）。
+  （上一基线 1161/1170 → 本批 **1172/1181：+11 条 / 两个口径同增**，复核就一条命令
+  `for f in $(git diff --name-only 50a913a..HEAD -- tests/); do echo "$f $(git show 50a913a:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`，
+  分布：`test_verdict_evidence_badge.py` **+3**（① 一把纯函数尺子的八格边界表：点数刚好够 / 差一个点 /
+  终点年龄正好在上限 / 越界一天 / 末笔早于窗口起点 / 库里一条都没有 / **还没到期 ⇒ 点数不够也放行** /
+  窗口起点说不清 —— 样品按 `config` 那两个常量排，阈值一改这张表就得重排；② `retag_prediction` 对
+  未到期窗口必须放行且仍按"改标必清结论"走；③ AST 钉**两个调用方都接了这把尺子**，
+  且 `retag_prediction` 与 `sync_sector_mappings` 两处都不许出现 `VERIFY_MIN_DATA_POINTS` 这个属性名）；
+  `test_prediction_maintenance.py` **+3**（预览与实跑**同数**那条主账：把 `calendar_gap` 那一支摘掉 ⇒
+  `would_update` 从 1 变 2 就红；把唯一入口换成"什么都不做"的桩 ⇒ `predictions_updated` 必须 0、
+  `predictions_skipped_unservable` 必须 1；路由那句话必须带上"N 条没动"）；
+  `test_stats_evidence_report.py` **+3**（整库一起旧 ⇒ 一行都不喊、只有掉队那一只说话并且带上参照物；
+  库里没有净值时退回今天 ⇒ 不许修成哑巴；"全库最新一笔"按 `(文件, 函数)` 登记名单 +
+  **临时目录现造一处新站点必须被点名**的控制）；`test_frontend_cold_start.py` **+2**
+  （回收站那条**改判据形状**不只看文本：从 `<tr v-for="p in filteredPredictions">` 那一行抽出所有
+  `p.<字段>` 拿 `_serialize` 的真返回对表，锚点找不到也响；配"页面凭空读一个接口没有的名字 ⇒ 必须点名"
+  的空判对照。只扫这一行不扫全篇 —— `p` 这个循环名在帖子表与清理预览表也在用，扫全篇就是假红））
+  （上一基线 1144/1153 → 那批 **1161/1170：+17 条 / 两个口径同增**，任务 #8 第二半 + 生产量到的那条机制账：
   新文件 `test_close_unknowable_predictions.py` 当场收集 **6** 条（关闭必须不写 `is_correct` 且台账记
   `source='system'`；三条**反面对照**——"净值刚补到窗口附近"、"源端答不出（`None`）"、"源端还答得出行"
   都不许关；还原默认 dry-run 再真还原；CLI 缺确认词与 `--production` 指向不对各退 4）；

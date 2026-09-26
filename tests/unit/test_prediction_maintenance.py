@@ -410,3 +410,113 @@ def test_the_mapping_preview_does_not_query_the_database_per_prediction(test_db)
         % (small['n'], big['n']))
     assert first['would_update'] == second['would_update'] == 0
     assert second['predictions_no_mapping'] >= 400, '没走到"别名查不到"那一支 ⇒ 这条判据是空转'
+
+
+def _mapping(sector, code, name):
+    return SectorFundMapping(sector_name=sector, fund_code=code, fund_name=name,
+                             reviewed=True, is_active=True)
+
+
+def _nav(db, code, *days):
+    from src.models.database import FundHistory
+    for i, d in enumerate(days):
+        db.add(FundHistory(fund_code=code, nav_date=d, nav=1.0 + i / 100))
+
+
+def test_the_evidence_gate_refuses_a_target_whose_history_starts_after_the_window(test_db):
+    """预览与实跑必须问同一句话，并且给出**同一个数**（任务 #100 的第二半 / #105）。
+
+    2026-09-26 生产实测：页面上那句「将更新 326 个预测」里有 6 条真跑时根本不会动 ——
+    证据门当时只装在 `retag_prediction` 里面，而 dry-run 那支不调它。
+    更糟的是那 6 条本来就该拒：`158038` 库里首笔净值 2026-09-07，而压在它身上的预测
+    窗口是 08-28~09-14 ⇒ 绑过去就是一段问不出净值的窗口，验证器报
+    `insufficient_points`（不是 `no_source_history`），任务 #8 那道重问锁接不住，
+    于是它永远躺在「待验证到期」里 —— 正是老板点名要清零的那一档。
+    """
+    from datetime import date as _d
+
+    test_db.add_all([
+        FundInfo(fund_code="OLD01", fund_name="旧基金"),
+        FundInfo(fund_code="LATE01", fund_name="净值来晚了的产品"),
+        FundInfo(fund_code="GOOD01", fund_name="覆盖得住的产品"),
+    ])
+    blogger, post = _blogger_post(test_db, "证据门博主")     # 窗口 2026-07-01 ~ 07-08
+    doomed = _prediction(test_db, blogger, post, fund_code="OLD01", sector="白酒")
+    fine = _prediction(test_db, blogger, post, fund_code="OLD01", sector="医药")
+    # 首笔 09-07：晚于这段窗口一整天都没有 ⇒ 老门（只看末笔）会点头放过去
+    _nav(test_db, "LATE01", _d(2026, 9, 7), _d(2026, 9, 8), _d(2026, 9, 24))
+    _nav(test_db, "GOOD01", _d(2026, 7, 1), _d(2026, 7, 4), _d(2026, 7, 8))
+    test_db.add_all([_mapping("白酒", "LATE01", "净值来晚了的产品"),
+                     _mapping("医药", "GOOD01", "覆盖得住的产品")])
+    test_db.commit()
+
+    service = PredictionMaintenanceService(test_db)
+    preview = service.sync_sector_mappings(dry_run=True)
+
+    assert preview["would_update"] == 1, '预览把不给证据的那条也算进"将更新" ⇒ 与实跑不是一个数'
+    assert preview["details"][0]["prediction_id"] == fine.id
+    assert preview["predictions_skipped_unservable"] == 1
+    skip = preview["skipped_unservable_details"][0]
+    assert skip["prediction_id"] == doomed.id and skip["new_fund_code"] == "LATE01"
+    assert "只发过 0 笔" in skip["reason"], '拒了却不写为什么 ⇒ 老板只会以为按钮坏了'
+
+    applied = service.sync_sector_mappings(dry_run=False, run_id="unit-evidence-gate")
+    assert applied["predictions_updated"] == preview["would_update"], \
+        '预览 %d / 实跑 %d：回执说的和做的事不是同一件事' % (
+            preview["would_update"], applied["predictions_updated"])
+    test_db.refresh(doomed)
+    test_db.refresh(fine)
+    assert doomed.fund_code == "OLD01", '被拒的行照样写了库 ⇒ 那句拒绝是摆设'
+    assert fine.fund_code == "GOOD01"
+    logs = test_db.query(PredictionChangeLog).filter(
+        PredictionChangeLog.prediction_id == doomed.id).count()
+    assert logs == 0
+
+
+def test_the_receipt_counts_only_rows_that_actually_moved(test_db, monkeypatch):
+    """「什么都没做」不许报成「更新了 N 个预测」（第 51 轮 B-2 的同一族，第二次长出来）。
+
+    `retag_prediction` 那个布尔说的是"清没清结论"，"已经是这个标的"和"被门拒了"
+    回的都是 False —— 拿它当"改标成功"计数，回执就会替一场空操作背书。
+    这里直接把入口换成一个"什么都不做"的桩，看回执怎么报。
+    """
+    from src.fund import fund_sync_manager
+
+    test_db.add_all([FundInfo(fund_code="OLD01", fund_name="旧基金"),
+                     FundInfo(fund_code="NEW01", fund_name="已审核基金")])
+    blogger, post = _blogger_post(test_db, "回执博主")
+    target = _prediction(test_db, blogger, post, fund_code="OLD01", sector="白酒")
+    test_db.add(_mapping("白酒", "NEW01", "已审核基金"))
+    test_db.commit()
+
+    monkeypatch.setattr(fund_sync_manager.FundSyncManager, 'retag_prediction',
+                        staticmethod(lambda *a, **k: False))
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id="unit-stub")
+
+    assert result["predictions_updated"] == 0, '一行都没动却报"更新 1 个预测"'
+    assert result["verified_reset"] == 0
+    assert result["predictions_skipped_unservable"] == 1, '"没动"这件事必须有个数'
+    test_db.refresh(target)
+    assert target.fund_code == "OLD01"
+
+
+def test_the_route_says_out_loud_how_many_rows_it_left_alone(test_db):
+    """回执那句话要把"有几条没动"说到屏幕上，不能只留在 JSON 里。
+
+    页面上只有 `message` 这一处会被读；`predictions_skipped_unservable` 没人印出来
+    等于没说（第 34 轮那族"算了必须说出口"）。
+    """
+    test_db.add_all([FundInfo(fund_code="OLD01", fund_name="旧基金"),
+                     FundInfo(fund_code="LATE01", fund_name="净值来晚了的产品")])
+    blogger, post = _blogger_post(test_db, "那句话博主")
+    _prediction(test_db, blogger, post, fund_code="OLD01", sector="白酒")
+    _nav(test_db, "LATE01", date(2026, 9, 7), date(2026, 9, 8))
+    test_db.add(_mapping("白酒", "LATE01", "净值来晚了的产品"))
+    test_db.commit()
+
+    body = prediction_routes.sync_sector_mapping(
+        request=_request(), dry_run=True, db=test_db)
+
+    assert body["data"]["predictions_skipped_unservable"] == 1
+    assert "1 条没动" in body["message"], '只报"预览完成"却不提那 1 条 ⇒ 老板以为全都会改'

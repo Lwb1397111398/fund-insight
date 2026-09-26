@@ -602,3 +602,115 @@ def test_the_stopped_note_counts_days_against_the_beijing_clock(monkeypatch):
     assert str(today - timedelta(days=NAV_LAG_WARN_DAYS)) in just['note']
     empty = nav_stop_note(None, today=today)
     assert empty and '一条净值都没有' in empty['note']
+
+
+def test_a_whole_database_that_is_stale_flags_no_row_at_all(env):
+    """整库一起落后 ⇒ 逐行一句都不许喊（任务 #104，2026-09-26 浏览器上照出来的）。
+
+    上一版那句"源端不更新"的参照物是**今天**：净值要靠人跑或 Cron 才来，
+    全库停在四天前是常态，于是基金页**每一行**都挂着一句"这只标的源端不更新"
+    —— 真正停更的（`003033` 末笔 2020-12-08）被淹成一片噪声里的一条。
+    现在参照物换成"库里最新的一笔"：整库旧 ⇒ 一行都不喊，那句话归页眉的
+    "净值截至 X"去说（`nav_freshness` 已经管着）；只有一只掉队 ⇒ 只有它喊，
+    并且话里带上它在跟谁比。
+    """
+    from src.models.database import FundInfo
+    from src.services.prediction_lifecycle import current_as_of
+
+    client, db = env
+    today = current_as_of()
+    stuck = today - timedelta(days=6)          # 整库都停在这儿：比"今天"旧，但互相一样新
+    for code, back in (('A00001', 0), ('A00002', 0), ('B00003', 40)):
+        last = stuck - timedelta(days=back)
+        db.add(FundInfo(fund_code=code, fund_name='基金' + code, nav_date=last,
+                        latest_nav=1.0))
+        db.add(FundHistory(fund_code=code, nav_date=last, nav=1.0))
+    db.commit()
+
+    rows = {f['fund_code']: f
+            for g in client.get('/api/funds', headers=HEADERS).json()['data']
+            for f in (g.get('funds') or [])}
+
+    assert rows['A00001']['nav_stop_note'] is None, '整库一起旧 ⇒ 每行都被叫"源端不更新"，那句话就成了噪声（真实原因是我们没同步）'
+    assert rows['A00002']['nav_stop_note'] is None
+    note = rows['B00003']['nav_stop_note'] or ''
+    assert '40 天' in note and str(stuck) in note, '掉队那一只必须说清在跟谁比：%r' % note
+
+
+def test_the_per_row_note_falls_back_to_the_clock_when_the_library_has_no_history(env):
+    """库里一条净值都没有时退回"今天"当参照物，不许因为算不出参照物就闭嘴。
+
+    镜像刚建、只导了档案就是这个形状；此时"每条都喊"反而是对的
+    （确实一条净值都没有 ⇒ 谁都验不了），别把这道门修成哑巴。
+    """
+    from src.models.database import FundInfo
+
+    client, db = env
+    db.query(FundHistory).delete()             # 让参照物真的取不到
+    db.add(FundInfo(fund_code='C00001', fund_name='只有档案没有净值',
+                    nav_date=date(2020, 1, 1), latest_nav=1.0))
+    db.commit()
+
+    rows = {f['fund_code']: f
+            for g in client.get('/api/funds', headers=HEADERS).json()['data']
+            for f in (g.get('funds') or [])}
+
+    assert '没有新行' in (rows['C00001']['nav_stop_note'] or ''), '参照物取不到就一句不说 ⇒ 停更这件事重新变回看不见'
+
+
+def _max_nav_call_sites(root):
+    """收集 src/ 里每一处 `max(<某表>.nav_date)`：返回 `(相对路径, 所在函数名)`。"""
+    import ast as _ast
+
+    hits = []
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith('.py'):
+                continue
+            path = os.path.join(base, name)
+            tree = _ast.parse(open(path, encoding='utf-8').read())
+            for fn in [n for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)]:
+                for node in _ast.walk(fn):
+                    if (isinstance(node, _ast.Call)
+                            and getattr(node.func, 'attr', '') == 'max' and node.args
+                            and isinstance(node.args[0], _ast.Attribute)
+                            and node.args[0].attr == 'nav_date'):
+                        hits.append((os.path.relpath(path, root), fn.name))
+    return sorted(hits)
+
+
+# "净值截至哪天"这把**全库**尺子只许一个出处；按代码各问一次的（引用面中位数、
+# 单条改标前问一句"这只标的末笔是哪天"）问的是另一件事，各自登记在案。
+WHOLE_LIBRARY_CUTOFF_SITES = [
+    (os.path.join('services', 'verdict_evidence.py'), 'nav_reference_date')]
+PER_CODE_LATEST_SITES = [
+    (os.path.join('services', 'verdict_evidence.py'), 'nav_freshness'),
+    (os.path.join('services', 'prediction_lifecycle.py'), 'window_evidence')]
+
+
+def test_the_nav_cutoff_date_has_exactly_one_implementation(tmp_path):
+    """"库里最新的一笔净值"这把尺子只许有一处实现（页眉与逐行共用）。
+
+    第 45 轮那条老账的通则：**"唯一出处"没有测试钉着，下一轮就会多一个出处**。
+    逐行那句原来自己拿 `today` 比大小，正是这把尺子的第 N 份分身 —— 这一版把它收进
+    `nav_reference_date`，`nav_freshness` 的截止日也从这里拿，两边不再各算一遍。
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    found = _max_nav_call_sites(os.path.join(root, 'src'))
+
+    assert [x for x in found if x not in PER_CODE_LATEST_SITES] == WHOLE_LIBRARY_CUTOFF_SITES, \
+        '「全库最新净值日」多了一个算法：%s ⇒ 页眉与逐行会各自漂' \
+        '（要当另一把尺子就登记进 PER_CODE_LATEST_SITES 并写清它问的是哪件不同的事）' % found
+    assert set(found) == set(WHOLE_LIBRARY_CUTOFF_SITES) | set(PER_CODE_LATEST_SITES), \
+        '登记的名单与当场量到的不吻合：%s' % found
+
+    # 反面对照（空判闸门）：现造一处新站点必须被点名，否则上面那两句是死的。
+    fake = tmp_path / 'src' / 'services'
+    fake.mkdir(parents=True)
+    (fake / 'new_tool.py').write_text('\n'.join([
+        'def another_ruler(db):',
+        '    return db.query(func.max(FundHistory.nav_date)).scalar()',
+        '']), encoding='utf-8')
+    assert _max_nav_call_sites(str(tmp_path / 'src')) == [
+        (os.path.join('services', 'new_tool.py'), 'another_ruler')], \
+        '尺子看不见新写的第 N 份实现 ⇒ 这条判据是摆设'

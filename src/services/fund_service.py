@@ -11,7 +11,7 @@ import threading
 
 from .base import BaseService
 from src.models.database import FundInfo, FundHistory, Prediction
-from src.services.verdict_evidence import nav_stop_note
+from src.services.verdict_evidence import nav_reference_date, nav_stop_note
 
 # 基金更新锁，防止重复执行
 # ⚠️ 注意：这是单进程保护机制，多进程部署时无效
@@ -328,6 +328,10 @@ class FundService(BaseService[FundInfo]):
 
         history_map = self._get_recent_history_map(fund_codes, per_fund=5) if include_history else {}
         prediction_counts = self._get_active_prediction_counts(fund_codes)
+        # 逐行"停更"那句话的参照物是**库里最新的一笔净值**，不是今天（任务 #104）：
+        # 净值要靠跑批来，整库一起停在几天前时按今天比会满屏喊"源端不更新"，
+        # 真正停更的那几只反倒被淹成噪声。整库落后该由页眉那句"净值截至 X"来说。
+        nav_stopped = nav_reference_date(self.db)
         
         if group_by_sector:
             sector_groups = {}
@@ -346,7 +350,7 @@ class FundService(BaseService[FundInfo]):
                     }
                 
                 history = history_map.get(f.fund_code, [])
-                stop = nav_stop_note(f.nav_date)
+                stop = nav_stop_note(f.nav_date, freshest=nav_stopped)
                 fund_data = {
                     "id": f.id,
                     "fund_code": f.fund_code,
@@ -395,7 +399,7 @@ class FundService(BaseService[FundInfo]):
             result = []
             for f in funds:
                 history = history_map.get(f.fund_code, [])
-                stop = nav_stop_note(f.nav_date)
+                stop = nav_stop_note(f.nav_date, freshest=nav_stopped)
                 fund_data = {
                     "id": f.id,
                     "fund_code": f.fund_code,

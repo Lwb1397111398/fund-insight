@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from datetime import date, timedelta  # noqa: F401  (下面几条用例按日期构造预测行)
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -1817,11 +1818,88 @@ def test_the_recycle_bin_says_why_each_row_was_archived():
 
     系统关闭的（标的停更、判不了）与老板手动归档是两件不同的事；只写"已归档"
     等于让他猜，他会以为还有一批等着处理 —— 正是他这次点名不想要的东西。
+
+    **这一条以前只判了页面那一半，于是它替一个坏掉的接口作保**（任务 #103，
+    2026-09-26 真开浏览器才照出来）：模板读 `p.delete_reason`，而
+    `prediction_query_service._serialize` 压根不给这个键 ⇒ `v-if` 恒假、那一支永不渲染，
+    页面上一句"为什么"都没有，而这条用例一直是绿的。现在两半都判。
     """
     html = INDEX_HTML.read_text(encoding='utf-8')
 
     assert 'p.is_deleted && p.delete_reason' in html
     assert '{{ p.delete_reason }}' in html
+    payload = _prediction_row_payload(is_deleted=True,
+                                      delete_reason='unverifiable_target: 标的 003033 净值停在 2020-12-08',
+                                      deleted_by='system',
+                                      restore_before=date(2026, 10, 26))
+    assert payload['delete_reason'].startswith('unverifiable_target'), \
+        '接口没把原因带出来 ⇒ 页面那句 v-if 永远不成立（这就是上一版绿着的洞）'
+    assert payload['deleted_by'] == 'system'
+    assert payload['restore_before'] == '2026-10-26'
+    live = _prediction_row_payload()
+    assert live['delete_reason'] is None, '没归档的行不许凭空带原因'
+
+
+def _prediction_row_payload(**overrides):
+    """真调一次 `_serialize`，拿页面那一行实际能读到的键集合。"""
+    from datetime import datetime, timedelta
+
+    from src.models.database import Prediction
+    from src.services.prediction_query_service import PredictionQueryService
+
+    base = dict(
+        id=1, blogger_id=1, post_id=1, fund_code='510300', fund_name='沪深300ETF华泰柏瑞',
+        sector='沪深300', prediction_type='up', confidence=80,
+        prediction_date=date(2026, 9, 1), target_date=date(2026, 9, 24),
+        status='pending', is_deleted=False,
+    )
+    base.update(overrides)
+    if 'deleted_at' in overrides and not isinstance(overrides['deleted_at'], datetime):
+        base['deleted_at'] = datetime.now()
+    return PredictionQueryService._serialize(Prediction(**base))
+
+
+def test_every_field_the_prediction_row_reads_is_actually_in_the_payload():
+    """预测表那一行读的**每一个** `p.xxx` 都必须真的出现在接口载荷里。
+
+    为什么要有这条通用的（而不是只补 #103 那四个字段）：那四个字段坏掉的形状是
+    "页面有 v-if、接口没这个键"，而它结构性地不可能被任何一条只读文本的用例抓到 ——
+    `test_the_recycle_bin_says_why_each_row_was_archived` 判的是 HTML 里有没有那行字，
+    有，就绿。判据必须**两头都跑真东西**：从页面里抽出这一行读了哪些名字，
+    拿 `_serialize` 的真返回去对。
+    """
+    missing = _payload_gaps_for_the_prediction_row(INDEX_HTML.read_text(encoding='utf-8'))
+    assert not missing, '模板读了接口没给的键：%s ⇒ 那一处永远是 undefined' % sorted(missing)
+
+
+def _payload_gaps_for_the_prediction_row(html):
+    known = set(_prediction_row_payload())
+    return [name for name in _prediction_row_field_reads(html) if name not in known]
+
+
+def _prediction_row_field_reads(html):
+    """抽出 `<tr v-for="p in filteredPredictions">` 那一行里所有 `p.<字段>`。
+
+    只认这一行，不扫全篇 —— 页面里 `p` 这个循环名在帖子表、清理预览表也在用，
+    扫全篇会把别的接口的字段算进来（那是**假红**，而假红会把人推回去写死一份名单）。
+    """
+    start = html.find('v-for="p in filteredPredictions"')
+    assert start > 0, '锚点没了：预测表那一行改了吗？（锚点失效必须响，不能变成"读了 0 个字段"）'
+    row = html[start:html.find('</tr>', start)]
+    return sorted({m for m in re.findall(r"\bp\.([a-z_][a-z0-9_]*)\b", row)})
+
+
+def test_a_field_the_row_invents_is_reported_as_missing():
+    """反面对照（空判闸门）：页面凭空多读一个接口没有的名字，判据必须点出来。
+
+    没有这一条，上面那条"抽字段再对表"完全可以因为正则没匹配到任何东西而满分通过。
+    """
+    html = INDEX_HTML.read_text(encoding='utf-8')
+    mutated = html.replace('v-for="p in filteredPredictions"',
+                           'v-for="p in filteredPredictions" :data-x="p.no_such_field"', 1)
+    assert mutated != html, '注入失败 ⇒ 这一条控制断言什么都没控'
+    gaps = _payload_gaps_for_the_prediction_row(mutated)
+    assert gaps == ['no_such_field'], '现造一处"模板读了接口没给的键"却不被点名 ⇒ 判据是死的'
 
 
 def test_a_stopped_fund_explains_itself_on_its_own_row():

@@ -37,7 +37,8 @@ class FundSyncManager:
     @staticmethod
     def retag_prediction(db: Session, pred, new_code: str, new_name: str, *,
                          source: str = 'fund_sync', run_id: str = None,
-                         touched_bloggers: set = None) -> bool:
+                         touched_bloggers: set = None,
+                         evidence: tuple = None) -> bool:
         """把预测换到另一个标的上：已有结论的必须同时清掉结论并留痕。
 
         第 18 轮的实测教训：全库有 53 条结论是按改标**之前**那只基金判出来的
@@ -46,7 +47,12 @@ class FundSyncManager:
         也不清结论，于是"改标（B 功能）"静默把"准确率（A 功能）"的依据换掉了。
         `scripts/audit_verdict_evidence.py` 报的 `verdict_under_other_fund` 就是这个族。
 
-        返回是否清掉过结论（调用方可以用来计数）。
+        返回是否清掉过结论（调用方可以用来计数）。**别拿它当"改标成功了没"**：
+        已经是这个标的、以及被证据门拒了，返回的都是同一个 False。要判"到底动没动"
+        只能看 `pred.fund_code` 现在是什么（`sync_sector_mappings` 就是这么数回执的）。
+
+        `evidence`：批量调用方预先读好的 `(窗口内净值日, 库里末笔净值日)`；
+        不传就自己问一次（一次一条的调用方不需要关心）。
         """
         from src.services.prediction_change_log_service import (
             add_prediction_change_log, snapshot_prediction)
@@ -55,22 +61,26 @@ class FundSyncManager:
 
         if pred.fund_code == new_code and pred.fund_name == new_name:
             return False
-        # 不许把预测绑到"净值覆盖不了这段窗口"的标的上。生产实测那 15 条验不了的预测
-        # 不是随机来的：台账里 57 行 action=maintenance_sync / source=sector_mapping，
-        # 全是这条改标路把 003033（末条净值停在 2020-12-08）、508031（停在 2026-06-30）
-        # 这类**源端已停更**的产品盖到了活预测身上 ⇒ 到期必然判不出来。
-        # 尺子只有一把：`nav_cannot_cover_window`（验证器判"要不要关"问的是同一句话）。
-        # 库里一条净值都没有 ⇒ 不下结论（新档案刚建、还没同步过是常态），交回正常流程。
-        newest_nav = (db.query(FundHistory.nav_date)
-                      .filter(FundHistory.fund_code == new_code)
-                      .order_by(FundHistory.nav_date.desc()).first())
-        from src.services.prediction_lifecycle import nav_cannot_cover_window
-        if nav_cannot_cover_window(newest_nav[0] if newest_nav else None,
-                                   pred.prediction_date):
-            print('[跳过改标] 预测 %s 不绑 %s：它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
-                  ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测'
-                  % (getattr(pred, 'id', '?'), new_code,
-                     newest_nav[0], pred.prediction_date))
+        # 不许把预测绑到"这段窗口它给不出证据"的标的上。生产实测那 15 条验不了的预测不是
+        # 随机来的：台账里 57 行 action=maintenance_sync / source=sector_mapping，全是这条
+        # 改标路把 003033（末条净值停在 2020-12-08）、508031（停在 2026-06-30）这类
+        # **源端已停更**的产品盖到了活预测身上 ⇒ 到期必然判不出来。
+        # 尺子只有一把：`target_cannot_evidence_window`（问的就是验证器
+        # `_check_fund_data_availability` 那两件事：窗口内点数、终点年龄）。库里一条净值
+        # 都没有 ⇒ 不下结论（新档案刚建、还没同步过是常态），交回正常流程。
+        # `evidence` 是批量调用方（「按板块对齐标的」）预先读好的那一份，
+        # 不传才自己查一次 —— 预览与实跑因此问的是同一句话、给出同一个数。
+        from src.services.prediction_lifecycle import (
+            target_cannot_evidence_window, window_evidence)
+
+        if evidence is None:
+            evidence = window_evidence(db, new_code, pred.prediction_date,
+                                       pred.target_date)
+        gap = target_cannot_evidence_window(
+            evidence[0], evidence[1], pred.prediction_date, pred.target_date)
+        if gap:
+            print('[跳过改标] 预测 %s 不绑 %s：%s'
+                  % (getattr(pred, 'id', '?'), new_code, gap))
             return False
         before = snapshot_prediction(pred)
         # 判据只有一份（`has_verdict_trace`）：以前这里只看 is_correct，

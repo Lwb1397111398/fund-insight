@@ -203,13 +203,38 @@ def span_report(db) -> Dict:
 NAV_LAG_WARN_DAYS = 4
 
 
-def nav_stop_note(nav_date, today=None):
+def nav_reference_date(db, today=None):
+    """**库内**最新的一笔可用净值日（只认不晚于今天的行）—— 逐行"停更"那句话的参照物。
+
+    为什么参照物不能是"今天"（任务 #104，浏览器上看页面时抓到的）：净值要靠人跑或
+    Cron 跑才来，整库一起停在 09-22 是常事。拿今天当尺子的话，**194 只里每一只**都会
+    被标成"源端不更新"—— 那句话既不是事实（是我们还没同步），又把真正停更的那几只
+    （`003033` 末笔 2020-12-08）淹成噪声。改成"比库里最新的那笔落后多少天"之后：
+    整库旧 ⇒ 一行都不喊（该喊的是页眉那句"净值截至 X"，`nav_freshness` 已经管这件事），
+    只有一只掉队 ⇒ 只有它喊。
+    `nav_freshness` 里的全表截止日就是从这一个函数拿的，不再各算一遍。
+    """
+    from sqlalchemy import func
+
+    from src.models.database import FundHistory
+    from src.services.prediction_lifecycle import current_as_of
+
+    if today is None:
+        today = current_as_of()
+    return db.query(func.max(FundHistory.nav_date)).filter(
+        FundHistory.nav_date <= today).scalar()
+
+
+def nav_stop_note(nav_date, freshest=None, today=None):
     """**单只**基金的净值停更说明（页面逐行读它；阈值仍然只有 `NAV_LAG_WARN_DAYS` 一处）。
 
     为什么要有这一句：老板那条"不要产生无法更新的基金"，实测形状是基金页上一行
     "净值截至 2020-12-08"或干脆空白（`003033` / `603758`，2026-09-26 生产只读）——
     看起来像我们的更新坏了，实际是源端不再给这只产品发净值。话得由后端算好给出去，
     页面不许自己拿日期比大小（那条规矩在净值新鲜度上已经立过一次）。
+
+    `freshest` 不给时退回"今天"（调用方拿不到参照物的兜底），但那正是整库旧时
+    满屏误报的来源 ⇒ 基金列表那条路必须把它递进来（见 `nav_reference_date`）。
     """
     from src.services.prediction_lifecycle import current_as_of
 
@@ -218,13 +243,20 @@ def nav_stop_note(nav_date, today=None):
                 'note': '库里一条净值都没有 ⇒ 这只标的取不到净值，任何预测都无法在它身上验证'}
     if hasattr(nav_date, 'date'):
         nav_date = nav_date.date()
-    today = today or current_as_of()
-    lag = (today - nav_date).days
+    reference = freshest if freshest is not None else (today or current_as_of())
+    if hasattr(reference, 'date'):
+        reference = reference.date()
+    lag = (reference - nav_date).days
     if lag < NAV_LAG_WARN_DAYS:
         return None
+    if freshest is None:
+        return {'lag_days': lag,
+                'note': '最后一笔净值停在 %s（已经 %d 天没有新行）⇒ 这只标的源端不更新，'
+                        '别把预测绑在它身上' % (nav_date, lag)}
     return {'lag_days': lag,
-            'note': '最后一笔净值停在 %s（已经 %d 天没有新行）⇒ 这只标的源端不更新，'
-                    '别把预测绑在它身上' % (nav_date, lag)}
+            'note': '最后一笔净值停在 %s，比库里最新的一笔（%s）落后 %d 天'
+                    ' ⇒ 别的基金还在更新、只有它不更新，多半是源端已停更，'
+                    '别把预测绑在它身上' % (nav_date, reference, lag)}
 
 
 def nav_freshness(db, today=None) -> Dict:
@@ -259,8 +291,7 @@ def nav_freshness(db, today=None) -> Dict:
 
     if today is None:
         today = current_as_of()
-    cutoff = db.query(func.max(FundHistory.nav_date)).filter(
-        FundHistory.nav_date <= today).scalar()
+    cutoff = nav_reference_date(db, today)
     future = db.query(func.count(FundHistory.nav_date)).filter(
         FundHistory.nav_date > today).scalar()
     lag = (today - cutoff).days if cutoff else None
