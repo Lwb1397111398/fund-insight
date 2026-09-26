@@ -489,7 +489,7 @@ def test_retag_destination_is_not_an_unservable_row(test_db):
         '第 3 步把被 verdict 否掉的 GHOST9 当成了可服务的替代标的（SQL 粗筛说了算）'
 
 
-def test_ghost_mapping_row_cannot_serve_or_poison_the_cache(test_db):
+def test_ghost_mapping_row_cannot_serve_or_poison_the_cache(test_db, monkeypatch):
     """第 23 轮 MAJOR-1/2：`get_fund_by_sector` 与 `_save_fund_mapping` 也吃同一把尺子。
 
     上一轮我只给"改标去处"那一条加了 `row_unservable`，另外两处仍只信 SQL 粗筛
@@ -515,6 +515,10 @@ def test_ghost_mapping_row_cannot_serve_or_poison_the_cache(test_db):
     # `_save_fund_mapping`：同一个粗筛，幽灵行会被当成"该板块已有映射"从而跳过写入
     test_db.refresh(ghost)
     assert ghost.reviewed is True
+    import src.services.sector_fund_service as sfs
+    # 建档前那道"这码到底是不是基金"的门由 `test_llm_analyzer_cache.py` 钉着；
+    # 这里要测的是幽灵行筛选，所以桩成"没意见"（真探针在单测里会被网络闸拦下）。
+    monkeypatch.setattr(sfs, '_manual_identity_verdict', lambda c, n, s: (None, None))
     from src.analyzer.llm_analyzer import LLMAnalyzer
     LLMAnalyzer._save_fund_mapping(LLMAnalyzer.__new__(LLMAnalyzer), 'R23幽灵',
                                    '512170', '医疗ETF', reviewed=False, db=test_db)

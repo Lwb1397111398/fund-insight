@@ -273,13 +273,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-26 11:40（北京），**第 49 轮那批（#46 密钥闸 + #47 前端路径闸 + 净值新鲜度 + S6 的 C 与 `--drop-dead-predictions`）**之后，
+最近一次核对（2026-09-26 12:56（北京），**第 49 轮整批（#46 密钥闸 + #47 前端路径闸 + 净值新鲜度 + S6 的 C 与 `--drop-dead-predictions` + LLM 建档身份门 + 档案工具能安全对生产）**之后，
 最后一次改用例后立刻**串行**重跑两个口径；**默认 locale（cp936，不设 `PYTHONIOENCODING`）下跑**，
 子进程一律显式 `PYTHONIOENCODING=utf-8`）：
 
-- `pytest tests/unit -q` → **1102 passed / 16 skipped / 0 failed**（637.30 秒）。
-- `pytest tests/ -q`（含 integration/services）→ **1111 passed / 16 skipped / 0 failed**（459.15 秒）。
-  （上一基线 1086/1095 → 本批 1102/1111：**+16 条**，分布与"为什么"——
+- `pytest tests/unit -q` → **1105 passed / 16 skipped / 0 failed**（551.07 秒）。
+- `pytest tests/ -q`（含 integration/services）→ **1114 passed / 16 skipped / 0 failed**（473.65 秒）。
+  （上一基线 1086/1095 → 本批 1105/1114：**+19 条**，分布与"为什么"——
   ① `tests/unit/test_no_secrets_in_tracked_files.py` 新增 **3**（任务 #46：`.env` 真值 + 6 种凭据形状
   扫 `git ls-files`，只报"哪个文件、哪一类"绝不打印命中内容；两条控制断言里有一条专门钉
   "第一版形状正则漏了 `?` ⇒ 整条恒空而主用例全绿"这件事，同族教训又复现了一次）；
@@ -292,7 +292,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   每日跑批日志与页面说同一句话，判据在 node 里跑 `navFreshNote` 真源码，配 **4 处变异全 RED**）；
   ④ `test_purge_junk_funds.py` +3（`--drop-dead-predictions` 的动作/备份/还原与"带结论不许删"，
   外加一条**副本演练逼出来的**：`prediction_change_logs.prediction_id` 是 `ON DELETE RESTRICT` ⇒
-  旧写法"计划里承诺删、执行时 IntegrityError 整批回滚"，现在动手前数依赖并整批拒）。
+  旧写法"计划里承诺删、执行时 IntegrityError 整批回滚"，现在动手前数依赖并整批拒）；
+  ⑤ `test_llm_analyzer_cache.py` +1（**S6 那批垃圾档案的来路**：`_save_fund_mapping` 在"该板块还没有映射"
+  那一支不问身份就建档 + 建映射 ⇒ LLM 抽出的 A 股代码被机器写进基金库；现在建之前过
+  `_manual_identity_verdict`，判"不是基金"拒建、判"没意见"照建 —— 两侧都钉）；
+  `test_audit_fund_info_identity.py` +2（`--production` 四道拒：非 PostgreSQL / 要改名 / 缺确认词 /
+  **旗子与实际连接不一致**，第 ④ 条只认进程里那个 engine 真正绑在哪台；外加一条"计划回执要数得出
+  列出的行数"—— dry-run 列了 10 行 `[可补]` 却印"补上 0 行"是说反话）。
   **同一批还做了一件不在用例数里的**：`scripts/audit_verdict_evidence.py` 的 `accuracy_span` 改成
   返回整份 `span_report()`（脚本里不留第二份算式），并多印一行 `[净值新鲜度]`。）
   （上一基线 1085/1094 → 本批 1086/1095：+1 条 = `test_every_list_fetch_point_asks_the_wake_gate_before_giving_up`
@@ -979,6 +985,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   同一条规则的另一半（第 18 轮 MAJOR-5）：`verify_prediction` 若发现自带代码被体检判不可服务、
   改按板块解析出**另一个代码**，现在先走 `retag_prediction` 落库再判——以前它拿 B 判结论、
   行上还挂 A，等于持续新增上面那一族脏数据，而且因为从不回写，⚠ 徽章在新数据上永远测不到。
+- **判"这个代码是不是基金"必须两根轴一起看，一把就下结论会杀错真基金**（2026-09-26 实测推翻我上一轮的说法）：
+  `data/_roster_full.json`（27,905 条）是**快照不是全集** —— `000938 / 002154 / 002261 / 002413 / 003033`
+  名册查无，但基金域自证（`verify_fund_fetchable` / `get_fund_domain_name`）逐个答 `ok=True` 并给出
+  官方名、各带 20 行净值 ⇒ 那 5 只是**真基金顶着股票名或空名**；而 S6 那 6 个码
+  （`603758/600189/152788/HYNX/SBSP76/ign`）两根轴都答不出 ⇒ 才是真非基金。
+  所以"生产 9 行指向非基金"那句要拆成"6 行非基金 + 3 行名字错的真基金"。
+  **来源侧也从此有闸**：`LLMAnalyzer._save_fund_mapping` 走"该板块还没有映射"那一支时，
+  旧代码直接 `ensure_fund_info_exists` + 建映射 —— S6 那批垃圾档案就是这么进的生产库。
+  现在建之前过 `_manual_identity_verdict`（只有"查到了且不对"才拦，`unknown`/探针坏了照旧放行），
+  判据两侧都钉（`test_llm_analyzer_cache.py`）。
 - **下结论（写 `Prediction.is_correct`）在代码里只有一个入口**：
   `PredictionVerifyService.verify_prediction`。**措辞边界**（第 26 轮被抓到说过头）：
   `/api/config/import` 的**合并模式**仍能按整行列插 `is_correct`（`config.py` 里只有

@@ -1304,6 +1304,20 @@ class LLMAnalyzer:
                     )
                     return existing
 
+                # 建档之前先问一句"这码到底是不是基金"（S6 那批垃圾档案的**来路**就在这里：
+                # LLM 抽出「秦安股份 → 603758」「泉阳泉 → 600189」这类 A 股/债券代码，
+                # 这里一路 `ensure_fund_info_exists` + 建映射，机器自己把股票名当基金存了进去）。
+                # 判据复用人工改标那把尺子，语义也一样：只有"查到了且不对"才拦，
+                # `unknown` / 探针不可用 / 任何异常都按"没意见"放行（审查门不能建在网络抖动上）。
+                from src.services.sector_fund_service import _manual_identity_verdict
+                refusal, _ident = _manual_identity_verdict(fund_code, fund_name, sector)
+                if refusal:
+                    logger.warning(
+                        '[基金匹配] 拒绝自动建档/建映射 %s(%s)：%s ⇒ 股票/债券代码不再被机器'
+                        '当成基金写进库里（要人工确认请走页面上的映射编辑）',
+                        fund_code, fund_name, refusal)
+                    return None
+
                 # 外键保障：sector_fund_mapping.fund_code 指向 fund_info.fund_code，
                 # LLM 匹配出的新代码可能不在基金库，先补最小档案避免 FK 失败
                 try:

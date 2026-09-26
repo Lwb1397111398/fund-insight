@@ -134,3 +134,46 @@ def test_report_lists_the_stock_named_rows(seeded, monkeypatch, capsys):
     assert {'001309', '002354'} <= {r['fund_code'] for r in rows
                                     if r['verdict'] == 'not_a_fund'}
     os.remove(path)                  # 用例产物不留在仓库里
+
+
+def test_the_production_flag_has_teeth_and_refuses_every_but_the_additive_fill(monkeypatch, seeded, capsys):
+    """`--production` 的四道拒，全部必须排在第一次 commit 之前。
+
+    ① 目标不是 PostgreSQL ⇒ 拒；② 要改名 ⇒ 拒（生产只允许"补空名"这种没有旧值可丢的写）；
+    ③ 要写却没给确认词 ⇒ 拒；④ **给了旗子而进程里那个连接实际是 sqlite** ⇒ 拒。
+    第 ④ 条才是关键：环境变量可以骗人（这台机器的 `.env` 就写着生产），
+    实际 engine 绑在哪台骗不了 —— 上一版只查环境变量，等于把判据建在能撒谎的那一列上。
+    """
+    PROD_URL = 'postgresql+psycopg2://svc@db.example.com:5432/proddb'
+
+    monkeypatch.setenv('DATABASE_URL', 'sqlite:///:memory:')
+    assert _run(monkeypatch, seeded, '--production', '--apply',
+                '--confirm', 'FUND-INFO-FILL') == 4
+    assert 'PostgreSQL' in capsys.readouterr().out
+
+    monkeypatch.setenv('DATABASE_URL', PROD_URL)
+    assert _run(monkeypatch, seeded, '--production', '--rename-to-official',
+                '--apply', '--confirm', 'FUND-INFO-FILL') == 4
+    assert '只允许补空' in capsys.readouterr().out
+
+    assert _run(monkeypatch, seeded, '--production', '--apply') == 4
+    assert 'FUND-INFO-FILL' in capsys.readouterr().out
+
+    assert _run(monkeypatch, seeded, '--production', '--apply',
+                '--confirm', 'FUND-INFO-FILL') == 4
+    out = capsys.readouterr().out
+    assert '不一致' in out, out
+    assert seeded.query(FundInfo).filter_by(fund_code='000725').first().fund_name == '',         '四道拒里有任何一道先写了库，这条就会红（000725 的空名被补上了）'
+
+
+def test_a_dry_run_counts_the_rows_it_listed(monkeypatch, seeded, capsys):
+    """dry-run 列了 1 条 `[可补]` 却印"补上 0 行" ⇒ 这句回执在生产上会误导人下结论。
+
+    2026-09-26 实测：`--production` 那趟列出 10 条可补，末行写"空 fund_name 补上 0 行"。
+    计数必须跟着"列出来的条数"走，而不是只跟"写完的条数"。
+    """
+    assert _run(monkeypatch, seeded) == 0     # 不给旗子：本地镜像姿势，纯计划
+    out = capsys.readouterr().out
+    assert '[可补] 000725 → 大成添利宝货币B' in out, out
+    assert '空 fund_name：可补（未写库） 1 行' in out, out
+    assert seeded.query(FundInfo).filter_by(fund_code='000725').first().fund_name == ''
