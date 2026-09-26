@@ -246,6 +246,9 @@ def nav_stop_note(nav_date, freshest=None, today=None):
     reference = freshest if freshest is not None else (today or current_as_of())
     if hasattr(reference, 'date'):
         reference = reference.date()
+    today_ref = today or current_as_of()
+    if hasattr(today_ref, 'date'):
+        today_ref = today_ref.date()
     lag = (reference - nav_date).days
     if lag < NAV_LAG_WARN_DAYS:
         return None
@@ -253,6 +256,16 @@ def nav_stop_note(nav_date, freshest=None, today=None):
         return {'lag_days': lag,
                 'note': '最后一笔净值停在 %s（已经 %d 天没有新行）⇒ 这只标的源端不更新，'
                         '别把预测绑在它身上' % (nav_date, lag)}
+    # 参照物自己也过期时，不许说"别的基金还在更新"（任务 #109，2026-09-26 在镜像上量到：
+    # 库内最新一笔停在 09-22、今天 09-27，而 100 只基金的末笔都在 09-11 ⇒
+    # **每一行**都在喊"只有它不更新"，而真相是整库都没同步。那句话既说过头、
+    # 又把真正该做的事（跑一次更新）说反了。）
+    lib_lag = (today_ref - reference).days
+    if lib_lag >= NAV_LAG_WARN_DAYS:
+        return {'lag_days': lag, 'library_stale': True,
+                'note': '最后一笔净值停在 %s，比库里最新的一笔（%s）还晚 %d 天；'
+                        '但库里净值整体停在 %s（%d 天没新行）⇒ 先跑一次「更新基金」，'
+                        '再看这一行是不是真的源端停更' % (nav_date, reference, lag, reference, lib_lag)}
     return {'lag_days': lag,
             'note': '最后一笔净值停在 %s，比库里最新的一笔（%s）落后 %d 天'
                     ' ⇒ 别的基金还在更新、只有它不更新，多半是源端已停更，'

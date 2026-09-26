@@ -574,6 +574,11 @@ def test_a_stopped_target_says_so_on_its_own_row(env, monkeypatch):
                  nav_date=today - timedelta(days=1), latest_nav=4.1),
         FundInfo(fund_code='603758', fund_name='秦安股份'),
     ])
+    # 参照物取的是 `fund_history` 的全库最新一笔（`nav_reference_date`），不是档案头。
+    # 夹具原来只造档案 ⇒ 参照物落到 env 那批 6 月的行上，整库显得 111 天没动，
+    # 逐行那句就会走"先跑一次更新基金"的分支（任务 #109 新增的另一档）。
+    # 这一条要验的是"库是新的、只有一只停更"，所以把新净值补进历史表。
+    db.add(FundHistory(fund_code='510300', nav_date=today - timedelta(days=1), nav=4.1))
     db.commit()
 
     def rows():
@@ -656,6 +661,37 @@ def test_the_per_row_note_falls_back_to_the_clock_when_the_library_has_no_histor
             for f in (g.get('funds') or [])}
 
     assert '没有新行' in (rows['C00001']['nav_stop_note'] or ''), '参照物取不到就一句不说 ⇒ 停更这件事重新变回看不见'
+
+
+def test_a_laggard_row_must_not_claim_others_are_still_updating_when_nothing_is(env):
+    """整库都停着时，掉队那一行的话术不许说"别的基金还在更新"（任务 #109）。
+
+    2026-09-26 在镜像上量的形状：`/api/funds` 100 行**每一行**都挂着
+    "别的基金还在更新、只有它不更新" —— 因为参照物（库内最新一笔 09-22）自己已经过期 5 天，
+    而绝大多数基金停在 09-11。那句话在"整库没人同步"的时候是**反话**：
+    真相是先跑一次「更新基金」，而不是这只产品停更了。
+    对照那一半不许一起改掉：库里净值是新的、只有一只掉队 ⇒ 那句话仍然成立。
+    """
+    from datetime import timedelta
+
+    from src.models.database import FundInfo
+    from src.services.prediction_lifecycle import current_as_of
+    from src.services.verdict_evidence import NAV_LAG_WARN_DAYS, nav_stop_note
+
+    today = current_as_of()
+    laggard = today - timedelta(days=40)
+
+    stale_lib = today - timedelta(days=NAV_LAG_WARN_DAYS + 2)   # 库里最新一笔本身已过期
+    note_when_nothing_updates = nav_stop_note(laggard, freshest=stale_lib, today=today)
+    assert note_when_nothing_updates, '掉队那一行完全不说 ⇒ 这件事又变回看不见'
+    text = note_when_nothing_updates['note']
+    assert '别的基金还在更新' not in text, '整库都没同步，却说别人还在更新：%s' % text
+    assert '更新基金' in text, '没说"先跑一次同步"这个真正该做的动作：%s' % text
+
+    fresh_lib = today                                     # 对照：库里净值是新的
+    note_when_only_it_lags = nav_stop_note(laggard, freshest=fresh_lib, today=today)
+    assert '别的基金还在更新' in note_when_only_it_lags['note'], \
+        '把门修成哑巴了：只有一只掉队时那句话本来就该说（%s）' % note_when_only_it_lags['note']
 
 
 def _max_nav_call_sites(root):

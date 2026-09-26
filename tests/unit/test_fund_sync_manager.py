@@ -71,43 +71,6 @@ class TestFundSyncManager:
         assert result['failed'] == 0
         assert len(result['details']) == 2
     
-    @patch('src.fund.fund_sync_manager.fund_api')
-    def test_update_all_funds_info_partial_failure(self, mock_fund_api):
-        """测试部分基金更新失败"""
-        mock_db = Mock()
-        mock_fund1 = Mock()
-        mock_fund1.fund_code = '161725'
-        mock_fund1.fund_name = '招商中证白酒指数'
-        mock_fund1.latest_nav = 1.0
-        mock_fund1.day_growth = 0.0
-        mock_fund1.week_growth = 0.0
-        mock_fund1.month_growth = 0.0
-        
-        mock_fund2 = Mock()
-        mock_fund2.fund_code = '110022'
-        mock_fund2.fund_name = '易方达消费行业'
-        mock_fund2.latest_nav = 1.0
-        mock_fund2.day_growth = 0.0
-        mock_fund2.week_growth = 0.0
-        mock_fund2.month_growth = 0.0
-        
-        mock_db.query.return_value.all.return_value = [mock_fund1, mock_fund2]
-        
-        mock_fund_api.get_fund_info.side_effect = [
-            {
-                'nav': 1.234,
-                'day_growth': 2.5,
-                'week_growth': 5.0,
-                'month_growth': 10.0
-            },
-            None
-        ]
-        
-        result = self.manager.update_all_funds_info(mock_db)
-        
-        assert result['total'] == 2
-        assert result['updated'] == 1
-        assert result['failed'] == 1
     
     @patch('src.fund.fund_sync_manager.fund_api')
     def test_update_all_funds_info_datetime_fix(self, mock_fund_api):

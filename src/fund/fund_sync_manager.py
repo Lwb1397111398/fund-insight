@@ -459,6 +459,12 @@ class FundSyncManager:
             "updated": 0,
             "failed": 0,
             "failed_funds": [],
+            # 详情接口答不出但净值仍在更新（货币基金）/ 基金域两问都答不出且库里 0 行：
+            # 两者都**不算失败** —— 前者是成功的一半，后者多半根本不是基金。
+            # 混进 failed 会让一句"失败 N 个"同时冒充网络故障与垃圾档案。
+            "nav_only": 0,
+            "unsyncable": 0,
+            "unsyncable_funds": [],
             "details": []
         }
 
@@ -499,13 +505,39 @@ class FundSyncManager:
                     })
                     print(f"[FundSync] 基金 {fund.fund_code} 更新成功")
                 else:
-                    result["failed"] += 1
-                    result["failed_funds"].append({
-                        "fund_code": fund.fund_code,
-                        "fund_name": fund.fund_name,
-                        "reason": "无法获取基金信息（可能是测试基金或代码无效）"
-                    })
-                    print(f"[FundSync] 基金 {fund.fund_code} 获取信息失败")
+                    # 详情接口答不出，**不等于**这只产品同步不了。生产实测两个形状完全不同：
+                    # `000725`（大成添利宝货币B，真货币基金）详情取不到、历史接口照常给行；
+                    # `603758`（秦安股份，A 股代码混进基金库）两个接口都答不出、库里 0 行净值。
+                    # 旧写法把两者一起算进"失败 N 个"，还**连历史都不拉** ⇒ 前者一天天变旧，
+                    # 在页面上长成老板那句"无法更新的基金"（他点名的正是这一档）。
+                    answered = self._update_fund_history(db, fund.fund_code, fund.fund_name)
+                    if answered:
+                        result["nav_only"] += 1
+                        result["details"].append({
+                            "fund_code": fund.fund_code,
+                            "fund_name": fund.fund_name,
+                            "action": "只补到净值",
+                            "reason": "详情接口答不出（货币基金常见），历史接口给了 %d 条 ⇒ 净值没断"
+                                      % answered
+                        })
+                        print(f"[FundSync] 基金 {fund.fund_code} 详情取不到但净值仍在更新（{answered} 条）")
+                    elif not self._nav_rows(db, fund.fund_code):
+                        result["unsyncable"] += 1
+                        result["unsyncable_funds"].append({
+                            "fund_code": fund.fund_code,
+                            "fund_name": fund.fund_name,
+                            "reason": "基金域两个接口都答不出、库里一行净值都没有 ⇒ 这只多半不是基金"
+                        })
+                        print(f"[FundSync] 基金 {fund.fund_code} 基金域查无 ⇒ 不记为更新失败")
+                    else:
+                        result["failed"] += 1
+                        result["failed_funds"].append({
+                            "fund_code": fund.fund_code,
+                            "fund_name": fund.fund_name,
+                            "reason": "详情与历史接口这次都没答上（库里还有 %d 行历史）⇒ 算更新失败，可重试"
+                                      % self._nav_rows(db, fund.fund_code)
+                        })
+                        print(f"[FundSync] 基金 {fund.fund_code} 获取信息失败")
             except Exception as e:
                 result["failed"] += 1
                 result["failed_funds"].append({
@@ -524,15 +556,28 @@ class FundSyncManager:
             db.rollback()
             raise
 
-        print(f"[FundSync] 更新完成: 成功 {result['updated']}, 失败 {result['failed']}")
+        print(f"[FundSync] 更新完成: 成功 {result['updated']}, 失败 {result['failed']}, "
+              f"只补到净值 {result['nav_only']}, 基金域查无 {result['unsyncable']}")
         return result
 
-    def _update_fund_history(self, db: Session, fund_code: str, fund_name: str, days: int = 30):
-        """更新单只基金的历史净值"""
+    @staticmethod
+    def _nav_rows(db: Session, fund_code: str) -> int:
+        """库里这只代码现有几行净值（分档用：0 行才谈得上"查无此码"）。"""
+        return db.query(FundHistory).filter(FundHistory.fund_code == fund_code).count()
+
+    def _update_fund_history(self, db: Session, fund_code: str, fund_name: str, days: int = 30) -> int:
+        """更新单只基金的历史净值，返回**历史接口答了几条**（不是"新入库几行"）。
+
+        这个返回值是给调用方分档用的：`update_all_funds_info` 要分清
+        "详情接口答不出、历史接口还在给行"（真货币基金 `000725` 就是这个形状：
+        它详情取不到、净值一直在发 ⇒ 判成"同步不了"就是假事实）
+        与"两个接口都答不出"（多半是股票码或已注销产品）。
+        为什么不返回"新入库几行"：净值可能早已在库里，0 行新增不等于源端没答。
+        """
         try:
             history = fund_api.get_fund_history(fund_code, days)
             if not history:
-                return
+                return 0
 
             # 批量查询已存在的日期
             existing_dates = set(
@@ -551,8 +596,10 @@ class FundSyncManager:
                         day_growth=item['growth']
                     )
                     db.add(record)
+            return len(history)
         except Exception as e:
             print(f"[FundSync] 更新基金 {fund_code} 历史净值失败: {e}")
+            return 0
     
     def sync_predictions_by_sector_mapping(self, db: Session) -> Dict:
         """
@@ -820,6 +867,19 @@ class FundSyncManager:
                                 f"板块那只标的给不出这段窗口的净值证据，绑过去会变成到期也判不了"
                                 f"的预测，逐条原因见明细，")
             success_msg += f"更新 {update_report['updated']} 个基金"
+            # "失败 N 个"必须只装真失败：把 `000725`（真货币基金、详情接口取不到但净值照发）
+            # 与 `603758`（A 股代码混进基金库）都说成"更新失败"，就等于逼老板去查一个不存在的问题。
+            # 代码要逐个点名 —— 那句"失败 N 只（就是那 N 个垃圾码）"归错过一次，别再犯。
+            if update_report.get("nav_only"):
+                codes = '、'.join(d['fund_code'] for d in update_report['details']
+                                  if d.get('action') == '只补到净值')
+                success_msg += (f"\n\n另有 {update_report['nav_only']} 只详情接口答不出但净值仍在更新"
+                                f"（货币基金常见）：{codes}")
+            if update_report.get("unsyncable"):
+                codes = '、'.join('%s(%s)' % (f['fund_code'], f['fund_name'])
+                                  for f in update_report.get('unsyncable_funds') or [])
+                success_msg += (f"\n\n{update_report['unsyncable']} 只基金域查无此码、库里一行净值都没有"
+                                f"⇒ 多半不是基金，不算更新失败：{codes}")
 
             if failed_funds:
                 success_msg += f"\n\n失败 {len(failed_funds)} 个:"
