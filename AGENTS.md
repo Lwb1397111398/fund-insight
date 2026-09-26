@@ -292,8 +292,7 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   （登记成 **1** 不是 2：扫描器只认写死的授予值，`bool(owner_confirm)` 的值来自参数、看不见真值，
   那一档由行为判据补），这正是第 44 轮那道棘轮第一次替我拦住"我自己新加的来源"。）
   （上一基线 1123/1132 → 本批 **1126/1135：+3 条**，全在 `test_fund_info_archive_gate.py`（4 → 7）：一条"夹具自己必须真的拒悬空写"的控制断言（上一批的 `create_engine('sqlite:///:memory:')` 默认不开外键 ⇒ "档案被拒建、映射行却改到那个码上"这个形状在绿灯里过；镜像开 FK 会 `IntegrityError`，生产 `pg_constraint` 查该表外键 **0 行**于是静默留脏，两个库各坏一种）、一条"拒改必须一个字都不动旧标的"、一条"同一次保存身份门只被问一次"（数的是桩收到的代码列表，不是"有调用"）。另有一条改契约不增条数：`test_sector_mapping_api.py` 里"指控 ⇒ 行保留标不可服务"改成"指控且无档案 ⇒ 整行不建 + 理由回给调用方"，并补一句为什么第 7 轮那半在这里做不到。净值那两档的变异 2 处新增、3 处原有锚点跟着改形状（`python scripts/mutation_proof_frontend.py --list` 看末行，别抄这里），本轮复跑 `nav_staleness` / `stale_coverage` / `median_date` / `majority_staleness` 四组共 5 处全 RED、CONTROL 全绿。）
-  （上一批：上一基线 1106/1115 → 那批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。
-  （上一基线 1106/1115 → 本批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。
+  （上一基线 1106/1115 → 那批 **1123/1132：+17 条**，两个口径同增 ⇒ 没有只挂在 integration/services 里的。
   分布是 `git diff --name-only 9c143fa..HEAD -- tests/` 逐个文件数 `^def test_` 前后相减量出来的（复核就这一条命令）：
   `test_fund_info_archive_gate.py` **新建 +4**（建档身份门从路由/服务层打进去：股票码拒建档、真基金照建、
   `identity_checked` 旁路、已存在档案不许重复探）、`test_purge_junk_funds.py` **+3**（引用面来自元数据、
