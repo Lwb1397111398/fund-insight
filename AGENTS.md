@@ -294,7 +294,80 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 05:1x（北京），**任务 #139：第 57 轮复评 73/100 返修——失分集中在
+最近一次核对（2026-09-28 06:4x（北京），**任务 #141：第 58 轮复评 74/100 返修——三条 MAJOR 里
+最重的一条不是代码错，是我把一条零调用方的死路写成了产品事实；另外两条都是"同一把尺子的第二份
+分身"（可达性与"有没有累加"用了两套遍历）；还有一条是我接共用尺子时只取了一半**（条目号 M-*/m-*
+落在 #141 的 metadata 里，报告正文不随仓库走）——
+① **死路被我说成"页面一直在用"**（M-1，本批最该记的一条）：上一批我在三处（AGENTS、模块总览、
+判据注释）都写"`viewpoint_service.delete_viewpoints_by_ids` 是页面「批量删除观点」一直在走的整条批量
+UPDATE"。实测驳回：`grep -rn "delete_viewpoints_by_ids" src/ scripts/ web/` ⇒ **只命中定义那一行**
+（`viewpoint_service.py:504`）；`/api/viewpoints` 只有单条 `DELETE /{viewpoint_id}`；前端只有
+`viewpoint-manager.js` 那一条 `axios.delete('/api/viewpoints/${id}')` ⇒ **零调用方**。
+三处措辞已改成"这是死路"，并写明**登记它的理由与调用方无关**（它确实往那一列写值，所以"以后谁把它
+接上活路必须先改用那只钟"这句要有抓手）；按本仓规矩（第 49 轮 `_save_fund_mapping`、第 54 轮
+`sync_predictions_by_sector_mapping`）**死路不配绿灯判据**，只配登记 + 写明是死路。
+⚠ **而我在写这条更正的时候自己又说错两句**（现读代码驳回，比评审更早一步抓到的其实是我自己）：
+① 我说"`Viewpoint` 模型压根没有 `restore_before` 这一列" —— **错**，AST 按类数一遍：
+`restore_before` 挂在 `Prediction`(`database.py:252`) / **`Viewpoint`(:360)** / `CleanupItemLog`(:888)；
+真的那半句是"**页面不读它**"（`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0）。
+② 我说"墙钟在观点那一站后果方向安全（UTC 让行显得更年轻 ⇒ 硬删**延后**）" —— **方向反了**：
+UTC 容器里 `datetime.now()` 比北京**早** 8 小时，两处消费面比的都是"北京 today 减 N 天"
+（`retention_three_buckets.py:584/592`、`retention_cleanup_service.py:447`）⇒ 那一行显得**更老**
+⇒ 阈值**提前**到 ⇒ 硬删**提前**，站在危险那一侧。
+顺着 ② 还量出一件更实在的（**新任务 #142**）：`delete_viewpoint` 只写 `is_deleted` + `deleted_at`、
+**从不写 `restore_before`** ⇒ `retention_cleanup_service._viewpoint_candidates` 里那句
+"还在可恢复窗口内 ⇒ 保护起来"对**页面删掉的观点恒不成立**（NULL 直接落进日期锚那一支）；
+会把这一对列一起填上的通路是 `cleanup_enhanced.SoftDeleteManager`（按 `hasattr` 填），而页面那条按钮不走它。
+**教训写给下一轮的我**：驳回别人的话之前，先按同一把尺子自己现读一遍代码 —— 这一批两句"更正"
+全是没核就写，与第 47 轮那次"凭印象重列评审条目"同族。
+② **"调用点可达"与"参数递没递"是两把尺子**（M-2）：上一批我把 `_releases_live` 的调用点那一腿
+改成只走活路径，而 `_passes_the_new_dates` 里判"有没有累加"那一腿还走 `ast.walk` 整棵树 ⇒
+一行诱饵就买通整条判据：`d = []` + `def _never(): d.append(1)` + 递 `d`，运行时那个 def 从不被叫、
+`d` 永远空，而判据看见"有 append"就点头（探针实测 `releases_live=True`）。现在两半共用**同一份
+`live` 列表**（`_releases_live` 里算一次、传进去），样品 ① 判 False、真累加 ② 仍判 True。
+③ **"从不被叫"还有三种形状没进剪枝表**（m-1，与第 45 轮同族）：`for _ in ():` 的体、
+`_r = lambda: release(...)` 绑在名字上而没人叫、只有递归会叫自己的 `def` —— 探针实测三种全判"已接线"。
+现在 `_live_nodes` 认下这三种（`for` 只认"迭代对象是空容器字面量"这一种可证不进入的形状，
+`range(0)`/空生成器不猜，与 `_proves_sqlite` 的"不到运行时去猜"同一尺度），
+`_dead_inner_defs` 交回 `{'names', 'node_ids'}` 两份并按不动点迭代（剪掉一个死 def 之后，
+只有它才会叫的那个也一起死），认调用点时**扣掉它自己体内那些**（只有递归不算有人叫）。
+每格都配一条"真被叫到必须仍算接上"的反面样品（λ 被调、`for` 过非空字面量、自递归 def 另有外部调用点、
+累加发生在活 def 里）⇒ 修剪的是"不可达"，不是"这一族写法"。
+④ **批量写归档列还有两条隐身拼法**（M-3）：`.update(values={列: 值})`（关键字递字典）与
+`payload = {列: 值}` 再 `.update(payload)`（字典先交变量）—— 上一批补的那一腿只数**位置参数字典字面量**，
+两格实测都回 `[]`。现在走 `_bulk_dicts` 三档来路；变量那一腿只回溯"这个函数里唯一一次字典赋值"，
+**行号锚在那一格字典上**（值在哪一行算出来就该在哪一行追责，锚到调用行会把组 payload 的函数
+和发 UPDATE 的函数算成两处）。
+⑤ **接共用尺子时我只取了一半**（m-2）：裸 SQL 那一腿（`db.execute(text("UPDATE … SET deleted_at = …"))`）
+不搓第四把尺子，改问 `scripts/sql_write_policy.py`（"这句 SQL 在写哪一列"从第 48 轮起三处棘轮共用一份）。
+`classify_sql` 交回的是 `(授予, 看不清)` 两档，而**日期列的值永远不是 `true`/`1` 那种"看得见即授予"的
+字面量 ⇒ 一律落进"看不清"**；第一版只取前一档 ⇒ 整条腿恒空（探针 ⑨ 那格回 `[]` 才点红）。
+现在两档都数，并配"只在 `WHERE` 里出现那一列不许数成写"的反面样品。
+⚠ **边界要说清**：这一批四条修法（②③④⑤）都是**判据侧**的洞，能被它们各自的新样品钉死，
+但**不是** `src/` 里的行为 —— 所以变异体检**没有新增条目**（30 处与上一批同数），
+"新腿有没有牙"由那几格控制样品负责，别拿"变异全 RED"当这一批的证据。
+⑥ 两处卫生（m-3）：`TODAY` 从 `date.today()` 换成北京那把钟 `lc.current_as_of()`（生产容器在 UTC ⇒
+"今天"与队列/分类差一天，正是第 52 轮 B-3 那一族换到了测试自己身上），并删掉一个重复的
+`from pathlib import Path`。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话；
+⚠ 本批我又犯了一次同一族的错：先台起了 `nohup … &` 的体检，随后又用后台任务起了**第二份** ⇒
+锁把它当场拒了（退 0 但只印一行 `[abort]`，那行话来自前端那把锁），两份都没污染 `src/`——
+**并发这一条由锁守着，不是由我记得住守着**）：
+
+- `pytest tests/unit -q` → **1229 passed / 16 skipped / 0 failed**（350.06 秒）。
+- `pytest tests/ -q` → **1238 passed / 16 skipped / 0 failed**（340.34 秒）。
+  （与上一批**同数** —— 这一批四组新样品全部并进已有用例的样品表，`def test_` 条数一条没增：
+  改动面用 `git diff --stat HEAD -- tests/` 现看，只有归档那把与解锁那把两份判据文件。
+  当场条数一律 `python -m pytest tests/unit/test_one_ruler_per_question.py
+  tests/unit/test_structurally_unverifiable_hold.py -q` ⇒ 今天印 **48 passed**。）
+  变异：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（M1~M28 含 M3b/M5b；
+  CONTROL-GREEN = 7 个判据文件在干净代码上全绿；条数一律 `--list` 看末行），原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round58-lifecycle-mutations.txt`。
+  `audit_doc_claims.py` 退 **0**（"全部对得上（条数 3 条、数据源 4 行…）；另有 16 条看得见但不判"）。
+  判据文件当场：`python -m pytest tests/unit/test_structurally_unverifiable_hold.py
+  tests/unit/test_one_ruler_per_question.py -q` ⇒ **48 passed**。
+
+（上一批：2026-09-28 05:1x（北京），**任务 #139：第 57 轮复评 73/100 返修——失分集中在
 "我上一批刚写下的那句『判可达』"，而它四种形状里三种当场复现；另有一把棘轮补了三种拼法之后
 立刻量出一条隐身多年的活路**（条目号 M-*/m-* 落在 #139 的 metadata 里，报告正文不随仓库走）——
 ① **"接线判据"的可达性一跳即瞎**（M-1，本批最重）：上一批那句"改成判可达，不再用 `ast.walk`"
@@ -325,9 +398,23 @@ setattr / 关键字，实测 `row.deleted_at = archive_stamp()[0]` 与"钟先交
 `sorted(set(...))` 把同一行两处相同写并成一条。补完下标这一腿、补完批量写（收件人那条链上必须有
 查询动词，否则 `get_detail` 里 `detail.update({...})` 那种**返回给前端的字典**会被数成写 —— 第一版就是这么过宽的，
 被新控制当场点红），去重键换成 `(行, 列偏移, 列名, 来路)` ⇒ **批量这一腿立刻量出
-`viewpoint_service.delete_viewpoints_by_ids`**：页面「批量删除观点」一直走整条批量 UPDATE 写 `deleted_at`，
-上一版那把尺子对它结构性失明。它按"别的模型"登记（观点的 `deleted_at` 只当硬删年龄锚点，
+`viewpoint_service.delete_viewpoints_by_ids`**。⚠ **上一版把这一条写成"页面「批量删除观点」一直走整条批量
+UPDATE"是假话**（第 58 轮 M-1）：`grep -rn "delete_viewpoints_by_ids" src/ scripts/ web/` ⇒ **只命中定义那一行**、
+`/api/viewpoints` 只有单条 `DELETE /{viewpoint_id}`、前端只有一条 `axios.delete('/api/viewpoints/${id}')`
+⇒ **零调用方的死路**。登记它的理由与调用方无关——它确实往那一列写值，所以"谁以后把它接上活路必须先改用那只钟"
+这句要有抓手；按本仓规矩（第 49 轮 `_save_fund_mapping`、第 54 轮 `sync_predictions_by_sector_mapping`）
+**死路不配绿灯判据，只配登记 + 写明它是死路**。它按"别的模型"登记（观点的 `deleted_at` 只当硬删年龄锚点，
 页面上没有一句观点的"保留到 X 日"：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0）。
+第 58 轮 M-3 / m-2 又给这一腿补上**三条**拼法：`.update(values={列: 值})`（关键字递字典）、
+`payload = {列: 值}` 再 `.update(payload)`（字典先交变量，一跳回溯；行号锚在**那一格字典**上，
+因为值在哪一行算出来就该在哪一行追责）、以及**裸 SQL 那一整族**（`db.execute(text("UPDATE … SET deleted_at = …"))`）——
+最后这一条不搓第二把尺子，直接问 `scripts/sql_write_policy.py`（"这句 SQL 在写哪一列"从第 48 轮起有共用那把，
+归档这一把当时没接上，等于第四份没写）。⚠ 接它时我先只取了 `classify_sql` 的 `granted` 那一半 ⇒
+**日期列一律落在 `unclear`**（值永远不是 `true`/`1` 那种"看得见即授予"的字面量），整条腿恒空；
+探针 ⑨ 那格回 `[]` 才点红，现在两档都数。裸 SQL 归档列**今天 0 处**（这一腿不是空检查面：
+`src/` + `scripts/` 里 `execute`/`exec_driver_sql` 调用共 **101** 处，逐处问共用那把尺子，
+命中归档列的 0 处 —— 复核 `python -c` 走 `_functions('src')` / `_functions('scripts')` 那张表），
+所以登记名单没动 —— 但从现在起加一处就得登记并写明依据（`other` 那一档）。
 ⑤ **判据自己的红路径会崩**（同一处顺手抓到的）：那条"写站集合与名单不一致"的**解释语句**写成
 `registered - set(found)`（dict 减 set）⇒ 一有新站点就抛 `TypeError` 而不是说出"新增了哪一站"；
 补完批量那一腿的第一次跑就是它，报错长得像"工具坏了"。已改 `set(registered) - set(found)`。

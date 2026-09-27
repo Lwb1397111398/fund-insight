@@ -307,6 +307,45 @@ def _query_named(node):
     return names
 
 
+def _bulk_dicts(node, call, query_vars):
+    """一次批量写调用里"那些列 = 那些值"的字典，从**三种**来路挖（第 58 轮 M-3）。
+
+    上一版只看**位置参数字典字面量** ⇒ 两格日常拼法一格都不数（探针实测都回 `[]`）：
+    ① **关键字** —— SQLAlchemy 2.0 的 `.update(values={col: …})` / `.update(mappings=…)`；
+    ② **字典先交给变量** —— `payload = {col: …}` 然后 `q.update(payload)`（本仓 common 写法：
+       先组一份 detail 再整份递进去）；
+    ③ 位置参数字典字面量（原有那一格，保留）。
+    ②只回溯一跳、且**只在函数里能找到唯一一次字典赋值**时才认 —— 来路看不清就当一个没有，
+    这条闸拦的是"把归档列整批写掉却没人盯"，不是"我看不穿你的数据流"。
+    """
+    out = []
+    for arg in list(call.args) + [k.value for k in (call.keywords or [])]:
+        if isinstance(arg, ast.Dict):
+            out.append(arg)
+        elif isinstance(arg, ast.Name):
+            # 变量那一腿：这个函数里"唯一一次把字典赋给这个名字"
+            cands = [a.value for a in ast.walk(node)
+                     if isinstance(a, ast.Assign) and len(a.targets) == 1
+                     and isinstance(a.targets[0], ast.Name) and a.targets[0].id == arg.id
+                     and isinstance(a.value, ast.Dict)]
+            if len(cands) == 1:
+                out.append(cands[0])
+    return out
+
+
+def _sql_policy():
+    """`scripts/sql_write_policy.py` —— "这句 SQL 在写哪一列"的**唯一**那份判据（第 48 轮 B-2）。
+
+    三处棘轮（免疫授予、`is_correct`、`fund_code`）从第 48 轮起共用它；归档这一把以前是**第四份**
+    没接上它的（第 58 轮 m-2：`db.execute(text("UPDATE predictions SET deleted_at = now()"))`
+    探针实测一格都不数 ⇒ 有人把归档改成裸 SQL，"每处都必须出自那只钟"当场失明）。
+    """
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+    import sql_write_policy as sp
+    return sp
+
+
 def _archive_writes(node):
     """这个函数往"归档那一对列"写了几次、每次的值出自哪里。
 
@@ -328,6 +367,8 @@ def _archive_writes(node):
     """
     stamp = _stamp_names(node)
     query_vars = _query_named(node)
+    policy = _sql_policy()
+    sql_vars = policy.resolve_assigned_sql(node)
     hits = []
 
     def _clock_call(value):
@@ -374,14 +415,24 @@ def _archive_writes(node):
                 looks_like_query = bool(_chain_call_names(recv) & set(_QUERY_VERBS)) or \
                     (isinstance(recv, ast.Name) and recv.id in query_vars)
                 if looks_like_query:
-                    for arg in n.args:
-                        if not isinstance(arg, ast.Dict):
-                            continue
+                    for arg in _bulk_dicts(node, n, query_vars):
                         for k, v in zip(arg.keys, arg.values):
                             if isinstance(k, ast.Constant) and k.value in ARCHIVE_COLUMNS:
                                 _add(k.lineno, k.col_offset, k.value, _source_of(v))
                             elif isinstance(k, ast.Attribute) and k.attr in ARCHIVE_COLUMNS:
                                 _add(k.lineno, k.col_offset, k.attr, _source_of(v))
+            # 裸 SQL 那一腿（第 58 轮 m-2）："这句 SQL 在写哪一列"问共用那把尺子，
+            # 值出自哪只钟它答不出（SQL 文本里的 `now()` / `:ts` 都不是 `archive_stamp()`）
+            # ⇒ 一律记 `other`：**任何**用裸 SQL 写归档列的站点都必须登记并写明依据。
+            if fn in ('execute', 'exec_driver_sql'):
+                seen, unclear = policy.classify_sql(
+                    n, set(c.lower() for c in ARCHIVE_COLUMNS),
+                    extra_texts=policy.variable_sqls(n, sql_vars))
+                # **两档都要数**：日期列的值永远不会是 `true`/`1` 那种"看得见即授予"的字面量，
+                # 共用那把尺子把它们一律归进 `unclear` —— 只取 `granted` 就等于这条腿恒空
+                # （第 58 轮探针实测 ⑨ 那格回 `[]`，就是这个错）。
+                for col in sorted(seen | unclear):
+                    _add(n.lineno, n.col_offset, col, 'other')
         if isinstance(n, ast.keyword) and n.arg in ARCHIVE_COLUMNS:
             _add(n.lineno, n.col_offset, n.arg, _source_of(n.value))
     unique = {(line, col, attr, kind): (line, attr, kind) for line, col, attr, kind in hits}
@@ -396,8 +447,9 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
     加一处不登记就红；登记了却不再写那一列也红。
     第 57 轮 m-4 把 `_archive_writes` 补到能数**五种拼法**（属性赋值 / 解包 / setattr /
     关键字 / 批量 `.update({...})`），并认下"钟先交出来再取下标"那一腿 ——
-    补上批量这一腿的**当场收获**就是 `delete_viewpoints_by_ids`：页面「批量删除观点」
-    一直在用整条批量 UPDATE 写 `deleted_at`，而上一版那把尺子对它一格都不数。
+    补上批量这一腿**当场量到**的站点里有 `delete_viewpoints_by_ids`，
+    而它**是零调用方的死路**（第 58 轮 M-1 抓到：上一版我把死路写成"页面「批量删除观点」一直在用"，
+    那是假话 —— 登记它的理由是"它会写那一列"，与有没有人调无关，见下面那条注释）。
     """
     registered = {
         # —— 归档那一支：**每一处**写都必须出自那只钟（下面第二条逐个核）
@@ -409,14 +461,32 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         ('src/tasks/cleanup_enhanced.py', 'restore'): 2,
         # —— 只读审计：把列名放进清单里打印（`CleanupItemLog` 自己那行日志的时间戳）
         ('src/services/retention_cleanup_service.py', '_audit_item'): 1,
-        # —— 别的模型（观点）自己的软删：`deleted_at` 只当"满 N 天可硬删"的年龄锚点用，
-        # 页面上没有一句观点的"保留到 X 日"（`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0），
-        # 所以墙钟在那里的后果是阈值差一天，不是第 54 轮 A-1 那种"回收站那句话与页面对不齐"。
+        # —— 别的模型（观点）自己的软删。⚠ 这一条注释**上一版里两句都是假的**，现读代码逐句改正：
+        # ① 我写过"`Viewpoint` 模型压根没有 `restore_before` 这一列" —— **错**：
+        #    `python -c "import ast,io;…"` 按类数一遍 ⇒ `restore_before` 挂在
+        #    `Prediction`(database.py:252) / **`Viewpoint`(database.py:360)** / `CleanupItemLog`(:888) 三张表上。
+        #    真的那半句是**页面不读它**：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0。
+        # ② 我写过"墙钟在那里的后果方向安全（UTC 让行显得更年轻 ⇒ 硬删延后）" —— **反了**：
+        #    `datetime.now()` 在 UTC 容器里比北京**早 8 小时**，而两处消费面都比的是
+        #    "北京 today 减 N 天"（`retention_three_buckets.py:584/592` 的 `Viewpoint.deleted_at < cutoff`、
+        #    `retention_cleanup_service.py:447`）⇒ 那一行显得**更老** ⇒ 阈值**提前**到 ⇒ 硬删**提前**，
+        #    不是延后。方向本身就站在危险那一侧，这一条因此单独立成任务 #142。
+        # ③ 顺着 ② 现读到一件更实在的：`delete_viewpoint` 只写 `is_deleted` + `deleted_at`、
+        #    **从不写 `restore_before`** ⇒ `retention_cleanup_service._viewpoint_candidates` 那句
+        #    "还在可恢复窗口内 ⇒ protected"对**页面删掉的观点恒不成立**（NULL 直接落进日期锚那一支）。
+        #    写这一对列的正当通路是 `cleanup_enhanced.SoftDeleteManager`（它按 `hasattr` 会把
+        #    `restore_before` 一起填上），而页面的那条按钮不走它。⇒ 任务 #142，登记在这儿是为了
+        #    别让"已登记"被读成"这一站没问题"。
         ('src/services/viewpoint_service.py', 'delete_viewpoint'): 1,
-        # 第 57 轮 m-4 补的"批量写"这一腿当场量到的第二条活路：页面「批量删除观点」
-        # 走的是 `db.query(Viewpoint).filter(…).update({Viewpoint.deleted_at: datetime.now()})`，
-        # 上一版这把尺子只看赋值/setattr/关键字，**整条批量 UPDATE 一格都不数**。
-        # 它是观点自己的墙钟（与上面那条同档），不是预测回收站那一对，所以登记、但不并要求共用那只钟。
+        # ⚠ **这一条是死路**（第 58 轮 M-1 抓到我把死路说成产品事实）：
+        # `grep -rn "delete_viewpoints_by_ids" src/ scripts/ web/` ⇒ **只命中定义那一行**
+        # （`viewpoint_service.py:504`）；`/api/viewpoints` 的路由只有 `DELETE /{viewpoint_id}` 单条，
+        # 前端只有 `viewpoint-manager.js` 那一条 `axios.delete('/api/viewpoints/${id}')` ⇒ **零调用方**。
+        # 上一版三处（AGENTS / 模块总览 / 这里）都写成"页面「批量删除观点」一直在走整条批量 UPDATE"，
+        # 那是假话：这条路今天走不通。登记**保留**的理由与调用方无关 ——
+        # 它确实往那一列写值，所以"谁以后把它接上活路，必须先改用那只钟"这句要有抓手；
+        # 按本仓规矩（第 49 轮 `_save_fund_mapping`、第 54 轮 `sync_predictions_by_sector_mapping`），
+        # 死路**不配绿灯判据**，只配登记 + 写明它是死路。
         ('src/services/viewpoint_service.py', 'delete_viewpoints_by_ids'): 1,
     }
     found = {}
@@ -519,6 +589,32 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
                        '    row.deleted_at, row.deleted_at = archive_stamp()\n')
     assert len(_archive_writes(ast.parse(same_line_twice).body[0])) == 2, (
         '同一行、同一列、同一来路的两处写被去重并成 1 ⇒ 处数账还能被"写在同一行"骗过去')
+
+    # 控制二c（第 58 轮 M-3 / m-2）：批量写还有两条隐身拼法 + 裸 SQL 那一整族
+    bulk_kw = ('def f(db):\n'
+               '    return db.query(Prediction).update('
+               'values={"deleted_at": datetime.now()})\n')
+    assert _archive_writes(ast.parse(bulk_kw).body[0]) == [(2, 'deleted_at', 'other')], (
+            'SQLAlchemy 2.0 的 `.update(values={列: 值})`（**关键字**递字典）一格都不数 ⇒ '
+            '把归档改成这一种拼法就脱开这把尺子（探针实测第 58 轮 m-4 只认位置参数）')
+    bulk_via_payload = ('def f(db):\n'
+                        '    payload = {"deleted_at": datetime.now()}\n'
+                        '    return db.query(Prediction).update(payload)\n')
+    assert _archive_writes(ast.parse(bulk_via_payload).body[0]) == [(2, 'deleted_at', 'other')], (
+            '字典先交给变量、再整份递进 `.update(payload)` 认不出 ⇒ 换个变量名就隐身。'
+            '行号锚在**那一格字典**上（第 2 行），不是调用那一行 —— 值在哪一行算出来，'
+            '就该在哪一行追责；锚在调用行会把"组 payload 的函数"和"发 UPDATE 的函数"算成两处。')
+    raw_sql = ('def f(db):\n'
+               '    db.execute(text("UPDATE predictions SET deleted_at = now()"))\n')
+    assert _archive_writes(ast.parse(raw_sql).body[0]) == [(2, 'deleted_at', 'other')], (
+            '裸 SQL 写归档列一格都不数 ⇒ 这一族完全在这把尺子外面（第 58 轮 m-2：'
+            '"这句 SQL 在写哪一列"从第 48 轮起有共用那把尺子 `scripts/sql_write_policy.py`，'
+            '归档这一把当时没接上，等于第四份没写）')
+    raw_sql_where_only = ('def f(db):\n'
+                          '    db.execute(text("SELECT 1 FROM predictions '
+                          'WHERE deleted_at IS NOT NULL"))\n')
+    assert _archive_writes(ast.parse(raw_sql_where_only).body[0]) == [], (
+            '只在 WHERE 里出现那一列被数成写 ⇒ 过宽：那把共用尺子的第一条反向对照就是它')
 
     # 控制三（M-4 的本体）：往真实登记在册的 `_soft_archive` 注入一处墙钟写 ⇒ 处数 +1 且是 other
     rel, name = 'src/services/prediction_service.py', '_soft_archive'

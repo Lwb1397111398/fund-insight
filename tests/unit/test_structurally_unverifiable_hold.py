@@ -14,7 +14,6 @@
 """
 from datetime import date, timedelta
 from pathlib import Path
-from pathlib import Path
 
 import pytest
 
@@ -31,7 +30,11 @@ from tests.unit.test_script_db_guards import _is_dead_test
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-TODAY = date.today()
+# "今天"取**北京那把钟**，不是 `date.today()`（第 58 轮 m-3）：这一档的判据里 `TODAY` 既用来造样品、
+# 又用来对 `classify(as_of=…)` 的答案 —— 生产容器在 UTC，北京 00:00~08:00 那八小时里 `date.today()`
+# 比 `current_as_of()` 小一天，于是同一份样品在两个时区对上的是**两个不同的参照日**。
+# 本机在 +8 看不见这件事（这正是第 52 轮 B-3 给验证路径换北京钟的同一条理由）。
+TODAY = lc.current_as_of()
 
 
 def _seed(db, *, target, next_verify=None, fund_code='HOLD01', pred_type='up'):
@@ -616,7 +619,7 @@ def _empty_container(node):
             and getattr(node.func, 'id', '') in ('list', 'set', 'tuple', 'dict'))
 
 
-def _passes_the_new_dates(call, fn=None):
+def _passes_the_new_dates(call, fn=None, live=None):
     """那次调用有没有真的把"新落的那几天"递进去（第 56 轮 M-2，第 57 轮补一跳回溯）。
 
     `release_holds_after_nav_commit(db, code)` —— 少递第三个实参 —— 在代码里长得和
@@ -626,6 +629,11 @@ def _passes_the_new_dates(call, fn=None):
     是同一件事（第 57 轮 M-1 的第④格：上一版只认字面量，换个变量名就放行）。
     只回溯"这个函数里唯一一次 `d = …`"那种简单赋值 —— 来路看不清时**算递到了**，
     因为这条闸拦的是"明着掏空"，不是"我看不出你递了什么"（拦后者会把正常写法打成没接）。
+    **第 58 轮 M-2**：这一腿找"唯一一次赋值"与"有没有累加"必须走**活路径**（`live`），
+    与调用点那一腿共用同一套剪枝。上一版这两半用两套尺子：调用点已经改成"只看活路径"，
+    这里还在 `ast.walk` 整棵树 ⇒ 一行诱饵就买通整条判据 ——
+    `d = []` + `def _never(): d.append(1)` + 递 `d`，运行时那个 def 从不被叫、`d` 永远是空的，
+    而判据看见"有 append"就点头（实测 True）。
     """
     import ast as _ast
 
@@ -633,8 +641,9 @@ def _passes_the_new_dates(call, fn=None):
         (k.value for k in call.keywords or [] if k.arg == 'changed_dates'), None)
     if dates is None or _empty_container(dates):
         return False
-    if isinstance(dates, _ast.Name) and fn is not None:
-        assigned = [a.value for a in _ast.walk(fn) if isinstance(a, _ast.Assign)
+    if isinstance(dates, _ast.Name) and (live is not None or fn is not None):
+        nodes = live if live is not None else list(_ast.walk(fn))
+        assigned = [a.value for a in nodes if isinstance(a, _ast.Assign)
                     and any(isinstance(t, _ast.Name) and t.id == dates.id for t in a.targets)]
         # 关键分界：`inserted = []` 然后一路 `inserted.append(...)` 是**正常累加**（真代码就是这个形状），
         # 而 `d = []` 之后一个字没加就递进去才是"明着掏空"。少了这一句，回溯会把每条正常同步
@@ -643,7 +652,7 @@ def _passes_the_new_dates(call, fn=None):
                        and isinstance(c.func.value, _ast.Name)
                        and c.func.value.id == dates.id
                        and c.func.attr in ('append', 'extend', 'add', 'insert', 'update')
-                       for c in _ast.walk(fn))
+                       for c in nodes)
         if len(assigned) == 1 and _empty_container(assigned[0]) and not appended:
             return False
     return True
@@ -661,16 +670,24 @@ def _call_names(node):
     return set()
 
 
-def _live_nodes(root, fn, dead_defs):
+def _live_nodes(root, fn, dead):
     """按"这条语句真会执行"剪过的遍历 —— 可达性只算**一跳**是会漏的（第 57 轮 M-1）。
 
+    `dead` 是 `_dead_inner_defs` 交回的那份：`{'names': {…}, 'node_ids': {…}}`
+    （名字 = 从不被叫的内层 `def`；节点 id = 从不被叫的 `lambda`）。
+
     剪枝规则与判"接没接"用的是**同一套**（两边各搓一份就是两把尺子）：
-    - 恒假 `if` 的主体不进（`orelse` 照进）、恒假三目只走另一臂、`while False` 的循环体不进；
+    - 恒假 `if` 的主体不进（`orelse` 照进）、恒假三目只走另一臂、`while 恒假` 的循环体不进；
+    - **`for … in 空容器字面量` 的循环体不进**（第 58 轮 m-1：`for _ in ():` 与 `while False:` 同一种死法，
+      而 `For` 上一版压根不在剪枝表里）；
     - `except` 那一支不进（出事了才走的路径不算正常接线）；
-    - 名字落在 `dead_defs` 里的内层 `def` 整棵不进。
+    - 名字落在 `dead['names']` 里的内层 `def`、节点落在 `dead['node_ids']` 里的 `lambda` 整棵不进。
+    **边界**：只认"迭代对象是空字面量"这一种可证不进入的 `for`；`range(0)`、空生成器表达式这些
+    要靠数据流才看得出来，这一版不猜（与 `_proves_sqlite` 那条"不到运行时去猜"同一个尺度）。
     """
     import ast as _ast
 
+    names, node_ids = dead['names'], dead['node_ids']
     yield root
     if isinstance(root, _ast.If):
         arms = list(root.orelse) if _never_runs(root.test) \
@@ -679,55 +696,82 @@ def _live_nodes(root, fn, dead_defs):
         arms = [root.orelse] if _never_runs(root.test) else [root.body, root.orelse]
     elif isinstance(root, _ast.While) and _never_runs(root.test):
         arms = list(root.orelse)                      # 循环体不进，`else` 照进
+    elif isinstance(root, (_ast.For, _ast.AsyncFor)) and _empty_container(root.iter):
+        arms = list(root.orelse)                      # 一次都不进体，`else` 照进
     elif isinstance(root, (_ast.Try, _ast.TryStar)):
         arms = list(root.body) + list(root.finalbody or [])
     elif isinstance(root, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda)):
-        if root is not fn and getattr(root, 'name', '') in dead_defs:
-            return                                    # 从不被叫的内层 def ⇒ 整棵是死路
-        arms = list(_ast.iter_child_nodes(root))
+        if isinstance(root, _ast.Lambda):
+            if id(root) in node_ids:
+                return                                # 绑在没人叫的名字上 ⇒ 这棵是死路
+            arms = list(_ast.iter_child_nodes(root))
+        else:
+            if root is not fn and getattr(root, 'name', '') in names:
+                return                                # 从不被叫的内层 def ⇒ 整棵是死路
+            arms = list(_ast.iter_child_nodes(root))
     else:
         arms = list(_ast.iter_child_nodes(root))
     for arm in arms:
-        yield from _live_nodes(arm, fn, dead_defs)
+        yield from _live_nodes(arm, fn, dead)
 
 
 def _dead_inner_defs(fn):
-    """哪些内层 `def` 从这个函数的**活路径**上永远叫不到（迭代到不动点）。
+    """哪些内层 `def` / `lambda` 从这个函数的**活路径**上永远叫不到（迭代到不动点）。
 
     为什么要迭代：剪掉一个死 def 之后，只有它才会去叫的那个 def 也一起死了 ——
     上一版只算一层（`_called_names` 走 `ast.walk` 整棵树），于是
     "把解锁搬进 `def _release()`、唯一调用点压在 `if 1 == 0:` 里"照样判"已接线"。
+    第 58 轮 m-1 再补两种同族死法（探针实测两种都判"已接线"）：
+    ① **只有递归会叫自己的那个 def** —— 外面一个调用点都没有，运行时永远进不去，
+       所以"这个 def 里有一次解锁"不等于接了线 ⇒ 认调用点时要**扣掉它自己体内那些**；
+    ② `_r = lambda: release(...)` 绑在名字上而没人 `_r()` —— 与死 def 同一件事，
+       以前 `Lambda` 的体照常进遍历。
     """
     import ast as _ast
 
     inner = [d for d in _ast.walk(fn)
              if isinstance(d, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and d is not fn]
-    dead = set()
-    for _ in range(len(inner) + 1):                   # 单调收缩，最多这么多轮
-        calls = {n for node in _live_nodes(fn, fn, dead)
-                 if isinstance(node, _ast.Call) for n in _call_names(node)}
-        nxt = {d.name for d in inner if d.name and d.name not in calls}
-        if nxt == dead:
-            return dead
-        dead = nxt
-    return dead
+    lambdas = {}
+    for n in _ast.walk(fn):
+        if isinstance(n, _ast.Assign) and isinstance(n.value, _ast.Lambda) \
+                and len(n.targets) == 1 and isinstance(n.targets[0], _ast.Name):
+            lambdas[n.targets[0].id] = n.value
+    dead_names, dead_ids = set(), set()
+    for _ in range(len(inner) + len(lambdas) + 1):    # 单调收缩，最多这么多轮
+        live_calls = [c for c in _live_nodes(fn, fn, {'names': dead_names, 'node_ids': dead_ids})
+                      if isinstance(c, _ast.Call)]
+        nxt_names, nxt_ids = set(), set()
+        for d in inner:
+            if not d.name:
+                continue
+            inside = {id(x) for x in _ast.walk(d)}    # 只有"它叫它自己"不算有人叫
+            if not any(d.name in _call_names(c) and id(c) not in inside for c in live_calls):
+                nxt_names.add(d.name)
+        for name, lam in lambdas.items():
+            if not any(name in _call_names(c) for c in live_calls):
+                nxt_ids.add(id(lam))
+        if nxt_names == dead_names and nxt_ids == dead_ids:
+            break
+        dead_names, dead_ids = nxt_names, nxt_ids
+    return {'names': dead_names, 'node_ids': dead_ids}
 
 
 def _releases_live(fn):
     """函数体里有没有一次**真会执行**、且**参数也真递到**的 `release_holds_after_nav_commit`。
 
-    "接线"要过的两道（第 55 轮 M19 + 第 56 轮 M-2/M-3 + 第 57 轮 M-1 各教了一层）：
-    ① 那次调用得在活路径上 —— 恒假分支、恒假三目那一支、`while False`、`except` 里、
-      以及**从活路径叫不到的内层 `def`**（一层或多层）都不算；
-    ② "新落的那几天"得真递进去（见 `_passes_the_new_dates`）。
+    "接线"要过的两道（第 55 轮 M19 + 第 56 轮 M-2/M-3 + 第 57 轮 M-1 + 第 58 轮 M-2 各教了一层）：
+    ① 那次调用得在活路径上 —— 恒假分支、恒假三目那一支、`while 恒假`、空 `for` 的体、`except` 里、
+      以及**从活路径叫不到的内层 `def`（一层或多层、含只认递归的）与 `lambda`**都不算；
+    ② "新落的那几天"得真递进去（见 `_passes_the_new_dates`），而且**判断它递没递也走同一套活路径**
+      —— 两半用两套尺子的话，`def _never(): d.append(1)` 这种诱饵就把整条判据买通了。
     """
     import ast as _ast
 
-    dead = _dead_inner_defs(fn)
-    for node in _live_nodes(fn, fn, dead):
+    live = list(_live_nodes(fn, fn, _dead_inner_defs(fn)))
+    for node in live:
         if isinstance(node, _ast.Call) and \
                 (getattr(node.func, 'attr', None) or getattr(node.func, 'id', '')) == \
-                'release_holds_after_nav_commit' and _passes_the_new_dates(node, fn):
+                'release_holds_after_nav_commit' and _passes_the_new_dates(node, fn, live):
             return True
     return False
 
@@ -875,6 +919,31 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
                       '    db.add(FundHistory(fund_code=code))\n'
                       '    if False or False:\n'
                       '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        # 第 58 轮 m-1 的三格：这三种"从不被叫"上一版全判"已接线"
+        'for 一个空容器字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    for _ in ():\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        'lambda 绑在名字上而没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    _r = lambda: release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return 0\n'),
+        '只有递归会叫自己的 def': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    def _r(n):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'
+            '        return _r(n - 1)\n'),
+        # 第 58 轮 M-2：这一格与上面"先赋一个空列表再递进去"只差**一行诱饵** ——
+        # 上一版"有没有累加"那半走整棵树、与"调用点可达"那半用的是两套尺子，于是这一格判"接了"。
+        '空列表 + 诱饵累加藏在死 def 里': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    def _never():\n        d.append(1)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
     }
     for label, src in evasions.items():
         assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {
@@ -897,6 +966,38 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
                   '    release_holds_after_nav_commit(db, code, inserted)\n')
     assert _nav_writers([('src/fund/fund_api.py', _ast.parse(accumulate), accumulate)]) == {
         ('src/fund/fund_api.py', 'f'): True}, '累加后递出去被判成"没递" ⇒ 这条闸过宽，会把自己关掉'
+    # 上面 m-1 那三格的**反面对照**：三种形状各自"真被叫到"时必须仍算接上 ——
+    # 修剪"不可达"不等于修剪"这一族写法"，否则下一轮正常的延迟解锁会被这道闸集体判死。
+    honest_live = {
+        'lambda 真的被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    _r = lambda: release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return _r()\n'),
+        'for 一个非空字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    for _c in (code,):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        '自递归的 def 同时有外部调用点': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    def _r(n):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'
+            '        return _r(n - 1)\n'
+            '    return _r(3)\n'),
+        '累加发生在活 def 里（与上面那格诱饵只差"这个 def 有人叫"）': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    def _fill():\n        d.append(code)\n'
+            '    _fill()\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+    }
+    for label, src in honest_live.items():
+        assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {
+            ('src/fund/fund_api.py', 'f'): True}, \
+            '"%s" 被判成"没接解锁"⇒ 这条闸过宽，会把真接线的正常写法一起挡掉' % label
 
 
 def test_the_nav_lookback_has_one_home_for_both_questions(monkeypatch):
