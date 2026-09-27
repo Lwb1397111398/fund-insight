@@ -74,6 +74,33 @@ def _import_script():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _no_backup_residue_in_the_repo(tmp_path, monkeypatch):
+    """跑这个文件里的任何用例，都不许往仓库级 `backup/` 落一份文件（第 55 轮的卫生账）。
+
+    上一版只有两条用例记得 `os.remove(path)`，另外两条（`apply_close` 在 85 / 131 行）
+    关掉之后就把备份留在仓库里 —— 2026-09-27 数过一次：`backup/` 里当天 48 份
+    `close-unknowable-*.json` 全部只装着夹具那一行（复核
+    `grep -l 测试基金 backup/close-unknowable-*.json | wc -l`）。
+    那些文件名**只到秒**，两个会话同时跑就会互相盖掉对方的"回滚载荷"，
+    而它长得和真备份一模一样 —— 第 34 轮 `write_manifest` 那一族的复发。
+
+    机制：① 进程内那份模块常量改指 `tmp_path`；② 子进程走脚本认的 `CLOSE_BACKUP_DIR`；
+    ③ 收尾再对一次仓库目录，漏一个文件就红（把 ① 撤掉复跑，这条就会红 —— 它不是装饰）。
+    """
+    repo = os.path.join(ROOT, 'backup')
+    before = set(os.listdir(repo)) if os.path.isdir(repo) else set()
+    monkeypatch.setattr(_import_script(), 'BACKUP_DIR',
+                        str(tmp_path / 'backup'), raising=True)
+    monkeypatch.setenv('CLOSE_BACKUP_DIR', str(tmp_path))
+    yield
+    after = set(os.listdir(repo)) if os.path.isdir(repo) else set()
+    assert after == before, (
+            '用例往仓库级 `backup/` 落了文件（%s）⇒ 备份写到了仓库而不是 tmp，'
+            '而"跑完全量后要 git status 看有没有新残渣"这条又只能靠人记'
+            % sorted(after - before))
+
+
 def test_both_evidences_present_closes_and_leaves_the_verdict_untouched(test_db, monkeypatch):
     mod = _import_script()
     p = _seed(test_db, code='DEAD99', target_offset=3, nav_back_days=400, held=True)
@@ -400,7 +427,11 @@ print(u"|".join((p.delete_reason or u"") for p in db.query(Prediction)))
 ''' % (ROOT, url), encoding='utf-8')
 
     def _run(script, *extra):
-        env = dict(os.environ, PYTHONIOENCODING='utf-8', DATABASE_URL=url)
+        # `CLOSE_BACKUP_DIR` ⇒ 备份写进 `tmp_path`，不落仓库级 `backup/`（第 55 轮小三条）。
+        # 这条用例真起子进程跑 `--apply`，而备份文件名只到秒：不设这个出口，
+        # 每跑一次基线就在仓库里留一份没人收的 JSON，并与别的会话同名相撞。
+        env = dict(os.environ, PYTHONIOENCODING='utf-8', DATABASE_URL=url,
+                   CLOSE_BACKUP_DIR=str(tmp_path))
         return subprocess.run([sys.executable, script] + list(extra),
                               capture_output=True, text=True, env=env, cwd=ROOT,
                               timeout=300, encoding='utf-8', errors='replace')
@@ -429,6 +460,13 @@ print(u"|".join((p.delete_reason or u"") for p in db.query(Prediction)))
     assert after != before and '没有更早的重问记录' in after, \
         '--apply 之后话没被改 ⇒ 这一支其实什么都没做'
     assert '已问过两次仍无答案 ⇒' not in after, '那句没出处的断言还挂着 ⇒ 只加了注释没改掉它'
+
+    # 备份这一腿也要有牙：真订正必须留下**能用**的原句（仓库里不许留残渣，
+    # 由文件顶上那条 autouse 夹具统一管，这里不重复数第二遍）。
+    landed = sorted((tmp_path / 'backup').glob('archive-note-*.json'))
+    assert landed, '订正完没留下备份 ⇒ 原句丢了，"可随时回滚"是空话'
+    assert '900001' in landed[0].read_text(encoding='utf-8'), \
+        '备份里没有样例那一行的原句 ⇒ 这份备份还原不了任何东西'
 
 
 def test_cli_refuses_before_touching_the_database():

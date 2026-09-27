@@ -43,7 +43,11 @@ for _st in (sys.stdout, sys.stderr):
         pass
 
 CONFIRM_TOKEN = 'CLOSE-UNVERIFIABLE'
-BACKUP_DIR = os.path.join(ROOT, 'backup')
+# 备份写到哪儿 —— `CLOSE_BACKUP_DIR` 是**测试与运维**的出口，不是安全边界（第 55 轮小三条：
+# pytest 那条 CLI 判据真起子进程跑 `--fix-wording --apply`，于是每跑一次基线就往仓库级
+# `backup/` 落一份只到秒的 JSON；跑批日志里看不出区别，干净克隆上却有 79 份里的 6 份是夹具）。
+BACKUP_DIR = os.path.join(os.environ.get('CLOSE_BACKUP_DIR') or ROOT,
+                          'backup')
 
 # 第 53 轮 B-6：A-4 修之前那一版收口脚本收掉的行，回收站里都写着这句"已问过两次"，
 # 而台账前像证明它们**从没被重问锁压过**（第一次问出来就关了）。

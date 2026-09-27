@@ -37,84 +37,194 @@ def _functions(base):
                 yield rel, fn, src
 
 
-def _status_judged(node):
-    """这一处碰没碰**预测那一行**的 `status` 列（读或写都算一处，必须在名单里说明它是什么）。
+def _status_attrs(node):
+    """这个函数里所有"指向预测那一行 `status` 列"的 Attribute 节点。
 
-    先问"这个函数碰不碰预测"（引用过 `Prediction` 这个名字、或读过 `is_correct`）——
-    不碰就跳过，否则会把 `BatchAnalysisTask.status == 'pending'` 那一片**别的模型**的
-    状态机全点成违规（这条判据的第二版就这么假红了 6 处）。
-    **边界**：行对象那一侧靠变量名认（`prediction` / `pred` / `p` / `Prediction` 列），
-    换个名字（`row.status`）它会漏 —— 拦不住所有写法，但 SQL 侧那一腿
-    （`Prediction.status`，列对象没法改名）是结实的，而"另起一处判断"最常长的就是那一腿。
+    行对象那一侧靠变量名认（`prediction` / `pred` / `p` / `Prediction` 列），换个名字
+    （`row.status`）它会漏 —— 拦不住所有写法，但 SQL 侧那一腿（`Prediction.status`，
+    列对象没法改名）是结实的，而"另起一处判断"最常长的就是那一腿。
     """
-    names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-    attrs = {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
-    if 'Prediction' not in names and 'is_correct' not in attrs:
-        return False
+    out = []
     for n in ast.walk(node):
         if isinstance(n, ast.Attribute) and n.attr == 'status':
             owner = getattr(n.value, 'id', '') or getattr(n.value, 'attr', '')
-            if owner == 'Prediction' or owner in ('p', 'pred', 'prediction'):
+            if owner in ('Prediction', 'p', 'pred', 'prediction'):
+                out.append(n)
+    return out
+
+
+def _status_judgments(node):
+    """这个函数里有**几处**把 `status` 当"验过了吗"来回答（返回行号列表）。
+
+    第 55 轮 M-4：上一版按 (文件, 函数) 收名单 ⇒ 只要那个名字已经在名单里，
+    函数体内再造一处判断它一个字都不报（评审的复现：往挂在白名单里的
+    `retention_cleanup_service.build_plan` 注一处 `p.status == 'pending'` ⇒ 22 passed 无声）。
+    所以这里改数**判断语句**：一个函数里有几处比较/真值判断，名单就得写几。
+    取列、回显、赋值都不算（那是另一条账，见 `_status_writes`）。
+    """
+    attrs = {id(a) for a in _status_attrs(node)}
+    if not attrs:
+        return []
+    parents = {}
+    for parent in ast.walk(node):
+        for _field, child in ast.iter_fields(parent):
+            if isinstance(child, ast.AST):
+                parents[id(child)] = parent
+            elif isinstance(child, list):
+                for c in child:
+                    if isinstance(c, ast.AST):
+                        parents[id(c)] = parent
+    judged = []
+    for a in _status_attrs(node):
+        cur, decision = a, None
+        while cur is not None and decision is None:
+            parent = parents.get(id(cur))
+            if parent is None:
+                break
+            if isinstance(parent, ast.Compare):
+                decision = 'judge'          # 比较：`Prediction.status == 'pending'`
+            elif isinstance(parent, ast.Assign):
+                if any(cur is t for t in parent.targets):
+                    decision = 'write'      # 写列：留给同步那三处，不是"回答"
+                else:
+                    decision = 'read'
+            elif isinstance(parent, ast.AnnAssign):
+                decision = 'write'
+            elif isinstance(parent, (ast.If, ast.While, ast.Assert)):
+                decision = 'judge'          # 直接当布尔用
+            elif isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
+                decision = 'judge'
+            elif isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                decision = 'read'           # 到函数头还没遇上上面那些 ⇒ 取列/回显
+            cur = parent
+            if decision is not None:
+                break
+        if decision == 'judge':
+            judged.append(a.lineno)
+    return sorted(set(judged))
+
+
+def _status_writes(node):
+    """这个函数里有没有**写**那一列（`clear_verification_fields` 那三处的正当用途）。"""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Attribute) and n.attr == 'status':
+            owner = getattr(n.value, 'id', '') or getattr(n.value, 'attr', '')
+            if owner not in ('Prediction', 'p', 'pred', 'prediction'):
+                continue
+            parent = None
+            for cand in ast.walk(node):
+                if isinstance(cand, ast.Assign) and any(t is n for t in cand.targets):
+                    parent = cand
+                    break
+            if parent is not None:
                 return True
     return False
 
 
-def _status_reads(src_tree):
-    """一处读的**写法**：列对象 `Prediction.status`，还是行对象 `pred.status`。"""
-    kinds = set()
-    for n in ast.walk(src_tree):
-        if isinstance(n, ast.Attribute) and n.attr == 'status':
-            owner = getattr(n.value, 'id', '') or getattr(n.value, 'attr', '')
-            kinds.add('column' if owner == 'Prediction' else 'row:%s' % owner)
-    return kinds
+def _judgments_by_name(src):
+    """源码 → `{函数名: 判断处数}`（碰了预测 `status` 列的函数都要出现，0 处也出现）。"""
+    tree = ast.parse(src)
+    out = {}
+    for fn in [n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        if _status_judged(fn):
+            out.setdefault(fn.name, 0)
+            out[fn.name] += len(_status_judgments(fn))
+    return out
+
+
+def _status_judged(node):
+    """这个函数碰没碰**预测那一行**的 `status` 列（读、写、判断都算，处置另数）。"""
+    return bool(_status_attrs(node)) or _status_writes(node)
 
 
 def test_only_the_ruler_decides_whether_a_prediction_has_a_conclusion():
     """`status` 那一列不许再被任何一处当成"验过了吗"的答案（第 54 轮 A-2 / B-3）。
 
-    登记名单里只有一处是**判断**（`_conclusion_conditions` 的第三档：按字面值筛），
-    其余都是回显或取列。**边界要说清**：这条闸按"这个函数碰不碰预测"收 ——
-    只从字典里把 `p.status` 复制出去的序列化、以及不引用 `Prediction` / `is_correct`
-    的写法它看不见；它拦的是"再写一处判断"，不是"所有出现过的读法"。
+    第 55 轮 M-4：名单从"哪些函数碰过"改成"每个函数里有**几处判断**" ⇒
+    在一条已经登记的活路里再造一处判断，当场红。
+    **边界要说清**：这条闸按"这个函数碰不碰预测"收 —— 只从字典里把 `p.status`
+    复制出去的序列化、以及不引用 `Prediction` / `is_correct` 的写法它看不见；
+    它拦的是"再写一处判断"，不是"所有出现过的读法"。
     """
     registered = {
         # —— 判断：只有这一处，而且它的第三档问的是"按字面值筛"，不是"有没有结论"
-        ('src/services/prediction_query_service.py', '_conclusion_conditions'),
+        ('src/services/prediction_query_service.py', '_conclusion_conditions'): 1,
         # —— 写侧：把遗留列与 `is_correct` 保持同步（正因为不可信才要一直回填，不许拿它当判断）
-        ('src/services/prediction_verify_service.py', 'clear_verification_fields'),
-        ('src/services/prediction_verify_service.py', 'verify_prediction'),
-        ('src/services/prediction_verify_service.py', 'rollback_invalid_verifications'),
+        ('src/services/prediction_verify_service.py', 'clear_verification_fields'): 0,
+        ('src/services/prediction_verify_service.py', 'verify_prediction'): 0,
+        ('src/services/prediction_verify_service.py', 'rollback_invalid_verifications'): 0,
         # —— 回显 / 取列：payload、导出、清理计划里那一格给人看的话
-        ('src/services/prediction_query_service.py', '_serialize'),
-        ('src/services/prediction_service.py', 'get_prediction_detail'),
-        ('src/services/prediction_service.py', 'get_predictions_for_export'),
-        ('src/services/advice_evidence.py', '_build_predictions'),
-        ('src/services/post_service.py', 'get_post_detail'),
-        ('src/services/retention_cleanup_service.py', 'build_plan'),
-        ('src/services/retention_three_buckets.py', '_unverifiable_prediction_ids'),
+        ('src/services/prediction_query_service.py', '_serialize'): 0,
+        ('src/services/prediction_service.py', 'get_prediction_detail'): 0,
+        ('src/services/prediction_service.py', 'get_predictions_for_export'): 0,
+        ('src/services/advice_evidence.py', '_build_predictions'): 0,
+        ('src/services/post_service.py', 'get_post_detail'): 0,
+        ('src/services/retention_cleanup_service.py', 'build_plan'): 0,
+        ('src/services/retention_three_buckets.py', '_unverifiable_prediction_ids'): 0,
     }
-    found = {(rel, fn.name) for rel, fn, _s in _functions('src') if _status_judged(fn)}
-    assert found == registered, (
+    found = {}
+    for rel, fn, _s in _functions('src'):
+        if not _status_judged(fn):
+            continue
+        found[(rel, fn.name)] = found.get((rel, fn.name), 0) + len(_status_judgments(fn))
+    assert set(found) == set(registered), (
             '「有没有结论」又多了一处回答（读 `status` 列）：新增 %s / 已消失 %s'
-            % (sorted(found - registered), sorted(registered - found)))
+            % (sorted(set(found) - set(registered)), sorted(set(registered) - set(found))))
+    wrong = {k: (found[k], registered[k]) for k in found if found[k] != registered[k]}
+    assert not wrong, (
+            '这些函数里"拿 status 答一次"的处数与登记不符（实测, 登记）：%s ⇒ '
+            '在一条已登记的活路里再加一处判断，以前这条闸一个字都不报（第 55 轮 M-4）' % wrong)
 
-    # 控制：现造一处违规必须被量到（没有控制断言的判据等于没有判据）
+    # 控制一：现造一处违规必须被量到（没有控制断言的判据等于没有判据）
     column_read = ('def f(db):\n'
                    "    return db.query(Prediction).filter(Prediction.status == 'pending')\n")
     assert _status_judged(ast.parse(column_read).body[0]), (
         '列对象那种读法量不到 ⇒ 上面那条永远绿')
+    assert _status_judgments(ast.parse(column_read).body[0]) == [2]
     from_var = ('def f(status):\n'
                 '    return Prediction.status == status\n')
-    assert _status_judged(ast.parse(from_var).body[0]), (
+    assert _status_judgments(ast.parse(from_var).body[0]), (
         '右边是变量就放过 ⇒ 下一轮有人会专门这样写来绕过这条闸')
     row_read = ('def f(pred):\n'
                 "    return pred.status == 'success' and pred.is_correct is None\n")
-    assert _status_judged(ast.parse(row_read).body[0]), '行对象那种读法量不到'
+    assert _status_judgments(ast.parse(row_read).body[0]), '行对象那种读法量不到'
     benign = ('def f(task):\n'
               "    return task.status == 'running'\n")
     assert not _status_judged(ast.parse(benign).body[0]), (
         '过宽：**别的模型**的状态机不许被点名（第一版就把 6 处任务状态机点成违规，'
         '那种假红会让下一轮直接把整条闸关掉）')
+
+    # 控制二（这一条才是 M-4 的本体）：**同一个函数里两处判断必须数成 2**，
+    # 否则"按函数登记"与"按语句登记"没有区别，上面那条 wrong 检查是装饰。
+    twice = ('def f(p):\n'
+             "    if p.status == 'pending':\n"
+             '        return True\n'
+             "    return p.status == 'failed'\n")
+    assert len(_status_judgments(ast.parse(twice).body[0])) == 2, (
+        '同一函数里第二处判断被并成了 1 ⇒ 名单按函数收，'
+        '在已登记的活路里加判断仍然隐身（这就是第 55 轮 M-4 那个洞）')
+    # 取列与回显不许被数成判断（不然名单里那 9 处"写/读"会变成违规）
+    echo = ('def f(p):\n'
+            "    return {'status': p.status}\n")
+    assert _status_judgments(ast.parse(echo).body[0]) == [], '回显被数成判断 ⇒ 过宽'
+    write = ('def f(p):\n'
+             "    p.status = 'success'\n")
+    assert _status_judgments(ast.parse(write).body[0]) == [], '写列被数成判断 ⇒ 过宽'
+
+    # 控制三：往**真实登记在册**的函数里注入一处判断，按文件的计数必须 +1
+    rel, name = 'src/services/retention_three_buckets.py', '_unverifiable_prediction_ids'
+    src = io.open(os.path.join(ROOT, rel.replace('/', os.sep)), encoding='utf-8').read()
+    before = _judgments_by_name(src)[name]
+    tree = ast.parse(src)
+    target = [n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == name][0]
+    target.body.insert(0, ast.parse(
+        "if p.status == 'failed':\n    pass\n").body[0])
+    after = _judgments_by_name(ast.unparse(tree))[name]
+    assert after == before + 1, (
+        '往已登记的函数里注入一处判断，计数没动（%s → %s）⇒ 这把尺子量的还是"函数存不存在"'
+        % (before, after))
 
 
 def _targets(n):

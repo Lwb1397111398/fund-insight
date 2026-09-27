@@ -46,6 +46,7 @@ HOLD_TESTS = 'tests/unit/test_structurally_unverifiable_hold.py'
 CLOSE_TESTS = 'tests/unit/test_close_unknowable_predictions.py'
 QUERY_TESTS = 'tests/unit/test_prediction_query.py'
 SAFE_TESTS = 'tests/unit/test_prediction_management_safety.py'
+MIGRATE_TESTS = 'tests/unit/test_prediction_migrations.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -118,18 +119,45 @@ MUTATIONS = [
      CLOSE_TESTS, 'test_restore_refuses_to_overwrite_a_row_somebody_else_touched'),
     # 第 54 轮 A-5：退化端点这一档没有凭据可跟，跟着 3 天那一档走 ⇒ 镜像那 5 行每三天
     # 弹回「待验证到期」。这一处变异把它改回"两档共用一个节奏"，两条分档判据都要红。
+    # ⚠ 第 55 轮 M-1 之后取数改走 `nav_backfill_days()` ⇒ 这两条锚点跟着改了形状
+    #（旧锚点现在会 ANCHOR-MISS，而 ANCHOR-MISS 按规矩①就是失败 —— 这正是它存在的意义）。
     ('M14_both_tiers_share_the_credential_clock', LIFECYCLE,
      '    if verdict_reason in LOCK_ONLY_VERDICT_REASONS:\n'
-     '        from src.core.config import config\n\n'
-     '        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1\n',
+     '        return nav_backfill_days() + 1\n',
      '    if False:\n'
-     '        from src.core.config import config\n\n'
-     '        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1\n',
+     '        return nav_backfill_days() + 1\n',
      HOLD_TESTS, 'test_the_two_structural_tiers_wait_for_their_own_clock'),
     ('M15_the_reask_interval_becomes_a_second_number', LIFECYCLE,
-     '        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1',
+     '        return nav_backfill_days() + 1',
      '        return 31',
      HOLD_TESTS, 'test_the_nav_lookback_has_one_home_for_both_questions'),
+    # 第 55 轮 M-1：那句"重问节奏跟着常规同步的回补范围走"要有两处牙 ——
+    # 取数处不许退化成常数，写同步的那几处也不许再把天数写死。
+    ('M17_the_backfill_window_becomes_a_constant', LIFECYCLE,
+     '    return int(config.NAV_HISTORY_LOOKBACK_DAYS) if days is None else int(days)',
+     '    return 30 if days is None else int(days)',
+     HOLD_TESTS, 'test_the_backfill_window_is_read_at_call_time_not_at_import'),
+    ('M18_the_sync_writer_hard_codes_its_window_again', 'src/fund/fund_api.py',
+     '    def update_fund_history(self, fund_code: str, days: Optional[int] = None,',
+     '    def update_fund_history(self, fund_code: str, days: int = 30,',
+     HOLD_TESTS, 'test_the_sync_lookback_is_not_hard_coded_at_any_call_site'),
+    # 第 55 轮 M-2：补到净值要当场解得开那把锁 —— 三条各自的变异
+    ('M19_the_sync_writer_stops_releasing_the_lock', 'src/fund/fund_api.py',
+     '            if inserted:\n'
+     '                from src.services.prediction_lifecycle import (\n',
+     '            if False:\n'
+     '                from src.services.prediction_lifecycle import (\n',
+     HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_both_sync_writers'),
+    ('M20_releasing_ignores_what_actually_changed', LIFECYCLE,
+     '        if changed and not any(start is not None and start <= d <= end'
+     ' for d in changed):',
+     '        if False:',
+     HOLD_TESTS, 'test_a_backfill_outside_the_held_window_does_not_release_the_hold'),
+    ('M21_releasing_forgets_to_ask_the_verifier', LIFECYCLE,
+     '        if target_cannot_evidence_window(in_window, latest, start, end,'
+     ' today=today) is None:',
+     '        if True:',
+     HOLD_TESTS, 'test_a_backfill_that_still_cannot_evidence_the_window_keeps_the_hold'),
     # 第 54 轮 A-7：`--fix-wording` 这一支以前只有内部函数用例，CLI 层零判据 ⇒
     # 把 dry-run 那一支摘掉，全套绿灯一声不响，而"先看一眼"会真改回收站。
     ('M16_fix_wording_dry_run_actually_writes', SCRIPT,
@@ -138,19 +166,62 @@ MUTATIONS = [
      "            if False:\n"
      "                print('[dry-run] 一行都没动。真订正加 --apply --confirm %s' % CONFIRM_TOKEN)",
      CLOSE_TESTS, 'test_fix_wording_dry_run_leaves_the_row_alone_and_says_so'),
+    # 第 55 轮：全量跑批里那条"回退要留痕"偶发红、单跑绿 —— 根因是 alembic 的 env.py 照抄了
+    # 官方模板那句 `fileConfig(...)`，而它的 `disable_existing_loggers` 默认 True ⇒
+    # 一次进程内迁移把全部 `src.*` logger 永久禁掉，那行 WARNING 根本没被创建过。
+    ('M22_env_py_silences_the_app_loggers_again', 'alembic/env.py',
+     'fileConfig(config.config_file_name, disable_existing_loggers=False)',
+     'fileConfig(config.config_file_name)',
+     MIGRATE_TESTS,
+     'test_running_a_migration_in_process_does_not_silence_the_application_loggers'),
+    # 同一处改动带出来的第二条：回退那行日志里"缺 tzdata"这三个字是这条判据唯一的抓手，
+    # 把话改得含糊（"时区取不到"）也算把痕迹擦掉。
+    ('M23_the_as_of_fallback_trail_stops_naming_tzdata', LIFECYCLE,
+     "'容器缺 tzdata 时页面日期可能差一天', exc)",
+     "'容器缺时区时页面日期可能差一天', exc)",
+     'tests/unit/test_stats_evidence_report.py',
+     'test_current_as_of_fallback_leaves_a_trail'),
 ]
 
 
-def _run_one(test_file, test_name):
+def _child_env():
     env = dict(os.environ)
     # 放行标记：这一份 pytest 是我自己起的子会话，别被 conftest 那把体检锁拦死
     # （不带这个标记 ⇒ 每次跑批都"子会话起手就退、父进程把它记成红"，全是假红）。
     env[mutation_lock.ENV_PID] = str(os.getpid())
     env['PYTHONIOENCODING'] = 'utf-8'
+    return env
+
+
+def _run_one(test_file, test_name):
     return subprocess.run(
         [sys.executable, '-m', 'pytest', test_file, '-q', '-k', test_name,
          '--no-header', '-p', 'no:cacheprovider'],
-        capture_output=True, text=True, encoding='utf-8', errors='replace', env=env)
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        env=_child_env())
+
+
+def _run_file(test_file):
+    return subprocess.run(
+        [sys.executable, '-m', 'pytest', test_file, '-q', '--no-header',
+         '-p', 'no:cacheprovider'],
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        env=_child_env())
+
+
+def _control(test_files):
+    """干净代码上这些判据文件必须**先全绿**（第 55 轮 M-3 补上的那条腿）。
+
+    第 33 轮 A-MAJOR-4 在前端那份里立的规矩，逻辑侧这份一直没接：
+    基线本身红着的时候，"摘掉判据 ⇒ 用例变红"量的不是判据有效性，而是那个本来就存在的
+    故障 —— 而它印出来的也是 `RED`、退码也是 1，读的人分不出来。
+    """
+    bad = []
+    for f in sorted(test_files):
+        r = _run_file(f)
+        if r.returncode != 0:
+            bad.append((f, r.returncode, (r.stdout or '') + (r.stderr or '')))
+    return bad
 
 
 def main(argv=None):
@@ -184,6 +255,18 @@ def main(argv=None):
 
     cache, backups, rc = {}, [], 0
     try:
+        bad = _control({m[4] for m in todo})
+        if bad:
+            for f, code, out in bad:
+                print('%-58s ⇒ CONTROL-RED（退码 %s）' % (f, code))
+                for line in [x for x in out.splitlines() if x.strip()][-4:]:
+                    print('      | %s' % line)
+            print('[abort] 干净代码上这些判据文件就是红的 ⇒ 下面每一处 RED 都不作数，'
+                  '先修基线再跑体检')
+            return 4
+        print('%-58s ⇒ CONTROL-GREEN（%d 个判据文件在干净代码上全绿）'
+              % ('CONTROL', len({m[4] for m in todo})))
+
         for label, path, anchor, mutant, test_file, test in todo:
             full = os.path.join(ROOT, path)
             if path not in cache:

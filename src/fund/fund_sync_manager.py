@@ -349,7 +349,7 @@ class FundSyncManager:
                         # 获取历史数据（用于AI分析）
                         try:
                             from src.fund.fund_api import fund_data_manager
-                            fund_data_manager.update_fund_history(pred.fund_code, days=30, db=db)
+                            fund_data_manager.update_fund_history(pred.fund_code, db=db)
                             print(f"[FundSync] 已获取基金 {pred.fund_code} 的历史数据")
                         except Exception as e:
                             print(f"[FundSync] 获取基金 {pred.fund_code} 历史数据失败: {e}")
@@ -384,7 +384,7 @@ class FundSyncManager:
                     # 获取历史数据（用于AI分析）
                     try:
                         from src.fund.fund_api import fund_data_manager
-                        fund_data_manager.update_fund_history(fund.fund_code, days=30, db=db)
+                        fund_data_manager.update_fund_history(fund.fund_code, db=db)
                         print(f"[FundSync] 已获取基金 {fund.fund_code} 的历史数据")
                     except Exception as e:
                         print(f"[FundSync] 获取基金 {fund.fund_code} 历史数据失败: {e}")
@@ -572,7 +572,8 @@ class FundSyncManager:
         """库里这只代码现有几行净值（分档用：0 行才谈得上"查无此码"）。"""
         return db.query(FundHistory).filter(FundHistory.fund_code == fund_code).count()
 
-    def _update_fund_history(self, db: Session, fund_code: str, fund_name: str, days: int = 30) -> int:
+    def _update_fund_history(self, db: Session, fund_code: str, fund_name: str,
+                             days: Optional[int] = None) -> int:
         """更新单只基金的历史净值，返回**历史接口答了几条**（不是"新入库几行"）。
 
         这个返回值是给调用方分档用的：`update_all_funds_info` 要分清
@@ -580,9 +581,15 @@ class FundSyncManager:
         它详情取不到、净值一直在发 ⇒ 判成"同步不了"就是假事实）
         与"两个接口都答不出"（多半是股票码或已注销产品）。
         为什么不返回"新入库几行"：净值可能早已在库里，0 行新增不等于源端没答。
+
+        `days` 不传 ⇒ 走 `nav_backfill_days()`（第 55 轮 M-1：这里以前写死 30，
+        而"重问间隔跟着回补范围走"那句话指的是同一个数）。
         """
+        from src.services.prediction_lifecycle import (
+            nav_backfill_days, release_holds_after_nav_commit)
+
         try:
-            history = fund_api.get_fund_history(fund_code, days)
+            history = fund_api.get_fund_history(fund_code, nav_backfill_days(days))
             if not history:
                 return 0
 
@@ -593,6 +600,7 @@ class FundSyncManager:
                 ).all()
             )
 
+            added = []
             for item in history:
                 if item['date'] not in existing_dates:
                     record = FundHistory(
@@ -603,6 +611,12 @@ class FundSyncManager:
                         day_growth=item['growth']
                     )
                     db.add(record)
+                    added.append(item['date'])
+            if added:
+                # 真补进了新行才问一句"那把重问锁还需要吗"（第 55 轮 M-2）。
+                # 传的是**新落的那几天**，不是 `len(history)`：源端重复给已有的日期时不该白问，
+                # 而"补到别段的净值就把锁撤掉"会让第 54 轮 A-5 刚修的节奏又复现。
+                release_holds_after_nav_commit(db, fund_code, added, where='每日基金同步')
             return len(history)
         except Exception as e:
             print(f"[FundSync] 更新基金 {fund_code} 历史净值失败: {e}")
@@ -786,7 +800,7 @@ class FundSyncManager:
                         # 获取历史数据
                         try:
                             from src.fund.fund_api import fund_data_manager
-                            fund_data_manager.update_fund_history(fund_code, days=30, db=db)
+                            fund_data_manager.update_fund_history(fund_code, db=db)
                         except Exception as e:
                             print(f"[FundSync] 获取基金 {fund_code} 历史数据失败: {e}")
 

@@ -85,6 +85,57 @@ def test_alembic_adds_and_removes_prediction_change_log_on_existing_database(tmp
     assert "prediction_change_logs" not in inspect(engine).get_table_names()
 
 
+def test_running_a_migration_in_process_does_not_silence_the_application_loggers(tmp_path):
+    """进程内跑一次 alembic，不许把 `src.*` 的 logger 全体禁掉（第 55 轮）。
+
+    `alembic/env.py` 原来按官方模板照抄了 `fileConfig(config.config_file_name)`，而这个调用的
+    `disable_existing_loggers` **默认是 True** ⇒ 在此之前建好的每一个应用 logger 被永久
+    `disabled=True`：进程还活着，日志全没了（`Logger.handle()` 第一句就 return）。
+    现场是 `test_current_as_of_fallback_leaves_a_trail` 在全量跑批里偶发红、单跑永远绿 ——
+    那行"退回系统时钟"的 WARNING 根本没被创建，而这条测试存在的意义正是"生产上静默失效要被发现"。
+
+    问的是**结果**（跑完之后哪些 logger 哑了），不是"env.py 里有没有那个参数"：
+    把参数写进注释、换成别的调用形状，都照样红。
+    """
+    import logging
+
+    from alembic import command
+    from alembic.config import Config
+
+    database_path = tmp_path / "logging.db"
+    database_url = f"sqlite:///{database_path.as_posix()}"
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE predictions (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("CREATE TABLE bloggers (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("CREATE TABLE fund_history (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("CREATE TABLE sector_fund_mapping (id INTEGER PRIMARY KEY)"))
+
+    # 先让应用自己的 logger 真实存在（模块级 `logging.getLogger(__name__)` 的那种）
+    import src.services.prediction_lifecycle  # noqa: F401
+    import src.api.main  # noqa: F401
+
+    def _app_loggers():
+        return {n for n in logging.Logger.manager.loggerDict
+                if n == 'src' or n.startswith('src.')}
+
+    def _silenced():
+        return {n for n, lg in logging.Logger.manager.loggerDict.items()
+                if (n == 'src' or n.startswith('src.')) and getattr(lg, 'disabled', False)}
+
+    alive = _app_loggers()
+    assert alive, '一个 `src.*` logger 都没建出来 ⇒ 下面这条是空判'
+    before = _silenced()
+
+    config = Config(str(Path("alembic.ini").resolve()))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    assert _silenced() == before, \
+        '跑一次迁移把这些应用 logger 永久禁掉了：%s ⇒ 此后这个进程里的应用日志一条都不会落' \
+        % sorted(_silenced() - before)
+
+
 def test_alembic_can_render_offline_sql(tmp_path):
     from alembic import command
     from alembic.config import Config

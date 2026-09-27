@@ -10,7 +10,14 @@ from src.models.database import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` 是必须的：这一行是 alembic 官方模板原样抄来的，
+    # 而 `fileConfig` 的这个参数**默认是 True** ⇒ 凡是在此之前建出来的 logger
+    # （`src.*` 每一个模块级 `logging.getLogger(__name__)`）都被永久 `disabled=True`，
+    # 进程活着就不回来。第 55 轮在全量跑批里量到的现场：`test_current_as_of_fallback_leaves_a_trail`
+    # 偶发红、单跑永远绿 —— 那行"退回系统时钟"的 WARNING 压根没被创建（`logger.disabled` 才是真值）。
+    # 同一件事在生产上的形状是"跑一次迁移的那个进程之后再也不写任何应用日志"，
+    # 而我们要修的东西（"回退必须留痕"）正是靠这些日志才看得见。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # `_db_guard` 住在 `scripts/` 下（那里不是包），而 alembic 只会把仓库根放进 sys.path。
 # 显式按 `__file__` 找过去：报"哪个库"的尺子必须与守卫、与 `q.py` 是**同一把**（第 47 轮 B-2

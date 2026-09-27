@@ -821,9 +821,17 @@ class FundDataManager:
             if close_db:
                 db.close()
     
-    def update_fund_history(self, fund_code: str, days: int = 30, db: Session = None) -> int:
-        """更新基金历史净值到数据库"""
-        history = self.api.get_fund_history(fund_code, days)
+    def update_fund_history(self, fund_code: str, days: Optional[int] = None,
+                            db: Session = None) -> int:
+        """更新基金历史净值到数据库。
+
+        `days` 不传 ⇒ 取 `nav_backfill_days()`（**调用时**读 `config` 那个键）。
+        第 55 轮 M-1：这里以前是 `days: int = 30`，把调用方写死的 30 一起算进"每日同步
+        往回拉多少天"这句话 ⇒ 那句话与重问间隔各自的数只是今天恰好相同。
+        """
+        from src.services.prediction_lifecycle import nav_backfill_days
+
+        history = self.api.get_fund_history(fund_code, nav_backfill_days(days))
         if not history:
             return 0
 
@@ -860,6 +868,7 @@ class FundDataManager:
             } if existing_dates else {}
 
             count = 0
+            inserted = []
             for item in history:
                 if item['date'] in existing_dates:
                     # 更新已存在的记录（内存查找，无额外查询）
@@ -877,10 +886,22 @@ class FundDataManager:
                         day_growth=item['growth']
                     )
                     db.add(record)
+                    inserted.append(item['date'])
                     count += 1
 
             # 计算周涨跌幅和月涨跌幅
             self._calculate_growth_rates(fund_code, db)
+
+            # 净值真的落库了 ⇒ 压在它上面的重问锁可能当场就该解（第 55 轮 M-2：
+            # 以前没有任何人撤那把锁 —— 被锁的行不在到期队列里，验证器再也不会问它一次，
+            # 第二天补到的净值也要白等一整个间隔）。只报"新落的那几天"，
+            # 否则每天同步在别处补的行会把锁反复撤成"弹回到期队列"。
+            if inserted:
+                from src.services.prediction_lifecycle import (
+                    release_holds_after_nav_commit)
+
+                release_holds_after_nav_commit(db, fund_code, inserted,
+                                               where='update_fund_history')
 
             # 仅当使用内部创建的 session 时才提交，外部 session 由调用方管理事务
             if close_db:
@@ -1164,7 +1185,7 @@ if __name__ == '__main__':
     
     dm = FundDataManager()
     dm.update_fund_info('000001')
-    dm.update_fund_history('000001', days=30)
+    dm.update_fund_history('000001')
     
     from datetime import date
     change = dm.calculate_change('000001', date(2024, 1, 1), date(2024, 1, 31))

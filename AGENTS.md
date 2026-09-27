@@ -294,7 +294,81 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-27 15:4x（北京），**任务 #119~#128：第 54 轮返修——
+最近一次核对（2026-09-28 01:5x（北京），**任务 #134：第 55 轮返修——复评 73/100 的四条 MAJOR
+全部复现并修完，另加两处"我自己新写的判据"被它们各自逮回来，以及追一条偶发红追出来的生产级真相**
+（条目号 A-*/B-* 落在 #134 的 metadata 里，报告正文不随仓库走）——
+① **"重问节奏跟着每日回补范围走"以前只是看着成立**（#134 M-1）：那个键只喂到
+   `FundAPI.get_fund_history` 的**签名默认值**，而 `update_fund_history` 一路有 8 处把 30 写死
+   （复核 `git grep -n "update_fund_history" 4ef48ce -- src/ | grep days`）⇒ 改键只动间隔、不动取数。
+   现在取数天数只有 `prediction_lifecycle.nav_backfill_days()` 一处在**调用时**读那个键
+   （签名默认值在导入时就算死了，这条也是判据之一）；两条新判据：
+   `::test_the_sync_lookback_is_not_hard_coded_at_any_call_site`（按调用点扫字面量窗口，
+   配"良性 `days=1` 不许误伤"的过宽对照）与
+   `::test_the_backfill_window_is_read_at_call_time_not_at_import`（把键改成 47，真走一遍
+   `update_fund_history`，交给源端的那个数字必须跟着变）。
+② **"补到净值就该解开的锁"从来没有人解**（#134 M-2）：被锁的行不在到期队列里 ⇒ 验证器再也不会
+   问它一次，第二天就补到的净值也要白等一整个间隔。新增 `release_holds_after_nav_update` /
+   `..._commit(...)`，两条往 `fund_history` 插行的活路都接上；解锁只报"**新落**的那几天"
+   （否则每天同步在别处补一行 ⇒ 撤锁 ⇒ 再锁的循环），且判"够不够"仍问 `target_cannot_evidence_window`
+   那把尺子。`backfill_history_range` **故意不接**并写明依据（它跑在 `verify_prediction` 内部，
+   同一次验证两行之后才读 `previous_hold`，在那里撤锁等于自己清掉"问过两次"的证据）；
+   `fund_service.add_history` 是零调用方的死路 ⇒ 按规矩不给它写绿灯，但登记在名单里要求理由。
+③ **一处"接线"判据被自己的变异打回 GREEN**（#134 M-3 的现场，与第 45 轮"死路不算守卫"同族、
+   只是换到了写侧）：`_nav_writers` 用 `ast.walk` 找那个函数名 ⇒ 把 `if inserted:` 改成
+   `if False:`（M19）全套绿灯一声不响。现在判**可达**（`_never_runs` 认恒假条件，含 `and False`
+   那一族），并补一条"死分支里的调用不算接线"的控制断言。
+④ **棘轮按"出现过没有"数，就会按"出现过"被骗**（#134 M-4）：`test_one_ruler_per_question.py`
+   的归档时间戳那把尺子以前只登记 `(文件, 函数)` ⇒ 同一函数里再造一处 `datetime.now()` 它看不见。
+   现在登记**条数**（`{(文件, 函数): 判定条数}`），三条控制跟着补：一函数两处判定必须算 2、
+   回显/写侧必须算 0、往真函数里现插一处必须让它正好 +1。
+⑤ **追一条偶发红追出来的生产级真相（本批最贵的一条，它不在任何评审清单里）**：
+   `test_current_as_of_fallback_leaves_a_trail` 在全量跑批里红、单跑永远绿。用一次性探针插件
+   （拦 `dictConfig`/`fileConfig` 与 `Logger.disabled` 的赋值）量到真因：`alembic/env.py` 照抄官方
+   模板那句 `fileConfig(config.config_file_name)`，而这个调用的 `disable_existing_loggers`
+   **默认是 True** ⇒ 进程内跑一次迁移，就把当时已建好的 **24 个 `src.*` logger 永久静音**
+   （`Logger.handle()` 第一句就 return）。已显式传 `disable_existing_loggers=False`，新用例
+   `test_prediction_migrations.py::test_running_a_migration_in_process_does_not_silence_the_application_loggers`
+   问的是**结果**（跑完之后哪些 logger 哑了）而不是"env.py 里有没有那个参数"，另配 M22/M23 两条变异。
+   **两条推论**：a) 取证别借道别人的管道 —— 这条现在把探针 handler 直接挂在那个 logger 上，
+   并配"正常取到时不许留痕"的对照（**我第一版的对照塞了个假 tzinfo，它其实走的是回退那一支 ⇒
+   对照当场是假的**，已换成真 `tzinfo`）；b) 生产上"跑一次迁移的那个进程"从此日志不再是哑的。
+⑥ **体检子进程的 env 判据也只认字面量**（本批基线那三条红的根因）：`_child_env()` 一收，
+   `'env=env' in 源码` 就把一份**真的在传放行标记**的工具判成"会把自己拦死"，三条端到端用例连带红。
+   现在按 AST 数"起了几次子 pytest、其中几次递出去的 env 真带着 `ENV_PID`"，五格样品：
+   直白写法 / helper 交出去 / helper 里摘掉标记那行 / 递一个不含标记的字典 / 干脆不传 env
+   —— 前两格必须算接上、后三格必须不算。
+⑦ **守卫的文本证据：`via_cli` 是两个互不相干的文件级条件**（第 54 轮那条教训的第三个方向）：
+   "文件里出现过 `alembic` 字样" + "这个文件调用过 run/system 之一" ⇒ 体检工具把另一支脚本的锚点
+   原文当**变异载荷**抄进名单，就被判成"会借道 alembic 改表结构"（本批基线第 4 条红）。
+   现在只认真正**递进某次起进程调用**的字符串（保留一跳：命令先装进变量、变量再递进去仍算），
+   正反两条样品 `_x_alembic_via_variable` / `_x_alembic_mentioned_only` 进
+   `test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names`。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话）：
+
+- `pytest tests/unit -q` → **1226 passed / 16 skipped / 0 failed**（368.21 秒）。
+- `pytest tests/ -q` → **1235 passed / 16 skipped / 0 failed**（365.58 秒）。
+  （上一基线 1218/1227 → 本批 **+8 条 / 两个口径同增**，分布用
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  数出：`test_structurally_unverifiable_hold.py` 24→**30**（+6，①②③，当场账 `--collect-only -q` 印 **36**）、
+  `test_prediction_migrations.py` 6→**7**（⑤ 那条）、`test_stats_evidence_report.py` 23→**24**（⑤ 的对照）。
+  **改契约不增条数**：`test_one_ruler_per_question.py`（④ 按条数核）、`test_mutation_lock.py`（⑥ 按 AST 核）、
+  `test_script_db_guards.py`（⑦ 那一跳 + 两条 argv 比较样品）、`test_close_unknowable_predictions.py`
+  （备份目录改指 `tmp_path`，并断言仓库 `backup/` 一个字节都不许多 —— 这条是上一轮那份
+  CONTROL-RED 的真因：用例往仓库级 `backup/` 落了 51 份只带秒数的夹具残渣，已清）。
+  变异：`python scripts/mutation_proof_lifecycle.py` **25 处全 RED**（M1~M23，含 M3b/M5b；条数一律
+  `--list` 看末行），且开头多一条 **CONTROL**：这一轮涉及的 **6 个判据文件**在干净代码上必须先全绿，
+  红则整轮判 4 ⇒ "改完代码才红"与"判据本来就是红的"从此分得开。原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round55-lifecycle-mutations.txt`。
+  **镜像此刻**（同日 01:5x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条` —— 与 09-27 那次的 12 条
+  不是同一批形状，因为镜像净值停在 **2026-09-24**（`select max(nav_date), count(*) from fund_history`
+  ⇒ `2026-09-24 / 17626 行 / 245 只`）：22 行的回执是"源端这段给了 1~64 条 ⇒ 是本地没补到，不是它没有"
+  （这正是 ② 那条新路的存在理由 —— 跑一次「更新基金」当场解锁，而不是白等 31 天），
+  7 行等 09-30 那一把锁到点。**生产此刻**（同日 01:5x，只读门 + 引擎级只读探针）：
+  `expired_unjudged 17 / held_by_lock 0 / actionable_today 17` —— 昨天同一把尺子是 `0 / 0 / 0`，
+  这 17 条不是新坏的，是**目标日一天天过去而生产没人跑验证**（#132：生产没有任何自动化在跑）
+  ⇒ 上线后 #133 的 runbook 第一件事就是 update-all + verify-all 把这 17 条判出来。）
+（上一批：2026-09-27 15:4x（北京），**任务 #119~#128：第 54 轮返修——
 "修一半 + 说满一半"那一族、结构性不可验的分档重问节奏、收口脚本的话与备份的方向**——
 两份复评报告的分数**没随仓库走**（正文只在会话里，条目号 A-*/B-* 已逐条落进 #119~#128），
 下一轮要引用请以任务条目为准）——
@@ -383,15 +457,17 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 「结构性不可验」补上第二种永久形状、页面分母换成同一把尺子、改标必清重问锁、存量错文案订正**——
 ① **窗口整段早于标的首笔净值**是一档新的永久形状（#112，B-1 的 BLOCKER）：上一版只认"末条净值早于窗口起点"
    （＝标的停更），而镜像实测 `515440`／`158006`／`158038` 上压着 **7 行**窗口的目标日**早于该基金第一笔净值**
-   （复核 `python scripts/q.py "select f.fund_code, date(f.mn) first_nav, count(p.id) rows_held from (select fund_code, min(nav_date) mn from fund_history group by fund_code) f join predictions p on p.fund_code=f.fund_code where p.is_deleted=0 and p.is_correct is null and p.next_verify_date > p.target_date and f.mn > p.target_date group by f.fund_code, date(f.mn) order by 1"` ⇒ 印 `158006/1 · 158038/1 · 515440/5`；
+   （复核 `python scripts/q.py "select f.fund_code, date(f.mn) first_nav, count(p.id) rows_held from (select fund_code, min(nav_date) mn from fund_history group by fund_code) f join predictions p on p.fund_code=f.fund_code where p.is_deleted=false and p.is_correct is null and p.next_verify_date > p.target_date and f.mn > p.target_date group by f.fund_code, date(f.mn) order by 1"` ⇒ 印 `158006/1 · 158038/1 · 515440/5`；
    第一版那条命令写着 `group by 1,2,3` 又把 `count(*)` 放进分组 ⇒ sqlite 直接 `aggregate functions are not allowed in the GROUP BY clause`，**没人能照它复现这个 7**）
    ⇒ 末条永远晚于起点 ⇒ 光认停更把这 7 行永远留在"重问 ⇒ 弹回到期 ⇒ 再踢出去"的圈里。
    现在 `stale_close_evidence()` 答两种（`stopped` / `pre_inception`），回收站那句话按形状各说各话，
    `should_close_as_stale_target` 与存量收口脚本共用它，验证器多问一句"第一笔净值在哪天"。
 ② **「待验证」这一档的分母改成"有没有结论"**（A-5）：新 `_conclusion_conditions()` 一处实现，
    列表过滤器、facets 计数、行上那个标签三头共用 —— 旧写法读遗留列 `predictions.status`。
-   **归因按实测收窄（第 54 轮 A-3）**：2026-09-27 两个库各数了一遍（`python scripts/q.py "select status,
-   (is_correct is null), count(*) from predictions where is_deleted=0 group by 1,2"`，加 `--production` 走线上）
+   **归因按实测收窄（第 54 轮 A-3；2026-09-28 复核同数）**：两个库各数了一遍（`python scripts/q.py "select status,
+   (is_correct is null), count(*) from predictions where is_deleted=false group by 1,2"`，加 `--production` 走线上。
+   **这里必须写 `false` 不能写 `0`** —— 上一版这句命令在生产 PostgreSQL 上直接报错，等于"生产上量过"这句话
+   没法复核；sqlite 两种都收，所以只在镜像上跑过的人看不见这个差别）
    ⇒ 镜像 `pending/未判 422 · success+failed/已判 1189`、生产同形状 `410 / 1191` ⇒ **零漂移**，
    不许写成"生产上量到过"。那句"未到期与观望之和差 12 条"是**另一件事**（旧话把 `held` 漏在加和之外，
    与 `status` 无关；同一批把那句话删了）。

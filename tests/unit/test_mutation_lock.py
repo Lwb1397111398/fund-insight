@@ -6,6 +6,7 @@
 **只写在体检的 docstring 里**（第 32 轮 B 抓到：没有代码拦着的承诺等于没有承诺）。
 这里把两头都钉住：体检抢不到锁要走开、别的 pytest 会话看到锁要拒绝。
 """
+import ast
 import os
 import subprocess
 import sys
@@ -35,6 +36,58 @@ def test_the_lock_file_is_not_tracked_by_git(tmp_path):
     assert mutation_lock.LOCK_NAME in ignore, '锁文件没进 .gitignore'
 
 
+def _child_pytest_env_audit(src):
+    """`(起了几次子 pytest, 其中带 env= 的次数)` —— 按 AST 数，不按"文件里出现过 `env=env`"。
+
+    第 55 轮 M-3：逻辑侧体检把放行标记收进了 `_child_env()`，调用点变成 `env=_child_env()`
+    ⇒ 老判据按字面量 `'env=env'` 找，把一份**真的在传标记**的工具判成"会把自己拦死"，
+    三条端到端用例连带一起红（那三条起的子会话正是本文件那条判据）。
+    说明文买不到信号，反过来也一样：**换了拼法不该判红**。
+    """
+    tree = ast.parse(src)
+
+    def _marked_names(node):
+        """这个节点里被写进 `x[mutation_lock.ENV_PID] = …` 的那些字典名。"""
+        out = set()
+        for n in ast.walk(node):
+            targets = ([n.target] if isinstance(n, ast.AugAssign)
+                       else list(n.targets) if isinstance(n, ast.Assign) else [])
+            for t in targets:
+                if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) \
+                        and isinstance(t.slice, ast.Attribute) and t.slice.attr == 'ENV_PID':
+                    out.add(t.value.id)
+        return out
+
+    holders = _marked_names(tree)
+    # 标记收在 helper 里、调用点写 `env=_child_env()` ⇒ 只要那个函数自己往字典里塞过标记就算数
+    marked_funcs = {fn.name for fn in ast.walk(tree)
+                    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _marked_names(fn)}
+    total = wired = 0
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        names = [c.value for a in n.args for c in ([a] if isinstance(a, ast.Constant)
+                                                   else (a.elts if isinstance(a, (ast.List, ast.Tuple)) else []))
+                 if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+        if '-m' not in names or 'pytest' not in names:
+            continue
+        total += 1
+        env_kw = next((k for k in n.keywords if k.arg == 'env'), None)
+        if env_kw is None:
+            continue
+        value = env_kw.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) \
+                and value.func.id in marked_funcs:
+            wired += 1
+            continue
+        passed = [e.id for e in ast.walk(value) if isinstance(e, ast.Name)]
+        passed += [e.value.id for e in ast.walk(value)
+                   if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name)]
+        if set(passed) & holders:
+            wired += 1
+    return total, wired
+
+
 def test_both_sides_are_actually_wired():
     """两头都得真的接线：只留一个工具函数不叫闸。
 
@@ -62,11 +115,37 @@ def test_both_sides_are_actually_wired():
         assert 'held_exclusively(' in harness, '%s 没抢锁就能开始改写文件' % name
         assert 'harness_may_start(' in harness, \
             '%s 不先问有没有 pytest 会话在跑 ⇒ 它会改写别人正在读的那些文件' % name
-        # 放行标记要真的传进子进程：只写 `env = dict(os.environ)` 而不 `env=env` 是死的
+        # 放行标记要真的传进子进程：只准备一个 `env[ENV_PID]` 字典而不递给那一次调用是死的
         assert 'env[mutation_lock.ENV_PID]' in harness, '%s 没给自己起的子 pytest 准备放行标记' % name
-        assert 'env=env' in harness, '%s 起了子 pytest 但没把放行标记传过去 ⇒ 它会把自己拦死' % name
+        children, carried = _child_pytest_env_audit(harness)
+        assert children > 0 and carried == children, \
+            '%s 起了 %d 次子 pytest、只有 %d 次带上了放行标记 ⇒ 剩下的会把自己拦死' \
+            % (name, children, carried)
     conftest = (PROJECT_ROOT / 'tests' / 'conftest.py').read_text(encoding='utf-8')
     assert 'is_being_mutated(' in conftest, 'pytest 看到锁被持有时不会拦'
+
+    # 控制断言（第 55 轮 M-3）：认的是"递出去的那个 env 里真有标记"，不是某一句字面量
+    marked = ("env = dict(os.environ)\n"
+              "env[mutation_lock.ENV_PID] = str(os.getpid())\n"
+              "subprocess.run([sys.executable, '-m', 'pytest', 'tests'], env=env)\n")
+    via_helper = ("def _child_env():\n"
+                  "    env = dict(os.environ)\n"
+                  "    env[mutation_lock.ENV_PID] = str(os.getpid())\n"
+                  "    return env\n"
+                  "subprocess.run([sys.executable, '-m', 'pytest', 'tests'], env=_child_env())\n")
+    helper_without_mark = via_helper.replace(
+        "    env[mutation_lock.ENV_PID] = str(os.getpid())\n", "")
+    assert _child_pytest_env_audit(marked) == (1, 1), '最直白的写法都不认 ⇒ 上面那条循环是空判'
+    assert _child_pytest_env_audit(via_helper) == (1, 1), \
+        '标记收进 helper、调用点只写 `env=_child_env()` 就不认 ⇒ 这条判据在一句字面量上找形状'
+    assert _child_pytest_env_audit(helper_without_mark) == (1, 0), \
+        'helper 里把标记那行摘掉也算接上 ⇒ 它验的是"有个 env 参数"，不是"带着标记"'
+    assert _child_pytest_env_audit(
+        marked.replace('env=env', 'env={"PATH": ""}')) == (1, 0), \
+        '递一个不含标记的字典也算接上 ⇒ 摘掉标记它不会红'
+    assert _child_pytest_env_audit(
+        "subprocess.run([sys.executable, '-m', 'pytest', 'tests'])\n") == (1, 0), \
+        '干脆不传 env 也算接上 ⇒ 同上'
 
     # 控制：识别本身要有牙 —— 现造一份"改文件 + 起 pytest"的脚本必须被认成体检工具，
     # 于是名单外多一个这样的脚本就会被下面这条循环点红。

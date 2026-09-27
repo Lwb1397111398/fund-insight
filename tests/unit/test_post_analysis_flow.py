@@ -263,7 +263,8 @@ def test_fund_auto_manager_does_not_commit_an_external_session(monkeypatch, test
             "day_growth": 0.1,
         },
     )
-    monkeypatch.setattr(fund_data_manager, "update_fund_history", lambda fund_code, days, db: 0)
+    monkeypatch.setattr(fund_data_manager, "update_fund_history",
+                        lambda fund_code, days=None, db=None: 0)
 
     commit_calls = []
 

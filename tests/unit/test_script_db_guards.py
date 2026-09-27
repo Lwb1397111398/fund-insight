@@ -514,6 +514,7 @@ def _facts(py):
     tree = ast.parse(text, filename=str(py))
     prose = _docstring_consts(tree)
     called, flags, raised, consts, direct_db = set(), set(), set(), set(), False
+    proc_arg_consts, proc_arg_names = set(), set()
     # 方向是**按赋值点**记的（第 47 轮 A1）：以前一条 proven 赋值就把整篇文件点成"方向已证明"，
     # 于是 `if LOCAL: 钉 sqlite / else: 赋生产串` 这种 if-else 两臂能白买守卫 —— 与上一轮
     # 修掉的三目是**同一个语义**，只是换了语句形状。现在只要有**任何一处**方向不明的赋值，
@@ -666,6 +667,9 @@ def _facts(py):
                         and any('.db' in s or '.env' in s for s in strs):
                     capabilities.add('file_overwrite')
             if resolved in PROC_WRAPPERS:
+                proc_arg_consts |= set(strs)
+                for a in list(node.args) + [k.value for k in node.keywords]:
+                    proc_arg_names |= {x.id for x in ast.walk(a) if isinstance(x, ast.Name)}
                 # **同一个调用**的参数拼起来看：`subprocess.run([sys.executable,
                 # "scripts/x.py", "--apply", "--confirm", T])` 里路径与开关是**两个**常量，
                 # 逐个匹配永远配不上（第 45 轮我自己第一条控制断言当场抓出来）。
@@ -838,8 +842,23 @@ def _facts(py):
         capabilities.add('own_engine')
     if alembic:
         capabilities.add('alembic_import')
+    # 「这条命令字符串有没有被递给一个起进程的调用」—— 第 55 轮：`via_cli` 以前问的是
+    # "整篇文件里出现过 `alembic` 字样" + "这个文件调用过 run/Popen 之一"（**两个互不相干的
+    # 文件级条件**）。于是 `scripts/mutation_proof_lifecycle.py` 把另一支脚本的锚点原文当
+    # **变异载荷**抄进自己的名单元组，就被读成"会借道 alembic 改表结构"。第 54 轮那条教训的
+    # 反向应用：文本证据必须来自代码做的事，不是来自代码里引用的别人的那句话。
+    # 现在只认"真的进了某次起进程调用"的字符串，并且保留一跳：命令先赋给变量、变量再递进去的
+    # 那种写法（`cmd = ['alembic', 'upgrade']` → `run(cmd)`）仍然算。
+    proc_consts = set(proc_arg_consts)
+    if proc_arg_names:
+        for n in ast.walk(ast.parse(text)):
+            if not isinstance(n, ast.Assign):
+                continue
+            if any(isinstance(t, ast.Name) and t.id in proc_arg_names for t in n.targets):
+                proc_consts |= set(_strings_of(n.value))
     return {'text': text, 'called': called, 'flags': flags, 'raised': raised,
             'refusals': refusals, 'consts': consts, 'printed_targets': printed_targets,
+            'proc_consts': proc_consts,
             'printed_targets_derived': printed_targets_derived,
             'env_written': env_written, 'env_written_unknown': env_written_unknown,
             'direct_db': direct_db, 'src_imports': src_imports,
@@ -899,7 +918,7 @@ def _scripts():
                             'called': set(), 'flags': set(), 'raised': set(),
                             'refusals': [{'words': {'postgres', 'sqlite'}, 'line': 0,
                                           'scope': '<module>'}], 'consts': set(),
-                            'printed_targets': set(),
+                            'printed_targets': set(), 'proc_consts': set(),
                             'printed_targets_derived': set(),
                             'env_written': False, 'env_written_unknown': True,
                             'direct_db': True, 'src_imports': set(), 'alembic': False,
@@ -925,16 +944,30 @@ def _issues_schema_ddl(f):
     拿 `subprocess` 起裸 `alembic` CLI 的那一路同样隐身。
     """
     via_api = bool(f.get('alembic')) and (f['called'] & _SCHEMA_ddL_VERBS)
-    via_cli = any('alembic' in c for c in f['consts']) and bool(
+    via_cli = any('alembic' in c for c in f['proc_consts']) and bool(
         f['called'] & ({'run', 'Popen', 'call', 'check_call', 'check_output'} | OS_SHELL))
     # 第 43 轮 B 的盲区清单里两条最贵的：`Base.metadata.create_all(engine)`（不走 alembic 的建表）
-    # 与"子进程借道 `run_migrations.py`/裸 alembic"（`via_cli` 只认字面量里有 `alembic` 字样）。
+    # 与"子进程借道 `run_migrations.py`/裸 alembic"（`ddl_via_subprocess` 看的是**同一次调用**的参数，
+    # 外加 `via_cli` 这一跳：命令装进变量再递进去）。
     via_caps = bool(f.get('capabilities', set()) & {'schema_ddl_call', 'ddl_via_subprocess'})
     return bool(via_api or via_cli or via_caps)
 
 
+def _talks_to_argv(compare_node):
+    """这条比较的另一头是不是 `sys.argv` / `argv`（手工解析命令行参数）。"""
+    def is_argv(node):
+        if isinstance(node, ast.Subscript):
+            return is_argv(node.value)
+        if isinstance(node, ast.Attribute):
+            return node.attr == 'argv' or is_argv(node.value)
+        return isinstance(node, ast.Name) and node.id == 'argv'
+
+    sides = [compare_node.left] + list(compare_node.comparators)
+    return any(is_argv(s) for s in sides)
+
+
 def _payload_blanked(src):
-    """把**引号里的话**挖空，只留下 `add_argument('--apply', …)` 那种"自己在声明一个旗子"的字面量。
+    """把**引号里的话**挖空，只留下"这个脚本自己在声明一个写开关"的那几种字面量。
 
     第 54 轮基线当场被这件事打红：`scripts/mutation_proof_lifecycle.py` 为了做变异，把
     `close_unknowable_predictions.py` 整句 print **原文抄成载荷**
@@ -942,6 +975,12 @@ def _payload_blanked(src):
     "写开关 / 硬删字样"的闸门把一份从不连库的开发工具读成了"会删数据的脚本"。
     这跟第 43 轮"说明文买不到守卫信号"是同一条的两个方向：**文本证据必须来自代码做的事，
     不是来自代码里引用的别人那句话**。
+
+    留下的两种都满足"代码在做这件事"：① `add_argument('--apply', …)`；
+    ② 第 55 轮补的第二种 —— `if '--apply' in sys.argv:` 这种**手工解析参数**的脚本。
+    受检集合（`git ls-files scripts/`）里今天只有 1 份这么声明自己的开关：
+    `run_three_bucket_retention.py` 的 `--against-production` —— 而那正是"要不要动生产"
+    那一类旗子。只按"是不是 add_argument"挖会把这道闸对该形状永久闭上。
     """
     try:
         tree = ast.parse(src)
@@ -953,6 +992,12 @@ def _payload_blanked(src):
             for a in n.args:
                 if isinstance(a, ast.Constant) and isinstance(a.value, str):
                     keep.add((a.lineno, a.col_offset))
+    for n in ast.walk(tree):
+        # `X in sys.argv` / `sys.argv[0] == '--apply'` / `'--apply' not in argv`
+        if isinstance(n, ast.Compare) and _talks_to_argv(n):
+            for side in [n.left] + list(n.comparators):
+                if isinstance(side, ast.Constant) and isinstance(side.value, str):
+                    keep.add((side.lineno, side.col_offset))
     lines = src.splitlines(keepends=True)
     flat = [(i, len(l)) for i, l in enumerate(lines)]
     out = list(src)
@@ -1162,6 +1207,16 @@ def test_there_are_write_capable_scripts_left_to_guard():
     assert not WRITE_SWITCH.search(_payload_blanked(
         "print('真订正加 --apply --confirm TOKEN')")), \
         '引号里引用的一句话仍被当成"这个脚本有写开关" ⇒ 变异载荷会冤枉每一份开发工具'
+    # 第三条控制（第 55 轮小三条）：**手工解析 argv** 的那种声明法不许被挖成瞎子。
+    # 仓库里有 5 份脚本走这条路（没有 argparse），上一版只认 `add_argument` ⇒
+    # 那道闸门对这个形状结构上不可能响：新写一份 `if '--apply' in sys.argv:` 的删数据脚本
+    # 可以完全不设守卫、也不自报连的是哪个库。
+    assert WRITE_SWITCH.search(_payload_blanked(
+        "import sys\nif '--apply' in sys.argv:\n    drop_everything()\n")), \
+        '`if \'--apply\' in sys.argv:` 这种手工旗子被当成载荷挖掉了 ⇒ 闸门对该形状永久失明'
+    assert WRITE_SWITCH.search(_payload_blanked(
+        "import sys\nif '--execute' == sys.argv[1]:\n    drop_everything()\n")), \
+        '等值写法（`sys.argv[1] == \'--execute\'`）也是自己声明旗子 ⇒ 一样要留下'
     sample = "def f():\n    x = 1\n    print('DELETE FROM t')\n"
     assert _payload_blanked(sample).count('\n') == sample.count('\n'), \
         '挖空把行号弄丢了 ⇒ 后面按行定位的判据全部错位'
@@ -1251,6 +1306,7 @@ def test_the_two_new_triggers_can_actually_fire():
     没有这条合成判据，那两个集合就是两段"写在代码里却永远不会响"的死逻辑。"""
     def facts(**kw):
         base = {'text': '', 'called': set(), 'flags': set(), 'raised': set(), 'consts': set(),
+                'proc_consts': set(),
                 'env_written': False, 'direct_db': False, 'alembic': False}
         base.update(kw)
         return base
@@ -1258,8 +1314,14 @@ def test_the_two_new_triggers_can_actually_fire():
     assert _write_capable(facts(called={'post'})), 'HTTP 写不算能改数据 ⇒ 下一条 POST 脚本又隐身'
     assert _write_capable(facts(called={'put'})), '同上（put）'
     assert not _write_capable(facts(called={'get'})), 'GET 也算写 ⇒ 判据过宽会淹掉真信号'
-    assert _issues_schema_ddl(facts(alembic=False, called={'system'}, consts={'alembic upgrade head'})), \
+    assert _issues_schema_ddl(facts(alembic=False, called={'system'},
+                                    proc_consts={'alembic upgrade head'})), \
         '`os.system("alembic upgrade head")` 不被认成发 DDL（上一版只认 subprocess 那一族）'
+    # 反向那一格（第 55 轮）：同一个词只出现在**没递给任何进程**的字面量里 ⇒ 那是引用，不是执行
+    assert not _issues_schema_ddl(facts(alembic=False, called={'system'},
+                                        consts={'alembic/env.py'})), \
+        '"文件里出现过 alembic 字样"＋"这个文件调用过 run/system 之一"就算借道 ⇒ ' \
+        '把别人的锚点原文当载荷抄进名单的体检工具会被误判成会发 DDL（今天真的误判了一次）'
 
 
 def _scan_into(tmp_path, files, monkeypatch):
@@ -1346,15 +1408,17 @@ def test_every_way_of_changing_the_schema_counts_as_ddl():
     `drop_table("prediction_change_logs")`（审计台账本体），`stamp` 会让"库里有什么"和
     "记录说有什么"分家 —— 三个都能改结构，旧判据只盯其中一个。
     """
-    def facts(called=(), consts=(), alembic=True, direct_db=True):
+    def facts(called=(), consts=(), alembic=True, direct_db=True, proc_consts=()):
         return {'text': '', 'called': set(called), 'flags': set(), 'raised': set(),
-                'consts': set(consts), 'env_written': False, 'direct_db': direct_db,
+                'consts': set(consts), 'proc_consts': set(proc_consts),
+                'env_written': False, 'direct_db': direct_db,
                 'alembic': alembic}
 
     for verb in ('upgrade', 'downgrade', 'stamp'):
         assert _issues_schema_ddl(facts(called={'command', verb})), \
             '%s 不被算成改结构 ⇒ 动词集合又缩回只剩 upgrade 了' % verb
-    assert _issues_schema_ddl(facts(alembic=False, called={'run'}, consts={'alembic', 'upgrade'})), \
+    assert _issues_schema_ddl(facts(alembic=False, called={'run'},
+                                    proc_consts={'alembic', 'upgrade'})), \
         '拿 subprocess 起裸 alembic 的脚本不算能改结构（env.py 那条方向翻转就是被它绕过的）'
     assert not _issues_schema_ddl(facts(called={'current', 'heads'})), \
         '只读命令也算 DDL ⇒ 判据过宽会把信号淹掉'
@@ -1998,6 +2062,16 @@ def test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names(tmp
                            "shutil.copyfile('data/copy.db', 'data/fund_insight.db')\n",
         '_x_subproc_ddl.py': 'import subprocess, sys\n'
                              "subprocess.run([sys.executable, 'scripts/run_migrations.py'])\n",
+        # 第 55 轮：`via_cli` 以前问的是"整篇文件里出现过 `alembic` 字样"＋"这个文件调用过
+        # run/Popen 之一"（两个互不相干的**文件级**条件）。这两条样品是它的两面：
+        # 命令先装进变量、变量再递进去 ⇒ 仍要抓到；`alembic` 只是被写在无关字面量里
+        # （变异工具把别的脚本的锚点原文当**载荷**抄进名单）⇒ 不许抓到。
+        '_x_alembic_via_variable.py': 'import subprocess\n'
+                                      'CMD = ["alembic", "upgrade", "head"]\n'
+                                      'subprocess.run(CMD)\n',
+        '_x_alembic_mentioned_only.py': 'import subprocess\n'
+                                        'TARGETS = ("alembic/env.py", "src/x.py")\n'
+                                        'def go():\n    subprocess.run(["python", "-c", "pass"])\n',
         '_x_http_generic.py': 'import requests\n'
                               "def go(url):\n    return requests.request('DELETE', url)\n",
         # 对照：只读、走门、且没有任何写能力
@@ -2014,18 +2088,25 @@ def test_write_capability_is_judged_by_what_a_script_can_do_not_by_its_names(tmp
     for name in ('_x_create_all.py', '_x_raw_sql.py', '_x_dbapi.py', '_x_tosql.py',
                  '_x_file_over.py', '_x_subproc_ddl.py', '_x_http_generic.py',
                  '_x_dbapi_fromimport.py', '_x_dbapi_func_alias.py',
-                 '_x_dbapi_module_alias.py', '_x_dbapi_commit_only.py'):
+                 '_x_dbapi_module_alias.py', '_x_dbapi_commit_only.py',
+                 '_x_alembic_via_variable.py'):
         assert capable[name] is True, '%s 这类落笔能力仍然隐身' % name
     assert capable['_x_read_only_query.py'] is False, '只读查询被判成能写 ⇒ 判据过宽，会误伤'
+    assert capable['_x_alembic_mentioned_only.py'] is False, \
+        '`alembic` 只出现在**与起进程无关**的字面量里就被判成"借道改表结构" ⇒ ' \
+        '这是"文件级 OR"那一族的复发（第 55 轮的误报正是它：体检工具抄别人的锚点当载荷）'
     assert capable['_x_dbapi_readonly.py'] is False, \
         '看得见是 `select` 的 DB-API 纯读被判成能写 ⇒ 同一族里的过宽那一面'
     naked = [n for n, f in scripts.items() if _write_capable(f) and not _guarded(n, f)]
     assert '_x_read_only_query.py' not in naked
     assert '_x_dbapi_readonly.py' not in naked
     READONLY_CONTROLS = {'_x_read_only_query.py', '_x_dbapi_readonly.py'}
-    assert set(naked) == set(capable) - READONLY_CONTROLS, \
+    # 这一族样品是"该被判成**不能**改数据"的对照。`set(capable)` 取的是样品**名字**（不是判定的
+    # 值），所以任何一条负面对照都得在这里登记一次，否则它同时出现在右边与不在左边 ⇒ 红得莫名其妙。
+    NOT_CAPABLE_CONTROLS = READONLY_CONTROLS | {'_x_alembic_mentioned_only.py'}
+    assert set(naked) == set(capable) - NOT_CAPABLE_CONTROLS, \
         '这些"能改数据"的样品没被抓进受管集合：%s' % sorted(
-            set(capable) - set(naked) - READONLY_CONTROLS)
+            set(capable) - set(naked) - NOT_CAPABLE_CONTROLS)
 
 
 

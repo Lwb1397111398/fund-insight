@@ -283,29 +283,90 @@ def test_text_interpolation_rule_itself_is_not_foolable():
     assert any('evidenceReport.judged' in x for x in _text_interpolations(good))
 
 
-def test_current_as_of_fallback_leaves_a_trail(monkeypatch, caplog):
-    """容器缺 tzdata 时 `current_as_of()` 会回退，但**必须留一行 WARNING**。
+def _run_current_as_of_with_zoneinfo(monkeypatch, zone_info):
+    """把 `zoneinfo.ZoneInfo` 换成 `zone_info` 后跑一次 `current_as_of()`，带回它落的记录。
 
-    第 25 轮 B：回退本身可以接受，静默不行 —— 这条修复针对的就是"生产上日期差一天"，
-    如果它在生产永远走回退而没人知道，那修了等于没修。
+    取证不借道 `caplog`：那条管道属于 pytest 自己，同一会话里任何人重建 logging 配置都能把它
+    整体换掉（第 55 轮量到的现场见下面那条用例的 docstring）。探针 handler 直接挂在
+    `prediction_lifecycle` 自己那个 logger 上，收不到就只有一种解释：**那行日志没被写过**。
     """
     import logging
     import sys
     import types
 
-    from src.services.prediction_lifecycle import current_as_of
+    import src.services.prediction_lifecycle as pl
 
     fake = types.ModuleType('zoneinfo')
+    fake.ZoneInfo = zone_info
+    monkeypatch.setitem(sys.modules, 'zoneinfo', fake)
+
+    logger = pl.logging.getLogger(pl.__name__)
+    seen = []
+
+    class _Grab(logging.Handler):
+        def emit(self, record):
+            seen.append(record)
+
+    probe = _Grab()
+    probe.setLevel(logging.DEBUG)
+    previous_level = logger.level
+    logger.addHandler(probe)
+    logger.setLevel(logging.DEBUG)          # 祖先被人设成 ERROR 时也照样收得到
+    try:
+        got = pl.current_as_of()
+    finally:
+        logger.setLevel(previous_level)
+        logger.removeHandler(probe)
+    return got, seen, logger
+
+
+def test_current_as_of_fallback_leaves_a_trail(monkeypatch):
+    """容器缺 tzdata 时 `current_as_of()` 会回退，但**必须留一行 WARNING**。
+
+    第 25 轮 B：回退本身可以接受，静默不行 —— 这条修复针对的就是"生产上日期差一天"，
+    如果它在生产永远走回退而没人知道，那修了等于没修。
+
+    第 55 轮把它从 `caplog` 改到探针 handler，是因为它在全量跑批里偶发红、单跑永远绿。
+    量出来的根因不在这个函数身上：同会话里 `test_prediction_migrations.py` 在**进程内**跑了一次
+    `alembic command.upgrade(...)`，而 `alembic/env.py` 按官方模板写着
+    `fileConfig(config.config_file_name)` —— 这个调用的 `disable_existing_loggers` **默认是 True**
+    ⇒ 在此之前建好的每一个 `src.*` logger 被永久 `disabled=True`（`Logger.handle()` 第一句就
+    return）⇒ 这行 WARNING 从来没被创建，caplog 与自己的 handler 一起收到 0 条
+    （现场：`effective=30 / propagate=True / logging 同一个模块实例 / logger.disabled=True`）。
+    那一半修在 `alembic/env.py`（显式传 `disable_existing_loggers=False`，并由
+    `test_running_a_migration_in_process_does_not_silence_the_application_loggers` 盯着）；
+    这条继续只管"回退要留痕"，并且不再把自己的断言抵押在别人的管道上。
+    """
+    import logging
 
     def boom(*_a, **_k):
         raise RuntimeError('No time zone found with key Asia/Shanghai')
-    fake.ZoneInfo = boom
-    monkeypatch.setitem(sys.modules, 'zoneinfo', fake)
-    with caplog.at_level(logging.WARNING):
-        got = current_as_of()
-    assert got                            # 确实回退了
-    assert any('tzdata' in r.getMessage() for r in caplog.records), \
-        '回退没留任何痕迹 ⇒ 生产上这条修复静默失效也不会被发现'
+
+    got, seen, logger = _run_current_as_of_with_zoneinfo(monkeypatch, boom)
+    assert got                              # 确实回退了
+    assert any('tzdata' in r.getMessage() for r in seen), \
+        ('回退没留任何痕迹 ⇒ 生产上这条修复静默失效也不会被发现（这一次收到 %d 条；'
+         '这个 logger 现在是 disabled=%s）' % (len(seen), logger.disabled))
+
+
+def test_the_as_of_trail_is_only_there_when_it_actually_fell_back(monkeypatch):
+    """上面那条的对照：时区取得到时**不许**留这行 WARNING。
+
+    没有这条对照，"挂个 handler 数记录"可以靠无条件多写一行糊过去（第 44 轮那一族：
+    一条只在"验的事情"变坏时才红，才叫判据）。
+    """
+    import logging
+
+    import datetime as _dt
+
+    def ok_zone(*_a, **_k):
+        return _dt.timezone.utc        # 必须是真 tzinfo：交个假对象进去，`now()` 会抛 TypeError，
+        # 那正是"回退"那一档 —— 这条对照就白做了（第一版就是这么"通过"的）
+
+    got, seen, _logger = _run_current_as_of_with_zoneinfo(monkeypatch, ok_zone)
+    assert got
+    assert not any('tzdata' in r.getMessage() for r in seen), \
+        '正常取到时也喊"退回系统时钟" ⇒ 那行日志再没人信（收到了 %d 条）' % len(seen)
 
 
 def test_the_page_shows_the_numbers_as_text_not_only_a_title():

@@ -191,6 +191,335 @@ def test_the_page_repeats_the_reask_day_from_the_row_itself(test_db, monkeypatch
         assert b not in line[0], '页面上写死了间隔（%s）⇒ 两档节奏一分叉它就说错话' % b
 
 
+def _src_trees(*, skip=()):
+    """把 `src/` 下所有 .py 解析成 (相对路径, ast, 源码)。解析不了的文件要报出来。"""
+    import ast as _ast
+    from pathlib import Path as _P
+
+    root = _P(__file__).resolve().parents[2]
+    out = []
+    for path in sorted((root / 'src').rglob('*.py')):
+        rel = path.relative_to(root).as_posix()
+        if rel in skip:
+            continue
+        src = path.read_text(encoding='utf-8')
+        out.append((rel, _ast.parse(src), src))
+    return out
+
+
+def _literal_backfill_windows(trees):
+    """谁把"同步往回拉多少天"又写死了一遍 —— 返回违规点 `文件:行号 名字`。
+
+    两种形状都算：调用点上的 `days=<字面量>`，与函数签名里 `days=<字面量>` 的默认值。
+    只看 `update_fund_history` / `_update_fund_history` 这两个"每日同步真的往回拉净值"的
+    咽喉 ⇒ `get_fund_history(code, days=1)`（只问最新一笔）那种另作一用的不在这条账上。
+    """
+    import ast as _ast
+
+    names = ('update_fund_history', '_update_fund_history')
+    hits = []
+    for rel, tree, _src in trees:
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                fn = node.func.attr if isinstance(node.func, _ast.Attribute) else \
+                    getattr(node.func, 'id', '')
+                if fn not in names:
+                    continue
+                for kw in node.keywords or []:
+                    if kw.arg == 'days' and isinstance(kw.value, _ast.Constant) \
+                            and isinstance(kw.value.value, int):
+                        hits.append('%s:%s %s(days=%s)'
+                                    % (rel, node.lineno, fn, kw.value.value))
+            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) \
+                    and node.name in names:
+                args = node.args
+                defaults = args.defaults
+                posnames = args.args + args.posonlyargs + args.kwonlyargs
+                offset = len(posnames) - len(defaults)
+                for i, d in enumerate(defaults):
+                    if isinstance(d, _ast.Constant) and isinstance(d.value, int) \
+                            and posnames[offset + i].arg == 'days':
+                        hits.append('%s:%s def %s(days=%s 默认值)'
+                                    % (rel, node.lineno, node.name, d.value))
+    return hits
+
+
+def test_the_sync_lookback_is_not_hard_coded_at_any_call_site():
+    """那句"重问间隔跟着常规同步的回补范围走"要有牙（第 55 轮 M-1）。
+
+    上一版这条判据只 AST 读 `FundAPI.get_fund_history` 的**签名默认值** —— 结构性看不见
+    真跑同步的那 8 处 `days=30`（复核 `git grep -n "update_fund_history" 4ef48ce -- src/ | grep days`
+    ⇒ 两个默认值 + 五处调用实参 + 一处 demo）⇒ 键改成 47 时间隔变 48、同步照旧只拉 30 天，
+    文档那句因果当场是假的。
+    """
+    violations = _literal_backfill_windows(_src_trees())
+    assert violations == [], \
+        '每日同步的回补范围又出现写死的天数 ⇒ 它和重问间隔只是"今天恰好相同"：\n' + \
+        '\n'.join(violations)
+
+    # 反向对照：这个扫描器必须真的抓得到那种写法（否则上面那条空断言是装饰）
+    import ast as _ast
+    fake = ('def update_fund_history(self, fund_code, days=30, db=None):\n'
+            '    api.get_fund_history(fund_code, days)\n'
+            'def caller(mgr):\n'
+            '    mgr.update_fund_history("000001", days=30, db=None)\n')
+    caught = _literal_backfill_windows([('fake/sync.py', _ast.parse(fake), fake)])
+    assert len(caught) == 2 and all('fake/sync.py' in c for c in caught), \
+        '扫描器抓不到"签名默认值 + 调用点实参"这两种写法 ⇒ 上面那条零违规是空判：%s' % caught
+    # 过宽对照：另作一用的 `get_fund_history(days=1)`（只问最新一笔）不许被算进来
+    benign = ('def probe(api, code):\n'
+              '    return api.get_fund_history(code, days=1)\n')
+    assert _literal_backfill_windows([('fake/probe.py', _ast.parse(benign), benign)]) == [], \
+        '把"只取最新一笔"的显式天数也拦了 ⇒ 这道闸会把自己建成墙'
+
+
+def test_the_backfill_window_is_read_at_call_time_not_at_import(monkeypatch):
+    """`nav_backfill_days()` 必须**在调用时**读那个键。
+
+    签名默认值（`days: int = config.X`）在 import 那一刻就算死了 ⇒ 改键不动它，
+    而判据用 monkeypatch 也量不出来（它看的还是那份算好的默认值）。
+    这一条同时是对上面那句"跟着回补范围走"的外部真值检查。
+    """
+    from src.core.config import config
+    from src.services.prediction_lifecycle import nav_backfill_days
+
+    monkeypatch.setattr(config, 'NAV_HISTORY_LOOKBACK_DAYS', 47, raising=False)
+    assert nav_backfill_days() == 47, '取数处不在调用时读键 ⇒ 那个键其实是装饰'
+    assert nav_backfill_days(7) == 7, '显式给的天数必须照收（回放脚本按区间补拉要用它）'
+    # 真走一遍写入路径：`update_fund_history` 交给源端的天数必须就是这个数
+    import importlib
+    api = importlib.import_module('src.fund.fund_api')
+    seen = {}
+
+    def spy(fund_code, days):
+        seen['days'] = days
+        return []
+
+    monkeypatch.setattr(api.fund_data_manager.api, 'get_fund_history', spy, raising=True)
+    assert api.fund_data_manager.update_fund_history('000001') == 0
+    assert seen['days'] == 47, \
+        '同步实际往回拉的天数不跟着键动（实测 %s）⇒ "重问间隔＝回补范围 +1"是巧合' % seen.get('days')
+
+
+def test_a_nav_backfill_releases_the_hold_and_the_row_goes_back_to_due(test_db, monkeypatch):
+    """净值真的补进这段窗口 ⇒ 当场撤锁、回到「待验证到期」，不用等满一个间隔（第 55 轮 M-2）。
+
+    §2e 给老板指的三条出路里"补拉成功当场解锁"这一条**当时不存在**：
+    `release_unverifiable_hold` 只有验证器一个调用方，而被锁的行在 `filter_due_for_verify`
+    就被减出队列 ⇒ 没人再问它一次，第二天就补到的净值也要白等 31 天。
+    这里跑的是真 sqlite + 真验证器 + 真解除函数，没有 Mock。
+    """
+    from src.models.database import FundHistory
+
+    target = TODAY - timedelta(days=3)
+    p = _seed(test_db, target=target, fund_code='UNLOCK01')
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'same_nav_endpoint', 'message': '那天没有独立净值'})
+    svc.verify_prediction(p.id)
+    test_db.refresh(p)
+    assert lc.classify(p, as_of=TODAY) == UNVERIFIABLE, '前提没立住：这一行没被锁'
+    assert p.id not in {x.id for x in filter_due_for_verify(test_db, as_of=TODAY)}
+
+    # 同步补到了这段窗口的净值（两条点、终点就是目标日 ⇒ 验证器判得出来）
+    test_db.add(FundHistory(fund_code='UNLOCK01', fund_name='重问锁基金',
+                            nav_date=p.prediction_date, nav=1.0, day_growth=0.1))
+    test_db.add(FundHistory(fund_code='UNLOCK01', fund_name='重问锁基金',
+                            nav_date=target, nav=1.2, day_growth=0.2))
+    test_db.commit()
+
+    released = lc.release_holds_after_nav_update(
+        test_db, 'UNLOCK01', [p.prediction_date, target])
+    test_db.commit()
+    test_db.refresh(p)
+
+    assert released == [p.id], '补到了净值却没撤锁 ⇒ §2e 那句"当场解锁"仍然是空头话'
+    assert p.next_verify_date is None
+    assert p.id in {x.id for x in filter_due_for_verify(test_db, as_of=TODAY)}, \
+        '撤了锁却没回到到期队列 ⇒ 页面照样看不见它'
+    assert p.is_correct is None, '撤锁不是下结论'
+
+
+def test_a_backfill_that_still_cannot_evidence_the_window_keeps_the_hold(test_db, monkeypatch):
+    """反面对照（防上一条被写成"补了就无条件撤"）：新行落进来但**还是判不出来** ⇒ 不许撤。
+
+    无条件撤锁的结果比不撤更坏：这条预测当天就弹回「待验证到期」，
+    下一次验证又判出同一个结构性结论、再锁一次 ⇒ 老板要清零的那一档天天回潮。
+    """
+    from src.models.database import FundHistory
+
+    target = TODAY - timedelta(days=3)
+    p = _seed(test_db, target=target, fund_code='KEEP01')
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'same_nav_endpoint', 'message': '那天没有独立净值'})
+    svc.verify_prediction(p.id)
+    test_db.refresh(p)
+    hold = p.next_verify_date
+    assert hold is not None and hold > target
+
+    # 只补进窗口一条点 < VERIFY_MIN_DATA_POINTS ⇒ 验证器仍然判不出来
+    test_db.add(FundHistory(fund_code='KEEP01', fund_name='重问锁基金',
+                            nav_date=p.prediction_date, nav=1.0, day_growth=0.1))
+    test_db.commit()
+
+    assert lc.release_holds_after_nav_update(test_db, 'KEEP01',
+                                             [p.prediction_date]) == []
+    test_db.refresh(p)
+    assert p.next_verify_date == hold, '还是问得不出答案却撤了锁 ⇒ 这把锁变成一天一次的噪音'
+
+    # 另一格：没被锁过的行（正常排期）一个字都不许动
+    q = _seed(test_db, target=target, fund_code='KEEP02',
+              next_verify=target - timedelta(days=1))
+    test_db.add(FundHistory(fund_code='KEEP02', fund_name='重问锁基金',
+                            nav_date=target, nav=1.1, day_growth=0.1))
+    test_db.commit()
+    assert lc.release_holds_after_nav_update(test_db, 'KEEP02', [target]) == []
+    test_db.refresh(q)
+    assert q.next_verify_date == target - timedelta(days=1), \
+        '它把"创建时排的那根日期"也清了 ⇒ 这条路在改的不是重问锁'
+
+
+def test_a_backfill_outside_the_held_window_does_not_release_the_hold(test_db, monkeypatch):
+    """补的行**不落在这条预测的窗口里** ⇒ 不许撤锁（第二道闸，与上一条同一个库形状）。
+
+    少了这道闸会复现第 54 轮 A-5 刚修掉的那件事：每天同步在别处补到一行，
+    就把这段永远问不出来的窗口撤回「待验证到期」⇒ 下一次验证再锁一次，
+    节奏从"每三十天一次真有机会改变的询问"变回"每天弹一次"。
+    """
+    from src.models.database import FundHistory
+
+    target = TODAY - timedelta(days=3)
+    p = _seed(test_db, target=target, fund_code='GATE01')
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'same_nav_endpoint', 'message': '那天没有独立净值'})
+    svc.verify_prediction(p.id)
+    test_db.refresh(p)
+    hold = p.next_verify_date
+    assert hold is not None and hold > target
+
+    # 库里现在给得出这段窗口（两个点、终点就是目标日）⇒ 只有"补的是哪几天"能拦住撤锁
+    test_db.add(FundHistory(fund_code='GATE01', fund_name='重问锁基金',
+                            nav_date=p.prediction_date, nav=1.0, day_growth=0.1))
+    test_db.add(FundHistory(fund_code='GATE01', fund_name='重问锁基金',
+                            nav_date=target, nav=1.2, day_growth=0.2))
+    test_db.commit()
+
+    assert lc.release_holds_after_nav_update(
+        test_db, 'GATE01', [target + timedelta(days=1)]) == [], \
+        '补的是目标日之后的另一段 ⇒ 这把锁问的那件事一个字都没变'
+    test_db.refresh(p)
+    assert p.next_verify_date == hold
+
+    assert lc.release_holds_after_nav_update(test_db, 'GATE01', [target]) == [p.id], \
+        '同样两个点，补的正是窗口里那天就该撤 ⇒ 上面那条不是"永远不撤"'
+
+
+# 每一条"往 `fund_history` 落行"的路都必须在这里登记**处置**：
+#   `'releases'` ⇒ 函数体里必须真的接 `release_holds_after_nav_commit`；
+#   其它字符串   ⇒ 为什么不接的**依据**（登记了却不解释、或解释了却已不存在，都红）。
+NAV_WRITE_SITES = {
+    ('src/fund/fund_api.py', 'update_fund_history'): 'releases',
+    ('src/fund/fund_sync_manager.py', '_update_fund_history'): 'releases',
+    ('src/fund/fund_api.py', 'backfill_history_range'):
+        '它跑在 `verify_prediction` 内部：同一次验证在两行之后才读 `previous_hold`，'
+        '在这里撤锁等于把"问过两次"的证据自己清掉 ⇒ 该行永远停在"第一次问出来"，'
+        '第 52 轮那条"锁 ⇒ 关"的升级链会断。补到的净值同一次就被 '
+        '`_check_fund_data_availability` 重问，不需要提前撤。',
+    ('src/services/fund_service.py', 'add_history'):
+        '`src/` 与 `scripts/` 零调用方（死路）⇒ 按仓库规矩不给死路写绿灯判据；'
+        '谁把它接上活路，就必须同时把这条改成 `releases` 并接上解锁。',
+}
+
+
+def _never_runs(node):
+    """这个条件恒假吗（写死的 `False`/`0`/空串，或 `and` 里压进一个恒假臂）。"""
+    import ast as _ast
+    try:
+        return not _ast.literal_eval(node)
+    except Exception:
+        return (isinstance(node, _ast.BoolOp) and isinstance(node.op, _ast.And)
+                and any(_never_runs(v) for v in node.values))
+
+
+def _releases_live(node):
+    """函数体里有没有一次**真会执行**的 `release_holds_after_nav_commit(...)`。
+
+    "接线"不等于"写了那一次调用"：`if False:` 那一支里的调用永不执行（第 55 轮变异 M19
+    第一次就是 GREEN —— 老写法 `ast.walk` 找名字，把同步器改成"再也不解锁"没人发现）。
+    """
+    import ast as _ast
+    if isinstance(node, _ast.Call):
+        return ((getattr(node.func, 'attr', None) or getattr(node.func, 'id', ''))
+                == 'release_holds_after_nav_commit')
+    if isinstance(node, _ast.If):
+        body = [] if _never_runs(node.test) else list(node.body)
+        return any(_releases_live(s) for s in body + list(node.orelse))
+    return any(_releases_live(child) for child in _ast.iter_child_nodes(node))
+
+
+def _nav_writers(trees):
+    """`{(文件, 函数)}` → 这个函数体里有没有接 `release_holds_after_nav_commit`。
+
+    判"它在写净值"用的是最硬的那个形状：函数体里构造了 `FundHistory(...)`。
+    """
+    import ast as _ast
+
+    out = {}
+    for rel, tree, _src in trees:
+        for fn in _ast.walk(tree):
+            if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                continue
+            writes = any(isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)
+                         and n.func.id == 'FundHistory' for n in _ast.walk(fn))
+            if not writes:
+                continue
+            out[(rel, fn.name)] = _releases_live(fn)
+    return out
+
+
+def test_the_nav_unlock_path_is_wired_into_both_sync_writers():
+    """写了净值就要问"那把锁还需要吗" —— 接线与登记表都要有牙（第 55 轮 M-2）。
+
+    判的不是"某处调用过一次"，而是**每一个往 `fund_history` 插行的函数**都得有处置：
+    以后新开一条同步写入路、忘了接 ⇒ 那条路上的预测补到净值也永远解不开锁，
+    而这类漏接在页面上完全看不出来（它表现为"什么都不发生"）。
+    """
+    found = _nav_writers(_src_trees())
+    assert set(found) == set(NAV_WRITE_SITES), (
+        '写净值的路与登记表对不上（多出来的一律没登记 ⇒ 新增一处不登记就红）：\n'
+        '  实际: %s\n  登记: %s' % (sorted(map(':'.join, found)),
+                                    sorted(map(':'.join, NAV_WRITE_SITES))))
+    for key, disposition in NAV_WRITE_SITES.items():
+        if disposition == 'releases':
+            assert found[key] is True, \
+                '%s:%s 登记成"接了解锁"，函数体里却没有那一次调用 ⇒ 撤谎' % key
+        else:
+            assert found[key] is False, \
+                '%s:%s 给了不接锁的依据，代码却已经接上了 ⇒ 依据过期，改登记' % key
+            assert len(disposition) >= 20, '%s 那条只登了个名字，没写依据' % (':'.join(key),)
+
+    # 控制断言：现造一处"插了行没接锁"与一处"接了锁却没登记"，两样都必须被点名
+    import ast as _ast
+    bare = ('def update_fund_history(self, code, db):\n'
+            '    db.add(FundHistory(fund_code=code))\n')
+    wired = ('def update_fund_history(self, code, db):\n'
+             '    db.add(FundHistory(fund_code=code))\n'
+             '    release_holds_after_nav_commit(db, code)\n')
+    scanned = _nav_writers([('src/fund/new_writer.py', _ast.parse(bare), bare)])
+    assert scanned == {('src/fund/new_writer.py', 'update_fund_history'): False}
+    assert set(scanned) - set(NAV_WRITE_SITES), '扫描器看不见新造的那条写净值路 ⇒ 上面是空判'
+    fixed = _nav_writers([('src/fund/fund_api.py', _ast.parse(wired), wired)])
+    assert fixed[('src/fund/fund_api.py', 'update_fund_history')] is True, \
+        '接了锁也认不出来 ⇒ 那条"登记成 releases 必须真接"的断言是反的'
+    # 同一条调用写进 `if False:` 那一支 ⇒ 不算接线（变异 M19 的形状，第一版它就是 GREEN）
+    dead = ('def update_fund_history(self, code, db):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    if inserted and False:\n'
+            '        release_holds_after_nav_commit(db, code)\n')
+    assert _nav_writers([('src/fund/fund_api.py', _ast.parse(dead), dead)]) == {
+        ('src/fund/fund_api.py', 'update_fund_history'): False}, \
+        '死分支里的调用也算"接了解锁" ⇒ 把同步器改成永不解锁没人发现'
+
+
 def test_the_nav_lookback_has_one_home_for_both_questions(monkeypatch):
     """"同步往回拉多少天"这件事只许有一处实现（第 54 轮 A-5 的加固）。
 
@@ -219,6 +548,23 @@ def test_the_nav_lookback_has_one_home_for_both_questions(monkeypatch):
         '取历史的默认窗口又写回字面量 ⇒ 重问间隔与它各自的数会漂开'
     cfg = (root / 'src' / 'core' / 'config.py').read_text(encoding='utf-8')
     assert cfg.count('NAV_HISTORY_LOOKBACK_DAYS =') == 1, '这个数在 config 里立了两处'
+    # 取数只能从 `nav_backfill_days()` 出来：别的函数自己再读一次那个键就是第二把尺子
+    life_tree = ast.parse((root / 'src' / 'services' / 'prediction_lifecycle.py')
+                          .read_text(encoding='utf-8'))
+    readers = set()
+    for fn in ast.walk(life_tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute) and \
+                    node.attr == 'NAV_HISTORY_LOOKBACK_DAYS':
+                readers.add(fn.name)
+    assert readers == {'nav_backfill_days'}, \
+        '读那个键的函数不止 `nav_backfill_days`（实测 %s）⇒ 端点档的间隔又有了第二个出处' \
+        % sorted(readers)
+    assert 'return nav_backfill_days() + 1' in (
+        root / 'src' / 'services' / 'prediction_lifecycle.py').read_text(encoding='utf-8'), \
+        '端点档不再走那唯一的出处'
 
 
 @pytest.mark.parametrize('period_days', [0, 1, 5, 6, 11, 30, 45])

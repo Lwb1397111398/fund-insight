@@ -151,18 +151,37 @@ def unverifiable_retry_days(verdict_reason: Optional[str] = None) -> int:
       了却没验证的预测"。这一档唯一会变的东西是**这段窗口里的净值行**，而常规同步只往回
       拉 `config.NAV_HISTORY_LOOKBACK_DAYS` 天 ⇒ 间隔取"回补范围 + 1"，
       含义是"等一次真的可能有新行落进这段窗口的机会，再问一次"。
-      人工按区间重放补拉（会写凭据）与改标/编辑目标日都当场解掉这把锁，不必等到那天。
+      当场解掉这把锁的路有四条：每日同步补到**落在这段窗口里**的新行
+      （`release_holds_after_nav_commit`，第 55 轮 M-2 —— 这一条以前不存在）、
+      人工按区间重放补拉（会写凭据）、改标、编辑目标日；不必等到那天。
 
     不传 `verdict_reason` ⇒ 按有凭据那一档答（调用方没说要问哪件事时，用更短的那个）。
     懒导入：本模块被 API 与脚本共读，顶层拉 `src.fund` 会把整个包 __init__ 带进来。
     """
     if verdict_reason in LOCK_ONLY_VERDICT_REASONS:
-        from src.core.config import config
-
-        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1
+        return nav_backfill_days() + 1
     from src.fund import backfill_proofs
 
     return int(backfill_proofs.EMPTY_TTL_DAYS) + 1
+
+
+def nav_backfill_days(days: Optional[int] = None) -> int:
+    """常规同步一次往回拉多少天净值 —— 这句话只许有一处实现。
+
+    第 55 轮 M-1：上面那句"跟着回补范围走"当时是假的。`NAV_HISTORY_LOOKBACK_DAYS` 只喂到
+    `FundAPI.get_fund_history` 的**签名默认值**，而真跑同步的 `update_fund_history` 一路
+    有 **8 处**把 30 写死（复核：`git grep -n "update_fund_history" 4ef48ce -- src/ | grep days`
+    ⇒ 两个默认值 + 五处调用实参 + 一处 demo）⇒ 两个数今天都是 30，那是**巧合不是等价**
+    （本仓自己立的规矩）：把键改成 47，重问间隔变 48 而同步仍只拉 30 天，
+    "等一次真可能有新行落进这段窗口的机会"当场失效。
+
+    两件事缺一不可，判据 `test_the_nav_lookback_has_one_home_for_both_questions` 两腿都问：
+    ① 这条路只许从这里取数（AST 扫 `src/`，谁再往 `days=` 塞字面量就点名）；
+    ② 必须**在调用时**读那个键 —— 签名默认值在导入时就算死了，改了键它不动。
+    """
+    from src.core.config import config
+
+    return int(config.NAV_HISTORY_LOOKBACK_DAYS) if days is None else int(days)
 
 
 def hold_until(prediction: Prediction) -> Optional[date]:
@@ -493,6 +512,76 @@ def release_unverifiable_hold(prediction: Prediction,
         return False
     prediction.next_verify_date = None
     return True
+
+
+def release_holds_after_nav_update(db: Session, fund_code: Optional[str],
+                                   changed_dates: Optional[Iterable] = None,
+                                   as_of: Optional[date] = None) -> List[int]:
+    """净值真的补进了这段窗口 ⇒ 把压着的那把重问锁当场撤掉，回「待验证到期」。
+
+    第 55 轮 M-2：§2e 给老板指的三条出路里，"补拉成功当场解锁"这一条**当时不存在**。
+    `release_unverifiable_hold` 全仓只有一个调用方（`verify_prediction`），而被锁的行在
+    `filter_due_for_verify` 就被减出到期队列 ⇒ 没人会对它跑验证 ⇒ 第二天就补到的净值
+    也要白等一整个重问间隔（端点档 31 天，旧行为 3 天）。这句承诺写在文档里、
+    入口却点不到，比不写更坏。
+
+    两道闸，缺一不算"补到了这段"：
+    ① 新落的行**落在这条预测的窗口里**（`changed_dates`）—— 少了这条，每天同步在别处
+      补到的行会把锁一次次撤掉、验证器再一次次锁回去，第 54 轮 A-5 刚修的"每三天弹一回
+      到期队列"就换个频率复现；
+    ② 问的还是改标门与验证器共用的那把尺子（`target_cannot_evidence_window` 答 None
+      ⇒ 验证器判得出来），不另立第二个"够不够"。
+    只碰**由结构性锁压着**的行（`next_verify_date > target_date`，见 `was_locked_previously`），
+    正常排期的行一个字都不动。返回被撤锁的预测 id；**不 commit**，事务边界留给调用方。
+    """
+    today = _as_date(as_of) or current_as_of()
+    if not fund_code:
+        return []
+    changed = {d for d in (_as_date(x) for x in (changed_dates or [])) if d is not None}
+    held = (
+        db.query(Prediction)
+        .filter(Prediction.is_deleted == False,               # noqa: E712
+                Prediction.is_correct.is_(None),
+                Prediction.fund_code == fund_code,
+                Prediction.target_date.isnot(None),
+                Prediction.target_date <= today)
+        .all()
+    )
+    released: List[int] = []
+    for p in held:
+        if not was_locked_previously(p.next_verify_date, p.target_date):
+            continue
+        start = _as_date(getattr(p, "prediction_date", None))
+        end = _as_date(p.target_date)
+        if changed and not any(start is not None and start <= d <= end for d in changed):
+            continue                       # 补的是别段的净值 ⇒ 这把锁问的那件事没变
+        in_window, latest = window_evidence(db, fund_code, start, end)
+        if target_cannot_evidence_window(in_window, latest, start, end, today=today) is None:
+            if release_unverifiable_hold(p, as_of=today):
+                released.append(p.id)
+    return released
+
+
+def release_holds_after_nav_commit(db: Session, fund_code: Optional[str],
+                                   changed_dates: Optional[Iterable] = None,
+                                   *, where: str = '') -> int:
+    """同步补到净值之后调用：撤锁、说出口、不许把同步本身弄失败。
+
+    单独成一处是为了让"每条写净值的路都要接它"这件事只有一份实现
+    （判据 `test_the_nav_unlock_path_is_wired_into_both_sync_writers` 数的是接线）。
+    """
+    try:
+        released = release_holds_after_nav_update(db, fund_code, changed_dates)
+    except Exception as exc:                     # 撤锁失败不能毁掉一次净值同步
+        logging.getLogger(__name__).warning(
+            '[重问锁] %s 补完 %s 的净值后解除重问锁失败（行照旧留在原排期）：%s',
+            where or '同步', fund_code, exc)
+        return 0
+    if released:
+        logging.getLogger(__name__).info(
+            '[重问锁] %s 补到 %s 的净值 ⇒ 解除 %d 条重问锁，回到「待验证到期」：%s',
+            where or '同步', fund_code, len(released), released)
+    return len(released)
 
 
 def classify(
