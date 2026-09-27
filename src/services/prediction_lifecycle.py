@@ -59,6 +59,23 @@ def current_as_of() -> date:
         return date.today()
 
 
+def beijing_now() -> datetime:
+    """时间戳版的"现在"：日期出自 `current_as_of()` 那一把北京钟，时分秒取同一把钟。
+
+    为什么不让调用方直接写 `datetime.now()`（第 53 轮 A-11）：Render 的容器在 UTC，
+    北京 00:00~08:00 归档的行，时间戳的**日期**会比页面上的"截至日"少一天 ——
+    而回收站里那句"保留到 X 日"正是拿这个日期算的。两件事必须出自同一把钟，
+    所以"今天"这一层仍然只由 `current_as_of()` 回答（全仓唯一的今日出口）。
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        clock = datetime.now(ZoneInfo("Asia/Shanghai"))
+    except Exception:
+        clock = datetime.now()          # 取不到时区时 `current_as_of()` 自己会留一行日志
+    return datetime.combine(current_as_of(), clock.time())
+
+
 def _as_date(value) -> Optional[date]:
     if value is None:
         return None
@@ -91,12 +108,18 @@ def verify_window_end(target: date, max_age: Optional[int] = None) -> date:
 
 
 def unverifiable_retry_days() -> int:
-    """结构性不可验的重问间隔（天）。
+    """结构性不可验的重问间隔（天）—— **只有一个出处**，两档各自说清它等的是什么。
 
-    **只有这一处定义它**，且它不是拍出来的数：数据源答"这段没有"的凭据 TTL 是
-    `backfill_proofs.EMPTY_TTL_DAYS`（空答复只信 2 天，防限流页被当成事实），
-    重问间隔取 TTL+1 ⇒ 凭据一旦过期，这条预测自己回到到期队列再问一次。
-    写在这里而不写死，是为了让"锁多久"永远跟着"凭据可信多久"走。
+    - `no_source_history`（数据源答"这段没有"）：这个数不是拍出来的。那条答复存成凭据，
+      TTL 是 `backfill_proofs.EMPTY_TTL_DAYS`（空答复只信 2 天，防限流页被当成事实），
+      重问间隔取 TTL+1 ⇒ 凭据一旦过期，这条预测自己回到到期队列再问一次。
+      判据 `test_the_lock_expires_and_the_prediction_asks_again` 钉的就是这层关系。
+    - `same_nav_endpoint`（起点与终点是同一条净值）：**这一档没有凭据可跟** ——
+      它依据的是库里那条"目标日之后已有净值"的事实，而那件事自己不会在几天内改变，
+      能改变它的只有老板手动把目标日挪到交易日（那次编辑会顺手把锁退回目标日之前，
+      见 `retag_prediction` / `update_prediction_fields`）。
+      所以这里复用同一个节奏是**明说的取舍**，不是"跟着证据走"：
+      再问一次不改变结论，但也不花钱（一天一批净值，重问日到了才排队问）。
 
     懒导入：本模块被 API 与脚本共读，顶层拉 `src.fund` 会把整个包 __init__ 带进来。
     """
@@ -162,11 +185,38 @@ def was_locked_previously(previous_hold: Optional[date],
     return hold is not None and target is not None and hold > target
 
 
+def stale_close_evidence(*, local_latest_nav: Optional[date] = None,
+                         window_start: Optional[date] = None,
+                         local_first_nav: Optional[date] = None,
+                         window_end: Optional[date] = None) -> Optional[str]:
+    """这句"永远问不出答案"拿不拿得出**只属于它自己的**证据 —— 两处共用（验证器、收口脚本）。
+
+    两种永久形状，各问各的，谁都不许替谁说：
+    - `'stopped'`：`local_latest_nav < window_start` ⇒ 这只产品从窗口开始之前就没再发过一条
+      净值。少了它，我们自己同步掉几天就可能把一条本可验证的预测关掉（第 23 轮那种
+      "把镜像坏了当产品坏了"的坑）。
+    - `'pre_inception'`：`local_first_nav > window_end` ⇒ **窗口整段早于这只标的首笔净值**
+      （第 53 轮 B-1 的 BLOCKER：镜像上 12 行是这一档）。新基金先被拿来发预测、净值从成立
+      那天才开始记 ⇒ 同步永远补不出它成立之前的历史，但末条净值活得好好的、远晚于窗口起点，
+      所以 `stopped` 那把尺子对它恒为 False ⇒ 只锁不关，每到一个重问日弹回「待验证到期」再被
+      踢出去一次。这一档要单独认，别拿 `stopped` 凑。
+    说不清（日期缺失）⇒ None，交回给"继续问"那条路。两种同时成立的形状不存在
+    （`first <= latest` 且 `start <= end`）。
+    """
+    if nav_cannot_cover_window(local_latest_nav, window_start):
+        return 'stopped'
+    if nav_started_after_window(local_first_nav, window_end):
+        return 'pre_inception'
+    return None
+
+
 def should_close_as_stale_target(*, verdict_reason: Optional[str],
                                  previous_hold: Optional[date],
                                  target_date: Optional[date],
                                  local_latest_nav: Optional[date],
                                  window_start: Optional[date],
+                                 local_first_nav: Optional[date] = None,
+                                 window_end: Optional[date] = None,
                                  today: Optional[date] = None) -> bool:
     """这条预测要不要从"重问锁"升级成**关闭**（永远问不出答案，代价比锁大得多）。
 
@@ -178,10 +228,8 @@ def should_close_as_stale_target(*, verdict_reason: Optional[str],
        验证，那两条"周六目标日"就是这么一跳进回收站的 —— 是我自己跑出来的，不是评审发现的）。
        创建排期被 `test_the_creation_schedule_never_writes_a_date_after_the_target`
        夹在目标日之前 ⇒ 只有 `apply_unverifiable_hold` 会写下晚于目标日的那一天。
-    ② 这一档在 `CLOSABLE_VERDICT_REASONS` 里，且它那句"永久"拿得出**只属于它自己的**证据：
-       `no_source_history` 问 `local_latest_nav < window_start` —— 这只产品从窗口开始之前
-       就没再发过一条净值。少了这一条，我们自己同步掉几天就可能把一条本可验证的预测关掉
-       （第 23 轮那种"把镜像坏了当产品坏了"的坑）。
+    ② 这一档在 `CLOSABLE_VERDICT_REASONS` 里，且 `stale_close_evidence()` 答得出永久形状
+       （`'stopped'` 停更 / `'pre_inception'` 窗口早于首笔净值）。
        `same_nav_endpoint` **一律不关**（第 52 轮 A-1，实测过才敢这么写）：那句"起点与终点
        是同一条净值"有两种来路 —— 目标日确实不是交易日，**或这只标的自己有数据洞**（补拉能填）。
        库里分不开这两种：2026-09-27 在镜像上逐日数过行数，真休市的 2026-07-11（周六）
@@ -197,7 +245,21 @@ def should_close_as_stale_target(*, verdict_reason: Optional[str],
         return False                      # 没锁过（那根日期是排期写的）：这是第一次问出来
     if prev > today:
         return False                      # 锁还没到点：不该被问到
-    return nav_cannot_cover_window(local_latest_nav, window_start)
+    return stale_close_evidence(
+        local_latest_nav=local_latest_nav, window_start=window_start,
+        local_first_nav=local_first_nav, window_end=window_end) is not None
+
+
+def nav_started_after_window(local_first_nav: Optional[date],
+                             window_end: Optional[date]) -> bool:
+    """这段窗口**整段早于**这只标的的第一笔净值 —— 那几天它还没有净值可发。
+
+    与 `nav_cannot_cover_window` 是一对：一个问"末条太早（已经停了）"，一个问"首笔太晚
+    （那时候还没开始）"。两边都是**永久**事实，也都只此一处实现这句话。
+    两个日期任一说不清 ⇒ False（不敢下结论，继续走"再问一次"）。
+    """
+    first, end = _as_date(local_first_nav), _as_date(window_end)
+    return first is not None and end is not None and first > end
 
 
 def nav_cannot_cover_window(local_latest_nav: Optional[date],
@@ -330,25 +392,37 @@ def target_cannot_evidence_window(in_window: Sequence[date],
 
 def close_as_stale_target_note(prediction: Prediction, latest_nav: Optional[date],
                                window_start: Optional[date],
-                               *, asked_times: int = 2) -> str:
+                               *, first_nav: Optional[date] = None,
+                               window_end: Optional[date] = None) -> str:
     """关闭时写给老板看的那句话：说清为什么判不了、去哪找、对准确率有什么影响。
 
-    只有 `CLOSABLE_VERDICT_REASONS` 那一档会走到这里，所以这句可以断言"标的停更"；
-    退化端点那一档永远不关（见 `should_close_as_stale_target` ②），别把两种原因混成一句 ——
-    把"那天没有独立净值行"写成"这只产品停更"会让人去查一只没毛病的基金。
+    原因那半句由 `stale_close_evidence()` 现算（**同一把尺子**，不是两处各抄一句）：
+    "停更"与"那几天还没开始发净值"是两种相反的来路，说反了会让人去查一只没毛病的基金。
+    答不出永久形状时只许说中性事实，不许挑一个原因写上去。
 
-    `asked_times` 不是修辞：**"已问过两次"是一句关于发生过什么的事实陈述**。
-    验证器只在第二次问出来时才关（默认 2），而存量收口脚本是自己逐行现问一次的 ——
-    那一趟只有当行上原本就压着一把到点的重问锁时才算"第二次"（2026-09-27 镜像实测：
-    脚本收掉的 5 行 `next_verify_date` 全部 ≤ 目标日 ⇒ 那句"已问过两次"当时是写多的）。
+    那句"已问过两次"**不需要参数**：能走到这里的唯一门是 `should_close_as_stale_target`，
+    它要求"上一轮真的被锁过、且锁已到点"，而本次是这一行的第二次问 ⇒ 这句话由门保证，
+    不由调用方自报（第 53 轮 A-4：原来那个 `asked_times` 只能被测试走到，是一条死路参数）。
     """
-    asked = ('已问过两次仍无答案' if asked_times >= 2
-             else '本次现问一次它仍答没有（这条行上原先没有重问锁 ⇒ 这是第一次问出来就记录的）')
-    return ('标的 %s 的数据源给不出这段净值（库里最后一条净值停在 %s，窗口从 %s 起），'
-            '%s ⇒ 无法判定，既不算判对也不算判错，不计入准确率；'
-            '记录已放入回收站，可随时恢复'
-            % (getattr(prediction, 'fund_code', '') or '未知',
-               _as_date(latest_nav) or '未记录', _as_date(window_start) or '未记录', asked))
+    code = getattr(prediction, 'fund_code', '') or '未知'
+    tail = ('已问过两次仍无答案 ⇒ 无法判定，既不算判对也不算判错，不计入准确率；'
+            '记录已放入回收站，可随时恢复')
+    evidence = stale_close_evidence(local_latest_nav=latest_nav,
+                                    window_start=window_start,
+                                    local_first_nav=first_nav,
+                                    window_end=window_end)
+    if evidence == 'pre_inception':
+        return ('标的 %s 在那段窗口还没有开始发净值（库里第一笔净值始于 %s，窗口到 %s 就结束'
+                '了，早于它），%s' % (code, _as_date(first_nav) or '未记录',
+                                     _as_date(window_end) or '未记录', tail))
+    if evidence == 'stopped':
+        return ('标的 %s 的数据源给不出这段净值（库里最后一条净值停在 %s，窗口从 %s 起），%s'
+                % (code, _as_date(latest_nav) or '未记录',
+                   _as_date(window_start) or '未记录', tail))
+    # 走到这里说明调用方没把证据递全（或者它本来就不该关）⇒ 只报事实，不报原因
+    return ('标的 %s 的这段窗口判不出结论（库里净值区间：%s 至 %s；窗口从 %s 起、到 %s 止），%s'
+            % (code, _as_date(first_nav) or '未记录', _as_date(latest_nav) or '未记录',
+               _as_date(window_start) or '未记录', _as_date(window_end) or '未记录', tail))
 
 
 def apply_unverifiable_hold(prediction: Prediction, as_of: Optional[date] = None) -> date:
@@ -547,9 +621,9 @@ def due_skip_reason(prediction: Prediction, as_of: Optional[date] = None) -> Opt
         return "中性预测（观望）不参与验证"
     if is_held_unverifiable(prediction, as_of=today):
         hold = hold_until(prediction)
-        return (f"验证器已按区间问过、这一轮判不出结论（哪两种原因见上方"
-                f"「上次验证未成功原因」）⇒ 属结构性不可验，{hold.isoformat()} 之前不再重问"
-                f"（到点自动回队再问一次）")
+        return (f"验证器已按区间问过、这一轮判不出结论 ⇒ 属结构性不可验，"
+                f"{hold.isoformat()} 之前不再重问（到点自动回队再问一次；"
+                f"到底是哪一档原因不落库，只在那一次验证的回执里）")
     return None
 
 

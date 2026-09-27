@@ -94,7 +94,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 3. 预测入库：`Prediction` 记录关联 `Blogger`、`Post`、基金代码和目标验证日期。
 4. 基金数据同步：`src/fund/fund_api.py`、`FundDataManager`、`FundSyncManager` 拉取净值和历史。
 5. 预测验证：`src/services/prediction_verify_service.py` 根据起点/终点净值、过程涨跌、震荡阈值和预测方向打分。
-6. 博主统计：`blogger_stats`、`BloggerService`、`StatsService` 统计准确率、等级、预测数量。
+6. 博主统计：`src/utils/blogger_stats.py`（`recalculate_blogger_stats`，**不是表**；统计列直接落在
+   `bloggers` 行上）、`BloggerService`、`StatsService` 统计准确率、等级、预测数量。
 
 观点和建议流：
 
@@ -288,7 +289,63 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-27 06:5x（北京），**任务 #110 + 第 52 轮返修：「结构性不可验」要升级成关闭，
+最近一次核对（2026-09-27 12:0x（北京），**任务 #112~#118：第 53 轮两份复评（A 74 / B 61）返修——
+「结构性不可验」补上第二种永久形状、页面分母换成同一把尺子、改标必清重问锁、存量错文案订正**——
+① **窗口整段早于标的首笔净值**是一档新的永久形状（#112，B-1 的 BLOCKER）：上一版只认"末条净值早于窗口起点"
+   （＝标的停更），而镜像实测 `515440`／`158006`／`158038` 上压着 **7 行**窗口的目标日**早于该基金第一笔净值**
+   （复核 `python scripts/q.py "select f.fund_code, count(*) , date(f.mn) first_nav from (select fund_code, min(nav_date) mn, max(nav_date) mx from fund_history group by fund_code) f join predictions p on p.fund_code=f.fund_code where p.is_deleted=0 and p.is_correct is null and p.next_verify_date > p.target_date and f.mn > p.target_date group by 1,2,3"`）
+   ⇒ 末条永远晚于起点 ⇒ 光认停更把这 7 行永远留在"重问 ⇒ 弹回到期 ⇒ 再踢出去"的圈里。
+   现在 `stale_close_evidence()` 答两种（`stopped` / `pre_inception`），回收站那句话按形状各说各话，
+   `should_close_as_stale_target` 与存量收口脚本共用它，验证器多问一句"第一笔净值在哪天"。
+② **「待验证」这一档的分母改成"有没有结论"**（A-5）：新 `_conclusion_conditions()` 一处实现，
+   列表过滤器、facets 计数、行上那个标签三头共用 —— 旧写法读遗留列 `predictions.status`，
+   而 `classify` 与验证器只认 `is_correct` ⇒ 页面那句"未到期与观望之和"与数差 12 条就是这么来的（同一批把那句话删了）。
+③ **改标必清旧标的的重问锁**（#113 / #114，A-3 + B-5）：`retag_prediction` 把压在旧标的上、晚于目标日的那根日期
+   退回目标日；页面「编辑预测」改绑不再直接写 `prediction.fund_code`，而是先过 `retag_gap` 那道证据门、
+   再走同一个咽喉 ⇒ "换到新标的后第一次问就满足关闭全部条件、当场进回收站还写着已问过两次"这条路断了。
+④ **归档时间戳与恢复下界都按北京那把钟**（A-11）：`_soft_archive` 原来用 `datetime.now()` / `date.today()`，
+   Render 容器在 UTC ⇒ 北京 00:00~08:00 归档的行"保留到 X 日"比页面其它日期口径少一天。
+⑤ **存量收口脚本补上"锁未到点不关"那一半**（#115 / A-2）：判"问过几次"的尺子与验证器共用（`was_locked_previously`），
+   并把 `asked_times` 传进回收站那句话（见上一批）。**同批新增 `--fix-wording`**（B-6）：默认 dry-run，
+   真写要 `--apply --confirm CLOSE-UNVERIFIABLE`，先备份再只改 `delete_reason`、台账记 `archive_note_fixed`；
+   镜像 2026-09-27 10:31 真跑订正 **5 行**（`3016/3191/3194/3346/3355`，那句"已问过两次"是 09-26 那版脚本写多的），
+   生产 15 行逐行核过**全部有锁证据** ⇒ 一行都没订正（复现：`python scripts/q.py --production` 数
+   `position('已问过两次' in delete_reason) > 0` 与 `was_locked_previously` 的等价条件）。
+⑥ **`--restore-from` 从此比对现状**（#117，B-3）：只按 id 盖回会无声抹掉老板手动归档的署名与原因；
+   现在哪一行被别人动过就拦哪一行，`--force-restore` 才硬盖。**这条旗子上一版是假承诺**：它打印"照样盖回"
+   却把拦下的行踢出名单 ⇒ 退码 0、一行没还原，是新用例点红的（`_block` 里 `if not force` 才加入 blocked）。
+⑦ **两处页面的话**（#116 / A-1、B-2）：那句"哪两种原因见上方…"自指一个不渲染的栏 ⇒ 改成中性一句；
+   「待验证」按钮的 title 与口径灰字现在明说这一档＝待验证到期＋结构性不可验＋未到期，
+   **"今天点验证只跑到「待验证到期」那一档"**。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`）：
+
+- `pytest tests/unit -q` → **1202 passed / 16 skipped / 0 failed**（693.05 秒）。
+- `pytest tests/ -q` → **1211 passed / 16 skipped / 0 failed**（862.22 秒）。
+  （上一基线 1190/1199 → 本批 **+12 条 / 两个口径同增**，分布用
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  数出：`test_close_unknowable_predictions.py` 7→**12**（+5：北京钟的归档戳与恢复下界、"已问过两次"只在行真锁过
+  时才算第二次、订正只动那一列、还原不许盖掉别人动过的行、CLI 缺确认词那一支）、
+  `test_structurally_unverifiable_hold.py` 16→**21**（+5，当场账 `--collect-only -q` 印 **27**：
+  首笔净值之前的窗口该关、两种永久形状分得开、改标把旧锁退回目标日、只有那一把锁写晚于目标日的日期、
+  验证器整份词汇表都要有处置、异步函数也要被 AST 扫到）、`test_prediction_query.py` 12→**13**
+  （「待验证」问结论不问 `status` 列，配"两把尺子给出不同数时以结论为准"的对照 + 三档可加和）、
+  `test_prediction_management_safety.py` 7→**8**（页面改绑必须问证据门并清锁）。
+  **改契约不增条数**：`test_verdict_evidence_badge.py`、`test_frontend_cold_start.py` 两处口径判据跟着改钉新灰字，
+  并加"未到期与观望之和"这句不许再出现的反向断言。
+  变异：**新工具 `python scripts/mutation_proof_lifecycle.py` 15 处全 RED**（M1~M13，CONTROL 全绿，原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round53-structural-mutations.txt`）；前端侧
+  `python scripts/mutation_proof_frontend.py --only unverifiable` / `--only queue_caliber` 全 RED ——
+  两处锚点本批改了形状，旧锚点会报 ANCHOR-MISS 而不是绿。⚠ **M11 第一次跑就是 ANCHOR-MISS**：
+  跨行锚点写死 `\n`，而仓库 `.py` 在这台机器按 CRLF 检出 ⇒ `count(anchor)==0` 而**单行锚点全部正常**，
+  症状是"只有跨行那几条量不到"，极易误读成"这条判据不存在"；现在脚本按文件自己的换行重拼。
+  **一次镜像真跑存量收口**（2026-09-27 11:5x 只读 dry-run，命令 `python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：12 条` —— 6 条"重问锁 2026-09-30 还没到点
+  ⇒ 这一轮连第二次都还没成立，不许关"、4 条"源端这段给了 1 条 ⇒ 是本地没补到，不是它没有"、
+  2 条源端答得出。⇒ 这 7 行 `pre_inception` 形状**今天不该关、到 09-30 那一问就会关**，
+  而旧代码是永远关不掉。**生产此刻的状态**（同日 11:5x，只读门 + 引擎级只读探针，命令
+  `python scripts/q.py --production "with h as (select id, (next_verify_date is not null and next_verify_date > target_date) as locked from predictions where is_deleted=false and target_date is not null and is_correct is null and prediction_type<>'flat' and target_date <= date '2026-09-27') select count(*) as expired_unjudged, count(*) filter (where locked) as held_by_lock, count(*) filter (where not locked) as actionable_today from h"`）：
+  `expired_unjudged 0 / held_by_lock 0 / actionable_today 0`。）
+（上一批：2026-09-27 06:5x（北京），**任务 #110 + 第 52 轮返修：「结构性不可验」要升级成关闭，
 证据链重做**——
 ① "问过两次"从此由一把共用的尺子回答（`was_locked_previously`：那根日期落在**自己的目标日之后**）。
 上一版拿"创建时排的那根日期过去了"当证据，2026-09-27 在镜像上真跑一次批量验证时，那两条周六目标日

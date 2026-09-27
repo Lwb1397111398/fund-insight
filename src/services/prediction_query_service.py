@@ -164,6 +164,23 @@ class PredictionQueryService:
             Prediction.id.desc(),
         )
 
+    @staticmethod
+    def _conclusion_conditions(status: Optional[str]) -> List[Any]:
+        """把"待验证 / 已验证"这两档翻译成 SQL —— 问的是**有没有结论**（`is_correct`），
+        不是遗留列 `predictions.status`（第 53 轮 A-5）。
+
+        为什么换：`status` 那一列由老代码写，验证器与改标咽喉都按 `is_correct` 说话
+        （`classify` 也只看它）。镜像今天两把尺子**恰好逐档对上**（422 条未判 ↔
+        `status='pending'` 422 条），那是巧合不是等价 —— 生产上曾经出现过
+        `status='success'` 而 `is_correct` 为空的行。页面上的数与点进去的列表
+        从此共用这一处实现，谁也不再各抄一遍 `== 'pending'`。
+        """
+        if status == "verified":
+            return [Prediction.is_correct.isnot(None)]
+        if status in ("pending", "unverified"):
+            return [Prediction.is_correct.is_(None)]
+        return [Prediction.status == status]
+
     def _lifecycle_conditions(self, lifecycle: str) -> List[Any]:
         """把 lifecycle 语义翻译成 SQL 条件（与 prediction_lifecycle 同口径）。"""
         today = current_as_of()
@@ -215,11 +232,7 @@ class PredictionQueryService:
         if filters.get("prediction_type"):
             query = query.filter(Prediction.prediction_type == filters["prediction_type"])
         if filters.get("status"):
-            status = filters["status"]
-            if status == "verified":
-                query = query.filter(Prediction.status.in_(("success", "failed", "verified")))
-            else:
-                query = query.filter(Prediction.status == status)
+            query = query.filter(*self._conclusion_conditions(filters["status"]))
         if filters.get("result"):
             result = filters["result"]
             if result == "correct":
@@ -227,7 +240,7 @@ class PredictionQueryService:
             elif result == "wrong":
                 query = query.filter(Prediction.is_correct.is_(False))
             elif result in ("pending", "unverified"):
-                query = query.filter(Prediction.status == "pending")
+                query = query.filter(*self._conclusion_conditions("pending"))
         if filters.get("start_date"):
             query = query.filter(Prediction.prediction_date >= filters["start_date"])
         if filters.get("end_date"):
@@ -256,8 +269,14 @@ class PredictionQueryService:
         due_base = and_(unverified_actionable, Prediction.target_date <= today)
         row = self.db.query(
             func.count(case((active, 1))).label("all"),
-            func.count(case((and_(active, Prediction.status == "pending"), 1))).label("pending"),
-            func.count(case((and_(active, Prediction.status.in_(("success", "failed", "verified"))), 1))).label("verified"),
+            # 「待验证」/「已验证」这两个数问的是**有没有结论**，与上面 `status` 过滤器
+            # 共用 `_conclusion_conditions` 一处实现（第 53 轮 A-5：原来分母是遗留列
+            # `predictions.status`，而 `classify` 与验证器都按 `is_correct` 说话 ⇒
+            # 页面那句"未到期与观望之和"和数差 12 条就是这么来的）
+            func.count(case((and_(active, *self._conclusion_conditions("pending")),
+                             1))).label("pending"),
+            func.count(case((and_(active, *self._conclusion_conditions("verified")),
+                             1))).label("verified"),
             func.count(case((and_(active, Prediction.is_correct.is_(True)), 1))).label("correct"),
             func.count(case((and_(active, Prediction.is_correct.is_(False)), 1))).label("wrong"),
             func.count(case((and_(active, Prediction.prediction_type == "flat"), 1))).label("flat"),
@@ -291,8 +310,11 @@ class PredictionQueryService:
         lifecycle_status = (
             "archived"
             if prediction.is_deleted
+            # 行上那个"待验证 / 已验证"标签问的也是**有没有结论**（与 facets、classify
+            # 同一把尺子，第 53 轮 A-5）：老写法读 `status` 列，一旦出现
+            # `status='success'` 而 `is_correct` 为空的漂移行，标签就替它说谎。
             else "pending"
-            if prediction.status == "pending"
+            if prediction.is_correct is None
             else "verified"
         )
         lifecycle = classify(prediction)

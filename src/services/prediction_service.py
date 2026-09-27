@@ -386,15 +386,40 @@ class PredictionService(BaseService[Prediction]):
             prediction.sector_type = get_category_for_sector(standard_sector)
 
         explicit_fund_change = "fund_code" in values or "fund_name" in values
+        wanted_code = prediction.fund_code
+        wanted_name = prediction.fund_name
         if "fund_code" in values:
-            prediction.fund_code = values["fund_code"] or None
+            wanted_code = values["fund_code"] or None
         if "fund_name" in values:
-            prediction.fund_name = values["fund_name"] or None
+            wanted_name = values["fund_name"] or None
         if sector_changed and not explicit_fund_change:
             matched_fund = get_fund_for_sector(prediction.sector)
             if matched_fund:
-                prediction.fund_code = matched_fund.get("code") or None
-                prediction.fund_name = matched_fund.get("name") or None
+                wanted_code = matched_fund.get("code") or None
+                wanted_name = matched_fund.get("name") or None
+
+        if wanted_code != prediction.fund_code:
+            # 人工改绑也是**改标**，所以走同一条门与同一个咽喉（第 53 轮 A-3）：
+            # 上一版这里直接 `prediction.fund_code = …`，既不问"这只标的给不给得出这段窗口"
+            # （绕开 #105 那道改标证据门），也不清上一只标的留下的**重问锁** ⇒ 锁到点那天
+            # 对新标的的第一问就满足关闭的全部条件，行直接进回收站还写着"已问过两次"。
+            # `retag_prediction` 只回 bool（"已经就是这个标的"与"被门拒了"共用同一个 False），
+            # 所以这里先问 `retag_gap` 拿到**能回给页面的那句理由**。
+            from src.fund.fund_sync_manager import FundSyncManager
+            gap, evidence = FundSyncManager.retag_gap(self.db, prediction, wanted_code)
+            if gap:
+                raise ValueError("不能把这条预测改到 %s：%s" % (wanted_code, gap))
+            FundSyncManager.retag_prediction(
+                self.db, prediction, wanted_code, wanted_name,
+                source='user_edit', evidence=evidence)
+            # 旧标的上的那把锁对新标的毫无意义 ⇒ 退回创建排期（它被用例夹在目标日之前，
+            # 所以这一行从此被算作"第一次问"，不会被读成第二次）
+            prediction.next_verify_date = self._calculate_next_verify_date(
+                prediction.prediction_date, prediction.target_date)
+            if wanted_code != prediction.fund_code:
+                raise ValueError("改绑没有落库：标的仍为 %s" % (prediction.fund_code,))
+        elif wanted_name != prediction.fund_name:
+            prediction.fund_name = wanted_name
 
         if "prediction_type" in values:
             if values["prediction_type"] == "flat":
@@ -490,12 +515,17 @@ class PredictionService(BaseService[Prediction]):
 
     def _soft_archive(self, prediction: Prediction, *, reason: str, source: str) -> bool:
         """归档那条预测的唯一实现：手动归档与系统关闭都走这里（别在这里开第二条旁路）。"""
+        from src.services.prediction_lifecycle import beijing_now, current_as_of
+
         before_state = snapshot_prediction(prediction)
         prediction.is_deleted = True
-        prediction.deleted_at = datetime.now()
+        # 归档时刻与"可恢复到哪天"都按北京那把钟写（第 53 轮 A-11）：Render 容器在 UTC，
+        # 北京时间 00:00~08:00 归档的行会用 `date.today()` 少写一天 ⇒ 回收站里那句
+        # "保留到 X 日"比页面上的其它日期口径早一天，而恢复下界正是拿它算的。
+        prediction.deleted_at = beijing_now()
         prediction.deleted_by = source
         prediction.delete_reason = reason
-        prediction.restore_before = date.today() + timedelta(days=30)
+        prediction.restore_before = current_as_of() + timedelta(days=30)
         try:
             self.db.flush()
             self._recalculate_related_stats(prediction)

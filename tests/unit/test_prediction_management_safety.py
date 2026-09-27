@@ -167,6 +167,64 @@ def test_put_prediction_route_updates_pending_prediction(monkeypatch, test_db):
         Base.metadata.drop_all(engine)
 
 
+def test_put_prediction_rebind_asks_the_evidence_gate_and_clears_the_lock(monkeypatch, test_db):
+    """人工改绑必须过**同一道**改标证据门，并且旧标的上的重问锁要一起清掉（第 53 轮 A-3）。
+
+    上一版这条路直接 `prediction.fund_code = …`：不问"这只标的给不给得出这段窗口"，
+    也不动 `next_verify_date` ⇒ 一把压在旧标的上的锁会让**新标的的第一问**被
+    `was_locked_previously` 读成"第二次"，行当场进回收站还写着"已问过两次"。
+    判据从路由打进去（PUT 一次），不是直接调私有方法 —— 后者只能证明"这函数会自检"。
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import sessionmaker
+
+    from src.api.deps import get_db
+    from src.api.main import app
+    from src.models.database import FundHistory
+
+    monkeypatch.setenv("ACCESS_PASSWORD", "rebind_gate_password")
+    engine = _memory_engine()
+    db = sessionmaker(bind=engine)()
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        _, _, prediction = _seed_prediction(db)
+        # 行上先压一把"锁在未来"的重问日期（只有 `apply_unverifiable_hold` 会写在这种形状上）
+        prediction.next_verify_date = date(2026, 8, 1)
+        # 一只"库里只有窗口之后净值"的标的 ⇒ 这段窗口它给不出证据
+        db.add_all([
+            FundInfo(fund_code='LATE99', fund_name='晚到的基金'),
+            FundHistory(fund_code='LATE99', nav_date=date(2026, 9, 1), nav=1.0),
+            FundHistory(fund_code='LATE99', nav_date=date(2026, 9, 2), nav=1.01),
+            # 一只窗口两端都有行的标的 ⇒ 照常允许改过去
+            FundInfo(fund_code='GOOD99', fund_name='对得上的基金'),
+            FundHistory(fund_code='GOOD99', nav_date=date(2026, 7, 1), nav=0.98),
+            FundHistory(fund_code='GOOD99', nav_date=date(2026, 7, 8), nav=1.05),
+        ])
+        db.commit()
+        client = TestClient(app)
+        headers = {"X-Access-Password": "rebind_gate_password"}
+
+        resp = client.put(f"/api/predictions/{prediction.id}", headers=headers,
+                          json={"fund_code": "LATE99", "fund_name": "晚到的基金"})
+        assert resp.status_code == 400, '给不出这段窗口的标的，人工改绑也不能放行'
+        assert '不能把这条预测改到' in resp.json()["detail"]
+        db.refresh(prediction)
+        assert prediction.fund_code == 'SAFE01', '被拒的改绑一个字都不许留下'
+        assert prediction.next_verify_date == date(2026, 8, 1)
+
+        resp = client.put(f"/api/predictions/{prediction.id}", headers=headers,
+                          json={"fund_code": "GOOD99", "fund_name": "对得上的基金"})
+        assert resp.status_code == 200, resp.text
+        db.refresh(prediction)
+        assert prediction.fund_code == 'GOOD99'
+        assert prediction.next_verify_date <= prediction.target_date, (
+            '旧标的上的锁必须退回目标日之前 ⇒ 否则新标的的第一问会被当成第二次直接关进回收站')
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
 def test_put_prediction_route_rejects_verified_and_flat(monkeypatch, test_db):
     """已验证预测改验证依据、以及保存观望类型，都必须被 400 拒绝。"""
     from fastapi.testclient import TestClient

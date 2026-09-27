@@ -190,6 +190,13 @@ def test_the_three_prediction_queues_explain_themselves_without_hover():
     text = _visible_text(html)
     assert '已到目标日、仍在验证窗口内' in text, '「待验证到期」的定义只在 title 里'
     assert '别把它当成' in text, '「待验证」含观望/未到期这件事没写进正文'
+    # 第 53 轮 A-5：这一档的分母从遗留列 `status='pending'` 换成"有没有结论"，
+    # 于是它**包含**到期与结构性不可验两档 —— 那句话必须把加法式子写在正文里，
+    # 否则老板会拿"未到期 410 + 观望 0"去对 422，以为页面算错了。
+    assert '还没有结论的全部' in text and '待验证到期＋结构性不可验＋未到期' in text, (
+        '「待验证」这一档现在到底含哪几档，没写在正文里')
+    assert '未到期与观望之和' not in text, (
+        '旧口径还挂在页面上：那个数不是"未到期＋观望"，它含到期与结构性两档')
     assert 'class="filter-caliber-note"' in html, '这行说明没有自己的样式类（会被当成临时文案删掉）'
     css = (PROJECT_ROOT / 'web' / 'common.css').read_text(encoding='utf-8')
     assert '.filter-caliber-note' in css
@@ -1814,6 +1821,10 @@ def test_the_structurally_unverifiable_queue_is_counted_and_explained():
     # 而且灰字/行内**不许断言是哪一种原因**：行上只有那根日期，没有 reason
     # （第 52 轮 A-2/B-2：这一档有两半，"数据源给不出这段净值"对退化端点那半是说反的）
     assert '数据源给不出这段' not in html, '页面又开始替某一档下结论了'
+    # 也不许让页面指一条**走不通的路**（第 53 轮 A-1/B-2：那句话在正常路径下指向一个
+    # 不渲染的栏，而且那一栏印的正是这句话本身 ⇒ 读者绕一圈回到原点）
+    assert '见上方「上次验证未成功原因」' not in html, '页面上不许有自指的指路'
+    assert '哪两种原因' not in html
 
 
 def test_the_recycle_bin_says_why_each_row_was_archived():

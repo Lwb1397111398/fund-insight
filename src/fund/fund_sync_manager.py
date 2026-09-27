@@ -100,6 +100,13 @@ class FundSyncManager:
         had_verdict = has_verdict_trace(pred)
         pred.fund_code = new_code
         pred.fund_name = new_name
+        # 换标的 ⇒ 压在**旧标的**上的那把重问锁一起作废（第 53 轮 B-5 / 第 52 轮 B-5）：
+        # `apply_unverifiable_hold` 写下的日期晚于目标日，而 `was_locked_previously` 认的正是
+        # "晚于自己的目标日" ⇒ 不清它，新标的的第一问会被读成"第二次"，条件齐了就当场进回收站。
+        # 退回目标日 = 这条行从那天起就该按新标的验一次，不越过、也不藏起来。
+        if (pred.next_verify_date and pred.target_date
+                and pred.next_verify_date > pred.target_date):
+            pred.next_verify_date = pred.target_date
         if had_verdict:
             # 结论退回未验证：由下一次验证按**新标的**重判，而不是留着旧标的的数
             clear_verification_fields(pred)

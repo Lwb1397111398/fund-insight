@@ -162,31 +162,42 @@ def test_the_stopped_target_ruler_has_exactly_one_implementation():
 
     第 45 轮那条老账：**"唯一入口"这句话没有测试钉着，下一轮就会多一个入口** ——
     我这一批就先在自己新写的脚本里抄了一份 `latest >= start`，被这条判据当场点红。
+
+    第 53 轮 B-1 之后这把尺子有**两半**（末条太早 = 停更、首笔太晚 = 那几天还没开始），
+    所以判据跟着改成问"链条"：`should_close_as_stale_target → stale_close_evidence →
+    两把尺子`，链条上任何一跳自己比日期、或者脚本绕过去自己判，都算第二把尺子。
     """
     import ast
 
-    def calls_ruler(path, func_name):
+    def facts(path, func_name):
         tree = ast.parse(open(path, encoding='utf-8').read())
         fn = next((n for n in ast.walk(tree)
                    if isinstance(n, ast.FunctionDef) and n.name == func_name), None)
         assert fn is not None, '%s 里找不到 %s()' % (path, func_name)
-        called = {getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
+        called = {(getattr(n.func, 'id', None) or getattr(n.func, 'attr', ''))
                   for n in ast.walk(fn) if isinstance(n, ast.Call)}
         compares = [n for n in ast.walk(fn) if isinstance(n, ast.Compare)
                     and isinstance(n.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
-                    and {'local_latest_nav', 'latest', 'start', 'window_start'} &
+                    and {'local_latest_nav', 'latest', 'start', 'window_start',
+                         'local_first_nav', 'first', 'window_end', 'end'} &
                     {getattr(x, 'id', '') for x in ast.walk(n)}]
-        return 'nav_cannot_cover_window' in called, compares
+        return called, compares
 
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(os.path.dirname(here))
     lifecycle = os.path.join(root, 'src', 'services', 'prediction_lifecycle.py')
     script = os.path.join(root, 'scripts', 'close_unknowable_predictions.py')
 
-    used, own = calls_ruler(lifecycle, 'should_close_as_stale_target')
-    assert used and not own, '验证器自己不问尺子、改在自己函数里比日期 ⇒ 第二把尺子'
-    used, own = calls_ruler(script, 'plan')
-    assert used, '存量收口脚本没走那把尺子 ⇒ 两边的"关不关"会各自漂'
+    called, own = facts(lifecycle, 'should_close_as_stale_target')
+    assert 'stale_close_evidence' in called, '关闭判据不再问那把尺子 ⇒ 两半永久证据会各自漂'
+    assert not own, '验证器自己比日期 ⇒ 第二把尺子'
+    called, own = facts(lifecycle, 'stale_close_evidence')
+    assert {'nav_cannot_cover_window', 'nav_started_after_window'} <= called, (
+        '两半永久证据必须都问一把尺子（少一半 = 第 53 轮 B-1 那个洞：新基金那一档没人认）')
+    assert not own, '这把总闸自己比日期 ⇒ 又造出一处实现'
+    used, own = facts(script, 'plan')
+    assert 'should_close_as_stale_target' in used, (
+        '存量收口脚本不整条问验证器那道门 ⇒ 两边"关不关"会各自漂（第 53 轮 A-2）')
     assert not own, '脚本里又手写了一遍日期比较 ⇒ 一处改了另一处不会跟着改'
 
 
@@ -302,9 +313,8 @@ def test_no_new_direct_fund_code_writes_appear():
     allowed = {
         # 唯一入口本体
         ('fund/fund_sync_manager.py', 'retag_prediction'),
-        # 人工编辑预测：同一函数里对"已生效结论"先 raise 再改（prediction_service.py:409），
-        # 所以它不会静默把结论留在改过的标的上
-        ('services/prediction_service.py', 'update_prediction_fields'),
+        # 第 53 轮 A-3 之后少了一处豁免：人工编辑预测不再自己 `fund_code = …`，
+        # 改成先问 `retag_gap` 再走 `retag_prediction` ⇒ 这站从名单里退出来。
         # 下面两处写的是 SectorFundMapping.fund_code（映射表自己的字段），不是预测
         ('services/sector_fund_agent.py', 'apply_decision'),
         ('services/sector_fund_service.py', 'update_mapping'),

@@ -42,9 +42,12 @@ def _seed(db, *, code, target_offset, nav_back_days, pred_type='up', held=False)
                    target_date=today - timedelta(days=target_offset), status='pending',
                    is_expired=False)
     if held:
-        # 上一轮验证器真问过、写过一把重问锁（那根日期晚于自己的目标日 = 只有锁会写在那儿）
-        # ⇒ 脚本这一次现问才算"第二次"，那句"已问过两次"才写得出口
-        p.next_verify_date = p.target_date + timedelta(days=30)
+        # 上一轮验证器真问过、写过一把**已经到点**的重问锁（那根日期晚于自己的目标日 = 只有
+        # 锁会写在那儿；且必须 ≤ 今天，否则锁还没到点，脚本这一轮就不该关）
+        # ⇒ 脚本这一次现问才算"第二次"，那句"已问过两次"才写得出口。
+        # 第 53 轮 A-2：这一档原来写成 `target_date + 30 天`（锁在**未来**），
+        # 正向用例于是替"锁没到点也关"这个错行为作了保。
+        p.next_verify_date = today - timedelta(days=1)
     db.add(p)
     if nav_back_days is not None:
         db.add(FundHistory(fund_code=code, nav_date=today - timedelta(days=nav_back_days),
@@ -92,6 +95,121 @@ def test_both_evidences_present_closes_and_leaves_the_verdict_untouched(test_db,
     assert log is not None and log.source == 'system'
 
 
+def test_the_archive_stamp_and_the_restore_deadline_come_from_the_beijing_clock(test_db, monkeypatch):
+    """归档时间戳与"保留到哪天"必须出自同一把北京钟（第 53 轮 A-11）。
+
+    本机看不见这一格（这台机器就在 +8）⇒ 只有**故意让墙钟与北京钟差一天**才测得到。
+    Render 的容器在 UTC：北京 00:00~08:00 关掉的行，`date.today()` 会少一天 ⇒
+    回收站里"保留到 X 日"比页面上的"截至日"早一天，而恢复下界正是拿它算的。
+    """
+    from datetime import datetime as real_datetime
+
+    import src.services.prediction_service as ps
+    from src.models.database import Prediction
+    from src.services import prediction_lifecycle as lc
+
+    mod = _import_script()
+    beijing = date(2026, 9, 27)
+    monkeypatch.setattr(lc, 'current_as_of', lambda: beijing)
+
+    class ConflictDate(date):
+        @classmethod
+        def today(cls):
+            return beijing - timedelta(days=1)
+
+    class ConflictDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real_datetime(2026, 9, 26, 23, 30)
+
+    monkeypatch.setattr(ps, 'date', ConflictDate)
+    monkeypatch.setattr(ps, 'datetime', ConflictDateTime)
+
+    p = _seed(test_db, code='DEAD98', target_offset=3, nav_back_days=400, held=True)
+    _stub_source(monkeypatch, {'DEAD98': []})
+    items, _skipped = mod.plan(test_db, beijing)
+    mod.apply_close(test_db, items, beijing)
+
+    row = test_db.query(Prediction).filter(Prediction.id == p.id).first()
+    assert row.restore_before == beijing + timedelta(days=30), (
+        '恢复下界又去问墙钟了 ⇒ 两把钟冲突时会少一天')
+    assert row.deleted_at.date() == beijing, (
+        '归档时刻的**日期**必须与页面上的"截至日"同一把钟：%s' % row.deleted_at)
+
+
+def test_a_two_ask_claim_is_only_allowed_when_the_row_can_produce_the_lock(test_db):
+    """回收站里那句"已问过两次"逐行问一句：这一行**当时真被锁过吗**（第 53 轮 B-6）。
+
+    A-4 修之前那一版收口脚本第一次问出来就关了，于是镜像 5 行带着这句话躺在回收站里，
+    而台账前像显示它们的 `next_verify_date` 全部 ≤ 自己的目标日（只有重问锁会写在那天之后）。
+    生产那 15 行问过一遍：日期确实晚于目标日 ⇒ 话是真的 ⇒ 这条订正必须一行都不动它们。
+    """
+    mod = _import_script()
+
+    def _archive(code, *, locked, by='system'):
+        p = _seed(test_db, code=code, target_offset=5, nav_back_days=400)
+        p.is_deleted = True
+        p.deleted_by = by
+        p.next_verify_date = (p.target_date + timedelta(days=30)) if locked \
+            else p.target_date            # 没锁过：那根日期还在目标日或其之前
+        p.delete_reason = ('标的 %s 的数据源给不出这段净值，%s ⇒ 无法判定，'
+                           '既不算判对也不算判错，不计入准确率' % (code, mod.UNPROVEN_CLAIM))
+        test_db.commit()
+        return p
+
+    unproven = _archive('LIE001', locked=False)
+    proven = _archive('TRUE01', locked=True)
+    manual = _archive('USER001', locked=False, by='user')   # 老板自己写的句子，不归我订正
+
+    found = mod.find_unproven_claims(test_db)
+    assert [p.id for p, _o, _n in found] == [unproven.id], (
+        '订正名单与"拿不出证据的行"对不上 ⇒ 要么漏了说谎的那行，要么动了有据的那行')
+    for _p, old, new in found:
+        assert mod.UNPROVEN_CLAIM not in new and '没有更早的重问记录' in new
+        assert '不计入准确率' in new, '改口不许顺手把准确率那句说明删掉'
+    test_db.refresh(proven)
+    test_db.refresh(manual)
+    assert mod.UNPROVEN_CLAIM in proven.delete_reason
+    assert mod.UNPROVEN_CLAIM in manual.delete_reason
+
+
+def test_rewriting_the_sentence_touches_only_that_column(test_db, monkeypatch):
+    """订正默认 dry-run 一行都不改；真改只动 `delete_reason`，并且先留下带原句的备份。"""
+    import json
+
+    mod = _import_script()
+    p = _seed(test_db, code='LIE002', target_offset=5, nav_back_days=400)
+    p.is_deleted = True
+    p.deleted_by = 'system'
+    p.next_verify_date = p.target_date
+    p.delete_reason = '数据源给不出这段净值，%s ⇒ 不计入准确率' % mod.UNPROVEN_CLAIM
+    test_db.commit()
+    before = {c.key: getattr(p, c.key) for c in p.__table__.columns}
+
+    found = mod.find_unproven_claims(test_db)
+    assert [x[0].id for x in found] == [p.id]
+    # 这一支**不问数据源**：改一句文案不该背 15 次外呼。真去问会被 conftest 的零网络闸
+    # 当场打死（`BlockedRealHttp`），所以这里故意不注入任何桩 —— 它响了就是这一支写歪了。
+    path = mod.apply_reword(test_db, found, date.today())
+    try:
+        test_db.refresh(p)
+        payload = json.load(open(path, encoding='utf-8'))
+        assert payload['plan'][0]['old'] == before['delete_reason'], '备份里要留着原句'
+        assert mod.UNPROVEN_CLAIM not in p.delete_reason
+        for key, value in before.items():
+            if key == 'delete_reason':
+                continue
+            assert getattr(p, key) == value, '订正只许动 delete_reason，%s 被碰了' % key
+        from src.models.database import PredictionChangeLog
+        log = test_db.query(PredictionChangeLog).filter(
+            PredictionChangeLog.prediction_id == p.id).order_by(
+            PredictionChangeLog.id.desc()).first()
+        assert log is not None and log.action == 'archive_note_fixed'
+        assert log.changed_fields == ['delete_reason'], log.changed_fields
+    finally:
+        os.remove(path)
+
+
 def test_a_row_never_locked_before_is_not_closed(test_db, monkeypatch):
     """第三条证据：这条行**以前没被锁过** ⇒ 脚本这一问就是第一次，不关（第 52 轮 A-4）。
 
@@ -106,15 +224,28 @@ def test_a_row_never_locked_before_is_not_closed(test_db, monkeypatch):
     items, skipped = mod.plan(test_db, date.today())
 
     assert items == [], '第一次问出来就关 ⇒ 那句"已问过两次"又是写多的'
-    assert [s[0] for s in skipped] == [p.id] and '第一次' in skipped[0][2]
+    assert [s[0] for s in skipped] == [p.id] and '只该上锁' in skipped[0][2]
     test_db.refresh(p)
     assert p.is_deleted is False
 
-    from src.services.prediction_lifecycle import close_as_stale_target_note
-    twice = close_as_stale_target_note(p, None, None)
-    once = close_as_stale_target_note(p, None, None, asked_times=1)
-    assert '已问过两次' in twice, '第二次的说法不许被改掉（判据与既有回收站文案同源）'
-    assert '已问过两次' not in once and '第一次' in once, '只问过一次却写"两次" ⇒ 那句话仍然是假的'
+
+def test_a_lock_that_has_not_expired_yet_is_not_closed(test_db, monkeypatch):
+    """锁**还没到点**的行不许被脚本关掉（第 53 轮 A-2：脚本原来只抄了判据的一半）。
+
+    `should_close_as_stale_target` 里有"上一轮被锁过"与"锁已到点"两道，上一版脚本只抄前者
+    ⇒ 实测同一行（锁 2026-10-24、今天 09-27）验证器 False、脚本"可关 1 条"。
+    现在整条判据交回验证器那个函数，少任何一道都关不成。
+    """
+    mod = _import_script()
+    p = _seed(test_db, code='FUTU99', target_offset=3, nav_back_days=400, held=True)
+    p.next_verify_date = date.today() + timedelta(days=30)     # 锁还在未来
+    test_db.commit()
+    _stub_source(monkeypatch, {'FUTU99': []})
+
+    items, skipped = mod.plan(test_db, date.today())
+
+    assert items == [], '锁没到点 ⇒ 这一轮连"第二次"都还没成立'
+    assert [s[0] for s in skipped] == [p.id] and '还没到点' in skipped[0][2]
 
 
 def test_a_recent_nav_row_means_we_are_stale_not_the_fund(test_db, monkeypatch):
@@ -167,6 +298,49 @@ def test_restore_from_backup_is_dry_run_by_default(test_db, monkeypatch):
         assert p.is_correct is None, '还原也不会凭空写出结论'
     finally:
         os.remove(path)        # 用例自己造的备份，绝不留在仓库里（上一轮那种残渣就是这么来的）
+
+
+def test_restore_refuses_to_overwrite_a_row_somebody_else_touched(test_db, monkeypatch):
+    """还原 = 撤销**我这一次**动作，不是"把行盖回备份"（第 53 轮 B-3 / 任务 #117）。
+
+    中间如果这一行被别人动过（改过原因、换了署名、甚至已经放回活跃列表），
+    旧的写法只按 id 盖回去 ⇒ 老板手动归档的署名与他写的原因被无声清掉，台账还自称 `user`。
+    现在必须先比对现状，不符就整行拦下来；只有显式 `--force-restore` 才硬盖。
+    """
+    from src.models.database import Prediction
+
+    mod = _import_script()
+    p = _seed(test_db, code='RSVR99', target_offset=3, nav_back_days=400, held=True)
+    _stub_source(monkeypatch, {'RSVR99': []})
+    items, _ = mod.plan(test_db, date.today())
+    path = mod.apply_close(test_db, items, date.today())
+    test_db.refresh(p)
+    assert p.is_deleted is True
+
+    # 有人在关闭之后往这句话后面补了内容 ⇒ 现状与备份不一致
+    p.delete_reason = p.delete_reason + '（老板补的一句）'
+    test_db.commit()
+
+    try:
+        assert mod.restore(test_db, path, apply_it=True) == 4, '现状不符时必须拒还原'
+        test_db.refresh(p)
+        assert p.is_deleted is True, '拦下来的行一行都不许动'
+        assert '老板补的一句' in p.delete_reason, '拦下来还不算完：那句话不能被盖掉'
+
+        # 署名不是 system ⇒ 同样拦（这一行已经不是"我关的"了）
+        p.delete_reason = items[0]['note']          # 把上一处差异修回去，只留署名这一处
+        p.deleted_by = 'user'
+        test_db.commit()
+        assert mod.restore(test_db, path, apply_it=True) == 4
+        test_db.refresh(p)
+        assert p.deleted_by == 'user' and p.is_deleted is True
+
+        # 显式硬盖才放行，并且要说清拦了几行
+        assert mod.restore(test_db, path, apply_it=True, force=True) == 0
+        test_db.refresh(p)
+        assert p.is_deleted is False and p.deleted_by is None
+    finally:
+        os.remove(path)
 
 
 def test_cli_refuses_before_touching_the_database():

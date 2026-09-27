@@ -407,6 +407,64 @@ def test_lifecycle_filter_and_facets_expose_due_queue(test_db):
     assert facets["upcoming"] == 2
 
 
+def test_the_pending_bucket_asks_for_a_conclusion_not_for_the_status_column(test_db):
+    """「待验证」那个数问的是**有没有结论**，不是遗留列 `predictions.status`（第 53 轮 A-5）。
+
+    镜像今天两把尺子**恰好逐档对上**（未判 422 条 ↔ `status='pending'` 422 条），
+    这正是它一直没被发现的原因。而 `classify`、验证器、改标咽喉全都按 `is_correct` 说话，
+    生产上还量到过 `status='success'` 而 `is_correct` 为空的漂移行 ⇒
+    页面上的数与点进去的列表会各说一套。这里把两行"会说谎的 status"摆进夹具：
+    ① 列说没验、其实判对了 ⇒ 不许再算进「待验证」；
+    ② 列说验过了、其实没有结论 ⇒ 必须算进「待验证」，点进去也要看得见它。
+    """
+    from src.models.database import Blogger, Post
+    from src.services.prediction_lifecycle import current_as_of
+    from src.services.prediction_query_service import PredictionQueryService
+
+    _seed_ordering_predictions(test_db)
+    first_post = test_db.query(Post).first()
+    first_blogger = test_db.query(Blogger).first()
+    today = current_as_of()
+    test_db.add_all([
+        # ① 列说"还没验"，其实早就判对了
+        Prediction(post_id=first_post.id, blogger_id=first_blogger.id,
+                   fund_code="liar_verdict", prediction_type="up",
+                   prediction_date=today - timedelta(days=30),
+                   target_date=today - timedelta(days=20),
+                   status="pending", is_correct=True, is_expired=True, is_deleted=False),
+        # ② 列说"验过了"，其实一个结论都没有
+        Prediction(post_id=first_post.id, blogger_id=first_blogger.id,
+                   fund_code="liar_no_verdict", prediction_type="up",
+                   prediction_date=today - timedelta(days=2),
+                   target_date=today + timedelta(days=30),
+                   status="success", is_correct=None, is_deleted=False),
+    ])
+    test_db.commit()
+
+    service = PredictionQueryService(test_db)
+    facets = service.search()["meta"]["facets"]
+    unjudged = {"due_old", "due_today", "upcoming_near", "upcoming_far", "liar_no_verdict"}
+
+    listed = {row["fund_code"] for row in service.search(status="pending")["data"]}
+    assert listed == unjudged, (
+        '「待验证」点进去的列表还在读遗留列 status ⇒ 与页面上的数两套口径：%s'
+        % (listed ^ unjudged))
+    judged = {row["fund_code"] for row in service.search(status="verified")["data"]}
+    assert judged == {"verified", "liar_verdict"}
+    assert facets["pending"] == len(unjudged)
+    assert facets["verified"] == 2
+    # 三档加起来仍是"未判的全部"：这条数不再来自某一列，而是来自同一把尺子
+    assert (facets["due"] + facets["unverifiable"] + facets["upcoming"]
+            == facets["pending"] == facets["all"] - facets["verified"]), facets
+
+    # 反空判：夹具自己必须**让两把尺子给出不同的名单**，否则这条判据结构上不可能红
+    legacy_pending = {p.fund_code for p in test_db.query(Prediction).filter(
+        Prediction.is_deleted == False, Prediction.status == "pending").all()}
+    assert legacy_pending != unjudged, (
+        '夹具里的"说谎行"没造出来 ⇒ 两把尺子今天恰好同数，这条判据看不见回退'
+        '（镜像此刻正是 422=422 的那种巧合）')
+
+
 def test_explicit_sort_options_override_due_first(test_db):
     from src.services.prediction_query_service import PredictionQueryService
 

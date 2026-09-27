@@ -87,6 +87,10 @@ def test_a_structural_verdict_holds_the_row_out_of_todays_queue(test_db, monkeyp
     assert p.id not in {x.id for x in filter_due_for_verify(test_db, as_of=as_of)}
     assert {x.id for x in filter_unverifiable(test_db, as_of=as_of)} == {p.id}
     assert '结构性不可验' in (lc.due_skip_reason(p, as_of=as_of) or '')
+    # 这句话不许自指（第 53 轮 A-1）：被压住的原因是两档，而行上没有 reason 列，
+    # "见上方「上次验证未成功原因」"既指不到、那一栏印的也正是这句本身
+    reason_line = lc.due_skip_reason(p, as_of=as_of)
+    assert '见上方' not in reason_line and '哪两种原因' not in reason_line
 
 
 def test_a_failure_that_was_never_asked_about_does_not_hold_the_row(test_db, monkeypatch):
@@ -206,6 +210,10 @@ def test_a_live_fund_with_a_history_gap_is_never_closed(test_db, monkeypatch):
 
     p = _seed(test_db, target=TODAY - timedelta(days=3),
               next_verify=TODAY - timedelta(days=1), fund_code='LIVE01')
+    # 窗口**之前**也要有一行，才真的是"缺中间那段"（历史洞）。只留窗口之后那一行的话，
+    # 形状就变成"库里首笔晚于窗口终点" = 第 53 轮 B-1 那档永久判不出，会被新证据关掉。
+    test_db.add(FundHistory(fund_code='LIVE01', nav_date=TODAY - timedelta(days=40),
+                            nav=1.31))
     test_db.add(FundHistory(fund_code='LIVE01', nav_date=TODAY - timedelta(days=2),
                             nav=1.5))
     test_db.commit()
@@ -277,6 +285,148 @@ def test_a_refused_close_still_puts_the_lock_back(test_db, monkeypatch):
     test_db.refresh(p)
     assert p.is_deleted is False and p.next_verify_date == held
     assert p.id not in {x.id for x in filter_due_for_verify(test_db, as_of=TODAY)}
+
+
+def test_a_window_entirely_before_the_first_nav_row_closes_the_row(test_db, monkeypatch):
+    """第 53 轮 B-1 的 BLOCKER：窗口**整段早于**库里首笔净值 ⇒ 这是第二种"永久"，得单独认。
+
+    镜像实测 12 行到期未判里有这一族（`515440` 五条：窗口 07-23~08-20，库里首笔 09-02）：
+    末条净值活得好好地在窗口之后 ⇒ `nav_cannot_cover_window`（末条早于起点）恒为 False ⇒
+    关不掉，而重问日每三天把它们弹回「待验证到期」再踢出去一次 ⇒ 老板那句"打开后我不想看到
+    过期没验的预测"每个周期破一次。源端已经答过"这段没有"（`no_source_history` 的前提），
+    而库里在窗口终点**之后**有行 ⇒ 不是我们同步坏了，是那几天它真的还没有净值。
+    """
+    from src.models.database import FundHistory
+
+    p = _seed(test_db, target=TODAY - timedelta(days=3),
+              next_verify=TODAY - timedelta(days=1), fund_code='NEW01')
+    test_db.add(FundHistory(fund_code='NEW01', nav_date=TODAY - timedelta(days=2), nav=1.0))
+    test_db.add(FundHistory(fund_code='NEW01', nav_date=TODAY - timedelta(days=1), nav=1.01))
+    test_db.commit()
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'no_source_history', 'message': '这段没有'})
+
+    result = svc.verify_prediction(p.id)
+
+    test_db.refresh(p)
+    assert result['closed_as_unverifiable'] is True, '第二种永久形状不许没人认'
+    assert p.is_deleted is True and p.deleted_by == 'system' and p.is_correct is None
+    assert '还没有开始发净值' in p.delete_reason, '这句话不能说成"停更"（方向相反）'
+    assert (TODAY - timedelta(days=2)).isoformat() in p.delete_reason
+
+
+def test_the_two_permanent_shapes_are_told_apart():
+    """`stale_close_evidence` 是一张表，不是一句猜：停更 / 还没开始 / 洞 / 说不清 各一格。"""
+    d = lc.stale_close_evidence
+    gone = TODAY - timedelta(days=400)
+    assert d(local_latest_nav=gone, window_start=TODAY - timedelta(days=10)) == 'stopped'
+    assert d(local_first_nav=TODAY - timedelta(days=2),
+             window_end=TODAY - timedelta(days=3)) == 'pre_inception'
+    # 库里两头都有行、只是中间缺一段 ⇒ 洞，补拉能填，两种永久都不许认
+    assert d(local_latest_nav=TODAY - timedelta(days=2), window_start=TODAY - timedelta(days=10),
+             local_first_nav=TODAY - timedelta(days=40), window_end=TODAY - timedelta(days=3)) is None
+    # 日期说不清一律不敢下结论
+    assert d(local_latest_nav=None, window_start=None,
+             local_first_nav=None, window_end=None) is None
+    assert d(local_first_nav=TODAY - timedelta(days=2), window_end=None) is None
+
+
+def test_a_retag_sends_the_old_targets_lock_back_below_the_target(test_db):
+    """改标必须把压在**旧标的**上的重问锁退回目标日之前（第 53 轮 B-5）。
+
+    不清它：`was_locked_previously` 只看"那根日期晚于自己的目标日"，而锁恰好写在晚于的位置上
+    ⇒ 换了标的之后的第一次结构性结论会被读成"第二次"，条件齐了就当场进回收站。
+    """
+    from src.fund.fund_sync_manager import FundSyncManager
+    from src.models.database import FundHistory
+
+    p = _seed(test_db, target=TODAY - timedelta(days=3),
+              next_verify=TODAY + timedelta(days=20), fund_code='RTG01')
+    # 新标的给得出这段窗口的证据 ⇒ 改标本身该放行（不然这条用例验不到"清锁"那一半）
+    test_db.add_all([FundHistory(fund_code='RTG02', nav_date=TODAY - timedelta(days=10), nav=1.0),
+                     FundHistory(fund_code='RTG02', nav_date=TODAY - timedelta(days=3), nav=1.1)])
+    test_db.commit()
+
+    FundSyncManager.retag_prediction(test_db, p, 'RTG02', '改标后的基金', source='unit_test')
+    # `retag_prediction` 自己不提交（调用方负责），不 commit 就 refresh 等于把这次改标回滚掉
+    test_db.commit()
+    test_db.refresh(p)
+    assert p.fund_code == 'RTG02'
+    assert p.next_verify_date <= p.target_date, (
+        '旧标的的那把锁还挂着 ⇒ 新标的的第一问会被当成第二次，可能一跳进回收站')
+
+
+def test_only_the_hold_writes_a_date_after_the_target(tmp_path):
+    """`next_verify_date` 的写侧站点必须闭合（第 52 轮 A-7）—— 这条不变式是整个"问过两次"的根基。
+
+    判据分两半，缺一个都不算钉住：
+    ① **本条**：全仓能写这一列的代码点逐字等于登记名单，加一处不登记就红、登记了却没写也红；
+    ② 名单里除 `apply_unverifiable_hold` 之外，每一站写进去的日期都被夹在目标日之前 ——
+      创建侧由 `test_the_creation_schedule_never_writes_a_date_after_the_target` 钉，
+      改标侧由 `test_a_retag_sends_the_old_targets_lock_back_below_the_target` 钉。
+    边界说清楚：本条只数"谁写了这一列"，不静态证明"写进去的是哪天"（那一半是行为判据的活）。
+    """
+    import ast
+    import os
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(here))
+    registered = {
+        # 唯一会写"晚于目标日"的那一天的一道（结构性结论的重问日）
+        ('src/services/prediction_lifecycle.py', 'apply_unverifiable_hold'),
+        ('src/services/prediction_lifecycle.py', 'release_unverifiable_hold'),
+        # 改标：把旧标的的锁退回目标日（行为判据在上一条）
+        ('src/fund/fund_sync_manager.py', 'retag_prediction'),
+        ('src/services/prediction_service.py', 'update_prediction_fields'),
+        # 创建：构造行时排期，两个出口都被 min(..., target) 夹住
+        ('src/services/post_analysis_service.py', '_build_prediction'),
+        ('src/utils/concurrent_analyzer.py', 'analyze_posts_concurrent'),
+        ('src/utils/concurrent_analyzer.py', 'analyze_single_post'),
+        # 一次性修复工具（不入库的路径不在这儿）
+        ('scripts/repair_replay_side_effects.py', 'main'),
+    }
+
+    def site_names(node):
+        out = set()
+        for n in ast.walk(node):
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Attribute) and t.attr == 'next_verify_date':
+                        out.add('assign')
+            if isinstance(n, ast.Call):
+                fn = getattr(n.func, 'id', '') or getattr(n.func, 'attr', '')
+                if (fn == 'setattr' and len(n.args) > 1
+                        and isinstance(n.args[1], ast.Constant)
+                        and n.args[1].value == 'next_verify_date'):
+                    out.add('setattr')
+            if isinstance(n, ast.keyword) and n.arg == 'next_verify_date':
+                out.add('kwarg')
+        return out
+
+    found = set()
+    for base in ('src', 'scripts'):
+        for dirpath, _dirs, files in os.walk(os.path.join(root, base)):
+            for name in files:
+                if not name.endswith('.py'):
+                    continue
+                path = os.path.join(dirpath, name)
+                rel = os.path.relpath(path, root).replace(os.sep, '/')
+                tree = ast.parse(open(path, encoding='utf-8').read())
+                for fn in [n for n in ast.walk(tree)
+                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+                    if site_names(fn):
+                        found.add((rel, fn.name))
+    assert found == registered, (
+        '写 next_verify_date 的站点与登记名单对不上：多出 %s / 少登记 %s ⇒ '
+        '"晚于目标日的那一天只可能由重问锁写下"这句判据的地基开始漏' %
+        (sorted(found - registered), sorted(registered - found)))
+
+    # 反空判：现造一处（async 也算）必须被点名
+    fake = ast.parse("async def elsewhere(p):\n"
+                     "    p.next_verify_date = None\n")
+    hit = any(site_names(n) for n in ast.walk(fake)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    assert hit, '扫描器自己恒空 ⇒ 这条判据等于没判（第 53 轮 A-7：async def 曾经是盲区）'
 
 
 def test_a_degenerate_endpoint_holds_the_row_out_of_the_due_queue(test_db, monkeypatch):
@@ -385,6 +535,76 @@ def test_the_structural_reasons_are_all_dispositioned(test_db):
     assert tampered != closable | lock_only, '空判对照：塞一档进来必须被上面那条发现'
 
 
+def test_the_verifier_s_whole_vocabulary_is_dispositioned(test_db):
+    """三张名单不能只跟彼此对表 —— 必须跟**验证器真会答的那些 reason**对表（第 53 轮 A-8 = B-8）。
+
+    上面那条 `test_the_structural_reasons_are_all_dispositioned` 只问"名单拼得上吗"，
+    它看不见两件本批真的踩到的事：
+    ① 名单里挂着一档验证器**从来不会答**的理由 ⇒ 那条锁/关的代码是死路（#112 就是这么藏着的）；
+    ② 验证器新答一档、名单里没人认领 ⇒ 它掉进"既不锁也不关"的默认分支，
+      于是"到期却永远判不出来"又回到页面上（老板点名要清零的那一档）。
+    所以这里从 `_check_fund_data_availability` 的源码里**现读**词表，再对三张名单。
+    """
+    import ast as _ast
+    import inspect
+    import os
+
+    from src.services.prediction_verify_service import PredictionVerifyService
+
+    src_path = inspect.getsourcefile(PredictionVerifyService)
+    assert os.path.abspath(src_path).replace(os.sep, '/').endswith(
+        'src/services/prediction_verify_service.py'), src_path
+    fn = None
+    for node in _ast.walk(_ast.parse(open(src_path, encoding='utf-8').read())):
+        if (isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                and node.name == '_check_fund_data_availability'):
+            fn = node
+            break
+    assert fn is not None, '找不到 `_check_fund_data_availability` ⇒ 词表扫描恒空，这条判据没判'
+
+    answers = set()          # 验证器会答出口的全部 reason 字面量
+    for node in _ast.walk(fn):
+        if isinstance(node, _ast.keyword) and node.arg == 'reason':
+            if isinstance(node.value, _ast.Constant) and isinstance(node.value.value, str):
+                answers.add(node.value.value)
+        elif isinstance(node, _ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if (isinstance(k, _ast.Constant) and k.value == 'reason'
+                        and isinstance(v, _ast.Constant) and isinstance(v.value, str)):
+                    answers.add(v.value)
+    assert answers, '词表扫出来是空的 ⇒ 这条判据结构上不可能红'
+
+    structural = set(lc.STRUCTURAL_VERDICT_REASONS)
+    # 会自愈的失败：明天净值到了就判得出来 ⇒ 绝不配锁（锁了等于亲手藏一条可验的预测）
+    self_healing = {'insufficient_points', 'no_history', 'end_nav_too_old',
+                    'endpoint_lag_unproven', 'waiting_target_nav'}
+    # "数据够了"那一侧的三种说明：本来就不是失败
+    enough = {'exact_target', 'weekend_previous', 'waited_previous'}
+
+    assert answers == structural | self_healing | enough, (
+        '验证器的词表与三档名单对不上 ⇒ 要么新增一档没人处置（会掉进默认分支、'
+        '永远回到到期队列），要么名单里挂着一档它从不答的（那条锁/关是死路）：%s'
+        % (answers ^ (structural | self_healing | enough)))
+    assert not (structural & self_healing) and not (structural & enough), \
+        '一档 reason 不许既"结构性"又"会自愈"'
+
+    # 名单不只是标签：行为必须跟着分档走（否则对表通过、代码仍然锁错）
+    full_close = dict(previous_hold=TODAY - timedelta(days=1),
+                      target_date=TODAY - timedelta(days=3),
+                      local_latest_nav=TODAY - timedelta(days=400),
+                      window_start=TODAY - timedelta(days=3), today=TODAY)
+    for reason in self_healing | enough:
+        assert lc.is_structural_verdict(reason) is False, '%s 被当成结构性失败 ⇒ 会上锁' % reason
+        assert lc.should_close_as_stale_target(verdict_reason=reason, **full_close) is False, (
+            '%s 判得出关闭 ⇒ 一条明天就能验的预测被收进回收站' % reason)
+    for reason in structural:
+        assert reason in answers, '名单挂着 %s，验证器从不答它 ⇒ 那条路是死代码' % reason
+
+    # 反空判：验证器多答一档、名单没人认领时，上面那条对表必须响
+    assert (answers | {'a_reason_nobody_registered'}) != structural | self_healing | enough, (
+        '空判：新增一档 reason 不会被发现')
+
+
 def test_only_one_place_decides_whether_a_failure_is_structural():
     """"哪些失败算结构性"这句话只许 `is_structural_verdict` 一处回答（第 52 轮 B-1）。
 
@@ -428,9 +648,12 @@ def test_only_one_place_decides_whether_a_failure_is_structural():
                 continue
             rel = os.path.relpath(os.path.join(base, name), root).replace(os.sep, '/')
             scanned += 1
-            for fn in [n for n in _ast.walk(_ast.parse(
-                    open(os.path.join(root, rel), encoding='utf-8').read()))
-                    if isinstance(n, _ast.FunctionDef)]:
+            tree = _ast.parse(open(os.path.join(root, rel), encoding='utf-8').read())
+            # `FunctionDef` 与 `AsyncFunctionDef` 一起走（第 53 轮 A-7 = B-7）：
+            # 只数前者的话，`src/` 里那些 `async def` 是结构性盲区 —— 抄第二把尺子的人
+            # 只要把函数写成 async，这条判据就永远看不见。
+            for fn in [n for n in _ast.walk(tree)
+                       if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))]:
                 for lineno in reason_gates(fn):
                     offenders.append('%s:%d' % (rel, lineno))
     assert scanned > 50, '扫描面塌了（只数到 %d 个文件）⇒ 这条判据结构上不可能红' % scanned
@@ -444,6 +667,13 @@ def test_only_one_place_decides_whether_a_failure_is_structural():
     fake_tuple = _ast.parse("def gate(reason):\n"
                             "    return reason in ('no_source_history', 'same_nav_endpoint')\n")
     assert reason_gates(fake_tuple), '抄成元组名单的那一把看不见 ⇒ 判据有洞'
+    # 第三条样品：**同一个函数写成 async** ⇒ 扫描面必须仍然盖到它（A-7 = B-7 那一格）
+    tree = _ast.parse("async def gate(reason):\n"
+                      "    return reason == 'no_source_history'\n")
+    async_hits = [ln for n in _ast.walk(tree)
+                  if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                  for ln in reason_gates(n)]
+    assert async_hits, 'async def 又成盲区了 ⇒ 写成异步就能抄第二把尺子'
 
 
 def test_the_close_decision_reads_both_conditions_not_just_the_answer(test_db):

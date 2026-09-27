@@ -1151,6 +1151,14 @@ class PredictionVerifyService:
                     FundHistory.fund_code == fund_code).order_by(
                     FundHistory.nav_date.desc()).first()
                 latest_nav = self._as_date(newest[0]) if newest else None
+                # 第一笔净值在哪天同样要点名（第 53 轮 B-1 的 BLOCKER）：窗口整段早于首笔
+                # ⇒ 这只标的在那几天还没开始发净值，同步永远补不出来，而"末条早于窗口起点"
+                # 那把尺子对这种行恒为 False ⇒ 光认停更会把这 12 行永远留在"重问 ⇒ 弹回到期
+                # ⇒ 再踢出去"的圈里。
+                oldest = self.db.query(FundHistory.nav_date).filter(
+                    FundHistory.fund_code == fund_code).order_by(
+                    FundHistory.nav_date.asc()).first()
+                first_nav = self._as_date(oldest[0]) if oldest else None
                 archived = False
                 if should_close_as_stale_target(
                         verdict_reason=data_check.get('reason'),
@@ -1158,11 +1166,16 @@ class PredictionVerifyService:
                         target_date=target_date,
                         local_latest_nav=latest_nav,
                         window_start=nav_start_date,
+                        local_first_nav=first_nav,
+                        window_end=window_end,
                         today=today):
-                    # 同一个窗口第二次被源端答"没有"，且这只产品从窗口开始之前就没再发过净值
-                    # ⇒ 判不了是永久事实，不是"再等等"。收进回收站（带原因、可恢复、不写结论）。
+                    # 同一个窗口第二次被源端答"没有"，且这只产品对这段窗口**永久**给不出净值
+                    # （停更、或那几天它还没开始发净值）⇒ 判不了是永久事实，不是"再等等"。
+                    # 收进回收站（带原因、可恢复、不写结论）。
                     from src.services.prediction_service import PredictionService
-                    note = close_as_stale_target_note(prediction, latest_nav, nav_start_date)
+                    note = close_as_stale_target_note(
+                        prediction, latest_nav, nav_start_date,
+                        first_nav=first_nav, window_end=window_end)
                     archived = PredictionService(self.db).close_as_unverifiable(prediction.id, note)
                     if archived:
                         closed_as = note

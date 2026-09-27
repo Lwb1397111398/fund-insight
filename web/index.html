@@ -252,11 +252,11 @@
                         <button class="action-btn small" :class="predictionFilter === 'due' ? 'danger' : 'default'"
                             @click="setPredictionFilter('due')" title="已到目标日、仍在验证窗口内，可立即验证">待验证到期 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.due) }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'unverifiable' ? 'warning' : 'default'"
-                            @click="setPredictionFilter('unverifiable')" title="验证器已按区间问过、这一轮判不出结论 ⇒ 今天点验证也问不出来；到重问日自动回到「待验证到期」。到底是哪一种原因，看上方「上次验证未成功原因」那一条">结构性不可验 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.unverifiable) }})</button>
+                            @click="setPredictionFilter('unverifiable')" title="验证器已按区间问过、这一轮判不出结论 ⇒ 今天点验证也问不出来；到重问日自动回到「待验证到期」。到底是哪一档原因，只在跑完一次「验证全部」后的回执里（行上不存原因）">结构性不可验 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.unverifiable) }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'upcoming' ? 'warning' : 'default'"
                             @click="setPredictionFilter('upcoming')" title="尚未到目标日">未到期 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.upcoming) }})</button>
                         <button class="action-btn small" :class="predictionFilter === 'pending' ? 'warning' : 'default'"
-                            @click="setPredictionFilter('pending')" title="包含未到期与观望预测；可立即验证的请看「待验证到期」">待验证 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.pending) }})</button>
+                            @click="setPredictionFilter('pending')" title="还没有结论的全部预测（含「待验证到期」「结构性不可验」「未到期」三档）；今天点验证只跑到「待验证到期」那一档">待验证 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.pending) }})</button>
                         <button class="action-btn small"
                             :class="predictionFilter === 'verified' ? 'success' : 'default'"
                             @click="setPredictionFilter('verified')">已验证 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.verified) }})</button>
@@ -267,7 +267,7 @@
                         <button class="action-btn small" :class="predictionFilter === 'archived' ? 'danger' : 'default'"
                             @click="setPredictionFilter('archived')"><i class="ri-archive-line"></i> 回收站 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.archived) }})</button>
                     </div>
-                    <div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「结构性不可验」= 验证器已按区间问过、这一轮判不出结论（净值补不上来，或目标日那天没有独立净值行），今天点验证也问不出来，到重问日自动回到「待验证到期」；「未到期」= 还没到目标日；「待验证」= 未到期与观望之和，别把它当成"可以验了"。</div>
+                    <div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「结构性不可验」= 验证器已按区间问过、这一轮判不出结论（净值补不上来，或目标日那天没有独立净值行），今天点验证也问不出来，到重问日自动回到「待验证到期」；「未到期」= 还没到目标日；「待验证」= 还没有结论的全部（＝待验证到期＋结构性不可验＋未到期），别把它当成"今天能验了"。</div>
                     <div class="post-filter-bar prediction-filter-bar">
                         <input v-model="predictionFilters.keyword" @keyup.enter="applyPredictionFilters" placeholder="搜索博主、基金、板块或内容">
                         <select v-model="predictionFilters.blogger_id"><option value="">全部博主</option><option v-for="b in bloggers" :key="b.id" :value="b.id">{{ b.name }}</option></select>
