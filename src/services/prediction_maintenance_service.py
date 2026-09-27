@@ -1,7 +1,7 @@
 """预测维护操作：默认只读预览，写入必须由路由显式确认。"""
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date
 from typing import Dict, List, Optional
 
 from sqlalchemy import func
@@ -13,6 +13,7 @@ from src.services.prediction_change_log_service import (
     add_prediction_change_log,
     snapshot_prediction,
 )
+from src.services.prediction_lifecycle import archive_stamp
 from src.utils.blogger_stats import recalculate_blogger_stats
 
 
@@ -106,10 +107,12 @@ class PredictionMaintenanceService:
                     if prediction.fund_code:
                         affected_funds.add(prediction.fund_code)
                     prediction.is_deleted = True
-                    prediction.deleted_at = datetime.now()
+                    # 归档那一对时间戳不许自己算（第 54 轮 A-1 / B-2）：上一批把
+                    # `_soft_archive` 改成北京钟时漏了这条活路（页面「合并相似预测」真在走它），
+                    # 于是"合并掉的那批行"在 Render 上仍然少一天。
+                    prediction.deleted_at, prediction.restore_before = archive_stamp()
                     prediction.deleted_by = "maintenance"
                     prediction.delete_reason = f"duplicate_of_{group['keep_id']}"
-                    prediction.restore_before = date.today() + timedelta(days=30)
                     add_prediction_change_log(
                         self.db,
                         prediction,

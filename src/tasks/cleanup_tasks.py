@@ -36,7 +36,9 @@ class CleanupManager:
             expired_predictions = db.query(Prediction).filter(
                 Prediction.target_date < cutoff_date,
                 Prediction.is_deleted == False,
-                Prediction.status != 'pending'  # 跳过未验证的预测，留给验证任务处理
+                Prediction.is_correct.isnot(None),  # 只清**有结论**的（第 54 轮 B-3：
+                # 原来读遗留列 `status != 'pending'`，而这条会删行 —— 一页之上「待验证」
+                # 已经按 `is_correct` 说话，两边共用一把尺子才不会哪天删掉没结论的行
             ).all()
             
             if not expired_predictions:
@@ -250,7 +252,7 @@ class CleanupManager:
             from src.models.database import FundInfo
             
             active_long_predictions = db.query(Prediction).filter(
-                Prediction.status == 'pending',
+                Prediction.is_correct.is_(None),        # 「没有结论」⇒ 净值还得留着（同一把尺子）
                 Prediction.target_date > cutoff_90
             ).all()
             
@@ -469,7 +471,9 @@ class CleanupManager:
             expired_predictions = db.query(Prediction).filter(
                 Prediction.target_date < cutoff_date,
                 Prediction.is_deleted == False,
-                Prediction.status != 'pending'  # 跳过未验证的预测，留给验证任务处理
+                Prediction.is_correct.isnot(None),  # 只清**有结论**的（第 54 轮 B-3：
+                # 原来读遗留列 `status != 'pending'`，而这条会删行 —— 一页之上「待验证」
+                # 已经按 `is_correct` 说话，两边共用一把尺子才不会哪天删掉没结论的行
             ).order_by(Prediction.target_date.asc()).limit(limit).all()
 
             if not expired_predictions:

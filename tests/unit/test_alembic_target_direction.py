@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.unit.test_prediction_migrations import killed_by_the_os
+
 ROOT = Path(__file__).resolve().parents[2]
 REMOTE = 'postgresql://u:S3cr3tPW@evil.invalid/proddb'
 
@@ -32,13 +34,29 @@ def _child_env(**overrides):
     return env
 
 
+def _spawn(args, attempts=3, **overrides):
+    """起子进程跑 alembic；**只有"像被系统打死"的退码**才重跑，脚本自己返回非 0 一次都不许多试。
+
+    本机 8 GB 内存、常年轻微吃紧：Windows 会把刚起的解释器直接打死（0xC0000374），
+    而且 stdout/stderr 全空 —— 那句 `assert '[abort]' in blob` 于是替环境问题响成代码回归
+    （2026-09-27 单元基线 1217 passed / 1 failed 就是这么来的，退码非 0 而 blob 是空串）。
+    同一族处理在第 43 轮就立过规矩，见 `test_prediction_migrations.py` 的
+    `_run_the_migration_script`；尺子 `killed_by_the_os` 共用那一条，不再搓第二把。
+    """
+    env = _child_env(**overrides)
+    result = None
+    for _ in range(attempts):
+        result = subprocess.run([sys.executable] + list(args), cwd=str(ROOT), env=env,
+                                capture_output=True, text=True, encoding='utf-8',
+                                errors='replace', timeout=300)
+        if not killed_by_the_os(result.returncode):
+            return result
+    return result
+
+
 def _run_alembic_offline(**overrides):
     """`--sql` 是离线模式：不连任何库，只用解析出来的 URL 选方言 ⇒ 方言就是它认定的目标。"""
-    result = subprocess.run(
-        [sys.executable, '-m', 'alembic', 'upgrade', 'head', '--sql'],
-        cwd=str(ROOT), env=_child_env(**overrides),
-        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
-    )
+    result = _spawn(['-m', 'alembic', 'upgrade', 'head', '--sql'], **overrides)
     return result.returncode, result.stdout + result.stderr
 
 
@@ -112,11 +130,10 @@ def test_a_supplied_connection_still_runs(tmp_path):
         '    command.upgrade(cfg, "head")\n'
         'print("BOOT-PATH-OK")\n' % (str(ROOT / 'alembic.ini'), db.as_posix()),
         encoding='utf-8')
-    result = subprocess.run(
-        [sys.executable, str(script)], cwd=str(ROOT),
-        env=_child_env(DATABASE_URL=REMOTE, ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None,
-                       LOCAL_DB_URL=None),
-        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    result = _spawn(
+        [str(script)],
+        DATABASE_URL=REMOTE, ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None,
+        LOCAL_DB_URL=None)
     assert 'BOOT-PATH-OK' in result.stdout, \
         '交了连接还被拒 ⇒ 生产启动会被这条闸门挡住（stderr 尾部：%s）' % result.stderr[-600:]
     # 第 41 轮 A-M1：这条路放行 DDL 的依据是"连接由调用方交进来"，而两道旗子一面都没立。
@@ -149,25 +166,20 @@ def test_a_second_ini_pointing_at_a_remote_is_refused_too(tmp_path):
                                     LOCAL_DB_URL=None)
     assert rc == 0 and 'Context impl SQLiteImpl' in blob     # 对照组：默认 ini + 本地库照常
     ini = _second_ini(tmp_path, REMOTE)
-    result = subprocess.run(
-        [sys.executable, '-m', 'alembic', '-c', ini, 'upgrade', 'head', '--sql'],
-        cwd=str(ROOT), env=_child_env(DATABASE_URL='sqlite:///data/fund_insight.db',
-                                      ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None,
-                                      LOCAL_DB_URL=None),
-        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    result = _spawn(['-m', 'alembic', '-c', ini, 'upgrade', 'head', '--sql'],
+                    DATABASE_URL='sqlite:///data/fund_insight.db',
+                    ALEMBIC_DATABASE_URL=None, ALEMBIC_ALLOW_REMOTE=None, LOCAL_DB_URL=None)
     blob = result.stdout + result.stderr
     assert result.returncode != 0 and '[abort]' in blob, \
         '换一份 ini 指远程就绕过了方向闸（判据又建在"配置是否等于我记得的默认串"上）：%s' % blob[-400:]
     assert 'S3cr3tPW' not in blob
 
 
-def test_one_environment_variable_alone_does_not_unlock_a_remote(tmp_path):
+def test_one_environment_variable_alone_does_not_unlock_a_remote():
     """第 39 轮 B：显式远程那条"被批准的路"曾经 0 自报、0 确认 ⇒ 现在要两道旗子。"""
-    result = subprocess.run(
-        [sys.executable, '-m', 'alembic', 'upgrade', 'head', '--sql'], cwd=str(ROOT),
-        env=_child_env(DATABASE_URL='sqlite:///data/fund_insight.db',
-                       ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE=None, LOCAL_DB_URL=None),
-        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    result = _spawn(['-m', 'alembic', 'upgrade', 'head', '--sql'],
+                    DATABASE_URL='sqlite:///data/fund_insight.db',
+                    ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE=None, LOCAL_DB_URL=None)
     blob = result.stdout + result.stderr
     assert result.returncode != 0 and '[abort]' in blob and 'ALEMBIC_ALLOW_REMOTE' in blob, \
         '只设一个环境变量就能对远程发 DDL：%s' % blob[-300:]
@@ -176,11 +188,9 @@ def test_one_environment_variable_alone_does_not_unlock_a_remote(tmp_path):
 def test_the_unlocked_remote_path_says_so_out_loud(tmp_path):
     """两道旗子都给了 ⇒ 放行，但**必须自报**；而且自报要进 stderr，
     不许污染 `--sql` 那份要存成文件的 SQL。"""
-    result = subprocess.run(
-        [sys.executable, '-m', 'alembic', 'upgrade', 'head', '--sql'], cwd=str(ROOT),
-        env=_child_env(DATABASE_URL='sqlite:///data/fund_insight.db',
-                       ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE='1', LOCAL_DB_URL=None),
-        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+    result = _spawn(['-m', 'alembic', 'upgrade', 'head', '--sql'],
+                    DATABASE_URL='sqlite:///data/fund_insight.db',
+                    ALEMBIC_DATABASE_URL=REMOTE, ALEMBIC_ALLOW_REMOTE='1', LOCAL_DB_URL=None)
     assert result.returncode == 0, result.stderr[-400:]
     assert 'Context impl PostgresqlImpl' in result.stderr + result.stdout
     assert '[库]' in result.stderr, '放行远程却没自报（第 39 轮 B：这条路以前一声不吭）'

@@ -151,6 +151,11 @@ class Config:
 
     VERIFY_PROCESS_THRESHOLD = float(os.getenv("VERIFY_PROCESS_THRESHOLD", "0.5"))
 
+    # 每日基金同步一次往回拉多长历史净值（`FundAPI.get_fund_history` 的默认窗口）。
+    # 这同一个数还回答另一件事：一段窗口的终点只要落在它之外，常规同步就再也不会
+    # 往这段里补行 —— 所以"重问一次会不会换个答案"的期限，对已出界的窗口只有一个出处。
+    NAV_HISTORY_LOOKBACK_DAYS = int(os.getenv("NAV_HISTORY_LOOKBACK_DAYS", "30"))
+
     # L1 命中率 Beta 收缩加权（证据层）；默认关，回测过关再开
     ADVICE_L1_HIT_WEIGHTING = os.getenv("ADVICE_L1_HIT_WEIGHTING", "0").lower() in (
         "1",

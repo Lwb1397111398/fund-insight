@@ -76,6 +76,37 @@ def beijing_now() -> datetime:
     return datetime.combine(current_as_of(), clock.time())
 
 
+def archive_stamp(retention_days: int = 30):
+    """归档一行的那一对时间戳：`(归档时刻, 可恢复到哪天)`。
+
+    为什么要有这个函数（第 54 轮 A-1 / B-2）：全仓有三条活路会把一行放进回收站
+    （手动归档、系统关闭、合并相似预测），而"少一天"那个缺陷上一批只修了第一条 ——
+    同一件事的第二、第三条活路不会自己长出来。写侧登记见
+    `tests/unit/test_prediction_migrations.py` 里那把按 (文件, 函数) 数站点的棘轮。
+    """
+    return beijing_now(), current_as_of() + timedelta(days=retention_days)
+
+
+def conclusion_conditions(status: str):
+    """「待验证 / 已验证」这两档在 SQL 里到底问什么 —— 全仓只此一处（第 54 轮 A-2 / B-3）。
+
+    问的是**有没有结论**（`is_correct` 是否为空），不是遗留列 `predictions.status`：
+    `classify`、验证器、改标咽喉都按 `is_correct` 说话，而 `status` 由老代码写。
+    今天两库实测两把尺子逐档相同（镜像未判 422 ↔ `status='pending'` 422；生产同向），
+    **那是巧合不是等价** —— 写侧与读侧一旦分叉，页面上的数就会与点进去的列表打脸。
+    """
+    if status == 'verified':
+        return [Prediction.is_correct.isnot(None)]
+    if status in ('pending', 'unverified'):
+        return [Prediction.is_correct.is_(None)]
+    raise ValueError('这一档不归这把尺子管：%r' % status)
+
+
+def has_conclusion(prediction) -> bool:
+    """Python 侧的同一句话：这一行已经有结论了吗（与 `conclusion_conditions` 同一把尺子）。"""
+    return getattr(prediction, 'is_correct', None) is not None
+
+
 def _as_date(value) -> Optional[date]:
     if value is None:
         return None
@@ -107,22 +138,28 @@ def verify_window_end(target: date, max_age: Optional[int] = None) -> date:
     return target + timedelta(days=age)
 
 
-def unverifiable_retry_days() -> int:
-    """结构性不可验的重问间隔（天）—— **只有一个出处**，两档各自说清它等的是什么。
+def unverifiable_retry_days(verdict_reason: Optional[str] = None) -> int:
+    """结构性不可验的重问间隔（天）—— **只有一个出处**，但两档各问各的期限。
 
     - `no_source_history`（数据源答"这段没有"）：这个数不是拍出来的。那条答复存成凭据，
       TTL 是 `backfill_proofs.EMPTY_TTL_DAYS`（空答复只信 2 天，防限流页被当成事实），
       重问间隔取 TTL+1 ⇒ 凭据一旦过期，这条预测自己回到到期队列再问一次。
       判据 `test_the_lock_expires_and_the_prediction_asks_again` 钉的就是这层关系。
-    - `same_nav_endpoint`（起点与终点是同一条净值）：**这一档没有凭据可跟** ——
-      它依据的是库里那条"目标日之后已有净值"的事实，而那件事自己不会在几天内改变，
-      能改变它的只有老板手动把目标日挪到交易日（那次编辑会顺手把锁退回目标日之前，
-      见 `retag_prediction` / `update_prediction_fields`）。
-      所以这里复用同一个节奏是**明说的取舍**，不是"跟着证据走"：
-      再问一次不改变结论，但也不花钱（一天一批净值，重问日到了才排队问）。
+    - `same_nav_endpoint`（起点与终点是同一条净值）：**这一档没有凭据可跟**，所以拿凭据
+      TTL 当节奏是错的（第 54 轮 A-5 的账）：镜像上 5 行因此每三天弹回「待验证到期」
+      被问一次、再弹回去，永远没有一个终局 —— 而老板的验收条件正是"打开后看不到过期
+      了却没验证的预测"。这一档唯一会变的东西是**这段窗口里的净值行**，而常规同步只往回
+      拉 `config.NAV_HISTORY_LOOKBACK_DAYS` 天 ⇒ 间隔取"回补范围 + 1"，
+      含义是"等一次真的可能有新行落进这段窗口的机会，再问一次"。
+      人工按区间重放补拉（会写凭据）与改标/编辑目标日都当场解掉这把锁，不必等到那天。
 
+    不传 `verdict_reason` ⇒ 按有凭据那一档答（调用方没说要问哪件事时，用更短的那个）。
     懒导入：本模块被 API 与脚本共读，顶层拉 `src.fund` 会把整个包 __init__ 带进来。
     """
+    if verdict_reason in LOCK_ONLY_VERDICT_REASONS:
+        from src.core.config import config
+
+        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1
     from src.fund import backfill_proofs
 
     return int(backfill_proofs.EMPTY_TTL_DAYS) + 1
@@ -139,6 +176,9 @@ def is_held_unverifiable(prediction: Prediction, as_of: Optional[date] = None) -
     判据是**验证器上一次真问出来的结论**（见 `apply_unverifiable_hold`），
     不是日历推断：`next_verify_date` 由创建时的排期保证 ≤ 目标日，
     所以"晚于今天"这个形状只可能由结构性结论写出来。
+    **两档的节奏不共用一个数**（第 54 轮 A-5 / 任务 #121 的决定）：有凭据的那档跟凭据 TTL，
+    没有凭据的那档跟净值回补范围，否则它每三天弹回「待验证到期」而没有终局 ——
+    处置记录在 `docs/模块总览/预测验证与准确率统计.md` 的 2e 段（任务 #121）。
     """
     today = _as_date(as_of) or current_as_of()
     target = _as_date(getattr(prediction, "target_date", None))
@@ -196,7 +236,8 @@ def stale_close_evidence(*, local_latest_nav: Optional[date] = None,
       净值。少了它，我们自己同步掉几天就可能把一条本可验证的预测关掉（第 23 轮那种
       "把镜像坏了当产品坏了"的坑）。
     - `'pre_inception'`：`local_first_nav > window_end` ⇒ **窗口整段早于这只标的首笔净值**
-      （第 53 轮 B-1 的 BLOCKER：镜像上 12 行是这一档）。新基金先被拿来发预测、净值从成立
+      （第 53 轮 B-1 的 BLOCKER；2026-09-27 镜像实测这一档 **7** 行，复核命令写在 `AGENTS.md`
+      「当前测试基线」那一条的第①点）。新基金先被拿来发预测、净值从成立
       那天才开始记 ⇒ 同步永远补不出它成立之前的历史，但末条净值活得好好的、远晚于窗口起点，
       所以 `stopped` 那把尺子对它恒为 False ⇒ 只锁不关，每到一个重问日弹回「待验证到期」再被
       踢出去一次。这一档要单独认，别拿 `stopped` 凑。
@@ -425,14 +466,16 @@ def close_as_stale_target_note(prediction: Prediction, latest_nav: Optional[date
                _as_date(window_start) or '未记录', _as_date(window_end) or '未记录', tail))
 
 
-def apply_unverifiable_hold(prediction: Prediction, as_of: Optional[date] = None) -> date:
-    """验证器判定"已问过数据源、它给不出这段净值"后，把这条压到重问日。
+def apply_unverifiable_hold(prediction: Prediction, as_of: Optional[date] = None,
+                            verdict_reason: Optional[str] = None) -> date:
+    """验证器判定"这段今天问不出答案"后，把这条压到重问日。
 
     返回压到的那一天。**不动 `is_correct`、不清结论** —— 它只回答"什么时候再问"，
-    不回答"预测对不对"。
+    不回答"预测对不对"。`verdict_reason` 决定问的是哪一档的节奏（见
+    `unverifiable_retry_days`）：有凭据可跟的按凭据 TTL，没有凭据的按净值回补范围。
     """
     today = _as_date(as_of) or current_as_of()
-    hold = today + timedelta(days=unverifiable_retry_days())
+    hold = today + timedelta(days=unverifiable_retry_days(verdict_reason))
     prediction.next_verify_date = hold
     return hold
 

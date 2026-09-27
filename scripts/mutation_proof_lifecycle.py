@@ -19,12 +19,23 @@
     python scripts/mutation_proof_lifecycle.py --only pre_inception
 """
 import argparse
+import importlib.util
 import io
 import os
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 两把互斥锁（第 54 轮 B-10）：这份工具会**就地改写 `src/*.py`** 再跑 pytest，
+# 与任何 pytest 会话并发都会互相污染（它自己抢不到锁就照跑 ⇒ 别人的会话读到的是变异体）。
+# 加载方式与前端那份一样按**文件路径**：`from src.utils import ...` 会执行 `src/__init__.py`，
+# 一路拉起 ORM 并按 `.env` 建出绑生产的 engine（第 45 轮 A-M5 那条链）。
+_lock_spec = importlib.util.spec_from_file_location(
+    'mutation_lock', os.path.join(ROOT, 'src', 'utils', 'mutation_lock.py'))
+mutation_lock = importlib.util.module_from_spec(_lock_spec)
+_lock_spec.loader.exec_module(mutation_lock)
+assert 'src.models.database' not in sys.modules, \
+    '加载锁的时候把 ORM 拉起来了 ⇒ 这个进程会按 .env 建 engine，正是要避免的那种事'
 LIFECYCLE = 'src/services/prediction_lifecycle.py'
 VERIFY = 'src/services/prediction_verify_service.py'
 SCRIPT = 'scripts/close_unknowable_predictions.py'
@@ -91,24 +102,51 @@ MUTATIONS = [
      '                raise ValueError("不能把这条预测改到 %s：%s" % (wanted_code, gap))',
      SAFE_TESTS, 'test_put_prediction_rebind_asks_the_evidence_gate_and_clears_the_lock'),
     ('M11_pending_bucket_reads_the_legacy_column_again', QUERY,
-     '        if status in ("pending", "unverified"):\n'
-     '            return [Prediction.is_correct.is_(None)]',
-     '        if status in ("pending", "unverified"):\n'
+     '        if status in ("verified", "pending", "unverified"):\n'
+     '            return conclusion_conditions(status)',
+     '        if status in ("verified", "pending", "unverified"):\n'
      '            return [Prediction.status == "pending"]',
      QUERY_TESTS, 'test_the_pending_bucket_asks_for_a_conclusion_not_for_the_status_column'),
     ('M12_archive_stamp_goes_back_to_the_wall_clock', SVC,
-     '        prediction.restore_before = current_as_of() + timedelta(days=30)',
-     '        prediction.restore_before = date.today() + timedelta(days=30)',
+     '        prediction.deleted_at, prediction.restore_before = archive_stamp()',
+     '        prediction.deleted_at, prediction.restore_before = '
+     'datetime.now(), date.today() + timedelta(days=30)',
      CLOSE_TESTS, 'test_the_archive_stamp_and_the_restore_deadline_come_from_the_beijing_clock'),
     ('M13_force_restore_promises_but_still_skips', SCRIPT,
      "        blockers.append('%s：%s' % (pid, why))\n        if not force:",
      "        blockers.append('%s：%s' % (pid, why))\n        if True:",
      CLOSE_TESTS, 'test_restore_refuses_to_overwrite_a_row_somebody_else_touched'),
+    # 第 54 轮 A-5：退化端点这一档没有凭据可跟，跟着 3 天那一档走 ⇒ 镜像那 5 行每三天
+    # 弹回「待验证到期」。这一处变异把它改回"两档共用一个节奏"，两条分档判据都要红。
+    ('M14_both_tiers_share_the_credential_clock', LIFECYCLE,
+     '    if verdict_reason in LOCK_ONLY_VERDICT_REASONS:\n'
+     '        from src.core.config import config\n\n'
+     '        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1\n',
+     '    if False:\n'
+     '        from src.core.config import config\n\n'
+     '        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1\n',
+     HOLD_TESTS, 'test_the_two_structural_tiers_wait_for_their_own_clock'),
+    ('M15_the_reask_interval_becomes_a_second_number', LIFECYCLE,
+     '        return int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1',
+     '        return 31',
+     HOLD_TESTS, 'test_the_nav_lookback_has_one_home_for_both_questions'),
+    # 第 54 轮 A-7：`--fix-wording` 这一支以前只有内部函数用例，CLI 层零判据 ⇒
+    # 把 dry-run 那一支摘掉，全套绿灯一声不响，而"先看一眼"会真改回收站。
+    ('M16_fix_wording_dry_run_actually_writes', SCRIPT,
+     "            if not args.apply:\n"
+     "                print('[dry-run] 一行都没动。真订正加 --apply --confirm %s' % CONFIRM_TOKEN)",
+     "            if False:\n"
+     "                print('[dry-run] 一行都没动。真订正加 --apply --confirm %s' % CONFIRM_TOKEN)",
+     CLOSE_TESTS, 'test_fix_wording_dry_run_leaves_the_row_alone_and_says_so'),
 ]
 
 
 def _run_one(test_file, test_name):
-    env = dict(os.environ, PYTHONIOENCODING='utf-8')
+    env = dict(os.environ)
+    # 放行标记：这一份 pytest 是我自己起的子会话，别被 conftest 那把体检锁拦死
+    # （不带这个标记 ⇒ 每次跑批都"子会话起手就退、父进程把它记成红"，全是假红）。
+    env[mutation_lock.ENV_PID] = str(os.getpid())
+    env['PYTHONIOENCODING'] = 'utf-8'
     return subprocess.run(
         [sys.executable, '-m', 'pytest', test_file, '-q', '-k', test_name,
          '--no-header', '-p', 'no:cacheprovider'],
@@ -131,6 +169,18 @@ def main(argv=None):
     if not todo:
         print('[abort] --only %r 一处都没匹配到 ⇒ 这次什么都没测' % args.only)
         return 4
+    # 两把锁各管一个方向（与前端那份同一套）：会话锁被 pytest 握着就不启动；
+    # 启动后自己握住体检锁，让并发的 pytest 起手就退出。
+    if not mutation_lock.harness_may_start(ROOT):
+        print('[abort] 已经有一个 pytest 会话握着 %s ⇒ 本次会就地改写 src/，'
+              '两边并发时报出来的红绿都不作数。等它跑完再启动。' % mutation_lock.SESSION_NAME)
+        return 5
+    try:
+        guard = mutation_lock.held_exclusively(ROOT)
+        guard.__enter__()
+    except RuntimeError as exc:
+        print('[abort] %s' % exc)
+        return 5
 
     cache, backups, rc = {}, [], 0
     try:

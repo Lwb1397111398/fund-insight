@@ -6,11 +6,16 @@
 验证器每次问都拿到"这段没有"⇒ 这批预测会永远留在"到期未判"里，老板每次点验证都白跑一遍。
 
 **为什么不能直接按"到期很久了"关**（第 12 轮 MAJOR-3 撤掉过纯日历推断，这里不再放回来）：
-一把脚本必须同时拿到两条证据才动手 ——
+一道门必须同时拿到三条证据才动手 ——
 ① **现场再问一次数据源**：`get_fund_history_range` 对这个窗口答 **0 条**才算"问过且没有"；
    接口抛错／没答话（`None`）一律**不放行**（第 10 轮 B-1 那一课：一次抖动不许被记成事实）；
-② **本地库里这只代码最后一条净值早于窗口起点**：否则它只是"我们几天没同步"，不是"产品停更"。
-两条都在同一个窗口上成立，才关闭；只中一条 ⇒ 原样报"还在等"。
+② **这段窗口永久给不出净值**，两种形状任一成立（`stale_close_evidence` 一处回答，第 53 轮 B-1
+   补上第二种）：**停更**＝库里这只代码最后一条净值早于窗口起点；**还没开始**＝窗口整段早于
+   库里第一笔净值。都不满足 ⇒ 原样报"还在等"（包括"库里一行都没有"那种说不清的）；
+③ **这一行确实被问过第二次**：`was_locked_previously` 问的是"行上那根重问日期是否晚于它
+   自己的目标日"，与验证器同一条尺子（第 53 轮 A-2：上一版只抄了①②，同一行验证器说不关、
+   脚本说可关）。
+三条都在同一个窗口上成立才关闭；少任何一条 ⇒ 只上锁或不关，回收站里那句话也就写不出口。
 
 用法：
     python scripts/close_unknowable_predictions.py                      # 本地镜像：只读预检 + 出计划
@@ -101,8 +106,15 @@ def plan(db, today):
         first = oldest[0] if oldest else None
         if stale_close_evidence(local_latest_nav=latest, window_start=start,
                                 local_first_nav=first, window_end=end) is None:
-            skipped.append((p.id, code,
-                            '库里净值 %s 至 %s 覆盖得到这段窗口 ⇒ 还能判，不关' % (first, latest)))
+            # 这句话不许说反（第 54 轮 B-8）：库里一行净值都没有时，`stale_close_evidence`
+            # 因为两个日期都说不清而放行 ⇒ 旧写法"库里净值 None 至 None **覆盖得到**这段窗口"
+            # 正好说成了它的反面。放行是对的（拿不准就别关），话要说对。
+            if latest is None:
+                skipped.append((p.id, code,
+                                '库里这只代码一行净值都没有 ⇒ 说不清它给不给得出这段，不关'))
+            else:
+                skipped.append((p.id, code,
+                                '库里净值 %s 至 %s 覆盖得到这段窗口 ⇒ 还能判，不关' % (first, latest)))
             continue
         # **整条判据交回给验证器那一个函数**，不在脚本里各抄一半：上一版这里只抄了
         # `was_locked_previously` 而漏掉"锁未到点不关"，实测同一行（锁在未来）验证器 False、
@@ -180,7 +192,21 @@ def restore(db, path, apply_it, force=False):
 
     with open(path, encoding='utf-8') as fh:
         payload = json.load(fh)
+    # 这份备份是**哪一种动作**留下的，决定还原该往哪个方向走（第 54 轮 B-1 / A-8）：
+    # `--fix-wording` 的备份里 `plan[]` 只有 `old/new` 两句文案、没有 `note` ⇒ 下面那道
+    # "行上原因与我关闭时写的不一样"的比对结构性永不触发，其余三道拦对这种行又都为真，
+    # 于是拿它 `--restore-from --apply` 会把**该留在回收站**的行放回活跃列表。
+    # 文案订正的反向是"把 old 写回去"，不是"撤销关闭"。
+    reason_kind = payload.get('reason_kind')
+    if reason_kind != 'stale_target_no_source_history':
+        print('[abort] 这份备份的 reason_kind=%r 不是关闭留的档 ⇒ 还原命令只认关闭备份；'
+              '文案订正（unproven_two_ask_claim）要改回去请用 --fix-wording 反向把 old 写回'
+              % reason_kind)
+        return 4
     notes = {i['prediction_id']: i.get('note') or '' for i in payload.get('plan') or []}
+    if not any(notes.values()):
+        print('[警告] 这份关闭备份里一行 `note` 都没有 ⇒ 少一道"行上原因与关闭时一致"的比对，'
+              '只剩署名/在回收站/无结论三道拦得住')
     ids = list(notes) or [r['id'] for r in payload.get('rows') or []]
     print('[计划] 备份里有 %d 行，还原 = 把它们从回收站放回活跃列表（%s）'
           % (len(ids), '真还原' if apply_it else 'dry-run，一行都不动'))
@@ -265,7 +291,10 @@ def find_unproven_claims(db):
 def apply_reword(db, items, today):
     """把那句写多的话改口：**只动 `delete_reason` 这一列**，别的一字不碰。
 
-    先写备份（原句逐行留着），再逐行回执；还原命令照旧能用那份备份（还原比的是现状）。
+    先写备份（原句逐行留着），`db.commit()` 成功之后才逐行回执（第 54 轮 B-9：旧写法
+    把 `[已订正]` 排在提交之前，提交失败时话已经说出去了）。
+    ⚠ 这份备份**不能**喂给 `--restore-from` —— 那条命令的方向是"撤销关闭"，会把行放回
+    活跃列表；这份要改回去是把 `old` 写回那一列（`restore()` 现在按 `reason_kind` 拒）。
     """
     os.makedirs(BACKUP_DIR, exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -282,16 +311,18 @@ def apply_reword(db, items, today):
     from src.services.prediction_change_log_service import (
         add_prediction_change_log, snapshot_prediction)
 
-    done = 0
+    done = []
     for p, old, new in items:
         before = snapshot_prediction(p)
         p.delete_reason = new
         add_prediction_change_log(db, p, action='archive_note_fixed', source='system',
                                   before_state=before)
-        done += 1
-        print('[已订正] 预测 %s：只改 delete_reason（其余列一字未动）' % p.id)
+        done.append(p.id)
     db.commit()
-    print('[回执] 订正 %d / %d 行；原句在 %s' % (done, len(items), backup_path))
+    # 回执排在提交之后（第 54 轮 B-9）：提交失败时话不能说在前头
+    for pid in done:
+        print('[已订正] 预测 %s：只改 delete_reason（其余列一字未动）' % pid)
+    print('[回执] 订正 %d / %d 行；原句在 %s' % (len(done), len(items), backup_path))
     return backup_path
 
 
@@ -326,9 +357,11 @@ def main():
                   % db_kind(url))
             return 4
         print('[target] %s' % db_kind(url))
+        target_label = '线上生产库'
     else:
         from _db_guard import db_kind, pin_local_sqlite
         print('[target] %s' % db_kind(pin_local_sqlite(use_mirror_default=True)))
+        target_label = '本地镜像库'
 
     from src.models.database import SessionLocal
     from src.services.prediction_lifecycle import current_as_of
@@ -352,7 +385,9 @@ def main():
             for p, _old, new in stale:
                 print('  [改口] 预测 %s（%s）⇒ %s' % (p.id, p.fund_code, new))
             if not stale:
-                print('[结论] 没有拿不出证据的"已问过两次"（生产实测就是这一档）')
+                # 这句话以前在镜像上跑也印"生产实测"（第 54 轮 B-4 / A-7）⇒ 库名要从实际连的那台来
+                print('[结论] %s里没有拿不出证据的"%s"' % (
+                    '线上生产库' if target_label.startswith('线上') else '这个库', UNPROVEN_CLAIM))
                 return 0
             if not args.apply:
                 print('[dry-run] 一行都没动。真订正加 --apply --confirm %s' % CONFIRM_TOKEN)

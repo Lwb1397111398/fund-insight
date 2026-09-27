@@ -278,6 +278,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   把写操作落进了 `data/fund_insight.db`）。一次性探针不设该参数 ⇒ 会被拦下，这是有意的。
 - `src/analyzer/llm_analyzer.py`、`src/models/database.py`、`src/services/prediction_verify_service.py`、`src/api/main.py`、`web/index.html` 是高风险区域，先读测试和调用方再动。
 - 文档类改动也要跑最小验证或至少格式/链接/命令检查。
+- **评分门禁（2026-09-27 老板改口，以这一条为准）**：原规矩是"两份独立复评、取低分 ≥80 才推"。
+  老板 09-27 原话「我发现你的速度有些过于慢了……可以适当降低分数要求来提升速度，具体由你自己来控制」
+  ⇒ 现在按 **一份独立复评 ≥75 即推**执行，第二份不再等。降线降的是**等待**，不是纪律：
+  BLOCKER 一律先复现再动手、基线两个口径必须绿、`audit_doc_claims` 必须退 0、生产写入仍是
+  只读预检→dry-run→显式确认→逐行回执；评审分数不到 75 就继续修，不许拿"老板说可以慢着来"当借口。
 
 ## 推荐工作流
 
@@ -289,17 +294,107 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-27 12:0x（北京），**任务 #112~#118：第 53 轮两份复评（A 74 / B 61）返修——
+最近一次核对（2026-09-27 15:4x（北京），**任务 #119~#128：第 54 轮返修——
+"修一半 + 说满一半"那一族、结构性不可验的分档重问节奏、收口脚本的话与备份的方向**——
+两份复评报告的分数**没随仓库走**（正文只在会话里，条目号 A-*/B-* 已逐条落进 #119~#128），
+下一轮要引用请以任务条目为准）——
+① **「这一行有没有结论」全仓只许一处回答**（#120 / A-2 + B-3）：`_conclusion_conditions` 上一批只改了
+   `PredictionQueryService` 自己，而 `src/` 里还有别处在拿遗留列 `predictions.status` 当答案 ——
+   其中 `cleanup_tasks.py` 的**三处会删行的过滤器**（两条"只清已过期的验证过的预测"、一条"没结论就留着净值"）
+   现在改问 `Prediction.is_correct`；`fund_service.get_with_predictions` 与 `PredictionService` 里四条
+   按 `status` 取预测的方法（`get_active` / `get_pending_verification` / `get_expired` /
+   `get_predictions_with_filters`）**`src/` 与 `scripts/` 零调用方，整条删掉**，
+   留下的登记名单由新文件 `tests/unit/test_one_ruler_per_question.py` 用 AST 逐处核
+   （当场账 `--collect-only -q` 印 **10**；名单里只有一处是**判断**，其余是写侧同步、回显与取列）。
+   第三档（`success` / `failed` 这种按字面值筛）仍按 `status` 列查，那是另一件事、不归这把尺子管。
+   **为什么删死路而不是给它写绿灯**：留着就是留着一个随时会被接上的错误口径（第 49 轮
+   `_save_fund_mapping` 那一课：绿灯替死路作保）。
+② **归档时间戳与恢复下界也只有一个来源**（#119 / A-1 + B-2）：上一批只把 `_soft_archive` 换成北京钟，
+   而页面「合并相似预测」那条活路还在自己 `date.today() + 30`、`cleanup_enhanced.SoftDeleteManager`
+   那条腿还在 `datetime.now()` ⇒ 同一座回收站里两种"保留到 X 日"（Render 容器在 UTC，北京
+   00:00~08:00 归档的行少一天）。现在三处都走 `prediction_lifecycle.archive_stamp()`，
+   判据按 `(文件, 函数)` 登记写侧站点，新造一处不登记就红。
+③ **结构性不可验按档各等自己的钟**（#121 / A-5）：`same_nav_endpoint`（退化端点）那一档原来与
+   `no_source_history` 共用凭据 TTL（三天）⇒ 到点弹回「待验证到期」、当场又只锁不关，永远没有终局。
+   现在 `unverifiable_retry_days(verdict_reason)` 分两档：端点退化那档等 `config.NAV_HISTORY_LOOKBACK_DAYS + 1`
+   （**每日回补范围之外，常规同步就再也补不进这段** ⇒ 这个数是"重问一次会不会换个答案"的唯一出处），
+   `no_source_history` 仍按凭据 TTL。**为什么端点档要等回补范围**：镜像今天挂在 `1669/1709`（目标日是周六）
+   与 `3099/3126/3178`（窗口跨过 `158038` 首笔净值 2026-09-07）这 5 行，收口脚本 dry-run 对它们说的是
+   "源端这段给了 1 条 ⇒ 是本地没补到，不是它没有" —— 那是**还能等**的形状，不是永久没有，
+   所以既不能关、也不该三天问一次（复现：`python scripts/close_unknowable_predictions.py`，
+   2026-09-27 15:5x 印 `0 条可关 / 12 条仍在等`，其中 **7 行**是"重问锁 2026-09-30 还没到点"、**5 行**是上面那句）。
+   这不是终局处置（三条解锁路径与"为什么不直接关"写在 `docs/模块总览/预测验证与准确率统计.md` §2e：
+   第 52 轮 A-1 驳掉的"休市日 vs 这只标的自己有数据洞"那道证据至今没补上，所以只锁不关）。
+   判据三条（含 M15 那次 GREEN 教出来的牙齿：默认 30 天 ⇒ `+1` 恰好等于写死的 31，把 monkeypatch
+   改成 47 才量得出"间隔真的跟着这个数走"）。
+④ **文案订正的备份不是关闭的备份**（#122 / B-1 + A-8）：`--fix-wording` 的 `plan[]` 只有 `old/new` 两句
+   话、没有 `note`，喂给 `--restore-from` 会被当成"撤销关闭"把该留在回收站的行放回活跃列表；
+   现在 `restore()` 按 `reason_kind` 当场拒（退 4），并说清反向动作是把 `old` 写回那一列。
+⑤ **`--fix-wording` 从此有 CLI 判据**（#123 / A-7 + B-4）：以前只有内部函数用例，而那句"生产 15 行逐行核过"
+   其实是镜像跑的 ⇒ 文档里的归因已改成"镜像 2026-09-27 10:31 真订正 5 行、生产一行都没订正"。
+   新用例真起子进程走 CLI：dry-run 退 **2** 且 `delete_reason` 逐字节不动，`--apply --confirm` 才真改。
+⑥ **"12 行"是错的，7 行才是**（#124 / B-5 + A-4 + A-3 + B-6）：文档里那条复核命令写着 `group by 1,2,3`
+   又把 `count(*)` 放进分组 ⇒ sqlite 直接报 `aggregate functions are not allowed in the GROUP BY clause`，
+   没人能照它复现；换成能跑的写法印 `158006/1 · 158038/1 · 515440/5` ＝ **7** 行。同批把两处归因过头收窄
+   （② 那两个库的 `status`↔`is_correct` 实测**零漂移**，换尺子是加固不是修 bug）。
+⑦ **永久形状的样品补上"首笔净值说不清"那一格**（#125 / A-6）：`stale_close_evidence` 的判定表原来缺
+   `first=None` 那格 ⇒ 库里一行净值都没有时"放行不关"没被量过。
+⑧ **页面那句加法式子是句错话**（#126 / A-9 + B-7）：`pending`＝"还没有结论的全部"，含观望行与缺目标日的行，
+   而三个子桶都排除这两类 ⇒ "待验证＝到期＋结构性＋未到期"只在 `flat=0 且缺目标日=0` 时**碰巧**平
+   （今天两库确实都是 0，那是巧合不是构造）⇒ 措辞改成"含这三档"，并加一条反向断言不许再把"含"写成"＝"。
+⑨ **收口脚本的三句话**（#127 / B-8 + B-9）：库里一行净值都没有时旧话写"净值 None 至 None **覆盖得到**这段窗口"
+   正好说反 ⇒ 改成"说不清它给不给得出这段，不关"；文件头那道门从"两条证据"改成**三条**（现场再问源端 /
+   两种永久形状 / `was_locked_previously` 真问过第二次），与验证器同尺；`[已订正]` 回执排在 `db.commit()` 之后。
+⑩ **新变异体检工具接了两把互斥锁**（#128 / B-10）：`scripts/mutation_proof_lifecycle.py` 会就地改写 `src/*.py`
+   再起 pytest，上一批一处锁都没接 ⇒ `test_both_sides_are_actually_wired` 从"只认前端那一份"改成按名单逐个核，
+   并登记一个"形状像但不是 hazard"的邻居（`audit_doc_claims.py`）——登记了却不解释、或解释了却已不存在都红。
+⑪ **一条环境账（不是代码回归）**：本机 8 GB 内存在跑批期间只剩 0.13 GB，Windows 会把刚起的子进程直接打死
+   （退码 `0xC0000374`、stdout/stderr 全空）⇒ 上一次基线那条红就是这个形状。
+   `test_alembic_target_direction.py` 里的裸 `subprocess.run` 全部收进一个 `_spawn`，
+   **只对"像被系统打死"的退码**重跑；"被系统打死"怎么认，共用 `killed_by_the_os`
+   （定义在 `test_prediction_migrations.py`，不搓第二把）。脚本自己返回非 0 时一次都不许多试。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话）：
+
+- `pytest tests/unit -q` → **1218 passed / 16 skipped / 0 failed**（821.60 秒）。
+- `pytest tests/ -q` → **1227 passed / 16 skipped / 0 failed**（612.79 秒）。
+  （上一基线 1202/1211 → 本批 **+16 条 / 两个口径同增**，分布用
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  数出：新文件 `test_one_ruler_per_question.py` 0→**5** 个 `def`（当场账 `--collect-only -q` 印 **10**：
+  「有没有结论」只许那把尺子回答、归档时间戳只许一个来源、合并去重也走北京钟、永久形状判定表含
+  `first=None` 那一格、`archive_stamp()` 一次交出一对）、
+  `test_close_unknowable_predictions.py` 12→**15**（+3：文案订正的备份不许当关闭备份、CLI dry-run 退 2
+  且一个字都不动、库里一行净值都没有不许说"覆盖得到"）、
+  `test_structurally_unverifiable_hold.py` 21→**24**（+3，当场账 `--collect-only -q` 印 **30**：
+  两档各等自己的钟、页面那句重问日取于行上那根日期、`NAV_HISTORY_LOOKBACK_DAYS` 两处问题一个出处）。
+  **改契约不增条数**：`test_frontend_cold_start.py`（"含"不许写成"＝"，加反向断言）、
+  `test_mutation_lock.py`（按名单核两份体检工具 + 邻居必须解释）、`test_script_db_guards.py`（守卫扫描的
+  文本证据改走 `_payload_blanked`：变异工具把另一支脚本的 `'…--apply --confirm TOKEN'` 当**载荷**嵌进自己，
+  老写法按原文 grep 就把体检工具当成"待管的写脚本"点名了两次 —— 现在只认 `add_argument` 那类"自己在声明旗子"
+  的字面量，解析失败一个字都不挖、fail-closed，并配三条控制断言；复跑该文件 36 passed / 142.79 秒）。
+  变异：`python scripts/mutation_proof_lifecycle.py` **18 处全 RED**（M1~M16 + CONTROL 全绿，原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round54-lifecycle-mutations.txt`）；前端侧
+  `python scripts/mutation_proof_frontend.py --only queue_caliber` 全 RED（`round54-frontend-queue-caliber.txt`）。
+  ⚠ 两处判据本身被体检逮到过：M15 第一次跑是 **GREEN**（默认 30 天 ⇒ `+1` 恰等于写死的 31，用例对
+  "换了个数"失明），M11 第一次是 **ANCHOR-MISS**（锚点还停在 `_conclusion_conditions` 委托之前）⇒
+  一条只在"验的事情"变坏时才红，才叫判据。
+  镜像那 12 行的逐行原因就在上面那条 dry-run 的回执里（`0 可关`，无一行进入关闭动作）。
+  **生产此刻**（同日 16:0x，只读探针）：`expired_unjudged 0 / held_by_lock 0 / actionable_today 0`。）
+（上一批：2026-09-27 12:0x（北京），**任务 #112~#118：第 53 轮两份复评（A 74 / B 61）返修——
 「结构性不可验」补上第二种永久形状、页面分母换成同一把尺子、改标必清重问锁、存量错文案订正**——
 ① **窗口整段早于标的首笔净值**是一档新的永久形状（#112，B-1 的 BLOCKER）：上一版只认"末条净值早于窗口起点"
    （＝标的停更），而镜像实测 `515440`／`158006`／`158038` 上压着 **7 行**窗口的目标日**早于该基金第一笔净值**
-   （复核 `python scripts/q.py "select f.fund_code, count(*) , date(f.mn) first_nav from (select fund_code, min(nav_date) mn, max(nav_date) mx from fund_history group by fund_code) f join predictions p on p.fund_code=f.fund_code where p.is_deleted=0 and p.is_correct is null and p.next_verify_date > p.target_date and f.mn > p.target_date group by 1,2,3"`）
+   （复核 `python scripts/q.py "select f.fund_code, date(f.mn) first_nav, count(p.id) rows_held from (select fund_code, min(nav_date) mn from fund_history group by fund_code) f join predictions p on p.fund_code=f.fund_code where p.is_deleted=0 and p.is_correct is null and p.next_verify_date > p.target_date and f.mn > p.target_date group by f.fund_code, date(f.mn) order by 1"` ⇒ 印 `158006/1 · 158038/1 · 515440/5`；
+   第一版那条命令写着 `group by 1,2,3` 又把 `count(*)` 放进分组 ⇒ sqlite 直接 `aggregate functions are not allowed in the GROUP BY clause`，**没人能照它复现这个 7**）
    ⇒ 末条永远晚于起点 ⇒ 光认停更把这 7 行永远留在"重问 ⇒ 弹回到期 ⇒ 再踢出去"的圈里。
    现在 `stale_close_evidence()` 答两种（`stopped` / `pre_inception`），回收站那句话按形状各说各话，
    `should_close_as_stale_target` 与存量收口脚本共用它，验证器多问一句"第一笔净值在哪天"。
 ② **「待验证」这一档的分母改成"有没有结论"**（A-5）：新 `_conclusion_conditions()` 一处实现，
-   列表过滤器、facets 计数、行上那个标签三头共用 —— 旧写法读遗留列 `predictions.status`，
-   而 `classify` 与验证器只认 `is_correct` ⇒ 页面那句"未到期与观望之和"与数差 12 条就是这么来的（同一批把那句话删了）。
+   列表过滤器、facets 计数、行上那个标签三头共用 —— 旧写法读遗留列 `predictions.status`。
+   **归因按实测收窄（第 54 轮 A-3）**：2026-09-27 两个库各数了一遍（`python scripts/q.py "select status,
+   (is_correct is null), count(*) from predictions where is_deleted=0 group by 1,2"`，加 `--production` 走线上）
+   ⇒ 镜像 `pending/未判 422 · success+failed/已判 1189`、生产同形状 `410 / 1191` ⇒ **零漂移**，
+   不许写成"生产上量到过"。那句"未到期与观望之和差 12 条"是**另一件事**（旧话把 `held` 漏在加和之外，
+   与 `status` 无关；同一批把那句话删了）。
 ③ **改标必清旧标的的重问锁**（#113 / #114，A-3 + B-5）：`retag_prediction` 把压在旧标的上、晚于目标日的那根日期
    退回目标日；页面「编辑预测」改绑不再直接写 `prediction.fund_code`，而是先过 `retag_gap` 那道证据门、
    再走同一个咽喉 ⇒ "换到新标的后第一次问就满足关闭全部条件、当场进回收站还写着已问过两次"这条路断了。

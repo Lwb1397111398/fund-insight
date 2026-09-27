@@ -1153,8 +1153,8 @@ class PredictionVerifyService:
                 latest_nav = self._as_date(newest[0]) if newest else None
                 # 第一笔净值在哪天同样要点名（第 53 轮 B-1 的 BLOCKER）：窗口整段早于首笔
                 # ⇒ 这只标的在那几天还没开始发净值，同步永远补不出来，而"末条早于窗口起点"
-                # 那把尺子对这种行恒为 False ⇒ 光认停更会把这 12 行永远留在"重问 ⇒ 弹回到期
-                # ⇒ 再踢出去"的圈里。
+                # 那把尺子对这种行恒为 False ⇒ 光认停更会把这一档永远留在
+                # "重问 ⇒ 弹回到期 ⇒ 再踢出去"的圈里（2026-09-27 镜像实测 7 行）。
                 oldest = self.db.query(FundHistory.nav_date).filter(
                     FundHistory.fund_code == fund_code).order_by(
                     FundHistory.nav_date.asc()).first()
@@ -1183,7 +1183,8 @@ class PredictionVerifyService:
                     # 没关成就照样上锁。上一版这里是一条 else，于是"该关但关不成"
                     # （归档咽喉拒了、行已不在活跃面等）既不锁也不报 ⇒ 每一批都重问它一次、
                     # 每一次又试关一次，回执上既没有 held_until 也没有 closed_as（第 52 轮 A-6）。
-                    held_until = apply_unverifiable_hold(prediction, as_of=today)
+                    held_until = apply_unverifiable_hold(
+                        prediction, as_of=today, verdict_reason=data_check.get('reason'))
                     try:
                         self.db.commit()
                     except Exception as hold_error:
@@ -1728,8 +1729,12 @@ class PredictionVerifyService:
             run_id = 'rollback-%s' % datetime.now().strftime('%Y%m%d-%H%M%S')
         today = date.today()
 
+        from src.services.prediction_lifecycle import conclusion_conditions
+
         predictions = self.db.query(Prediction).filter(
-            Prediction.status.in_(['success', 'failed']),
+            # 「有结论」才是可撤回的候选（第 54 轮 B-3：这一处以前读遗留列 `status`，
+            # 而同一个函数上面几行就写着 `is_correct is null` 不许撤 ⇒ 一行代码两套定义）
+            *conclusion_conditions('verified'),
             Prediction.verify_count > 0,
             Prediction.is_deleted == False,
             Prediction.prediction_type != 'flat'

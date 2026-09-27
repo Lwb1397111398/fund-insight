@@ -77,60 +77,13 @@ class PredictionService(BaseService[Prediction]):
             Prediction.fund_code == fund_code,
             Prediction.is_deleted == False
         ).order_by(Prediction.prediction_date.desc()).offset(skip).limit(limit).all()
-    
-    def get_active(self, skip: int = 0, limit: int = 100) -> List[Prediction]:
-        """
-        获取活跃预测（未过期且未验证）
-        
-        Args:
-            skip: 跳过记录数
-            limit: 返回记录数
-            
-        Returns:
-            活跃预测列表
-        """
-        today = date.today()
-        return self.db.query(Prediction).filter(
-            Prediction.status == 'pending',
-            Prediction.target_date >= today,
-            Prediction.is_deleted == False
-        ).order_by(Prediction.target_date.asc()).offset(skip).limit(limit).all()
-    
-    def get_pending_verification(self, days: int = 7) -> List[Prediction]:
-        """
-        获取待验证的预测
-        
-        Args:
-            days: 目标日期在几天内
-            
-        Returns:
-            待验证预测列表
-        """
-        today = date.today()
-        end_date = today + timedelta(days=days)
-        
-        return self.db.query(Prediction).filter(
-            Prediction.status == 'pending',
-            Prediction.target_date >= today,
-            Prediction.target_date <= end_date,
-            Prediction.is_deleted == False
-        ).all()
-    
-    def get_expired(self) -> List[Prediction]:
-        """
-        获取已过期的预测
-        
-        Returns:
-            过期预测列表
-        """
-        today = date.today()
-        return self.db.query(Prediction).filter(
-            Prediction.status == 'pending',
-            Prediction.target_date < today,
-            Prediction.is_deleted == False
-        ).all()
-    
-    
+
+    # 这里原来有四条"按遗留列 `status` 取预测"的查询（`get_active` /
+    # `get_pending_verification` / `get_expired` / `get_predictions_with_filters`），
+    # `src/` 与 `scripts/` 里零调用方 —— 它们与 `PredictionQueryService` 是同一件事的第二份
+    # 实现，而且用的是第 53 轮 A-5 已经宣布不可信的那根列。**留着就等于留着一个随时会被
+    # 人接上的错误口径**（第 49 轮 `_save_fund_mapping` 那一课：绿灯替死路作保），所以删掉。
+
     def get_stats(self, blogger_id: int = None) -> Dict:
         """
         获取预测统计（1条SQL替代原来4条）
@@ -221,73 +174,10 @@ class PredictionService(BaseService[Prediction]):
         ).scalar()
     
     # ==================== 为路由重构新增的方法 ====================
-    
-    def get_predictions_with_filters(
-        self,
-        skip: int = 0,
-        limit: int = 100,
-        blogger_id: Optional[int] = None,
-        status: Optional[str] = None,
-        is_expired: Optional[bool] = None
-    ) -> List[Dict]:
-        """
-        获取预测列表（包含博主和帖子信息）
-        
-        Args:
-            skip: 跳过记录数
-            limit: 返回记录数
-            blogger_id: 博主ID筛选
-            status: 状态筛选
-            is_expired: 是否过期筛选
-            
-        Returns:
-            预测列表（包含关联信息）
-        """
-        query = self.db.query(Prediction).options(
-            joinedload(Prediction.blogger),
-            joinedload(Prediction.post)
-        ).filter(Prediction.is_deleted == False)
-        
-        if blogger_id:
-            query = query.filter(Prediction.blogger_id == blogger_id)
-        if status:
-            query = query.filter(Prediction.status == status)
-        if is_expired is not None:
-            query = query.filter(Prediction.is_expired == is_expired)
-        
-        predictions = query.order_by(Prediction.prediction_date.desc()).offset(skip).limit(limit).all()
-        
-        result = []
-        for p in predictions:
-            blogger = p.blogger
-            post = p.post
-            
-            result.append({
-                "id": p.id,
-                "blogger_id": p.blogger_id,
-                "blogger_name": blogger.name if blogger else "未知",
-                "post_id": p.post_id,
-                "post_title": post.title if post else None,
-                "fund_code": p.fund_code,
-                "fund_name": p.fund_name,
-                "sector": p.sector,
-                "sector_type": p.sector_type,
-                "prediction_type": p.prediction_type,
-                "prediction_content": p.prediction_content,
-                "confidence": p.confidence,
-                "prediction_date": p.prediction_date.isoformat() if p.prediction_date else None,
-                "prediction_period": p.prediction_period,
-                "target_date": p.target_date.isoformat() if p.target_date else None,
-                "status": p.status,
-                "is_correct": p.is_correct,
-                "actual_change": p.actual_change,
-                "is_expired": p.is_expired,
-                "verify_count": p.verify_count,
-                "created_at": p.created_at.isoformat() if p.created_at else None
-            })
-        
-        return result
-    
+
+    # （这里原来还有 `get_predictions_with_filters`：自己拼一份预测列表的序列化、
+    #   又按遗留列 `status` 过滤，与 `PredictionQueryService` 同源同职责而零调用方 —— 已删。）
+
     def get_prediction_detail(self, prediction_id: int) -> Optional[Dict]:
         """
         获取预测详情
@@ -362,9 +252,14 @@ class PredictionService(BaseService[Prediction]):
             key for key, value in values.items()
             if key in verification_inputs and getattr(prediction, key) != value
         }
+        from src.services.prediction_lifecycle import has_conclusion
+
+        # "这一条已经验过了吗"只有一把尺子（第 54 轮 A-2 / B-3）：问**有没有结论**或
+        # **有没有问过**，不再读遗留列 `status` —— 同一页面上「待验证」的标签刚被改成按
+        # `is_correct` 说话，这里再按 `status` 判就会同时给出"待验证"和"已验证不能改依据"。
         is_verified = bool(
             (prediction.verify_count or 0) > 0
-            or prediction.status in ("success", "failed", "verified")
+            or has_conclusion(prediction)
             or prediction.is_expired
         )
         if is_verified and changed_inputs:
@@ -515,17 +410,17 @@ class PredictionService(BaseService[Prediction]):
 
     def _soft_archive(self, prediction: Prediction, *, reason: str, source: str) -> bool:
         """归档那条预测的唯一实现：手动归档与系统关闭都走这里（别在这里开第二条旁路）。"""
-        from src.services.prediction_lifecycle import beijing_now, current_as_of
+        from src.services.prediction_lifecycle import archive_stamp
 
         before_state = snapshot_prediction(prediction)
         prediction.is_deleted = True
         # 归档时刻与"可恢复到哪天"都按北京那把钟写（第 53 轮 A-11）：Render 容器在 UTC，
         # 北京时间 00:00~08:00 归档的行会用 `date.today()` 少写一天 ⇒ 回收站里那句
         # "保留到 X 日"比页面上的其它日期口径早一天，而恢复下界正是拿它算的。
-        prediction.deleted_at = beijing_now()
+        # 这一对时间戳只有一个出处 ⇒ 手动归档、系统关闭、合并去重三条款都走它（第 54 轮 A-1）。
+        prediction.deleted_at, prediction.restore_before = archive_stamp()
         prediction.deleted_by = source
         prediction.delete_reason = reason
-        prediction.restore_before = current_as_of() + timedelta(days=30)
         try:
             self.db.flush()
             self._recalculate_related_stats(prediction)

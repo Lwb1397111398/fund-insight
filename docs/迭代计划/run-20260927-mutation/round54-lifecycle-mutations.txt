@@ -1,0 +1,24 @@
+M1_any_failure_is_structural                               ⇒ RED（判据有效）
+M2_degenerate_endpoint_becomes_closable                    ⇒ RED（判据有效）
+M3_past_date_counts_as_second_ask                          ⇒ RED（判据有效）
+M3b_close_script_stops_asking_the_whole_gate               ⇒ RED（判据有效）
+M4_hold_only_covers_no_source_history                      ⇒ RED（判据有效）
+M5_rosters_stop_adding_up                                  ⇒ RED（判据有效）
+M5b_roster_invents_a_reason_the_verifier_never_answers     ⇒ RED（判据有效）
+M6_second_copy_of_the_structural_ruler                     ⇒ RED（判据有效）
+M7_refused_close_locks_nothing                             ⇒ RED（判据有效）
+M8_pre_inception_evidence_withdrawn                        ⇒ RED（判据有效）
+M9_retag_keeps_the_old_targets_lock                        ⇒ RED（判据有效）
+M10_manual_rebind_bypasses_the_evidence_gate               ⇒ RED（判据有效）
+M11_pending_bucket_reads_the_legacy_column_again           ⇒ RED（判据有效）
+M12_archive_stamp_goes_back_to_the_wall_clock              ⇒ RED（判据有效）
+M13_force_restore_promises_but_still_skips                 ⇒ RED（判据有效）
+M14_both_tiers_share_the_credential_clock                  ⇒ RED（判据有效）
+M15_the_reask_interval_becomes_a_second_number             ⇒ RED（判据有效）
+M16_fix_wording_dry_run_actually_writes                    ⇒ RED（判据有效）
+已还原 src/services/prediction_lifecycle.py
+已还原 scripts/close_unknowable_predictions.py
+已还原 src/services/prediction_verify_service.py
+已还原 src/fund/fund_sync_manager.py
+已还原 src/services/prediction_service.py
+已还原 src/services/prediction_query_service.py

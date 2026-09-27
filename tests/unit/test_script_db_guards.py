@@ -933,6 +933,48 @@ def _issues_schema_ddl(f):
     return bool(via_api or via_cli or via_caps)
 
 
+def _payload_blanked(src):
+    """把**引号里的话**挖空，只留下 `add_argument('--apply', …)` 那种"自己在声明一个旗子"的字面量。
+
+    第 54 轮基线当场被这件事打红：`scripts/mutation_proof_lifecycle.py` 为了做变异，把
+    `close_unknowable_predictions.py` 整句 print **原文抄成载荷**
+    （`'…真订正加 --apply --confirm %s' % CONFIRM_TOKEN`），于是这两道按正文文本找
+    "写开关 / 硬删字样"的闸门把一份从不连库的开发工具读成了"会删数据的脚本"。
+    这跟第 43 轮"说明文买不到守卫信号"是同一条的两个方向：**文本证据必须来自代码做的事，
+    不是来自代码里引用的别人那句话**。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return src                                  # 解析不了 ⇒ 一个字都不挖（fail-closed）
+    keep = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and getattr(n.func, 'id', getattr(n.func, 'attr', '')) == 'add_argument':
+            for a in n.args:
+                if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                    keep.add((a.lineno, a.col_offset))
+    lines = src.splitlines(keepends=True)
+    flat = [(i, len(l)) for i, l in enumerate(lines)]
+    out = list(src)
+    pos_of_line = 0
+    starts = []
+    acc = 0
+    for l in lines:
+        starts.append(acc)
+        acc += len(l)
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Constant) and isinstance(n.value, str)):
+            continue
+        if (n.lineno, n.col_offset) in keep:
+            continue
+        a = starts[n.lineno - 1] + n.col_offset
+        b = starts[n.end_lineno - 1] + n.end_col_offset
+        for k in range(a, min(b, len(out))):
+            if out[k] != '\n':
+                out[k] = ' '
+    return ''.join(out)
+
+
 def _write_capable(f):
     """CLI 上有写开关 / 确认口令 / 直接执行删除的服务 / 跑迁移 —— 都算"能改数据"。"""
     if f.get('broken'):
@@ -970,8 +1012,8 @@ def _write_capable(f):
         # 连"你正在往哪儿写"都不用自己说。要口令才动 = 就是写操作，与删不删无关。
         return True
     if f['called'] & {'confirm', 'execute'}:
-        return bool(HARD_DELETE.search(f['text']))
-    return bool(HARD_DELETE.search(f['text']) and f['direct_db'])
+        return bool(HARD_DELETE.search(_payload_blanked(f['text'])))
+    return bool(HARD_DELETE.search(_payload_blanked(f['text'])) and f['direct_db'])
 
 
 def _refuses_direction(f, direction):
@@ -1102,7 +1144,8 @@ def test_there_are_write_capable_scripts_left_to_guard():
     # `push_sector_mappings_to_prod.py` —— 全仓唯一往生产 POST 的写口，两头都不占。
     scripts = _scripts()
     text_switches = {name for name, f in scripts.items()
-                     if WRITE_SWITCH.search(f['text']) or '--confirm' in f['text']}
+                     if WRITE_SWITCH.search(_payload_blanked(f['text']))
+                     or '--confirm' in _payload_blanked(f['text'])}
     blind = sorted(name for name in text_switches
                    if not _write_capable(scripts[name])
                    and not _guarded(name, scripts[name],
@@ -1111,6 +1154,17 @@ def test_there_are_write_capable_scripts_left_to_guard():
                        % '、'.join(blind))
     assert 'push_sector_mappings_to_prod.py' in text_switches, \
         '文本证据源自己失效了（push 那条 HTTP 写口不见了）⇒ 上面那条交叉核对会变成空判'
+    # 挖空载荷不能把闸门挖成瞎子：现造两种形状对照 ——
+    # 真声明旗子的必须仍然算"写着写开关"，只在引号里**引用**别人那句话的不算。
+    assert WRITE_SWITCH.search(_payload_blanked(
+        "import argparse\nap = argparse.ArgumentParser()\nap.add_argument('--apply', "
+        "action='store_true')\n")), '挖空把 add_argument 声明的旗子也挖掉了 ⇒ 这道闸门报废'
+    assert not WRITE_SWITCH.search(_payload_blanked(
+        "print('真订正加 --apply --confirm TOKEN')")), \
+        '引号里引用的一句话仍被当成"这个脚本有写开关" ⇒ 变异载荷会冤枉每一份开发工具'
+    sample = "def f():\n    x = 1\n    print('DELETE FROM t')\n"
+    assert _payload_blanked(sample).count('\n') == sample.count('\n'), \
+        '挖空把行号弄丢了 ⇒ 后面按行定位的判据全部错位'
     # 第 36 轮 B-MINOR-3：旧判据的前提是"CLI 上有写开关"，于是**没有开关、上来就 commit**
     # 的脚本永远进不了集合。这条把那种形状自己钉住：会 commit 的直连脚本必须全部受管。
     committing = {name for name, f in _scripts().items()
@@ -1322,7 +1376,7 @@ def test_hard_delete_scripts_pin_the_mirror_by_default():
     for name, f in _scripts().items():
         if name in PRODUCTION_ENTRY:      # Render Cron 入口本就跑生产，护栏由上一条管
             continue
-        delegates = bool(HARD_DELETE.search(f['text']))
+        delegates = bool(HARD_DELETE.search(_payload_blanked(f['text'])))
         direct = '.delete(' in f['text']
         if not (delegates or direct):
             continue

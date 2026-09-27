@@ -68,31 +68,10 @@ class FundService(BaseService[FundInfo]):
         return self.db.query(FundInfo).filter(
             FundInfo.active_predictions > 0
         ).order_by(FundInfo.active_predictions.desc()).offset(skip).limit(limit).all()
-    
-    def get_with_predictions(self, fund_code: str) -> Optional[Dict]:
-        """
-        获取基金及其预测
-        
-        Args:
-            fund_code: 基金代码
-            
-        Returns:
-            包含预测的基金信息
-        """
-        fund = self.get_by_code(fund_code)
-        if not fund:
-            return None
-        
-        predictions = self.db.query(Prediction).filter(
-            Prediction.fund_code == fund_code,
-            Prediction.status == 'pending'
-        ).all()
-        
-        return {
-            **fund.__dict__,
-            "predictions": [p.__dict__ for p in predictions]
-        }
-    
+
+    # （这里原来有 `get_with_predictions`：按遗留列 `status=='pending'` 取"这只基金的预测"，
+    #   既不排 `is_deleted` 也不看有没有结论，且 `src/` 里零调用方 —— 已删，第 54 轮 B-3。）
+
     def update_nav(self, fund_code: str, nav: float, nav_date: date, 
                    day_growth: float = None) -> Optional[FundInfo]:
         """

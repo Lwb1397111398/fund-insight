@@ -237,7 +237,8 @@ class FundAPI:
             except Exception:
                 return None
     
-    def get_fund_history(self, fund_code: str, days: int = 30) -> List[Dict]:
+    def get_fund_history(self, fund_code: str,
+                         days: int = config.NAV_HISTORY_LOOKBACK_DAYS) -> List[Dict]:
         """获取基金历史净值"""
         try:
             params = {
@@ -455,7 +456,7 @@ class FundAPI:
             # 历史净值是判断"能否抓取"的权威依据，只调一次。
             # 窗口用 30 天而不是 7 天：7 天遇上节假日只有 4-5 条，会让严格判据
             # 在周末随机翻转（同一只正常基金一会儿合格一会儿不合格）。
-            history = self.get_fund_history(code, days=30)
+            history = self.get_fund_history(code, days=config.NAV_HISTORY_LOOKBACK_DAYS)
         except Exception as e:
             logger.warning(f"验证基金{code}时历史接口异常: {e}")
 

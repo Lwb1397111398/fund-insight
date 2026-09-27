@@ -36,6 +36,7 @@ from src.models.database import (
     VerificationTask,
     Viewpoint,
 )
+from src.services.prediction_lifecycle import has_conclusion
 from src.utils.blogger_stats import recalculate_blogger_stats
 
 
@@ -374,13 +375,19 @@ class RetentionCleanupService:
         pending: List[Prediction] = []
         candidates: Set[int] = set()
         for prediction in predictions:
-            if prediction.status == "pending" and not prediction.is_deleted:
+            # 「还没有结论」而不是「status 列写着 pending」（第 54 轮 B-3）：这一处决定
+            # 哪些行**被保护、不进删除候选**，尺子必须与页面上那一档同一把。
+            # 方向上保守只会多保护、不会多删。
+            if not has_conclusion(prediction) and not prediction.is_deleted:
                 pending.append(prediction)
                 protected_counts["pending_predictions"] += 1
                 if prediction.target_date and prediction.target_date > long_term_threshold:
                     protected_counts["long_term_predictions"] += 1
                 continue
-            if prediction.status not in {"success", "failed"}:
+            # 上面那道"没有结论 ⇒ 保护"与这一道"有结论才进候选"必须是同一把尺子
+            # （第 54 轮 B-3：原来这一道读遗留列 `status`，于是同一行可以既"没结论被保护"
+            #   又"status 写着 success 被列进删除候选"）
+            if not has_conclusion(prediction):
                 continue
             if prediction.is_deleted and prediction.restore_before and prediction.restore_before >= self.today:
                 continue

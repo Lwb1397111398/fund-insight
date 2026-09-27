@@ -166,19 +166,18 @@ class PredictionQueryService:
 
     @staticmethod
     def _conclusion_conditions(status: Optional[str]) -> List[Any]:
-        """把"待验证 / 已验证"这两档翻译成 SQL —— 问的是**有没有结论**（`is_correct`），
-        不是遗留列 `predictions.status`（第 53 轮 A-5）。
+        """「待验证 / 已验证」这两档问什么 —— 实现只在 `prediction_lifecycle.conclusion_conditions`
+        一处（第 53 轮 A-5 立的尺子，第 54 轮 A-2/B-3 收拢成全仓共用）。
 
-        为什么换：`status` 那一列由老代码写，验证器与改标咽喉都按 `is_correct` 说话
-        （`classify` 也只看它）。镜像今天两把尺子**恰好逐档对上**（422 条未判 ↔
-        `status='pending'` 422 条），那是巧合不是等价 —— 生产上曾经出现过
-        `status='success'` 而 `is_correct` 为空的行。页面上的数与点进去的列表
-        从此共用这一处实现，谁也不再各抄一遍 `== 'pending'`。
+        问的是**有没有结论**（`is_correct`），不是遗留列 `predictions.status`。
+        边界要说清：**今天两库实测两把尺子逐档相同**（镜像未判 422 ↔ `status='pending'` 422，
+        生产同向，漂移 0 行）—— 换尺子是防"写侧与读侧哪天分叉"的加固，不是修一处量到的错。
+        第三档（如 `success` / `failed`）仍按 `status` 列查，那是另一件事，不归这把尺子管。
         """
-        if status == "verified":
-            return [Prediction.is_correct.isnot(None)]
-        if status in ("pending", "unverified"):
-            return [Prediction.is_correct.is_(None)]
+        from src.services.prediction_lifecycle import conclusion_conditions
+
+        if status in ("verified", "pending", "unverified"):
+            return conclusion_conditions(status)
         return [Prediction.status == status]
 
     def _lifecycle_conditions(self, lifecycle: str) -> List[Any]:
@@ -270,9 +269,12 @@ class PredictionQueryService:
         row = self.db.query(
             func.count(case((active, 1))).label("all"),
             # 「待验证」/「已验证」这两个数问的是**有没有结论**，与上面 `status` 过滤器
-            # 共用 `_conclusion_conditions` 一处实现（第 53 轮 A-5：原来分母是遗留列
-            # `predictions.status`，而 `classify` 与验证器都按 `is_correct` 说话 ⇒
-            # 页面那句"未到期与观望之和"和数差 12 条就是这么来的）
+            # 共用 `_conclusion_conditions` 一处实现（第 53 轮 A-5）。**归因要说准**（第 54 轮 A-3）：
+            # 2026-09-27 两个库各数了一遍（`select status, (is_correct is null), count(*) …
+            # group by 1,2`）⇒ 镜像 `pending/1 422 · success|failed/0 1189`、生产同形状零漂移，
+            # 所以这一处换尺子是**防漂移的加固，今天没量到过**，不许写成"生产上量到过"。
+            # 那句"未到期与观望之和差 12 条"是另一件事：分母错在旧话把 `held`（重问锁未到点）
+            # 漏在了加和之外，与 `status` 列无关。
             func.count(case((and_(active, *self._conclusion_conditions("pending")),
                              1))).label("pending"),
             func.count(case((and_(active, *self._conclusion_conditions("verified")),

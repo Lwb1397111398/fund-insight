@@ -13,6 +13,8 @@
 哪天有人让排期越过目标日，"结构性不可验"就会开始冤枉人，所以这条得钉住。
 """
 from datetime import date, timedelta
+from pathlib import Path
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +27,7 @@ from src.services.prediction_lifecycle import (
 from src.fund import backfill_proofs
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TODAY = date.today()
 
 
@@ -130,6 +133,92 @@ def test_the_lock_expires_and_the_prediction_asks_again(test_db, monkeypatch):
     assert filter_unverifiable(test_db, as_of=held) == []
     # 锁的天数跟着凭据 TTL 走，不是拍出来的常数
     assert held == TODAY + timedelta(days=int(backfill_proofs.EMPTY_TTL_DAYS) + 1)
+
+
+def test_the_two_structural_tiers_wait_for_their_own_clock(test_db, monkeypatch):
+    """两档各等各的时钟（第 54 轮 A-5 的账）：有凭据的跟凭据 TTL，没凭据的跟净值回补范围。
+
+    镜像上 5 行 `same_nav_endpoint` 以前跟的是 3 天那一档 ⇒ 每三天弹回「待验证到期」
+    被问一次、再弹回去，**永远没有终局** —— 而这一档依据的事实（那段窗口里只有那一条净值）
+    不会因为过了三天就变。改变它只有一条路：新净值行落进这段窗口，而常规同步只往回拉
+    `config.NAV_HISTORY_LOOKBACK_DAYS` 天 ⇒ 间隔就取那个数 +1，出处只有一个。
+    """
+    from src.core.config import config
+
+    # 两档必须是**两个不同的数**，否则"分档"是装饰
+    ttl_days = unverifiable_retry_days('no_source_history')
+    endpoint_days = unverifiable_retry_days('same_nav_endpoint')
+    assert ttl_days == int(backfill_proofs.EMPTY_TTL_DAYS) + 1, '有凭据那档不再跟凭据 TTL ⇒ 凭据过期前就重问'
+    assert endpoint_days == int(config.NAV_HISTORY_LOOKBACK_DAYS) + 1, \
+        '退化端点这一档的间隔不是从"同步能回补多久"算出来的 ⇒ 又变回拍的常数'
+    assert endpoint_days > ttl_days, '两档同数 ⇒ 上面那条分档白分，5 行照旧每三天弹一次'
+
+    p = _seed(test_db, target=TODAY - timedelta(days=60), fund_code='LOOK01')
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'same_nav_endpoint', 'message': '那天没有独立净值'})
+
+    result = svc.verify_prediction(p.id)
+
+    test_db.refresh(p)
+    assert result['held_until'] == (TODAY + timedelta(days=endpoint_days)).isoformat()
+    assert p.is_correct is None and p.is_deleted is False, '拉长重问间隔不是把它关掉'
+    # 到点仍要自己回队 —— 这一档不是终态，与上一批的边界一样
+    held = p.next_verify_date
+    assert p.id not in {x.id for x in filter_due_for_verify(test_db, as_of=held - timedelta(days=1))}
+    assert p.id in {x.id for x in filter_due_for_verify(test_db, as_of=held)}
+
+
+def test_the_page_repeats_the_reask_day_from_the_row_itself(test_db, monkeypatch):
+    """页面灰字那句"『日期』自动重问"不许自己算一份间隔 —— 只许读行上那一根。
+
+    间隔从今天起分两档（3 天 / 31 天），页面上只要写死任一个数就会有一半行说错话；
+    而 `{{ p.next_verify_date }}` 这种"把接口给的日期原样印出来"才是对的形状。
+    """
+    p = _seed(test_db, target=TODAY - timedelta(days=60), fund_code='WORD01')
+    svc = _service(test_db, monkeypatch, {
+        'available': False, 'reason': 'same_nav_endpoint', 'message': '那天没有独立净值'})
+
+    result = svc.verify_prediction(p.id)
+    test_db.refresh(p)
+    assert result['held_until'] == p.next_verify_date.isoformat(), \
+        '回执报的重问日与行上排的不是一天 ⇒ 页面与接口各说一份'
+
+    html = (PROJECT_ROOT / 'web' / 'index.html').read_text(encoding='utf-8')
+    line = [l for l in html.splitlines() if '自动重问' in l]
+    assert line, '页面那句"自动重问"不见了 ⇒ 这一档的话没人说了'
+    assert 'p.next_verify_date' in line[0], '重问日不再读行上那一根'
+    for b in ('+3', '+ 3', 'three', '31'):
+        assert b not in line[0], '页面上写死了间隔（%s）⇒ 两档节奏一分叉它就说错话' % b
+
+
+def test_the_nav_lookback_has_one_home_for_both_questions(monkeypatch):
+    """"同步往回拉多少天"这件事只许有一处实现（第 54 轮 A-5 的加固）。
+
+    重问间隔必须**跟着 `config` 那个键动**，不是"今天恰好等于它 +1"：
+    第一版我只比了 `endpoint_days == NAV_HISTORY_LOOKBACK_DAYS + 1`，而默认值 30 ⇒
+    变异体把间隔写死成 31 也照样绿（第 54 轮变异 M15 打绿，就是这么暴露的）。
+    所以这里把键改成一个不是 30 的数再问一次。
+    """
+    import ast
+    from pathlib import Path as _P
+    from src.core.config import config
+
+    root = _P(__file__).resolve().parents[2]
+    monkeypatch.setattr(config, 'NAV_HISTORY_LOOKBACK_DAYS', 47, raising=False)
+    assert unverifiable_retry_days('same_nav_endpoint') == 48, \
+        '间隔不跟着回补范围动 ⇒ 它其实是第二个写死的数，两边会各漂各的'
+    # 有凭据那一档不许被这个键带着走（它跟的是凭据 TTL）
+    assert unverifiable_retry_days('no_source_history') != 48
+
+    api = (root / 'src' / 'fund' / 'fund_api.py').read_text(encoding='utf-8')
+    tree = ast.parse(api)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+              and n.name == 'get_fund_history')
+    defaults = [ast.unparse(d) for d in fn.args.defaults]
+    assert any('NAV_HISTORY_LOOKBACK_DAYS' in d for d in defaults), \
+        '取历史的默认窗口又写回字面量 ⇒ 重问间隔与它各自的数会漂开'
+    cfg = (root / 'src' / 'core' / 'config.py').read_text(encoding='utf-8')
+    assert cfg.count('NAV_HISTORY_LOOKBACK_DAYS =') == 1, '这个数在 config 里立了两处'
 
 
 @pytest.mark.parametrize('period_days', [0, 1, 5, 6, 11, 30, 45])
@@ -290,7 +379,7 @@ def test_a_refused_close_still_puts_the_lock_back(test_db, monkeypatch):
 def test_a_window_entirely_before_the_first_nav_row_closes_the_row(test_db, monkeypatch):
     """第 53 轮 B-1 的 BLOCKER：窗口**整段早于**库里首笔净值 ⇒ 这是第二种"永久"，得单独认。
 
-    镜像实测 12 行到期未判里有这一族（`515440` 五条：窗口 07-23~08-20，库里首笔 09-02）：
+    镜像实测 7 行到期未判里有这一族（`515440` 五条：窗口 07-23~08-20，库里首笔 09-02）：
     末条净值活得好好地在窗口之后 ⇒ `nav_cannot_cover_window`（末条早于起点）恒为 False ⇒
     关不掉，而重问日每三天把它们弹回「待验证到期」再踢出去一次 ⇒ 老板那句"打开后我不想看到
     过期没验的预测"每个周期破一次。源端已经答过"这段没有"（`no_source_history` 的前提），
@@ -444,7 +533,7 @@ def test_a_degenerate_endpoint_holds_the_row_out_of_the_due_queue(test_db, monke
     result = svc.verify_prediction(p.id)
 
     assert result['success'] is False
-    held = TODAY + timedelta(days=unverifiable_retry_days())
+    held = TODAY + timedelta(days=unverifiable_retry_days('same_nav_endpoint'))
     assert result['held_until'] == held.isoformat(), '退化端点没被锁 ⇒ 到期队列里永远有它'
     test_db.refresh(p)
     assert p.next_verify_date == held and p.is_correct is None
@@ -506,7 +595,8 @@ def test_a_degenerate_endpoint_is_never_closed_even_on_the_second_ask(test_db, m
     test_db.refresh(p)
     assert result['closed_as_unverifiable'] is False, '这条关不得：证据分不清休市与数据洞'
     assert p.is_deleted is False
-    assert result['held_until'] == (TODAY + timedelta(days=unverifiable_retry_days())).isoformat()
+    assert result['held_until'] == (TODAY + timedelta(
+        days=unverifiable_retry_days('same_nav_endpoint'))).isoformat()
 
 
 def test_the_structural_reasons_are_all_dispositioned(test_db):

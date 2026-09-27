@@ -1,0 +1,6 @@
+[提示] --only 'queue_caliber' 只匹配 2/118 处、判据 1 条 ⇒ 这不是全套体检
+本批改写到的文件：web/index.html
+CONTROL-GREEN（干净代码上判据通过，下面的红才有意义）
+queue_caliber_moves_back_into_title  index.html RED（判据有效）
+queue_caliber_back_to_an_equation_it_cannot_keep index.html RED（判据有效）
+已还原 web/index.html（逐文件回读比对一致）

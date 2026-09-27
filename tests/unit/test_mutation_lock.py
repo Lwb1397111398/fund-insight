@@ -36,14 +36,66 @@ def test_the_lock_file_is_not_tracked_by_git(tmp_path):
 
 
 def test_both_sides_are_actually_wired():
-    """两头都得真的接线：只留一个工具函数不叫闸。"""
-    harness = (PROJECT_ROOT / 'scripts' / 'mutation_proof_frontend.py').read_text(encoding='utf-8')
-    assert 'held_exclusively(' in harness, '体检没抢锁就能开始改写 web/'
-    # 放行标记要真的传进子进程：只写 `env = dict(os.environ)` 而不 `env=env` 是死的
-    assert 'env[mutation_lock.ENV_PID]' in harness, '体检没给自己起的子 pytest 准备放行标记'
-    assert 'env=env' in harness, '体检起了子 pytest 但没把放行标记传过去 ⇒ 它会把自己拦死'
+    """两头都得真的接线：只留一个工具函数不叫闸。
+
+    第 54 轮 B-10：`scripts/mutation_proof_lifecycle.py` 这批新加时**一处锁都没接**
+    （它会就地改写 `src/*.py` 再跑 pytest），而这条判据以前只认前端那一份 ⇒
+    "体检与 pytest 双向互斥"这句话对逻辑侧那份工具当场不成立。
+    现在按名单逐个核，并且新造一个"会改文件又跑 pytest"的工具必须被认出来。
+    """
+    harnesses = ('mutation_proof_frontend.py', 'mutation_proof_lifecycle.py')
+
+    def _is_a_harness(src):
+        """会就地改写仓库文件、又自己起 pytest 的脚本 —— 这种必须握两把锁。
+
+        落盘有两种拼法：前端那份按 `Path.write_text` 写、逻辑那份为防"写一半就崩"
+        用"临时文件 + `os.replace`"，两种都得认（第一版只认后者，把前端那份判成"不是体检工具"）。
+        """
+        writes_back = 'write_text(' in src or 'os.replace(' in src
+        runs_pytest = "-m', 'pytest'" in src or '"-m", "pytest"' in src
+        return writes_back and runs_pytest
+
+    for name in harnesses:
+        harness = (PROJECT_ROOT / 'scripts' / name).read_text(encoding='utf-8')
+        assert _is_a_harness(harness), \
+            '%s 已经不改文件/不起 pytest 了 ⇒ 把它从名单里删掉，别留着当装饰' % name
+        assert 'held_exclusively(' in harness, '%s 没抢锁就能开始改写文件' % name
+        assert 'harness_may_start(' in harness, \
+            '%s 不先问有没有 pytest 会话在跑 ⇒ 它会改写别人正在读的那些文件' % name
+        # 放行标记要真的传进子进程：只写 `env = dict(os.environ)` 而不 `env=env` 是死的
+        assert 'env[mutation_lock.ENV_PID]' in harness, '%s 没给自己起的子 pytest 准备放行标记' % name
+        assert 'env=env' in harness, '%s 起了子 pytest 但没把放行标记传过去 ⇒ 它会把自己拦死' % name
     conftest = (PROJECT_ROOT / 'tests' / 'conftest.py').read_text(encoding='utf-8')
     assert 'is_being_mutated(' in conftest, 'pytest 看到锁被持有时不会拦'
+
+    # 控制：识别本身要有牙 —— 现造一份"改文件 + 起 pytest"的脚本必须被认成体检工具，
+    # 于是名单外多一个这样的脚本就会被下面这条循环点红。
+    assert _is_a_harness("import os, subprocess\n"
+                         "os.replace('a.tmp', 'src/x.py')\n"
+                         "subprocess.run([sys.executable, '-m', 'pytest', 'tests'])\n"), \
+        '这条识别是死的 ⇒ 名单核对形同虚设'
+
+    # 形状命中、但**危害不同**的邻居：按名字登记并写清为什么不算体检工具。
+    # 判据是"它会不会让别人的红绿变成假红绿"，不是"它碰过文件又起过 pytest"。
+    adjacent = {
+        'audit_doc_claims.py':
+            '`--fix` 只改写 `docs/` 与 `AGENTS.md`（pytest 不把这些当源码读），起的子会话是 '
+            '`--collect-only`（收集不执行用例）⇒ 不会把谁的断言弄成假红绿。它真正的风险是'
+            '**与基线并发**（那也是一个 pytest 会话），那一半由 AGENTS 的"跑基线期间不起第二个'
+            '会话"这条规矩管，不是这两把锁。',
+    }
+    for path in sorted((PROJECT_ROOT / 'scripts').glob('*.py')):
+        if path.name in harnesses:
+            continue
+        name, hits = path.name, _is_a_harness(path.read_text(encoding='utf-8'))
+        if hits:
+            assert name in adjacent, (
+                '%s 会改写文件又起 pytest，却没登记进两把锁的名单 ⇒ 它会与 pytest 会话互相污染。'
+                '要么真把两把锁接上，要么写清它为什么不会弄脏别人的红绿。' % name)
+        else:
+            # 登记了却已经不当这个形状 ⇒ 死条目，同样要响（别留成装饰）
+            assert name not in adjacent, \
+                '%s 已经不满足体检形状了 ⇒ 把它从邻居名单里删掉' % name
 
 
 def test_a_stray_pytest_session_is_blocked_while_the_harness_holds_the_lock():

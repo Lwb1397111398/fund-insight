@@ -267,7 +267,7 @@
                         <button class="action-btn small" :class="predictionFilter === 'archived' ? 'danger' : 'default'"
                             @click="setPredictionFilter('archived')"><i class="ri-archive-line"></i> 回收站 ({{ viewErrors.predictions ? '—' : numOrDash(predictionMeta.facets.archived) }})</button>
                     </div>
-                    <div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「结构性不可验」= 验证器已按区间问过、这一轮判不出结论（净值补不上来，或目标日那天没有独立净值行），今天点验证也问不出来，到重问日自动回到「待验证到期」；「未到期」= 还没到目标日；「待验证」= 还没有结论的全部（＝待验证到期＋结构性不可验＋未到期），别把它当成"今天能验了"。</div>
+                    <div class="filter-caliber-note">口径：「待验证到期」= 已到目标日、仍在验证窗口内，今天点验证就是这一批；「结构性不可验」= 验证器已按区间问过、这一轮判不出结论（净值补不上来，或目标日那天没有独立净值行），今天点验证也问不出来，到重问日自动回到「待验证到期」；「未到期」= 还没到目标日；「待验证」= 还没有结论的全部（含「待验证到期」「结构性不可验」「未到期」这三档，另加不参与验证的观望行与没填目标日的行），别把它当成"今天能验了"。</div>
                     <div class="post-filter-bar prediction-filter-bar">
                         <input v-model="predictionFilters.keyword" @keyup.enter="applyPredictionFilters" placeholder="搜索博主、基金、板块或内容">
                         <select v-model="predictionFilters.blogger_id"><option value="">全部博主</option><option v-for="b in bloggers" :key="b.id" :value="b.id">{{ b.name }}</option></select>

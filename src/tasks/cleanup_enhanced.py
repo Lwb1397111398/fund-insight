@@ -10,6 +10,8 @@ import logging
 import threading
 from typing import Dict, List, Optional, Any, Callable
 from datetime import datetime, date, timedelta
+
+from src.services.prediction_lifecycle import archive_stamp
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from functools import wraps
@@ -267,14 +269,18 @@ class SoftDeleteManager:
             
             if hasattr(item, 'is_deleted'):
                 item.is_deleted = True
+            if hasattr(item, 'deleted_at') or hasattr(item, 'restore_before'):
+                # 这一对时间戳只有一个出处（第 54 轮 B-2）：这条腿今天零调用方，
+                # 但"少一天"那个缺陷不该因为多一条路就复活一次。保留期照这个类自己的配置。
+                stamp, deadline = archive_stamp(self.TRASH_RETENTION_DAYS)
             if hasattr(item, 'deleted_at'):
-                item.deleted_at = datetime.now()
+                item.deleted_at = stamp
             if hasattr(item, 'deleted_by'):
                 item.deleted_by = deleted_by
             if hasattr(item, 'delete_reason'):
                 item.delete_reason = reason
             if hasattr(item, 'restore_before'):
-                item.restore_before = date.today() + timedelta(days=self.TRASH_RETENTION_DAYS)
+                item.restore_before = deadline
             
             self.db.commit()
             return True
