@@ -47,6 +47,7 @@ CLOSE_TESTS = 'tests/unit/test_close_unknowable_predictions.py'
 QUERY_TESTS = 'tests/unit/test_prediction_query.py'
 SAFE_TESTS = 'tests/unit/test_prediction_management_safety.py'
 MIGRATE_TESTS = 'tests/unit/test_prediction_migrations.py'
+RULER_TESTS = 'tests/unit/test_one_ruler_per_question.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -147,7 +148,7 @@ MUTATIONS = [
      '                from src.services.prediction_lifecycle import (\n',
      '            if False:\n'
      '                from src.services.prediction_lifecycle import (\n',
-     HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_both_sync_writers'),
+     HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
     ('M20_releasing_ignores_what_actually_changed', LIFECYCLE,
      '        if changed and not any(start is not None and start <= d <= end'
      ' for d in changed):',
@@ -181,6 +182,26 @@ MUTATIONS = [
      "'容器缺时区时页面日期可能差一天', exc)",
      'tests/unit/test_stats_evidence_report.py',
      'test_current_as_of_fallback_leaves_a_trail'),
+    # 第 56 轮：四把判据各自"只修了一半"，每一半都补一处变异 ——
+    # 上一轮这几条之所以是 GREEN，正因为尺子只量了形状的一半。
+    ('M24_lookback_written_as_a_positional_argument', 'src/fund/fund_auto_manager.py',
+     'fund_data_manager.update_fund_history(fund_code, db=db)',
+     'fund_data_manager.update_fund_history(fund_code, 30, db=db)',
+     HOLD_TESTS, 'test_the_sync_lookback_is_not_hard_coded_at_any_call_site'),
+    ('M25_unlock_called_with_an_empty_list_of_dates', 'src/fund/fund_api.py',
+     'release_holds_after_nav_commit(db, fund_code, inserted,',
+     'release_holds_after_nav_commit(db, fund_code, [],',
+     HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
+    ('M26_unlock_hidden_behind_an_always_false_comparison', SYNC,
+     '            if added:\n',
+     '            if added and 1 == 0:\n',
+     HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
+    # 归档那把棘轮以前按 (文件, 函数) 收 ⇒ 已登记的函数里再长一处墙钟写它看不见
+    ('M27_second_wall_clock_archive_stamp_inside_a_registered_function', SVC,
+     '        prediction.deleted_at, prediction.restore_before = archive_stamp()\n',
+     '        prediction.deleted_at, prediction.restore_before = archive_stamp()\n'
+     '        prediction.deleted_at = datetime.now()   # 变异：第二处墙钟写同一列\n',
+     RULER_TESTS, 'test_archiving_a_prediction_always_stamps_with_the_shared_clock'),
 ]
 
 

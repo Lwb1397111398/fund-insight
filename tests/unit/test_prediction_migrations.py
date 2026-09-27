@@ -17,14 +17,22 @@ def killed_by_the_os(rc) -> bool:
     return rc is not None and (rc < 0 or rc >= 0xC0000000)
 
 
+def _child_io_env(env):
+    """交给子进程的那份环境：`PYTHONIOENCODING` **必须**是 utf-8，不论父进程带什么进来。"""
+    out = dict(env)
+    # 不是 `setdefault`：父进程带着空串（或 gbk）进来时 setdefault 会原样放过 ⇒
+    # 子进程按 cp936 写、这里按 utf-8 解，"自报库名"那行成替换符，用例假红（第 56 轮 m-4）。
+    out['PYTHONIOENCODING'] = 'utf-8'
+    return out
+
+
 def _run_the_migration_script(env, attempts=3):
     """跑 `scripts/run_migrations.py`；被系统打死就重跑，最多 `attempts` 次。
 
     子进程一律显式 `PYTHONIOENCODING=utf-8`：本仓库的控制台默认是 cp936，而下面按 utf-8 解码
     读它的输出 —— 不设的话"自报库名"那行会解成一串替换符，判据就在假红（2026-09-23 实测）。
     """
-    env = dict(env)
-    env.setdefault('PYTHONIOENCODING', 'utf-8')
+    env = _child_io_env(env)
     result = None
     for _ in range(attempts):
         result = subprocess.run(
@@ -216,3 +224,18 @@ def test_crash_like_exit_codes_are_recognised():
     assert killed_by_the_os(-6)                  # 类 Unix 上信号杀掉的形状
     assert not killed_by_the_os(0)
     assert not killed_by_the_os(1)               # run_migrations.main() 自己报的失败
+
+
+def test_the_child_always_writes_utf8_no_matter_what_the_parent_carries():
+    """那份环境里 `PYTHONIOENCODING` 必须是 utf-8 —— **继承来的空值也不行**（第 56 轮 m-4）。
+
+    上一版是 `setdefault`：`PYTHONIOENCODING=""` 时它原样放过 ⇒ 子进程按 cp936 写、
+    父进程按 utf-8 解 ⇒ `[库]` 那行成替换符，判据假红（评审为此重跑了一次全量）。
+    这一条不启子进程，问的是那份环境字典本身。
+    """
+    for inherited in ({}, {'PYTHONIOENCODING': ''}, {'PYTHONIOENCODING': '   '},
+                      {'PYTHONIOENCODING': 'gbk'}, {'PYTHONIOENCODING': 'utf-8'}):
+        got = _child_io_env(inherited)['PYTHONIOENCODING']
+        assert got == 'utf-8', '%r ⇒ %r：解码按 utf-8，写侧就必须按 utf-8' % (inherited, got)
+    assert _child_io_env({'DATABASE_URL': 'sqlite:///:memory:'})['DATABASE_URL'] == \
+        'sqlite:///:memory:', '它顺手把别的环境变量也改了'

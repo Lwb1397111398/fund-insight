@@ -249,21 +249,63 @@ def _targets(n):
     return out
 
 
-def _archive_writes(node):
-    """这一处写不写归档那一对列？（属性赋值 / 解包赋值 / setattr / 关键字参数都算）"""
-    hits = set()
+def _stamp_names(node):
+    """这个函数里哪些名字**就是**那只钟交出来的那一对（`stamp, deadline = archive_stamp()`）。"""
+    names = set()
     for n in ast.walk(node):
-        for t in _targets(n):
-            if t.attr in ARCHIVE_COLUMNS:
-                hits.add(t.attr)
+        if not isinstance(n, ast.Assign):
+            continue
+        value = n.value
+        if isinstance(value, ast.Call) and \
+                (getattr(value.func, 'id', '') or getattr(value.func, 'attr', '')) == 'archive_stamp':
+            target = n.targets[0]
+            for elt in (target.elts if isinstance(target, ast.Tuple) else [target]):
+                if isinstance(elt, ast.Name):
+                    names.add(elt.id)
+    return names
+
+
+def _archive_writes(node):
+    """这个函数往"归档那一对列"写了几次、每次的值出自哪里。
+
+    返回 `[(行号, 列名, 值的来路)]`，来路三档：
+    `stamp`＝共用那只钟（直接调、或调完 unpack 进的那两个名字）、`none`＝清空（还原那一支）、
+    `other`＝**别处算出来的时间**（墙钟、`date.today()+…`、外面传进来的参数……）。
+    第 56 轮 M-4：上一版只交回"写过哪几列"的**集合** ⇒ 一个函数里两处写与一处写在名单上
+    长得一模一样，而"回收站那三条必须共用那只钟"那半句只核到"函数里调用过 archive_stamp"
+    —— 在已登记的 `_soft_archive` 里再插一行 `row.deleted_at = datetime.now()`，
+    集合不变、那次调用也还在 ⇒ 两条断言都不红（实测）。
+    属性赋值 / 解包赋值 / setattr / 关键字参数四种拼法都算一次写。
+    """
+    stamp = _stamp_names(node)
+    hits = []
+
+    def _source_of(value):
+        if value is None:
+            return 'other'
+        if isinstance(value, ast.Constant) and value.value is None:
+            return 'none'
+        if isinstance(value, ast.Name) and value.id in stamp:
+            return 'stamp'
+        fn = getattr(value, 'func', None)
+        if fn is not None and \
+                (getattr(fn, 'id', '') or getattr(fn, 'attr', '')) == 'archive_stamp':
+            return 'stamp'
+        return 'other'
+
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Assign, ast.AugAssign)):
+            for t in _targets(n):
+                if t.attr in ARCHIVE_COLUMNS:
+                    hits.append((n.lineno, t.attr, _source_of(n.value)))
         if isinstance(n, ast.Call):
             fn = getattr(n.func, 'id', '') or getattr(n.func, 'attr', '')
-            if fn == 'setattr' and len(n.args) > 1 and isinstance(n.args[1], ast.Constant) \
+            if fn == 'setattr' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
                     and n.args[1].value in ARCHIVE_COLUMNS:
-                hits.add(n.args[1].value)
+                hits.append((n.lineno, n.args[1].value, _source_of(n.args[2])))
         if isinstance(n, ast.keyword) and n.arg in ARCHIVE_COLUMNS:
-            hits.add(n.arg)
-    return hits
+            hits.append((n.lineno, n.arg, _source_of(n.value)))
+    return sorted(set(hits))
 
 
 def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
@@ -274,25 +316,33 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
     加一处不登记就红；登记了却不再写那一列也红。
     """
     registered = {
-        # 归档那一支：三处都必须调用 `archive_stamp()`（行为判据在下面两条）
-        ('src/services/prediction_service.py', '_soft_archive'),
-        ('src/services/prediction_maintenance_service.py', 'deduplicate_predictions'),
-        ('src/tasks/cleanup_enhanced.py', 'soft_delete'),
-        # 还原那一支：写的是 None（把这一对清空），不涉及时区
-        ('src/services/prediction_service.py', 'restore_prediction'),
-        ('src/tasks/cleanup_enhanced.py', 'restore'),
-        # 只读审计：把列名放进清单里打印，不写值
-        ('src/services/retention_cleanup_service.py', '_audit_item'),
-        # 别的模型（观点）自己的软删，与预测的保留期不是一件事
-        ('src/services/viewpoint_service.py', 'delete_viewpoint'),
+        # —— 归档那一支：**每一处**写都必须出自那只钟（下面第二条逐个核）
+        ('src/services/prediction_service.py', '_soft_archive'): 2,
+        ('src/services/prediction_maintenance_service.py', 'deduplicate_predictions'): 2,
+        ('src/tasks/cleanup_enhanced.py', 'soft_delete'): 2,
+        # —— 还原那一支：写的是 None（把这一对清空），不涉及时区
+        ('src/services/prediction_service.py', 'restore_prediction'): 2,
+        ('src/tasks/cleanup_enhanced.py', 'restore'): 2,
+        # —— 只读审计：把列名放进清单里打印（`CleanupItemLog` 自己那行日志的时间戳）
+        ('src/services/retention_cleanup_service.py', '_audit_item'): 1,
+        # —— 别的模型（观点）自己的软删，与预测的保留期不是一件事
+        ('src/services/viewpoint_service.py', 'delete_viewpoint'): 1,
     }
-    found = {(rel, fn.name) for rel, fn, _s in _functions('src') if _archive_writes(fn)}
-    found |= {(rel, fn.name) for rel, fn, _s in _functions('scripts') if _archive_writes(fn)}
-    assert found == registered, (
+    found = {}
+    for base in ('src', 'scripts'):
+        for rel, fn, _s in _functions(base):
+            writes = _archive_writes(fn)
+            if writes:
+                key = (rel, fn.name)
+                found[key] = found.get(key, 0) + len(writes)
+    assert set(found) == set(registered), (
             '归档时间戳的写站集合与登记名单不一致：新增 %s / 已消失 %s'
-            % (sorted(found - registered), sorted(registered - found)))
+            % (sorted(set(found) - set(registered)), sorted(registered - set(found))))
+    wrong = {k: (found[k], registered[k]) for k in found if found[k] != registered[k]}
+    assert not wrong, (
+            '这些函数里"写归档那一对列"的**处数**与登记不符（实测, 登记）：%s ⇒ '
+            '在一条已登记的活路里再加一处写，以前这条闸一个字都不报（第 56 轮 M-4）' % wrong)
 
-    # 三条"放进回收站"的活路都必须**真的调用**那只共用的钟
     for rel, name in (('src/services/prediction_service.py', '_soft_archive'),
                       ('src/services/prediction_maintenance_service.py',
                        'deduplicate_predictions'),
@@ -301,20 +351,58 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         tree = ast.parse(src)
         fn = [n for n in ast.walk(tree)
               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name][0]
-        called = {getattr(c.func, 'id', '') or getattr(c.func, 'attr', '')
-                  for c in ast.walk(fn) if isinstance(c, ast.Call)}
-        assert 'archive_stamp' in called, (
-                '%s:%s 自己算归档时间戳 ⇒ 它就是第二条旁路（用 archive_stamp()）' % (rel, name))
+        writes = _archive_writes(fn)
+        assert writes, '%s:%s 现在一处归档列都不写 ⇒ 上面那条处数账是空的' % (rel, name)
+        stray = [(line, attr, kind) for line, attr, kind in writes if kind != 'stamp']
+        assert not stray, (
+                '%s:%s 里有 %d 处归档时间戳不是出自 `archive_stamp()`：%s ⇒ '
+                '同一座回收站里两种"保留到 X 日"（第 54 轮 A-1 那一族复活）'
+                % (rel, name, len(stray), stray))
 
-    # 控制：现造一处"绕过 archive_stamp 直接写"必须被量到，**两种写法都要**
+    # 控制一：现造"绕过 archive_stamp 直接写"必须被量到，**四种拼法都要**，且来路分得开
     plain = ('def f(row):\n'
              '    row.is_deleted = True\n'
              '    row.deleted_at = datetime.now()\n')
-    assert _archive_writes(ast.parse(plain).body[0]) == {'deleted_at'}
+    assert _archive_writes(ast.parse(plain).body[0]) == [(3, 'deleted_at', 'other')], \
+        '绕过那只钟的直接写量不到、或来路判不出 ⇒ 上面那条 stray 检查是装饰'
     unpacked = ('def f(row, stamp):\n'
                 '    row.deleted_at, row.restore_before = stamp\n')
-    assert _archive_writes(ast.parse(unpacked).body[0]) == {'deleted_at', 'restore_before'}, (
+    assert [a for _l, a, _k in _archive_writes(ast.parse(unpacked).body[0])] == \
+        ['deleted_at', 'restore_before'], (
         '解包赋值漏了 ⇒ 这条棘轮对"正确写法"是瞎的，也就能放过任何一处绕开它的写法')
+    from_stamp = ('def f(row):\n'
+                  '    row.deleted_at, row.restore_before = archive_stamp()\n')
+    assert {k for _l, _a, k in _archive_writes(ast.parse(from_stamp).body[0])} == {'stamp'}, \
+        '正确写法被判成"出自别处" ⇒ 那条 stray 检查会天天红，整条闸会被关掉'
+    via_names = ('def f(row):\n'
+                 '    stamp, deadline = archive_stamp(7)\n'
+                 '    row.deleted_at = stamp\n'
+                 '    row.restore_before = deadline\n')
+    assert [k for _l, _a, k in _archive_writes(ast.parse(via_names).body[0])] == \
+        ['stamp', 'stamp'], '钟先交给变量、再逐列赋值这一路认不出 ⇒ 过宽'
+    cleared = ('def f(row):\n'
+               '    row.deleted_at = None\n'
+               '    row.restore_before = None\n')
+    assert {k for _l, _a, k in _archive_writes(ast.parse(cleared).body[0])} == {'none'}, \
+        '还原那一支（清空）被算成"自己算时间" ⇒ 过宽'
+
+    # 控制二：**同一个函数里两处写必须数成 2**，否则"按处数登记"与"按函数登记"没有区别
+    assert len(_archive_writes(ast.parse(via_names).body[0])) == 2
+
+    # 控制三（M-4 的本体）：往真实登记在册的 `_soft_archive` 注入一处墙钟写 ⇒ 处数 +1 且是 other
+    rel, name = 'src/services/prediction_service.py', '_soft_archive'
+    src = io.open(os.path.join(ROOT, rel.replace('/', os.sep)), encoding='utf-8').read()
+    tree = ast.parse(src)
+    target = [n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == name][0]
+    before = _archive_writes(target)
+    target.body.insert(0, ast.parse('prediction.deleted_at = datetime.now()').body[0])
+    injected = ast.parse(ast.unparse(tree))
+    after = _archive_writes(next(n for n in ast.walk(injected)
+                                 if isinstance(n, ast.FunctionDef) and n.name == name))
+    assert len(after) == len(before) + 1 and any(k == 'other' for _l, _a, k in after), (
+            '往已登记的函数里注入一处绕开那只钟的写，处数没动或来路没判成 other（%d→%d）'
+            '⇒ 这把尺子量的还是"函数存不存在"（第 56 轮 M-4 那个洞）' % (len(before), len(after)))
 
 
 def test_deduplicating_predictions_stamps_the_archive_with_the_beijing_clock(test_db,

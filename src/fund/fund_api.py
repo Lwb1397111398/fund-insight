@@ -238,8 +238,16 @@ class FundAPI:
                 return None
     
     def get_fund_history(self, fund_code: str,
-                         days: int = config.NAV_HISTORY_LOOKBACK_DAYS) -> List[Dict]:
-        """获取基金历史净值"""
+                         days: Optional[int] = None) -> List[Dict]:
+        """获取基金历史净值。`days` 不传 ⇒ 走 `nav_backfill_days()`（**调用时**读那个键）。
+
+        第 56 轮 m-5：以前这里是 `days: int = config.NAV_HISTORY_LOOKBACK_DAYS`，
+        而签名默认值在 **import 那一刻**就算死了 ⇒ 改键不动它；那句话的出处也从此
+        有了第二处（`_literal_backfill_windows` 与"只许一处读那个键"两条判据都看不见它）。
+        """
+        from src.services.prediction_lifecycle import nav_backfill_days
+
+        days = nav_backfill_days(days)
         try:
             params = {
                 'fundCode': fund_code,
@@ -452,11 +460,15 @@ class FundAPI:
             logger.warning(f"验证基金{code}时信息接口异常: {e}")
 
         history: List[Dict] = []
+        from src.services.prediction_lifecycle import nav_backfill_days
+
         try:
             # 历史净值是判断"能否抓取"的权威依据，只调一次。
-            # 窗口用 30 天而不是 7 天：7 天遇上节假日只有 4-5 条，会让严格判据
-            # 在周末随机翻转（同一只正常基金一会儿合格一会儿不合格）。
-            history = self.get_fund_history(code, days=config.NAV_HISTORY_LOOKBACK_DAYS)
+            # 窗口取常规的**回补范围**（不是 7 天：7 天遇上节假日只有 4-5 条，
+            # 会让严格判据在周末随机翻转 —— 同一只正常基金一会儿合格一会儿不合格）。
+            # 出处只有 `nav_backfill_days()` 一个（第 56 轮 m-5：这里以前自己读那个键，
+            # 于是"同步往回拉多少天"这句话在 `src/` 里有了第二处实现）。
+            history = self.get_fund_history(code, days=nav_backfill_days())
         except Exception as e:
             logger.warning(f"验证基金{code}时历史接口异常: {e}")
 

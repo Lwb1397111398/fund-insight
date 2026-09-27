@@ -294,7 +294,89 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 01:5x（北京），**任务 #134：第 55 轮返修——复评 73/100 的四条 MAJOR
+最近一次核对（2026-09-28 04:2x（北京），**任务 #137：第 56 轮复评 72/100 返修——四条 MAJOR
+全都"上一批只修了一半"，其中一条是我说满了话；另有一条评审给的尺子被我在生产上证伪**
+（条目号 M-*/m-* 落在 #137 的 metadata 里，报告正文不随仓库走）——
+① **那把"不许把回补天数写死"的尺子只认 `days=` 关键字**（M-1）：
+`update_fund_history(code, 30)` 这种**按位置**传天数完全隐身（探针样品实测扫描器回 `[]`）。
+现在 `_literal_backfill_windows` 先从被扫的树里量出 `days` 落在第几个槽（绑定方法扣掉 `self`），
+再看那个槽是不是整数字面量；三条样品：位置写死必抓、`(code, db=None)` 与"位置传变量"不误伤，
+变异 **M24** 就是把 `fund_auto_manager.py:287` 改成位置传 30（RED）。
+② **"接了解锁"以前不看参数**（M-2）：`release_holds_after_nav_commit(db, code, [], ...)`
+——把"新落的那几天"掏空，＝第一道闸当场失效——仍判 `True`（实测 85 passed 一声不响）。
+现在第三个实参不递、或递空容器/`None` 都判"没接"；并补一条**穿过同步那条路**的端到端
+`::test_the_daily_sync_writer_is_the_thing_that_unlocks`（真 sqlite：源端给窗口内两行 ⇒ 锁解开并
+回到「待验证到期」；只给窗口外那行 ⇒ 净值照入库、锁一个字不动）。以前三条行为判据全是直接调
+解除函数，没有人从 `update_fund_history` 打进来。变异 **M25** 就是那个 `[]`。
+③ **那份 `_never_runs` 是"死路不算守卫"的第二份、更弱实现**（M-3，与第 45 轮同族）：
+`literal_eval` 根本不算比较，于是 `while False:`、`if ins and 1 == 0:`、恒假三目、
+藏在从不被调的内层 `def`、只写在 `except` 里 **五种**全被判成"已接线"（探针实测五种全 `True`）。
+现在共用守卫侧那把 `_is_dead_test`（常量折叠 + 自己算常量比较，第 46 轮就建好了），
+八种规避写法各一条样品 + 一条"内层 def 被真调用必须算接上"的反面对照；变异 **M26** 用
+`if added and 1 == 0:` 那一格（旧尺子对它是瞎的）。
+④ **我说满了一句：归档那把棘轮其实没改成按条数核**（M-4，本批最该记的一条）：
+上面 ④ 那段（#134 那批）写着"归档时间戳那把现在登记条数"——**实测是假的**：
+按条数核的是 `status` 那把，归档那把仍按 `(文件, 函数)` 收集合。探针往已登记的
+`_soft_archive` 里插一行 `prediction.deleted_at = datetime.now()` ⇒ 写站集合不变、
+函数里那次 `archive_stamp()` 调用也还在 ⇒ 两条断言都不红。现在它登记
+`{(文件, 函数): 写那一列的语句条数}`，并要求回收站那三条活路**每一处**写的值都出自那只钟
+（来路三档 `stamp`/`none`/`other`，出现 `other` 即红）；三条控制（两处写算 2、
+"钟交给变量再逐列赋"不误判、现插一处正好 +1 且判成 `other`）+ 变异 **M27**。
+⑤ **"两条活路"是半句**（m-3）：合并式整库导入 `data_portability_service.import_data` 也往
+`fund_history` 灌行（`TABLE_SPECS` + `spec.model(**row)`，一个字没写 `FundHistory`）⇒
+那把扫描器对它结构性失明。现在写净值的证据分两腿（点名构造 / `TABLE_SPECS` 泛型建行），
+名单从 2 条扩到 4 条，导入那条**登记为"故意不接"并写依据**（换库不是"补了几行"，那里没有
+"新落的那几天"这个量可递）；那条判据的名字也跟着从 `..._both_sync_writers` 改成
+`..._every_nav_writer`（三处引用一起改，旧名留着就是句假承诺）。
+⑥ **两处"判据自己不合格"**：a) `_never_runs` 之外，`test_the_nav_lookback_has_one_home_for_both_questions`
+当时**正向**钉着"`get_fund_history` 的签名默认值要含那个键" —— 而签名默认值在 import 那一刻就算死，
+"只有一个出处"因此有第二处（m-5）；现在它反过来判"不许是导入时默认值"，扫描范围从
+`prediction_lifecycle.py` 一个文件扩到**整个 `src/`**。b) `test_prediction_migrations` 用
+`env.setdefault('PYTHONIOENCODING', 'utf-8')` ⇒ 父进程带**空串**进来时原样放过 ⇒ 子进程按 cp936 写、
+父进程按 utf-8 解 ⇒ `[库]` 那行成替换符、用例稳定假红（评审为此白跑一次全量；m-4）。
+现在无条件赋值，新用例 `::test_the_child_always_writes_utf8_no_matter_what_the_parent_carries`
+把"缺失 / 空串 / 全空白 / gbk / utf-8"五格各钉一次。
+⑦ **评审给的那把"跨基金广度"尺子，我在生产上证伪了**（#135 的处置因此改写）：
+只读实测 `python scripts/q.py --production "select nav_date, count(distinct fund_code) n from fund_history where nav_date >= '2026-09-18' group by nav_date order by nav_date"`
+⇒ 工作日 09-18/09-21/09-22/09-23/09-24 各 **152~158** 只、周末 09-19/09-20/09-26/09-27 各 **1** 只，
+而 **2026-09-25 是个周五、也只有 1 只**（货币基金 `000725`）⇒ 绝对只数 / 当日占比 /
+"目标日前 7 天最大广度"三种定法**都会把一个"全库没补到"的交易日判成休市并永久关单**。
+镜像这边末条 2026-09-24、**当天只有 7 只**（全库 245 只）。正解是改用**星期**：
+`1669`/`1709` 的目标日是 2026-07-11/07-12，`python -c "from datetime import date;print(date(2026,7,11).strftime('%a'))"` ⇒ Sat/Sun，
+当场判得出来、不需要新表；**法定节假日那一档仍然没有凭据**，所以话只能说成"周末规则"，不许说成"非交易日规则"。
+⑧ **M-5 不成立**（写在这儿防下一轮照评审原文再"修"一遍）：它说按条数核的尺子对推导式失明
+（`[p for p in ps if p.status == "pending"]` 计 0）。探针实测 `_status_judgments` 回 `[2]`，
+与 lambda 同待遇 ⇒ 那条不改，已在报告与任务里写明。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话；
+⚠ 本批中途我自己起了两条 `pytest tests/unit` 会话 —— 第二条起手就印了
+`[警告] 已经有一个 pytest 会话握着 .pytest-session.lock`，那行警告正是替这件事盯梢的；
+两条都用 `Get-CimInstance … CommandLine -like '*pytest*'` 找 PID 收干净后**重跑**，下面两个数是重跑后的）：
+
+- `pytest tests/unit -q` → **1228 passed / 16 skipped / 0 failed**（302.70 秒）。
+- `pytest tests/ -q` → **1237 passed / 16 skipped / 0 failed**（308.02 秒）。
+  （上一基线 1226/1235 → 本批 **+2 条 / 两个口径同增**，分布用
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  数出：`test_structurally_unverifiable_hold.py` 30→**31**（②那条端到端）、
+  `test_prediction_migrations.py` 7→**8**（⑥b 那五格）。**改契约不增条数**：
+  `test_one_ruler_per_question.py`（④ 改成按语句条数 + 来路三档，控制断言并进去）、
+  `test_script_db_guards.py`（③ 那把 `_is_dead_test` 现在被两个测试文件共用）。
+  变异：`python scripts/mutation_proof_lifecycle.py` **29 处全 RED**（M1~M27，含 M3b/M5b；
+  CONTROL-GREEN 6→7 个判据文件；条数一律 `--list` 看末行），原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round56-lifecycle-mutations.txt`。
+  ⚠ 第一次整份跑它**输出 0 字节**：本机内存 load 88~91%、可用 0.60 GB ⇒ 子进程被系统打死
+  （第 55 轮记过同一签名）。判据是"退码 + 输出字节数"，不是"命令跑完了"；重跑要带 `-u`。
+  `audit_doc_claims.py` 退 **0**。
+  **镜像此刻**（同日 03:3x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条` ——
+  这 29 条是**两档**：22 行"源端这段给了 1~64 条 ⇒ 本地没补到"（其中 5 行段内只 1 笔）
+  + 7 行"重问锁 2026-09-30 还没到点"，加起来才是 29（上一批把三个数并列写成一句，读起来像 34 ⇒ m-1）。
+  **生产此刻**（同日 03:5x，只读探针，命令里那个日期必须现算，别抄 `date '2026-09-27'` ⇒ m-2）：
+  `D=$(date -u -d '+8 hours' +%F); python scripts/q.py --production "with h as (select id, (next_verify_date is not null and next_verify_date > target_date) as locked from predictions where is_deleted=false and target_date is not null and is_correct is null and prediction_type<>'flat' and target_date <= date '$D') select count(*) as expired_unjudged, count(*) filter (where locked) as held_by_lock, count(*) filter (where not locked) as actionable_today from h"`
+  ⇒ `expired_unjudged 17 / held_by_lock 0 / actionable_today 17`（净值已到 2026-09-25、198 只 11061 行）
+  —— 这 17 条不是新坏的，是目标日一天天过去而**生产没人跑验证**（#132）⇒ #133 第一件事就是 update-all + verify-all。）
+
+（上一批：2026-09-28 01:5x（北京），**任务 #134：第 55 轮返修——复评 73/100 的四条 MAJOR
 全部复现并修完，另加两处"我自己新写的判据"被它们各自逮回来，以及追一条偶发红追出来的生产级真相**
 （条目号 A-*/B-* 落在 #134 的 metadata 里，报告正文不随仓库走）——
 ① **"重问节奏跟着每日回补范围走"以前只是看着成立**（#134 M-1）：那个键只喂到
@@ -306,6 +388,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
    配"良性 `days=1` 不许误伤"的过宽对照）与
    `::test_the_backfill_window_is_read_at_call_time_not_at_import`（把键改成 47，真走一遍
    `update_fund_history`，交给源端的那个数字必须跟着变）。
+   ⚠ **当时只扫了 `days=` 关键字**：`update_fund_history(code, 30)` 这种按**位置**传天数
+   完全隐身（第 56 轮 M-1 注入它 ⇒ 1226 条一声不响），而"只有一个出处"那句还漏了
+   `get_fund_history` 的签名默认值自己 —— 下面新批次（#137）两条都补上了。
 ② **"补到净值就该解开的锁"从来没有人解**（#134 M-2）：被锁的行不在到期队列里 ⇒ 验证器再也不会
    问它一次，第二天就补到的净值也要白等一整个间隔。新增 `release_holds_after_nav_update` /
    `..._commit(...)`，两条往 `fund_history` 插行的活路都接上；解锁只报"**新落**的那几天"
@@ -313,14 +398,26 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
    那把尺子。`backfill_history_range` **故意不接**并写明依据（它跑在 `verify_prediction` 内部，
    同一次验证两行之后才读 `previous_hold`，在那里撤锁等于自己清掉"问过两次"的证据）；
    `fund_service.add_history` 是零调用方的死路 ⇒ 按规矩不给它写绿灯，但登记在名单里要求理由。
+   ⚠ **"两条活路"是半句**：合并式整库导入（`data_portability_service.import_data`）也往
+   `fund_history` 灌行，而它一个字都没写 `FundHistory` ⇒ 那把扫描器对它结构性失明；
+   并且"接了锁"只看调用存不存在、**不看第三个实参**（第 56 轮 M-2：换成 `[]` 也绿）。两处都在 #137 修。
 ③ **一处"接线"判据被自己的变异打回 GREEN**（#134 M-3 的现场，与第 45 轮"死路不算守卫"同族、
    只是换到了写侧）：`_nav_writers` 用 `ast.walk` 找那个函数名 ⇒ 把 `if inserted:` 改成
    `if False:`（M19）全套绿灯一声不响。现在判**可达**（`_never_runs` 认恒假条件，含 `and False`
    那一族），并补一条"死分支里的调用不算接线"的控制断言。
+   ⚠ 那份 `_never_runs` 自己是**第二份、更弱**的恒假识别（`literal_eval` 根本不算比较）：
+   `while False:`、`if ins and 1 == 0:`、恒假三目、藏在从不被调的内层 `def`、只写在 `except` 里
+   五种全被判成"已接线"（第 56 轮 M-3）。#137 改成共用守卫侧那把 `_is_dead_test`，八种规避各一条样品。
 ④ **棘轮按"出现过没有"数，就会按"出现过"被骗**（#134 M-4）：`test_one_ruler_per_question.py`
    的归档时间戳那把尺子以前只登记 `(文件, 函数)` ⇒ 同一函数里再造一处 `datetime.now()` 它看不见。
-   现在登记**条数**（`{(文件, 函数): 判定条数}`），三条控制跟着补：一函数两处判定必须算 2、
-   回显/写侧必须算 0、往真函数里现插一处必须让它正好 +1。
+   ⚠ **这一条当时说满了，第 56 轮 M-4 实测驳回**：上一批真正改成按**条数**核的是
+   `status` 那把（"有没有结论"），**归档那把仍然按 `(文件, 函数)` 收集合** ——
+   探针往已登记的 `_soft_archive` 里插一行 `prediction.deleted_at = datetime.now()`，
+   写站集合一个字不变、函数里那次 `archive_stamp()` 调用也还在 ⇒ 两条断言都不红。
+   **这一批才把它改对**：登记 `{(文件, 函数): 写那一列的语句条数}`，并且回收站那三条活路要求
+   **每一处**写的值都出自那只钟（来路三档 `stamp`/`none`/`other`，出现 `other` 即红）；
+   三条控制（两处写算 2、正确写法与"先交给变量再逐列赋"不许误判、现插一处必须正好 +1 且判成
+   `other`），变异 **M27** 就是那处现插。
 ⑤ **追一条偶发红追出来的生产级真相（本批最贵的一条，它不在任何评审清单里）**：
    `test_current_as_of_fallback_leaves_a_trail` 在全量跑批里红、单跑永远绿。用一次性探针插件
    （拦 `dictConfig`/`fileConfig` 与 `Logger.disabled` 的赋值）量到真因：`alembic/env.py` 照抄官方
