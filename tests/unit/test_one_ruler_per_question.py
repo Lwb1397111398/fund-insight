@@ -265,20 +265,76 @@ def _stamp_names(node):
     return names
 
 
+# `db.query(...).update({Prediction.deleted_at: …})` / `.values(**{…})` 这种"批量写"的入口名。
+# 只认这三个动词，因为**别的**字典字面量是回显（`_serialize` 返回 `{'deleted_at': …}`），
+# 算成写就把 9 处正当的读全变成违规。
+_BULK_WRITE_CALLS = ('update', 'values', 'set')
+# 判断"这个 `.update({...})` 是查询还是字典"只有一把尺子：收件人那条链上有没有查询动词。
+# 光看动词名会过宽 —— `get_detail` 里那句 `detail.update({...})` 是**合并返回给前端的字典**，
+# 数成写就是把回显算进账（第 57 轮 m-4 的控制样品）。
+_QUERY_VERBS = ('query', 'filter', 'filter_by', 'where', 'select', 'scalars',
+                'options', 'join', 'session', 'execute', 'update', 'delete')
+
+
+def _chain_call_names(expr):
+    """`self.db.query(X).filter(Y)` → {'query', 'filter'}（收件人那条链上的调用叶子名）。"""
+    out = set()
+    cur = expr
+    while isinstance(cur, ast.Call):
+        leaf = getattr(cur.func, 'attr', '') or getattr(cur.func, 'id', '')
+        if leaf:
+            out.add(leaf)
+        cur = cur.func.value if isinstance(cur.func, ast.Attribute) else None
+    return out
+
+
+def _query_named(node):
+    """这个函数里哪些局部变量**是从查询表达式赋来的**（`q = db.query(P).filter(…)`）。
+    一跳就停：再深就不是"读代码看得出它在写哪张表"，而是我在猜数据流。"""
+    names = set()
+    for n in ast.walk(node):
+        if not isinstance(n, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+        value = n.value
+        if value is None:
+            continue
+        for t in targets:
+            if isinstance(t, ast.Name) and any(
+                    _chain_call_names(c) & set(_QUERY_VERBS)
+                    for c in [value] + [x for x in ast.walk(value) if isinstance(x, ast.Call)]):
+                names.add(t.id)
+    return names
+
+
 def _archive_writes(node):
     """这个函数往"归档那一对列"写了几次、每次的值出自哪里。
 
     返回 `[(行号, 列名, 值的来路)]`，来路三档：
-    `stamp`＝共用那只钟（直接调、或调完 unpack 进的那两个名字）、`none`＝清空（还原那一支）、
+    `stamp`＝共用那只钟（直接调、下标取它第 0/1 格、或调完 unpack 进的那两个名字）、
+    `none`＝清空（还原那一支）、
     `other`＝**别处算出来的时间**（墙钟、`date.today()+…`、外面传进来的参数……）。
     第 56 轮 M-4：上一版只交回"写过哪几列"的**集合** ⇒ 一个函数里两处写与一处写在名单上
     长得一模一样，而"回收站那三条必须共用那只钟"那半句只核到"函数里调用过 archive_stamp"
     —— 在已登记的 `_soft_archive` 里再插一行 `row.deleted_at = datetime.now()`，
     集合不变、那次调用也还在 ⇒ 两条断言都不红（实测）。
-    属性赋值 / 解包赋值 / setattr / 关键字参数四种拼法都算一次写。
+    第 57 轮 m-4 补三种边：
+    ① **下标** —— `row.deleted_at = archive_stamp()[0]` 与 `stamp[0]`（先交给变量再取格）
+       都是正确写法，判成 `other` 就是过宽，而过宽的下场是整条闸被人关掉；
+    ② **批量写** —— `.update({col: …})` / `.values({col: …})` 里字典的**键**在列名上，
+       这一路以前一格都不数 ⇒ 有人把归档改成批量 UPDATE，那条"每处都必须出自那只钟"当场失明；
+    ③ **同一行同名的两处** 不能再被 `set` 并成一处，去重按 `(行, 列, 来路, **那次出现的位置**)`。
+    属性赋值 / 解包赋值 / setattr / 关键字参数 / 批量字典五种拼法都算一次写。
     """
     stamp = _stamp_names(node)
+    query_vars = _query_named(node)
     hits = []
+
+    def _clock_call(value):
+        """这个表达式叫的是不是那只钟（`archive_stamp()` / `pl.archive_stamp(7)`）。"""
+        fn = getattr(value, 'func', None)
+        return fn is not None and \
+            (getattr(fn, 'id', '') or getattr(fn, 'attr', '')) == 'archive_stamp'
 
     def _source_of(value):
         if value is None:
@@ -287,33 +343,61 @@ def _archive_writes(node):
             return 'none'
         if isinstance(value, ast.Name) and value.id in stamp:
             return 'stamp'
-        fn = getattr(value, 'func', None)
-        if fn is not None and \
-                (getattr(fn, 'id', '') or getattr(fn, 'attr', '')) == 'archive_stamp':
+        if _clock_call(value):
             return 'stamp'
+        if isinstance(value, ast.Subscript):
+            # `archive_stamp()[0]`、`stamp[0]`、`pair[1]` —— 从那一格里取，仍是那只钟
+            base = value.value
+            if _clock_call(base) or (isinstance(base, ast.Name) and base.id in stamp):
+                return 'stamp'
+        if isinstance(value, ast.Starred):
+            return _source_of(value.value)
         return 'other'
+
+    def _add(lineno, col, attr, kind):
+        hits.append((lineno, col, attr, kind))
 
     for n in ast.walk(node):
         if isinstance(n, (ast.Assign, ast.AugAssign)):
             for t in _targets(n):
                 if t.attr in ARCHIVE_COLUMNS:
-                    hits.append((n.lineno, t.attr, _source_of(n.value)))
+                    _add(n.lineno, t.col_offset, t.attr, _source_of(n.value))
         if isinstance(n, ast.Call):
             fn = getattr(n.func, 'id', '') or getattr(n.func, 'attr', '')
             if fn == 'setattr' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
                     and n.args[1].value in ARCHIVE_COLUMNS:
-                hits.append((n.lineno, n.args[1].value, _source_of(n.args[2])))
+                _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
+            # 批量写：字典字面量的**键**是列名才算，值是时间；并且收件人得是查询而不是返回给
+            # 前端的字典（`detail.update({...})` 那一格是回显）。
+            if fn in _BULK_WRITE_CALLS and isinstance(n.func, ast.Attribute):
+                recv = n.func.value
+                looks_like_query = bool(_chain_call_names(recv) & set(_QUERY_VERBS)) or \
+                    (isinstance(recv, ast.Name) and recv.id in query_vars)
+                if looks_like_query:
+                    for arg in n.args:
+                        if not isinstance(arg, ast.Dict):
+                            continue
+                        for k, v in zip(arg.keys, arg.values):
+                            if isinstance(k, ast.Constant) and k.value in ARCHIVE_COLUMNS:
+                                _add(k.lineno, k.col_offset, k.value, _source_of(v))
+                            elif isinstance(k, ast.Attribute) and k.attr in ARCHIVE_COLUMNS:
+                                _add(k.lineno, k.col_offset, k.attr, _source_of(v))
         if isinstance(n, ast.keyword) and n.arg in ARCHIVE_COLUMNS:
-            hits.append((n.lineno, n.arg, _source_of(n.value)))
-    return sorted(set(hits))
+            _add(n.lineno, n.col_offset, n.arg, _source_of(n.value))
+    unique = {(line, col, attr, kind): (line, attr, kind) for line, col, attr, kind in hits}
+    return sorted(unique[k] for k in sorted(unique))
 
 
 def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
     """写"归档时刻 / 可恢复到哪天"的站点必须闭合，且**放进回收站**那一支必须共用那只钟。
 
     第 54 轮 A-1 / B-2：`_soft_archive` 改成北京钟时，页面「合并相似预测」那条活路没跟上，
-    而它的 docstring 就写着"唯一实现"。登记名单按 (文件, 函数) 数站点：
+    而它的 docstring 就写着"唯一实现"。登记名单按 (文件, 函数) 数**语句条数**：
     加一处不登记就红；登记了却不再写那一列也红。
+    第 57 轮 m-4 把 `_archive_writes` 补到能数**五种拼法**（属性赋值 / 解包 / setattr /
+    关键字 / 批量 `.update({...})`），并认下"钟先交出来再取下标"那一腿 ——
+    补上批量这一腿的**当场收获**就是 `delete_viewpoints_by_ids`：页面「批量删除观点」
+    一直在用整条批量 UPDATE 写 `deleted_at`，而上一版那把尺子对它一格都不数。
     """
     registered = {
         # —— 归档那一支：**每一处**写都必须出自那只钟（下面第二条逐个核）
@@ -325,8 +409,15 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         ('src/tasks/cleanup_enhanced.py', 'restore'): 2,
         # —— 只读审计：把列名放进清单里打印（`CleanupItemLog` 自己那行日志的时间戳）
         ('src/services/retention_cleanup_service.py', '_audit_item'): 1,
-        # —— 别的模型（观点）自己的软删，与预测的保留期不是一件事
+        # —— 别的模型（观点）自己的软删：`deleted_at` 只当"满 N 天可硬删"的年龄锚点用，
+        # 页面上没有一句观点的"保留到 X 日"（`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0），
+        # 所以墙钟在那里的后果是阈值差一天，不是第 54 轮 A-1 那种"回收站那句话与页面对不齐"。
         ('src/services/viewpoint_service.py', 'delete_viewpoint'): 1,
+        # 第 57 轮 m-4 补的"批量写"这一腿当场量到的第二条活路：页面「批量删除观点」
+        # 走的是 `db.query(Viewpoint).filter(…).update({Viewpoint.deleted_at: datetime.now()})`，
+        # 上一版这把尺子只看赋值/setattr/关键字，**整条批量 UPDATE 一格都不数**。
+        # 它是观点自己的墙钟（与上面那条同档），不是预测回收站那一对，所以登记、但不并要求共用那只钟。
+        ('src/services/viewpoint_service.py', 'delete_viewpoints_by_ids'): 1,
     }
     found = {}
     for base in ('src', 'scripts'):
@@ -337,7 +428,7 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
                 found[key] = found.get(key, 0) + len(writes)
     assert set(found) == set(registered), (
             '归档时间戳的写站集合与登记名单不一致：新增 %s / 已消失 %s'
-            % (sorted(set(found) - set(registered)), sorted(registered - set(found))))
+            % (sorted(set(found) - set(registered)), sorted(set(registered) - set(found))))
     wrong = {k: (found[k], registered[k]) for k in found if found[k] != registered[k]}
     assert not wrong, (
             '这些函数里"写归档那一对列"的**处数**与登记不符（实测, 登记）：%s ⇒ '
@@ -388,6 +479,46 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
 
     # 控制二：**同一个函数里两处写必须数成 2**，否则"按处数登记"与"按函数登记"没有区别
     assert len(_archive_writes(ast.parse(via_names).body[0])) == 2
+
+    # 控制二b（第 57 轮 m-4 的三种边）
+    subscripted = ('def f(row):\n'
+                   '    row.deleted_at = archive_stamp()[0]\n'
+                   '    row.restore_before = archive_stamp()[1]\n')
+    assert {k for _l, _a, k in _archive_writes(ast.parse(subscripted).body[0])} == {'stamp'}, (
+        '从那一格里取下标认不出是那只钟 ⇒ 正确写法被判成"自己算时间"，那条 stray 检查会天天红')
+    subscript_via_name = ('def f(row):\n'
+                          '    pair = archive_stamp()\n'
+                          '    row.deleted_at = pair[0]\n')
+    assert [k for _l, _a, k in _archive_writes(ast.parse(subscript_via_name).body[0])] == ['stamp'], (
+        '钟先交给变量、再按下标取格这一路认不出 ⇒ 过宽')
+    bulk = ('def f(db):\n'
+            '    return db.query(Prediction).update('
+            '{Prediction.deleted_at: datetime.now(), "restore_before": archive_stamp()[1]})\n')
+    got = _archive_writes(ast.parse(bulk).body[0])
+    assert sorted(got) == [(2, 'deleted_at', 'other'), (2, 'restore_before', 'stamp')], (
+            '批量写（`.update({列: 值})`）一格都不数 ⇒ 把归档改成批量 UPDATE 之后，'
+            '"每处都必须出自那只钟"当场失明（实测第 57 轮 m-4）。数到的：%s' % (got,))
+    echo_dict = ('def f(p):\n'
+                 "    return {'deleted_at': p.deleted_at.isoformat()}\n")
+    assert _archive_writes(ast.parse(echo_dict).body[0]) == [], (
+        '回显用的字典被数成写 ⇒ 过宽：序列化/_serialize 那一族会变违规')
+    payload_merge = ('def f(self, p):\n'
+                     '    detail = self._serialize(p)\n'
+                     '    detail.update({"deleted_at": x, "restore_before": y})\n'
+                     '    return detail\n')
+    assert _archive_writes(ast.parse(payload_merge).body[0]) == [], (
+            '把**返回给前端的字典**当成批量写 ⇒ 过宽。收件人那条链上没有查询动词就不许数'
+            '（真仓库里 `prediction_query_service.get_detail` 就是这个形状，第一版把它点成了违规）')
+    via_query_var = ('def f(self, ids):\n'
+                     '    q = self.db.query(Viewpoint).filter(Viewpoint.id.in_(ids))\n'
+                     '    return q.update({"deleted_at": datetime.now()}, synchronize_session=False)\n')
+    assert _archive_writes(ast.parse(via_query_var).body[0]) == [(3, 'deleted_at', 'other')], (
+            '查询先交给变量、再 `.update({...})` 这一路认不出 ⇒ 那条批量写的路仍然隐身，'
+            '和没补这一腿只差一个变量名')
+    same_line_twice = ('def f(row):\n'
+                       '    row.deleted_at, row.deleted_at = archive_stamp()\n')
+    assert len(_archive_writes(ast.parse(same_line_twice).body[0])) == 2, (
+        '同一行、同一列、同一来路的两处写被去重并成 1 ⇒ 处数账还能被"写在同一行"骗过去')
 
     # 控制三（M-4 的本体）：往真实登记在册的 `_soft_archive` 注入一处墙钟写 ⇒ 处数 +1 且是 other
     rel, name = 'src/services/prediction_service.py', '_soft_archive'

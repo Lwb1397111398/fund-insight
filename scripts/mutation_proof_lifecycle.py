@@ -25,6 +25,16 @@ import os
 import subprocess
 import sys
 
+# 本机控制台默认 cp936，而这份工具的每一行回执都带 `⇒`（U+21D2，不在 cp936 里）。
+# 输出重定向到文件时 python 仍按 locale 编码 ⇒ 第 57 轮实测：跑到 CONTROL 那行
+# `UnicodeEncodeError` 直接崩，而**它崩之前已经抢了体检锁**，看起来像"体检自己坏了"。
+# 判"跑没跑成"要看产物，别把编码当成故障源；这里显式收一遍，两个流都管。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):     # 已被换成别的对象（pytest 捕获、io.StringIO）
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 两把互斥锁（第 54 轮 B-10）：这份工具会**就地改写 `src/*.py`** 再跑 pytest，
 # 与任何 pytest 会话并发都会互相污染（它自己抢不到锁就照跑 ⇒ 别人的会话读到的是变异体）。
@@ -202,6 +212,16 @@ MUTATIONS = [
      '        prediction.deleted_at, prediction.restore_before = archive_stamp()\n'
      '        prediction.deleted_at = datetime.now()   # 变异：第二处墙钟写同一列\n',
      RULER_TESTS, 'test_archiving_a_prediction_always_stamps_with_the_shared_clock'),
+    # 第 57 轮 M-1 的第④格：解锁的"新落的那几天"先交进一个空容器变量、再递进去 ——
+    # 与直接写 `[]` 是同一件事，而上一版只认字面量，换个变量名就量不到（M25 那处变异
+    # 因此只钉了一半）。这条变异问的是**回溯那一腿有没有牙**。
+    ('M28_unlock_dates_piped_through_an_empty_variable', SYNC,
+     "                release_holds_after_nav_commit(db, fund_code, added, "
+     "where='每日基金同步')\n",
+     "                _empties = []\n"
+     "                release_holds_after_nav_commit(db, fund_code, _empties, "
+     "where='每日基金同步')\n",
+     HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
 ]
 
 

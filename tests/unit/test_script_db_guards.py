@@ -352,6 +352,12 @@ def _is_dead_test(test):
         return False
     if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
         return any(_is_dead_test(v) for v in test.values)
+    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+        # 第 57 轮 M-1：`if False or False:` 与 `if ():` 是同一件事。`And` 只要有一臂恒假就整条恒假，
+        # `Or` 要**每一臂都恒假**才算 —— 少这一臂时守卫侧与接线侧会各自判出不同的"死不死"。
+        # （`ast.literal_eval` 在 3.12 上对 BoolOp 节点直接 `ValueError: malformed node`，
+        #   所以这条不能指望上面那行 `_try_const` 顺手做到 —— 实测两个数都不给它。）
+        return all(_is_dead_test(v) for v in test.values)
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         inner = _try_const(test.operand)
         return inner is not None and bool(inner)
@@ -1769,6 +1775,26 @@ if () and url.startswith("postgres"):
     raise SystemExit(4)
 command.upgrade(Config("alembic.ini"), "head")
 ''', False, '空容器作合取首项 ⇒ 整条恒假；这一族以前只认 `False` 字样'),
+    # ↓ 第 57 轮 M-1 的另一半：`Or` 全臂恒假同样一步都不走。`literal_eval` 在 3.12 上
+    #   对 BoolOp **节点**直接抛 `malformed node`（实测），所以以前这两种拼写都判"有守卫"。
+    ('_x_dead_disjunction.py', _GUARD_HEADER + '''
+if False or False:
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+command.upgrade(Config("alembic.ini"), "head")
+''', False, '`if False or False:` 与 `if False:` 是同一件事 —— 合取补了，析取漏了'),
+    ('_x_dead_or_empty.py', _GUARD_HEADER + '''
+if () or 0:
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+command.upgrade(Config("alembic.ini"), "head")
+''', False, '每一臂都是假常量 ⇒ 析取整体恒假（按值判，不按有没有 `False` 字样）'),
+    ('_x_live_disjunction.py', _GUARD_HEADER + '''
+if url.startswith("postgres") or False:
+    print("[abort] 目标是远程库，加 --against-production 再来")
+    raise SystemExit(4)
+command.upgrade(Config("alembic.ini"), "head")
+''', True, '反向对照：**只有**一臂是活的就还是活路 —— 把析取按合取那样剪，会把真护栏判红'),
     # ↓ 第 46 轮 A-M4：顺序与可达都要走到**调用图**上（以前只比"同一最内层函数里的行号"）
     ('_x_ddl_via_helper_first.py', _GUARD_HEADER + '''
 def apply_it():

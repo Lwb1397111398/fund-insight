@@ -294,7 +294,68 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 04:2x（北京），**任务 #137：第 56 轮复评 72/100 返修——四条 MAJOR
+最近一次核对（2026-09-28 05:1x（北京），**任务 #139：第 57 轮复评 73/100 返修——失分集中在
+"我上一批刚写下的那句『判可达』"，而它四种形状里三种当场复现；另有一把棘轮补了三种拼法之后
+立刻量出一条隐身多年的活路**（条目号 M-*/m-* 落在 #139 的 metadata 里，报告正文不随仓库走）——
+① **"接线判据"的可达性一跳即瞎**（M-1，本批最重）：上一批那句"改成判可达，不再用 `ast.walk`"
+只算了**一层** —— 探针实测四种形状：①解锁搬进 `def _release()` 而唯一调用点压在 `if 1 == 0:` 里
+⇒ 判"接了"；②同样搬进内层 def、调用点只写在 `except Exception:` 里 ⇒ 也判"接了"；
+④`d = []` 先赋空列表再递进去 ⇒ 也判"接了"（参数那腿只认字面量）；
+只有③（两层内层 def、最外层从不被叫）**已被抓到 ⇒ 那条不改**。
+运行时那种代码**一把锁都不解**，而 `pytest tests/unit -q` 在注入①之后 1228 passed / 0 failed
+（两条相关判据双双绿）。修法三处：`_live_nodes`（恒假 `If` 主体 / 恒假三目那一臂 / `while 恒假` 循环体 /
+`except` 支 / 死内层 `def` 整棵，全部按同一套规则剪）+ `_dead_inner_defs`（**迭代到不动点**，
+剪掉一个死 def 之后只有它才会叫的那个 def 也一起死）+ 参数那腿补**一跳回溯**
+（`d = []` 且此后没有任何 `.append/.add/...` ⇒ 判"没递"；有累加才是正常的 `inserted = []` 形状，
+这一句是防过宽 —— 少了它每条真同步都会被判成没接）。共用那把 `_is_dead_test` 补 `Or` 全臂恒假
+（`ast.literal_eval` 在 3.12 上对 BoolOp/Compare 直接 `ValueError: malformed node`，上一版只补了 `And`），
+守卫侧三条样品钉住（`if False or False:` / `if () or 0:` 恒假、`if x or True:` 恒活）。
+② **`FundSyncManager._update_fund_history` 那条腿零行为判据**（M-1 的另一半）：
+三条行为判据全都直接调 `fund_api.update_fund_history`，第二条腿只有 AST 作保 ⇒ 新增端到端
+`::test_the_fund_sync_writer_leg_also_unlocks`（真造 `FundHistory` 行 + 真叫那条腿 + 核锁真的解开），
+变异 **M28**（解锁的日期先经一个空容器变量再递进去）RED。**边界**：①那种"死内层 def"形状
+目前由判据里的规避样品钉住，体检里没有对应的真代码变异 —— M26 钉的是同一条腿上的恒假比较。
+③ **"量不到槽位"那一格以前是猜**（M-2）：`days` 的槽位从被扫的树里推，
+扫描集合里没有那个 `def`（咽喉挪进第三方包、或写在另一个还没被扫的文件里）时兜底写死 `1 if is_bound else 2`
+⇒ `update_fund_history(code, 30)`（裸函数）整个漏掉。现在量不到槽位就**把该调用里任何整数位置实参都点名**，
+话里明说"量不到 days 的槽位"，不再安静地按猜的数走。
+④ **一把棘轮补上三种拼法，当场多量出一条真活路**（m-4）：`_archive_writes` 以前只认属性赋值 / 解包 /
+setattr / 关键字，实测 `row.deleted_at = archive_stamp()[0]` 与"钟先交给变量再取下标"都判成
+"出自别处"（**诚实写法被拦 ⇒ 闸过宽的结局就是被整条关掉**）、`.update({列: 值})` 一格都不数、
+`sorted(set(...))` 把同一行两处相同写并成一条。补完下标这一腿、补完批量写（收件人那条链上必须有
+查询动词，否则 `get_detail` 里 `detail.update({...})` 那种**返回给前端的字典**会被数成写 —— 第一版就是这么过宽的，
+被新控制当场点红），去重键换成 `(行, 列偏移, 列名, 来路)` ⇒ **批量这一腿立刻量出
+`viewpoint_service.delete_viewpoints_by_ids`**：页面「批量删除观点」一直走整条批量 UPDATE 写 `deleted_at`，
+上一版那把尺子对它结构性失明。它按"别的模型"登记（观点的 `deleted_at` 只当硬删年龄锚点，
+页面上没有一句观点的"保留到 X 日"：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0）。
+⑤ **判据自己的红路径会崩**（同一处顺手抓到的）：那条"写站集合与名单不一致"的**解释语句**写成
+`registered - set(found)`（dict 减 set）⇒ 一有新站点就抛 `TypeError` 而不是说出"新增了哪一站"；
+补完批量那一腿的第一次跑就是它，报错长得像"工具坏了"。已改 `set(registered) - set(found)`。
+⑥ **两处数与指针不对表**（m-1 / m-3）：`NAV_WRITE_SITES` 是 **5** 条（父提交 4 条），
+上一批三处（AGENTS、docs §2e、提交信息）都写成"从 2 条扩到 4 条"——那个 2 是**接了解锁**的条数、
+不是登记面；现在三处都改成绑命令的写法（复核印 `[5]`）。`src/services/prediction_lifecycle.py` 里
+`archive_stamp()` 的 docstring 还指着"`test_prediction_migrations.py` 里那把按 (文件, 函数) 数站点的棘轮"
+—— 棘轮在 `test_one_ruler_per_question.py` 而且上一批已改成按**语句条数** ⇒ 那句把已被驳回的旧形状教给下一轮。
+⑦ **体检工具自己会在 cp936 控制台上崩**（一条运行账）：它每行回执都带 `⇒`，而输出重定向到文件时
+python 仍按 locale 编码 ⇒ 实测跑到 CONTROL 那行就 `UnicodeEncodeError`、退出码非 0，看起来像"体检失效"。
+现在 import 时对 stdout/stderr 各 `reconfigure(encoding='utf-8', errors='replace')`（已被换成别的对象就跳过）。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话）：
+
+- `pytest tests/unit -q` → **1229 passed / 16 skipped / 0 failed**（316.65 秒）。
+- `pytest tests/ -q` → **1238 passed / 16 skipped / 0 failed**（374.98 秒）。
+  （上一基线 1228/1237 → 本批 **+1 条 / 两个口径同增**：`test_structurally_unverifiable_hold.py`
+  31→**32** 个 `def`（② 那条端到端，当场账 `--collect-only -q` 印 **38**）。
+  **改契约不增条数**：`test_one_ruler_per_question.py`（④⑤，控制样品从 3 格扩到 9 格，当场账 **10**）、
+  `test_script_db_guards.py`（① 的 `Or` 那一臂 + 守卫侧新加的三格样品，当场账 **36**）。
+  变异：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（M1~M28，含 M3b/M5b；
+  `--list` 末行印"共 30 处变异，覆盖 7 个判据文件"），CONTROL 那 7 个判据文件在干净代码上全绿、
+  无 ANCHOR-MISS / 无 HARNESS-FAIL；原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round57-lifecycle-mutations.txt`，跑完逐文件字节回读一致。
+  **镜像此刻**（同日 05:0x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`；
+  **生产此刻**（同日 05:0x，只读门 + 引擎级只读探针）：`expired_unjudged 17 / held_by_lock 0 / actionable_today 17`
+  —— 与 09-28 凌晨那次同数，因为**生产仍然没有任何东西在跑**（#132），这 17 条一天天变旧。）
+（上一批：2026-09-28 04:2x（北京），**任务 #137：第 56 轮复评 72/100 返修——四条 MAJOR
 全都"上一批只修了一半"，其中一条是我说满了话；另有一条评审给的尺子被我在生产上证伪**
 （条目号 M-*/m-* 落在 #137 的 metadata 里，报告正文不随仓库走）——
 ① **那把"不许把回补天数写死"的尺子只认 `days=` 关键字**（M-1）：
@@ -325,7 +386,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 ⑤ **"两条活路"是半句**（m-3）：合并式整库导入 `data_portability_service.import_data` 也往
 `fund_history` 灌行（`TABLE_SPECS` + `spec.model(**row)`，一个字没写 `FundHistory`）⇒
 那把扫描器对它结构性失明。现在写净值的证据分两腿（点名构造 / `TABLE_SPECS` 泛型建行），
-名单从 2 条扩到 4 条，导入那条**登记为"故意不接"并写依据**（换库不是"补了几行"，那里没有
+**要登记的写净值站点从 4 条扩到 5 条**（复核 `python -c "import io,ast; t=ast.parse(io.open('tests/unit/test_structurally_unverifiable_hold.py',encoding='utf-8').read()); print([len(n.value.keys) for n in ast.walk(t) if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','')=='NAV_WRITE_SITES'])"` ⇒ `[5]`；
+第 57 轮 m-1：上一批这里写的"从 2 条扩到 4 条"是**把两个口径拼成了一句** —— 登记面 4→5，
+而**接了解锁**的那两条从头到尾都是 2 条），新登记的那条**登记为"故意不接"并写依据**（换库不是"补了几行"，那里没有
 "新落的那几天"这个量可递）；那条判据的名字也跟着从 `..._both_sync_writers` 改成
 `..._every_nav_writer`（三处引用一起改，旧名留着就是句假承诺）。
 ⑥ **两处"判据自己不合格"**：a) `_never_runs` 之外，`test_the_nav_lookback_has_one_home_for_both_questions`
@@ -342,7 +405,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 而 **2026-09-25 是个周五、也只有 1 只**（货币基金 `000725`）⇒ 绝对只数 / 当日占比 /
 "目标日前 7 天最大广度"三种定法**都会把一个"全库没补到"的交易日判成休市并永久关单**。
 镜像这边末条 2026-09-24、**当天只有 7 只**（全库 245 只）。正解是改用**星期**：
-`1669`/`1709` 的目标日是 2026-07-11/07-12，`python -c "from datetime import date;print(date(2026,7,11).strftime('%a'))"` ⇒ Sat/Sun，
+`1669`/`1709` 的目标日**都是 2026-07-11**（复核 `python scripts/q.py "select id, target_date, strftime('%w', target_date) dow from predictions where id in (1669,1709)"`
+⇒ 两行都是 `2026-07-11 / 6`＝**周六**；上一批这里写的"07-11/07-12，Sat/Sun"是我照着净值日期抄错的，
+第 57 轮 m-2 点出来后才拿库里的行改回），`python -c "from datetime import date;print(date(2026,7,11).weekday())"` ⇒ 5＝周六，
 当场判得出来、不需要新表；**法定节假日那一档仍然没有凭据**，所以话只能说成"周末规则"，不许说成"非交易日规则"。
 ⑧ **M-5 不成立**（写在这儿防下一轮照评审原文再"修"一遍）：它说按条数核的尺子对推导式失明
 （`[p for p in ps if p.status == "pending"]` 计 0）。探针实测 `_status_judgments` 回 `[2]`，

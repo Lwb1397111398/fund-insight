@@ -82,7 +82,9 @@ def archive_stamp(retention_days: int = 30):
     为什么要有这个函数（第 54 轮 A-1 / B-2）：全仓有三条活路会把一行放进回收站
     （手动归档、系统关闭、合并相似预测），而"少一天"那个缺陷上一批只修了第一条 ——
     同一件事的第二、第三条活路不会自己长出来。写侧登记见
-    `tests/unit/test_prediction_migrations.py` 里那把按 (文件, 函数) 数站点的棘轮。
+    `tests/unit/test_one_ruler_per_question.py` 里那把棘轮：它按 (文件, 函数) 收站点，
+    并且**数每个函数里有几处写**（第 56 轮 M-4），赋值 / 解包 / setattr / 关键字 /
+    批量 `.update({...})` 五种拼法都算一处。
     """
     return beijing_now(), current_as_of() + timedelta(days=retention_days)
 
