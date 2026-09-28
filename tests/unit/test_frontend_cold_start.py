@@ -2015,19 +2015,22 @@ process.stdout.write(JSON.stringify({
 
 
 def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
-    """一次、只一次，失败要放开，而且**净值没落库之前不许发起验证**（第 63 轮 #132 的判据 B）。
+    """一次、只一次；没补完的每一格都不占"今天这一次"；而且**只报本轮自己发起的那份回执**。
 
-    跑的是页面那份 `maybeCatchUpOnOpen` 真源码（含它自己那份 `CATCH_UP_KEY` 声明与
-    `catchUp` 状态），桩只替掉 axios 与两个刷新函数。
-    为什么要把调用**顺序**记成一条流水账而不是两个集合：`update-all` 与 `verify-all` 都是
-    后台任务，POST 立刻回"已启动"。真浏览器那次量到回执是
-    「更新净值：任务已启动；验证：已开始后台验证 17 个预测」—— 那 17 条是拿**旧净值**判的，
-    白跑一轮还替它说了"已开始验证"。两个接口都打了、顺序错了，在集合里看不见。
+    跑的是页面那份 `maybeCatchUpOnOpen` → `catchUpOnce` 真源码，桩只替掉 axios 与两个刷新函数。
+    为什么把调用**顺序**记成一条流水账而不是两个集合：`update-all` 与 `verify-all` 都是后台任务，
+    POST 立刻回"已启动"。真浏览器那次量到回执是
+    「更新净值：任务已启动；验证：已开始后台验证 17 个预测」—— 那批是拿**旧净值**判的。
+    第 64 轮 M-1 更坏的一格：上一批那句 `if (fin.result) funds = { data: fin.result }` 不看
+    POST 自己答了什么 ⇒ 我们压根没发起更新时，也把**别人那一轮**跑完的数报成"打开网站补了一次"
+    ＝把空操作报成做了事。所以这一轮的样品表把四种"这一轮不是我们的/没跑完"各钉一格：
+    别人握着锁 / 状态里换成了别的那一轮 / 回执丢了 / 数到上限还没完。
     """
     html = _html()
     key = re.search(r"const CATCH_UP_KEY = '[^']+';", html)
     state = re.search(r"const catchUp = reactive\(\{[^}]+\}\);", html)
     assert key and state, '找不到那把"每天一次"的键名或那份状态声明'
+    max_tries = int(re.search(r'(\d+)', _const(html, 'FUND_POLL_MAX_TRIES')).group(1))
     prelude = '\n'.join([
         "const store = {};",
         "const localStorage = { getItem: (k) => (k in store ? store[k] : null),",
@@ -2038,11 +2041,15 @@ def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
         "const currentView = ref('bloggers');",
         "const posts = []; const gets = []; const refreshed = []; const seq = [];",
         "let failOn = null;",
-        # 轮询真会睡 5 秒 × 最多 150 次：定时器接管掉，"一直不结束"那一档也能秒级跑完
+        # 轮询真会睡 5 秒 × 几百次：定时器接管掉，"一直不结束"那一档也能秒级跑完
         "const setTimeout = (fn) => { fn(); return 0; };",
-        # `navLeft` ＝ 状态接口还有几次答"在跑"。1 ＝ 问两次才完；999 ＝ 超过上限还没完
+        # 状态接口那一侧的三件东西都由用例现调：还有几次答"在跑"、它记的是哪一轮、留着什么回执
         "let navLeft = 1;",
-        # 首屏取数一律走唤醒门（第 40 轮那条 ratchet 也盯着这两笔）：桩自己记一刀，
+        "const ourRun = '本轮那一跑';",
+        "let reportedRun = ourRun;",
+        "let navResult = { success: true, message: '净值跑完了：更新 156 只\\n失败 6 只' };",
+        "let lockHeld = false;",
+        # 取数一律走唤醒门（第 40 轮那条 ratchet 也盯着这几笔）：桩自己记一刀，
         # 这样"绕过门"与"门后拿不到数"这两种形状分得开。
         "const withWakeRetry = async (fn) => { wakes.push('wake'); return fn(); };",
         "const wakes = [];",
@@ -2052,14 +2059,16 @@ def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
         "    if (url === '/api/stats/evidence') return { data: { data: { nav_lag_stale: true } } };",
         "    if (url === '/api/funds/update-status') {",
         "      const running = navLeft-- > 0;",
-        "      return { data: { data: { in_progress: running,",
-        "        last_result: running ? null",
-        # 接口自己分了两行（真回执就是这形状：`同步完成：…\\n\\n6 只基金域查无此码…`）
-        "          : { success: true, message: '净值跑完了：更新 156 只\\n失败 6 只' } } } }; }",
+        "      return { data: { data: { in_progress: running, started_at: reportedRun,",
+        "        last_result: running ? null : navResult } } }; }",
         "    return { data: { meta: { facets: { due: 17 } } } }; },",
         "  post: async (url) => { posts.push(url); seq.push('POST ' + url);",
         "    if (failOn === url) throw new Error('接口炸了');",
-        "    return { data: { success: true, message: '回执说：' + url } }; },",
+        "    if (url === '/api/funds/update-all' && lockHeld)",
+        "      return { data: { success: false, message: '基金更新正在进行中，请稍后再试',",
+        "                       data: { in_progress: true, started_at: '别人那一跑' } } };",
+        "    return { data: { success: true, message: '回执说：' + url,",
+        "                    data: { started_at: ourRun } } }; },",
         "};",
         "const fetchStats = async () => { refreshed.push('stats'); };",
         "const fetchPredictions = async () => { refreshed.push('predictions'); };",
@@ -2069,50 +2078,85 @@ def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
         _decl(html, 'catchUpReceipt = (step) =>'),
         # 那两个常数是从页面里**抄出来**的：把上限改成 1 次，本用例就该红（"只问一次就往下走"）
         _const(html, 'FUND_POLL_INTERVAL_MS'), _const(html, 'FUND_POLL_MAX_TRIES'),
-        _decl(html, 'waitFundUpdateToFinish = async () =>'),
+        _decl(html, 'fundPollMinutes = () =>'),
+        _decl(html, 'waitFundUpdateToFinish = async (since) =>'),
+        _decl(html, 'catchUpOnce = async (day) =>'),
         _decl(html, 'maybeCatchUpOnOpen = async () =>'),
     ])
-    out = _run_chain_js("""
+    reset = """
+const begin = (k) => { posts.length = 0; gets.length = 0; seq.length = 0; wakes.length = 0;
+  refreshed.length = 0;
+  navLeft = 1; reportedRun = ourRun;
+  navResult = { success: true, message: '净值跑完了：更新 156 只\\n失败 6 只' };
+  lockHeld = false; failOn = null;
+  if (k === false) delete store[CATCH_UP_KEY]; else store[CATCH_UP_KEY] = k;
+  catchUp.note = ''; catchUp.error = ''; catchUp.running = false; };
+"""
+    out = _run_chain_js(reset + """
 (async () => {
   const today = beijingDay();
+  // ① 正常一轮：先补净值、等它跑完、再发起验证
+  begin(false);
   await maybeCatchUpOnOpen();
   const first = { posts: posts.slice(), gets: gets.slice(), seq: seq.slice(),
-                  wakes: wakes.length,
-                  refreshed: refreshed.slice(),
-                  note: catchUp.note, error: catchUp.error, key: store[CATCH_UP_KEY] || null,
-                  running: catchUp.running };
-  posts.length = 0; gets.length = 0; wakes.length = 0;
+                  wakes: wakes.length, refreshed: refreshed.slice(),
+                  note: catchUp.note, error: catchUp.error,
+                  key: store[CATCH_UP_KEY] || null, running: catchUp.running };
+  // ② 同一个北京日里再叫一次：一个接口都不许打
+  begin(today);
   await maybeCatchUpOnOpen();
-  const again = { posts: posts.length, gets: gets.length };
-  // 换一天（键不是今天的北京日）⇒ 必须可以再补一次
-  posts.length = 0; store[CATCH_UP_KEY] = '2000-01-01';
+  const again = { posts: posts.length, gets: gets.length, key: store[CATCH_UP_KEY] || null };
+  // ③ 重新打开（上一轮那句回执不在这个进程里）⇒ "今天补过"必须看得见
+  begin(today);
+  await maybeCatchUpOnOpen();
+  const already = { note: catchUp.note, posts: posts.length };
+  // ④ 换一天：必须可以再补
+  begin('2000-01-01');
   await maybeCatchUpOnOpen();
   const nextDay = { posts: posts.slice(), key: store[CATCH_UP_KEY] || null };
-  // 失败那一格：键要放开，否则一次网络抖动就让这一天再也补不了
-  posts.length = 0; delete store[CATCH_UP_KEY]; failOn = '/api/funds/update-all';
+  // ⑤ 接口抛错
+  begin(false); failOn = '/api/funds/update-all';
   await maybeCatchUpOnOpen();
   const failed = { posts: posts.slice(), key: store[CATCH_UP_KEY] || null,
                    note: catchUp.note, error: catchUp.error, running: catchUp.running };
-  posts.length = 0; failOn = null;
+  // ⑥ 放开之后当天再打开要补得上
+  begin(false);
   await maybeCatchUpOnOpen();
   const retried = { posts: posts.slice(), key: store[CATCH_UP_KEY] || null };
-  // 净值那次一直不结束 ⇒ 宁可只补一半，也不许拿旧净值去判那 17 条（第 63 轮真浏览器量到的）
-  posts.length = 0; gets.length = 0; seq.length = 0; delete store[CATCH_UP_KEY];
-  catchUp.note = ''; catchUp.error = ''; navLeft = 999;
+  // ⑦ 一直不结束 ⇒ 不许发起验证，也不许把这一天占掉（第 64 轮 m-4：上一批占掉了）
+  begin(false); navLeft = 999;
   await maybeCatchUpOnOpen();
   const stuck = { posts: posts.slice(),
                   statusTries: seq.filter((s) => s === 'GET /api/funds/update-status').length,
-                  note: catchUp.note,
-                  error: catchUp.error, key: store[CATCH_UP_KEY] || null };
-  navLeft = 1;
-  // 两个数都没取到 ⇒ 一个字都不动，而且不许把"今天这一次"占掉（先把话擦干净＝刚打开的页面）
-  posts.length = 0; gets.length = 0; delete store[CATCH_UP_KEY];
-  catchUp.note = ''; catchUp.error = ''; failOn = 'get';
+                  note: catchUp.note, error: catchUp.error,
+                  key: store[CATCH_UP_KEY] || null };
+  // ⑧ 跑完了但接口不再给回执（容器重启那一格）
+  begin(false); navLeft = 0; navResult = null;
+  await maybeCatchUpOnOpen();
+  const lost = { posts: posts.slice(), note: catchUp.note,
+                 key: store[CATCH_UP_KEY] || null, running: catchUp.running };
+  // ⑨ 状态里现在记的是**别人那一轮** ⇒ 那份回执一个字都不许抄进我们的话里
+  begin(false); navLeft = 0; reportedRun = '别人那一跑';
+  await maybeCatchUpOnOpen();
+  const foreign = { posts: posts.slice(), note: catchUp.note,
+                    key: store[CATCH_UP_KEY] || null };
+  // ⑩ POST 自己说"正在进行中"（别人握着锁）⇒ 本轮没发起：不轮询、不认领、不验证
+  begin(false); lockHeld = true;
+  await maybeCatchUpOnOpen();
+  const busy = { posts: posts.slice(), gets: gets.slice(), note: catchUp.note,
+                 error: catchUp.error, key: store[CATCH_UP_KEY] || null };
+  // ⑪ 两个页签几乎同时打开 ⇒ 只许有一轮（并发门设在第一次 await 之前才管得住）
+  begin(false);
+  await Promise.all([maybeCatchUpOnOpen(), maybeCatchUpOnOpen()]);
+  const parallel = { posts: posts.slice(), key: store[CATCH_UP_KEY] || null };
+  // ⑫ 两个数都没取到 ⇒ 一个字都不动，也不占掉今天
+  begin(false); failOn = 'get';
   await maybeCatchUpOnOpen();
   const blind = { posts: posts.slice(), gets: gets.slice(), note: catchUp.note,
-                  error: catchUp.error, key: store[CATCH_UP_KEY] || null };
-  process.stdout.write(JSON.stringify({ today, first, again, nextDay, failed, retried,
-                                        stuck, blind }));
+                  error: catchUp.error, key: store[CATCH_UP_KEY] || null,
+                  running: catchUp.running };
+  process.stdout.write(JSON.stringify({ today, first, again, already, nextDay, failed, retried,
+                                        stuck, lost, foreign, busy, parallel, blind }));
 })();
 """, prelude)
     assert out['first']['posts'] == ['/api/funds/update-all', '/api/predictions/verify-all'], \
@@ -2123,26 +2167,19 @@ def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
         'GET /api/predictions',
         'POST /api/funds/update-all',
         'GET /api/funds/update-status',      # 第一次问：还在跑
-        'GET /api/funds/update-status',      # 第二次问：跑完了
+        'GET /api/funds/update-status',      # 第二次问：跑完了，而且是我们那一轮
         'POST /api/predictions/verify-all',
     ], '调用流水不对 ⇒ 验证可能压在"净值还没落库"那一段上（实测 %s）' % out['first']['seq']
-    assert out['stuck']['posts'] == ['/api/funds/update-all'], \
-        '净值那一次到上限还没结束，却还是发起了验证 ⇒ 那一轮拿的还是旧净值：%s' \
-        % out['stuck']['posts']
-    assert out['stuck']['statusTries'] == int(re.search(r'(\d+)', _const(html, 'FUND_POLL_MAX_TRIES')).group(1)), \
-        '轮询次数不等于页面上钉的那个上限 ⇒ 要么提前放弃、要么这一格根本没跑到底（实测 %d 次）' \
-        % out['stuck']['statusTries']
-    assert '没有发起验证' in out['stuck']['note'] and out['stuck']['error'] == '', \
-        '只补了一半却不吭声 ⇒ 老板以为两步都跑了：%s' % out['stuck']
-    assert out['stuck']['key'] == out['today'], \
-        '"净值还在跑"这一格不该放开键：今天再打开会把同一个后台任务再发起一次'
     assert out['first']['gets'][:2] == ['/api/stats/evidence', '/api/predictions'], \
         '那两个数各读各的接口：新鲜度问 evidence、到期条数问预测列表（同一个 facets.due）：%s' \
         % out['first']['gets']
     assert set(out['first']['gets'][2:]) <= {'/api/funds/update-status'}, \
         '补跑期间动了别的取数接口：%s' % out['first']['gets']
-    assert out['first']['wakes'] == 2, \
-        '那两笔取数只有 %d 笔走了唤醒门 ⇒ Render 冷启动时这一刀永远落不到地' % out['first']['wakes']
+    # 这一轮里每一笔 GET 都必须是"先问唤醒门、再放弃"：问数两笔 + 中途问状态那几笔。
+    # （Render 在补跑中途睡着时，那一笔不该把整轮判成"中断"；上一批状态那一笔是裸 axios.get）
+    assert out['first']['wakes'] == len(out['first']['gets']), \
+        '有几笔取数绕过了唤醒门（走门 %d 笔 / 共 %d 笔）⇒ 冷启动时这一刀会落空' \
+        % (out['first']['wakes'], len(out['first']['gets']))
     assert out['first']['key'] == out['today'], \
         '落下那天记的不是北京日：%r vs %r' % (out['first']['key'], out['today'])
     assert out['first']['refreshed'] == ['stats'], '补完没刷新统计 ⇒ 页面上还是旧数'
@@ -2158,22 +2195,72 @@ def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
         '两行的回执被并坏了或压根没并：%s' % out['first']['note']
     assert '\n' not in out['first']['note'], '那句话带着换行进了 span ⇒ 屏幕上会糊成一片'
     assert out['first']['running'] is False and out['first']['error'] == ''
-    assert out['again'] == {'posts': 0, 'gets': 0}, \
+    assert out['again'] == {'posts': 0, 'gets': 0, 'key': out['today']}, \
         '同一个北京日里第二次打开又补了一遍 ⇒ 每天一次那把门没生效'
+    assert '已经自动补过一次' in out['already']['note'] and out['already']['posts'] == 0, \
+        '重新打开时那句"今天补过"看不见 ⇒ 老板只知道落后几天，不知道今天有没有人试过：%s' \
+        % out['already']
     assert out['nextDay']['posts'] == ['/api/funds/update-all', '/api/predictions/verify-all'], \
         '换了一天却不肯再补：%s' % out['nextDay']
     assert out['failed']['posts'] == ['/api/funds/update-all'], '失败那格连试都没试'
     assert out['failed']['key'] is None, '补跑失败了还占着"今天这一次" ⇒ 这一天从此不会再补'
     assert out['failed']['note'] == '' and out['failed']['error'], \
         '失败那一格没把话说明白：%s' % out['failed']
-    assert out['failed']['running'] is False, 'running 没复位 ⇒ 那句话永远挂在"正在补"'
+    assert out['failed']['running'] is False, 'running 没复位 ⇒ 下一次打开永远被并发门挡住'
     assert out['retried']['posts'] == ['/api/funds/update-all', '/api/predictions/verify-all'] \
         and out['retried']['key'] == out['today'], \
         '放开之后当天再打开仍然补不上（实测 %r）⇒ "失败要放开"那一半是假的' % out['retried']
     assert out['blind']['posts'] == [] and out['blind']['key'] is None, \
         '两个数都没取到却还是动了手、或把"今天这一次"占掉了：%s' % out['blind']
     assert out['blind']['note'] == '' and out['blind']['error'] == '', \
-        '取不到数这一格什么话都不说 ⇒ 老板只会看到"落后 N 天"，不知道有没有人试过' % out['blind']
+        '取不到数这一格什么话都不说 ⇒ 老板只会看到"落后 N 天"，不知道有没有人试过'
+    assert out['blind']['running'] is False, '并发门没在出口放开 ⇒ 这一页从此再也不会补'
+
+    # 并发门的**位置**：设在第一次 await 之前才管得住（设在看完数之后＝门是形同虚设的那一种，
+    # 第 64 轮 M-3 量的正是这个 —— 这条门当时既没有行为样品、也没有位置断言）。
+    gate_body = _decl(html, 'maybeCatchUpOnOpen = async () =>')
+    assert 'catchUp.running = true;' in gate_body, '并发门不见了 ⇒ 两个页签会各补一遍'
+    assert gate_body.index('catchUp.running = true;') < gate_body.index('await '), \
+        '并发门排在第一次 await 之后 ⇒ 一让出线程，第二个调用照样进门（第 64 轮 M-3）'
+    assert 'catchUp.running' not in _decl(html, 'catchUpOnce = async (day) =>'), \
+        '门的开关散进了干活那个函数 ⇒ 里面任何一条 return 都可能把这一页永久锁住'
+
+    # ── 四种"这一轮不是我们的 / 没跑完"：每一格都不许占掉今天、不许发起验证 ──
+    assert out['stuck']['posts'] == ['/api/funds/update-all'], \
+        '净值那一次到上限还没结束，却还是发起了验证 ⇒ 那一轮拿的还是旧净值：%s' \
+        % out['stuck']['posts']
+    assert out['stuck']['statusTries'] == max_tries, \
+        '轮询次数不等于页面上钉的那个上限 ⇒ 要么提前放弃、要么这一格根本没跑到底（实测 %d 次）' \
+        % out['stuck']['statusTries']
+    assert '没有发起验证' in out['stuck']['note'] and out['stuck']['error'] == '', \
+        '只补了一半却不吭声 ⇒ 老板以为两步都跑了：%s' % out['stuck']
+    assert out['stuck']['key'] is None, \
+        '没跑完就把这一天占掉 ⇒ 中途关掉页面，今天再也没有第二次机会（第 64 轮 m-4）'
+
+    assert out['lost']['posts'] == ['/api/funds/update-all'] and out['lost']['key'] is None, \
+        '回执丢了那一格还是动了验证、或占掉了今天：%s' % out['lost']
+    assert '丢了' in out['lost']['note'], \
+        '那一格只会说"没等到结果"，说不出是接口不再给回执：%s' % out['lost']['note']
+    assert out['lost']['running'] is False, '回执丢了那一格没放开并发门'
+
+    assert out['foreign']['posts'] == ['/api/funds/update-all'] and out['foreign']['key'] is None, \
+        '状态里已经换成别的那一轮，却还是发起了验证/占了今天：%s' % out['foreign']
+    assert '净值跑完了' not in out['foreign']['note'], \
+        '把**别人那一轮**跑完的数报成"打开网站补了一次"⇒ 空操作当做了事（第 64 轮 M-1）：%s' \
+        % out['foreign']['note']
+
+    assert out['busy']['posts'] == ['/api/funds/update-all'], \
+        'POST 说"正在进行中"（success:false）却还是发起了验证：%s' % out['busy']['posts']
+    assert '/api/funds/update-status' not in out['busy']['gets'], \
+        '本轮压根没发起更新，还去轮询别人的进度 ⇒ 等来的回执必然不是我们的：%s' % out['busy']['gets']
+    assert '本轮没发起' in out['busy']['note'] and '正在进行中' in out['busy']['note'], \
+        '那句话没说出"我们一件都没做"：%s' % out['busy']['note']
+    assert '净值跑完了' not in out['busy']['note'] and out['busy']['error'] == '' \
+        and out['busy']['key'] is None, '别人的回执被抄进我们的话里，或这一格被占掉了：%s' % out['busy']
+
+    assert out['parallel']['posts'] == ['/api/funds/update-all', '/api/predictions/verify-all'], \
+        '两个页签同时打开补了两遍（实测 %s）⇒ 并发门要设在第一次 await 之前才管得住' \
+        % out['parallel']['posts']
 
 
 def test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist():
@@ -2190,9 +2277,28 @@ def test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist():
         '顺序倒了：净值还没补就去验证，那批到期数一个也判不出来'
     assert html.count('void maybeCatchUpOnOpen();') == 2, \
         '两条登录出口（本机存过口令 / 刚输口令）少接一条 ⇒ 有一类打开方式永远不补'
+    # 这两处直接触发点**只在两条"口令过了"的出口里**：`checkAuth`（本机存过口令）与
+    # `submitPassword`（刚输口令）。第 64 轮 M-3 量出还有第三条**到得了**的路 ——
+    # 「重新连接」按钮 → `retryConnect` → `checkAuth`，它是经由后者到达的，不是又一个直接触发点。
+    # 为什么要钉死"只有这两处直接触发"：哪天有人把触发点抄进某个刷新或重试里，
+    # "打开网站补一次"就变成"每次点重试都可能补一次"，而那已经不是同一件事。
+    check_auth = _decl(html, 'checkAuth = async () =>')
+    submit = _decl(html, 'submitPassword = async () =>')
+    assert check_auth.count('void maybeCatchUpOnOpen();') == 1 \
+        and submit.count('void maybeCatchUpOnOpen();') == 1, \
+        '两处触发点不在"口令过了"那两条出口里（checkAuth %d / submitPassword %d）' \
+        % (check_auth.count('void maybeCatchUpOnOpen();'), submit.count('void maybeCatchUpOnOpen();'))
+    retry = _decl(html, 'retryConnect = async () =>')
+    assert 'maybeCatchUpOnOpen' not in retry and 'checkAuth()' in retry, \
+        '「重新连接」自己另开了一刀，或者根本没经 checkAuth ⇒ 每天一次那把门被绕过'
+    assert 'localStorage.setItem(CATCH_UP_KEY' not in check_auth \
+        and 'localStorage.setItem(CATCH_UP_KEY' not in submit, \
+        '把"今天补过了"写到登录那一层 ⇒ 补没补成功都没人再看（那一格由补跑自己记账）'
     assert 'void maybeCatchUpOnOpen();' not in html[html.index('const fetchEvidence = async () => {'):
                                                    html.index('const spanText = () =>')], \
         '把副作用塞回取数点 ⇒ 每个写操作之后的刷新都会再触发一次补跑，那已经不是"打开网站"这件事'
+    assert 'localStorage.setItem(CATCH_UP_KEY' not in check_auth, \
+        '把"今天补过了"写到登录那一层 ⇒ 补没补成功都没人再看（那一格应当由补跑自己记账）'
     assert 'nav_lag_days' not in block, \
         '页面又开始自己比大小 ⇒ "落后几天算旧"这个阈值就有了第二个出处'
     for promise in ('补好了', '全部完成', '都已验证'):

@@ -1,0 +1,41 @@
+# run @ 2026-09-28T20:59:56+08:00  git=46eee6fb3840  python=3.12.10  共 30 处变异 / 7 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（7 个判据文件在干净代码上全绿）
+M1_any_failure_is_structural                               ⇒ RED（判据有效）
+M2_degenerate_endpoint_becomes_closable                    ⇒ RED（判据有效）
+M3_past_date_counts_as_second_ask                          ⇒ RED（判据有效）
+M3b_close_script_stops_asking_the_whole_gate               ⇒ RED（判据有效）
+M4_hold_only_covers_no_source_history                      ⇒ RED（判据有效）
+M5_rosters_stop_adding_up                                  ⇒ RED（判据有效）
+M5b_roster_invents_a_reason_the_verifier_never_answers     ⇒ RED（判据有效）
+M6_second_copy_of_the_structural_ruler                     ⇒ RED（判据有效）
+M7_refused_close_locks_nothing                             ⇒ RED（判据有效）
+M8_pre_inception_evidence_withdrawn                        ⇒ RED（判据有效）
+M9_retag_keeps_the_old_targets_lock                        ⇒ RED（判据有效）
+M10_manual_rebind_bypasses_the_evidence_gate               ⇒ RED（判据有效）
+M11_pending_bucket_reads_the_legacy_column_again           ⇒ RED（判据有效）
+M12_archive_stamp_goes_back_to_the_wall_clock              ⇒ RED（判据有效）
+M13_force_restore_promises_but_still_skips                 ⇒ RED（判据有效）
+M14_both_tiers_share_the_credential_clock                  ⇒ RED（判据有效）
+M15_the_reask_interval_becomes_a_second_number             ⇒ RED（判据有效）
+M17_the_backfill_window_becomes_a_constant                 ⇒ RED（判据有效）
+M18_the_sync_writer_hard_codes_its_window_again            ⇒ RED（判据有效）
+M19_the_sync_writer_stops_releasing_the_lock               ⇒ RED（判据有效）
+M20_releasing_ignores_what_actually_changed                ⇒ RED（判据有效）
+M21_releasing_forgets_to_ask_the_verifier                  ⇒ RED（判据有效）
+M16_fix_wording_dry_run_actually_writes                    ⇒ RED（判据有效）
+M22_env_py_silences_the_app_loggers_again                  ⇒ RED（判据有效）
+M23_the_as_of_fallback_trail_stops_naming_tzdata           ⇒ RED（判据有效）
+M24_lookback_written_as_a_positional_argument              ⇒ RED（判据有效）
+M25_unlock_called_with_an_empty_list_of_dates              ⇒ RED（判据有效）
+M26_unlock_hidden_behind_an_always_false_comparison        ⇒ RED（判据有效）
+M27_second_wall_clock_archive_stamp_inside_a_registered_function ⇒ RED（判据有效）
+M28_unlock_dates_piped_through_an_empty_variable           ⇒ RED（判据有效）
+已还原 src/services/prediction_lifecycle.py
+已还原 scripts/close_unknowable_predictions.py
+已还原 src/services/prediction_verify_service.py
+已还原 src/fund/fund_sync_manager.py
+已还原 src/services/prediction_service.py
+已还原 src/services/prediction_query_service.py
+已还原 src/fund/fund_api.py
+已还原 alembic/env.py
+已还原 src/fund/fund_auto_manager.py

@@ -294,7 +294,110 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 19:0x（北京），**任务 #151 + #152：第 63 轮复评 73/100 —— 不到 75 这条线，
+最近一次核对（2026-09-28 21:4x（北京），**任务 #153：第 64 轮复评 72/100 —— 三条 MAJOR 里最重的一条
+是"跑完之后那份回执可能根本不是本轮的"，第二条是同一个问题在同一个页面里有两份实现，第三条是我上一批
+自己写下的那句"并发门"从来没被人看过；返修途中页面里那条"写后刷新"的闸又替我拦下一处我新造的假话**
+（条目号取自第 64 轮报告结论表，正文不随仓库走，下面按**修法**记）——
+
+① **MAJOR（M-1）：`update-status` 是全局单例，"跑完了"三个字得先问是谁的那一轮**。
+上一批 `waitFundUpdateToFinish()` 只看 `in_progress:false` 就把 `last_result` 当成自己的成果念 ⇒
+老板手点过那一次、或别人那一轮刚结束时，页面会**认领别人的回执**、并且拿那份数去发起验证，
+而我们自己那一轮一件都没做。修法两格：
+⑴ `POST /api/funds/update-all` 自己回 `success:false`（多半是"基金更新正在进行中"＝锁在别人手里）⇒
+**一次状态都不轮**、不发起验证、不写当天的键，话说明白"更新净值那一步本轮没发起：<原因>"；
+⑵ 轮询到 `in_progress:false` 时先比 `started_at` —— 那不是本轮那一次的 ⇒ 判"认不出本轮的结果"，
+**不认领**那份回执。归属凭据用 `start()` 交回的那个时刻（`FundUpdateTask.status()` 里就有），
+不新开字段、不动接口。
+② **MAJOR（M-2）：同一个"等净值跑完"在同一个页面里有两份实现** —— 补跑那一条是一份
+`for`（5 秒 × 150），「更新所有基金」按钮是另一份 `setInterval`（另一套超时与 `consecutiveErrors`），
+两个"没等到"的判法各说各话 ⇒ 改一处必忘一处。现在两条路都走 `waitFundUpdateToFinish(since)`，
+超时那一句话由 `fundPollMinutes()` 从 `FUND_POLL_INTERVAL_MS × FUND_POLL_MAX_TRIES` 现算
+（页面上"约 N 分钟"与真实上限结构上不可能漂开），旧的那五个名字
+（`fundUpdatePollTimer` / `clearFundUpdatePoll` / `FUND_UPDATE_POLL_TIMEOUT_MS` / `consecutiveErrors` /
+`lastFundUpdateFinishedAt`）连按钮那份实现一起删掉，判据反向钉"一个都不许回来"。
+`tests/unit/test_frontend_fund_update.py` 里原来那些断言**全是 grep 文本**（把 `setInterval` 整份删掉、
+换成一把新轮询，它一条都不会红）⇒ 改成一条文本 + 一条**跑真实调用链**的八格行为判据
+（跑完/慢/那是别人那一轮/状态丢了/一直不结束/锁在别人手里/轮询自己坏了/列表刷新坏了），
+外加结构账 `waitFundUpdateToFinish` 出现 3 次、`/api/funds/update-status` 全页出现 1 次。
+⚠ **这一条改动自己造出来的那一格假话由已有的闸拦下**：按钮改走那把会 reject 的轮询之后，
+外层 `catch` 会把"更新其实成功了、只是进度没问到"说成「更新失败」⇒
+`test_a_write_that_succeeded_is_never_reported_as_a_failure` 当场点红（第 63 轮我在那条闸里写的
+"按腿收窄"这一次是真救了我：同一把闸上一批评过它过宽，这一批它量出的是我新写的洞）。
+两条腿各自收口并各配一格行为样品 + 两处变异（`the_progress_leg_blames_the_update` /
+`the_refresh_leg_blames_the_update`）。
+③ **MAJOR（M-3）：那句"同一页里不并发补两次"的旗，上一批从来没被人看过** ——
+`catchUp.running = true` 排在 `catchUpOnce` 里**取完两个数之后**才置位 ⇒ 两次并发进入都能穿过那道门
+（首屏与 `retryConnect` 同时到就撞上）。现在门与事分开：`maybeCatchUpOnOpen()` 起手置位、
+`catchUpOnce(day)` 一个字不碰那把旗；判据问的是**源码里的先后**（置位那行必须排在第一个 `await` 之前）
+而不是"有没有这句"。这一条与第 57~58 轮"判可达/判接线"那一族同源：**一把闸存在过 ≠ 它拦得住**。
+④ **两处话与键的时机（m-4 / m-5）**：当天的键**只在净值跑完并拿到本轮自己的回执之后**写 ——
+上一批"轮询到上限那一格不放开键"是反的（写死 ⇒ 中途关掉页面，这一天永远停在"补了一半"、没人接上），
+文档与这条判据一起反过来；而"今天已经补过"与"这次没有自动补"这两格**也必须说一句**
+（不沉默，也不长成红字 —— 红字留给真失败），与上一批那条"没动手也要说一句"同一把尺子。
+⑤ **判据侧两把 AST 尺子各补一腿**：新增 `_empty_shell()` 剥 `Starred` / `NamedExpr` 的壳
+（`release(db, code, *[])` 与 `(d := [])` 那一档以前穿不过 `_never_runs` / `_provably_empty`），
+`_live_nodes` 的"死内层 def"分支现在把 `decorator_list` 一起交出去（装饰器是**活路径上真会执行**的）；
+样品表 **evasions 54 / honest_live 47**（条数一律现数，命令写在那个文件的注释里，别在这里抄）。
+⑥ **体检工具自己的两条账**（这一批最该记的一条，因为它是"新加的闸第一次用就误伤既有判据"）：
+⑴ 注册表里的 id 有**参数化后缀**（`test_xxx[createViewpointManager]`），而文件里的 `def` 没有 ⇒
+上一批那句"先问这个文件里有没有这个人"按**整串**比，把两条**真在跑**的接线闸判成 JUDGE-MISS，
+而 1229 条用例一声不响 —— 只有我手工跑一次 `--only manager` 才看见。现在并成
+`_judge_defs()` + `_judge_lookup()`，并给它们立了用例（`tests/unit/test_mutation_lock.py`：
+**注册表里每一条**变异指向的判据都必须落在它被路由到的那个文件里；参数化那一格必须认、
+名字只在**别的**文件里有不许认、压根没有的名字不许认 —— 处数不在这里抄，跑 `--list` 看末行）。注入实证：把 `_judge_lookup` 改回"比整串" ⇒ 那两条用例**一起红**。
+⑵ 那句 `assert 'src.models.database' not in sys.modules` 原来在**模块顶层** ⇒ 任何用例想 import
+这份工具问它自己的问题都会被当场打死（这才是 ⑴ 长期没人能的根因）。现在挪进
+`_refuse_if_the_orm_is_already_built()`、排在**抢锁与改写第一个字节之前**，作用一字不减。
+⑶ 前端那份体检日志**没有运行头**（第 59 轮 m-4 只给了逻辑侧那支）⇒ 同一件事两腿两种待遇，
+本批对齐成一行 `# run @ <北京 ISO>  git=<HEAD>  python=<版本>  共 N 处变异 / M 个判据文件`；
+两支工具**各留一份这六行格式化**（互不 import 是既有边界，不是判据，写在注释里防下一轮的我）。
+⑦ **两处文档的账（MINOR-6 / MINOR-7）**：前端注册的处数**不在 AGENTS 里抄**（上一批写死"126 处"，
+本批加完变异就成假账），改绑 `python scripts/mutation_proof_frontend.py --list` 末行；
+那句"最早的未判目标日就是当天"**只对生产成立**（同一把尺子在镜像印 `2026-07-09`）⇒ 按库分开写，
+报数带库名（第 23 轮 MAJOR-1 那条规矩落到这一列上）。
+
+⑧ **老板那条"没妨碍的数据可以删"的授权，现读到的答案仍然是"没有可删的"**（两库各量一遍，日期现算）：
+生产（`--production`，只读 + 引擎级探针）`active 1601 / archived 577 / half_year_overdue_unjudged 0 /
+oldest_open_target 2026-09-28`；镜像 `half_year_overdue_unjudged 0 / oldest_open_target 2026-07-09 /
+expired_unjudged 13 / fund_history 末条 2026-09-28（19482 行）` ⇒ "很早期、验证代价极大、收益极小"那一档
+在**两个库**都是 0 条，要清的早就在回收站里（577 / 567 行）。
+⚠ **这一批我自己在这句命令上错过一次，改对才敢引用**：镜像那一遍我第一版写的是
+`min(target_date) oldest_open_target`——**没带 `is_deleted=0 and is_correct is null` 那半个 filter**，
+它量的是"全表最早目标日"（`2026-06-09`），却被我按"最早未判日"报 ⇒ 同一列在生产上带过滤、在镜像上不带，
+就是本仓反复扣分的"同一把尺子两腿两种待遇"。现补上过滤重跑（生产那一版从一开始就带着）。
+**线上此刻仍然没有任何东西在跑**（`GET /api/stats/evidence` 的 `nav_as_of=2026-09-27`、`nav_lag_days=1`，
+`GET /api/predictions?lifecycle=due|unverifiable|all` 的 `meta.total` = **17 / 0 / 1601**；
+`已判 1191 / 判对 638 = 53.57%`、`⚠ 265（22.25%）`、`区间 41.39%~63.64%` —— 与昨日同数，
+因为这一批还没上线，#132 那件事一个字没变）。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话；
+本批用一条后台链按顺序跑完五步，逐步记时刻与退码）：
+
+- `pytest tests/unit -q` → **1232 passed / 16 skipped / 0 failed**（587.32 秒）。
+- `pytest tests/ -q` → **1241 passed / 16 skipped / 0 failed**（725.07 秒）。
+  （与上一批**同数**，但**不是"什么都没改"**：`def test_` 前后相减
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_frontend_cold_start.py 52→52`、`test_frontend_fund_update.py **4→2**`（文本断言换成跑真实调用链）、
+  `test_mutation_lock.py **8→10**`（体检工具自己那两条）、`test_structurally_unverifiable_hold.py 32→32`
+  ⇒ 一减一增正好抵消，这种"总数没动"必须把分布一起交出来，不然就是拿一个数掩盖两处改动。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（CONTROL-GREEN = 7 个判据文件
+  在干净代码上全绿；无 ANCHOR-MISS / HARNESS-FAIL / `[还原失败]`；跑完 `git status --porcelain -- src/` 为空、
+  无 `.mutbackup` 残留）。原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round64-lifecycle-mutations.txt`（首行
+  `# run @ 2026-09-28T20:59:56+08:00  git=46eee6fb3840  python=3.12.10  共 30 处变异 / 7 个判据文件`）。
+  ⚠ 首行那个 `git=` 是**跑当时的 HEAD**（`46eee6f` ＝上一批），本批改动当时还没提交 ⇒ 这一行只自证
+  "哪一次跑的、哪一版起的"，**别拿它当"跑的就是被审的那一版"**；被审的那一版以提交之后的
+  `/api/health/detail` 的 `git_commit` 与页面 md5 为准（第 63 轮 ⑨ 那条门禁账）。
+  变异（前端）：`python scripts/mutation_proof_frontend.py` **全套逐条跑过**（处数看 `--list` 末行），
+  CONTROL-GREEN + 全部 RED，无 ANCHOR-MISS / GREEN / JUDGE-MISS / NOT-LANDED / NO-OP，
+  跑完逐文件回读比对还原一致。原始日志 `docs/迭代计划/run-20260927-mutation/round64-frontend-mutations.txt`
+  （首行 `# run @ 2026-09-28T21:31:03+08:00  git=46eee6fb3840  python=3.12.10  共 137 处变异 / 3 个判据文件`）。
+  ⚠ 这一份是**第二次**跑出来的：第一次的日志没有运行头（⑥⑶ 那条本批才补上），拿旧格式当"这一批的证据"
+  正是要拦的形状 ⇒ 补完头之后整轮重跑，归档的这份与 `--list` 末行、与代码是同一版。
+  **镜像此刻**（同日 21:2x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：13 条`。
+
+（上一批：2026-09-28 19:0x（北京），**任务 #151 + #152：第 63 轮复评 73/100 —— 不到 75 这条线，
 所以这一批先修完、再评、分数够了才推**（六条 MAJOR 全在判据侧，条目号取自第 63 轮报告结论表、正文不随
 仓库走，下面按**修法**记，不抄它的编号）——
 
@@ -333,11 +436,13 @@ kwonly 各自一段），并配两格样品：`def f(code=[], /, days=30)` 与 `
 ⚠ **这一条不是评审给的，是我自己真浏览器跑出来的第二版缺陷**：第一版把 `POST /api/funds/update-all`
 当成同步接口，而它是后台任务 ⇒ 回执印「更新净值：基金更新任务已启动；验证：已开始后台验证 17 个预测」——
 那 17 条是拿**旧净值**判的，正是 #132 要消灭的那次白跑（生产 09-28 那次是老板手点、中间等了 4 分钟）。
-现在 `waitFundUpdateToFinish()` 轮 `GET /api/funds/update-status` 到 `in_progress:false` 才发验证，
+现在 `waitFundUpdateToFinish(本轮 started_at)` 轮 `GET /api/funds/update-status` 到 `in_progress:false` 才发验证，
 并把给老板看的那句换成**跑完之后**那份回执（`last_result.message`；接口自己分两行 ⇒ 页面这一格是普通
 `<span>`，换行会塌成一片连字，所以并成一句 —— 这条由 node 判据负责，不再靠浏览器看）；
-超过 12.5 分钟没跑完 ⇒ 只补一半并明说"这次没有发起验证，明天打开会自动接上"（这一格**不放开**当天的键：
-后台任务已经在跑，再点一次是重复发起）。镜像 09-28 18:3x~18:5x 真浏览器两遍：调用流水
+⚠ **这一批的第 64 轮返修把这两句都改了**：① 那句"超过 12.5 分钟"随两份轮询实现一起没了 —— 现在两条路
+共用同一把（5 秒 × 360 ＝ `fundPollMinutes()` 现算的 30 分钟），页面上那句"约 N 分钟"由同两个常量算出来；
+② "轮询到上限那一格**不放开**当天的键"是**反的**（第 64 轮 m-4）：写死键 ⇒ 中途关掉页面，这一天就永远停在
+"补了一半"、没人接上。现在只有"净值跑完并且拿到本轮自己的回执"才写键，没跑完的每一格都留在下一开。镜像 09-28 18:3x~18:5x 真浏览器两遍：调用流水
 `GET evidence → GET predictions → POST update-all → GET update-status ×N → POST verify-all`，
 屏上那句现在是「打开网站补了一次 ⇒ 更新净值：同步完成：检测 1611 个预测…更新 236 个基金；6 只基金域查无此码…；
 验证：已开始后台验证 17 个预测，请稍后等待完成」。
@@ -355,8 +460,12 @@ python scripts/q.py --production "select count(*) filter (where is_deleted=false
 # 镜像同一句、把 `date '$D' - interval '180 day'` 换成 sqlite 写法 date('$D','-180 day')
 ```
 今天印：生产 `active 1601 / archived 577 / half_year_overdue_unjudged 0 / oldest_open_target 2026-09-28`；
-镜像 `1611 / 567 / 0 / 2026-07-09` ⇒ **"很早期、验证代价极大、收益极小"那一档在活预测里是 0 条**
-（最早的未判目标日就是当天），要清的那批早就走回收站了（577/567 行已经不在任何活视图里）。
+镜像 `1611 / 567 / 0 / 2026-07-09` ⇒ **"很早期、验证代价极大、收益极小"那一档在活预测里是 0 条**，
+要清的那批早就走回收站了（577/567 行已经不在任何活视图里）。
+⚠ **第 64 轮 MINOR-7：上一版在这里写的"最早的未判目标日就是当天"只对生产成立** ——
+同一句命令在镜像印的是 `2026-07-09`（差两个多月）。两库的"最早未判"本来就该不同（镜像刚被我把净值补到当天、
+验证也跑过一轮），把生产的数写成"就是当天"这种通用口气，下一批照着抄就会拿一个库的形状当两个库的结论 ⇒
+这句现在按库分开写，并报数必须带库名（与上面第 23 轮 MAJOR-1 同一条规矩）。
 ⚠ 那句 `interval '180 day'` 是 PostgreSQL 写法，sqlite 上直接 `OperationalError` ⇒ 两库各一条拼法，
 别再写成"一条命令两库通用"（第 54 轮 ⑥ 同一族）。**物理硬删回收站那批需要新开一条可还原通道**
 （`HARD_DELETE_DISABLED=True`），换来的用户可见收益为 0 ⇒ 本批不动手，等真有一批"占着库又永不复活"的行再说。
@@ -393,7 +502,9 @@ python scripts/q.py --production "select count(*) filter (where is_deleted=false
   `a_nav_update_that_never_finishes_still_verifies` / `the_first_screen_never_asks` /
   `the_page_starts_comparing_lag_days_itself` / `the_finished_nav_receipt_is_thrown_away` /
   `the_receipt_keeps_its_line_breaks`）全 RED、CONTROL 全绿、逐文件回读还原一致。
-  ⚠ **全套 126 处本批没有逐条重跑** ⇒ 别说成"前端体检全绿"，那一句的凭据只到本批那 10 处。
+  ⚠ **全套（处数 = `python scripts/mutation_proof_frontend.py --list` 末行那个数，当时 126、现在已因本批
+  新增而变多）那一整轮本批没有逐条重跑** ⇒ 别说成"前端体检全绿"，那一句的凭据只到本批那 10 处。
+  ⇒ 第 64 轮 MINOR-6：这里**不抄数**——那个数跟着注册表走，写死一个 126 就是下一批的假账。
   `audit_doc_claims.py` 退 **0**（数字见下）。
   **镜像此刻**（同日 18:4x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
   `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`（与上一批同数）；

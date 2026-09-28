@@ -7,6 +7,7 @@
 这里把两头都钉住：体检抢不到锁要走开、别的 pytest 会话看到锁要拒绝。
 """
 import ast
+import importlib.util
 import os
 import subprocess
 import sys
@@ -265,3 +266,51 @@ def test_the_harness_own_child_is_let_through():
         assert r.returncode == 0, '体检自己的子会话被闸拦掉了：\n%s' % (r.stdout + r.stderr)[-800:]
     finally:
         guard.__exit__(None, None, None)
+
+
+def _frontend_harness():
+    """按**文件路径**把前端体检加载进来（`scripts/` 不是包，没有第二条路）。
+
+    为什么要在用例里 import 它（第 64 轮）：这份工具自己那份"注册表里的判据名指向哪个文件"
+    的逻辑原来只有 `main()` 能走到 ⇒ 我把它写错（比整串 vs 比中括号前）时，1229 条用例
+    一声不响，只有真跑一次 `--only manager` 才看得见。能 import 才有这条用例。
+    """
+    spec = importlib.util.spec_from_file_location(
+        'mutation_proof_frontend', PROJECT_ROOT / 'scripts' / 'mutation_proof_frontend.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_every_mutation_points_at_a_judge_that_lives_where_it_routes_to():
+    """注册表里每一处变异指向的判据，必须**在它被路由到的那个文件里真有其人**。
+
+    这一条存在的意义就是它本可以当场说出第 64 轮那个错：参数化 id（`test_x[case]`）写在
+    注册表里、文件里的 `def` 没有中括号 ⇒ 按整串比就把两条**真在跑**的接线闸判成 JUDGE-MISS。
+    """
+    h = _frontend_harness()
+    defs = h._judge_defs()
+    assert any(n for n in defs.values()), '三个判据文件一条 `def test_` 都没数到 ⇒ 这把尺子恒空'
+    assert any('[' in test for test, *_rest in h.MUTATIONS), \
+        '注册表里一条参数化判据 id 都没有 ⇒ 下面这问退化成"名字在不在"，参数化那一档没人走过'
+    stranded = ['%s → %s（判据 %s）' % (name, h._judge_lookup(test, defs)[0].split('/')[-1], test)
+                for test, name, *_rest in h.MUTATIONS
+                if not h._judge_lookup(test, defs)[1]]
+    assert not stranded, '这些变异指向的判据在它该在的文件里找不到：\n  %s' % '\n  '.join(stranded)
+
+
+def test_the_judge_lookup_needs_both_the_right_file_and_the_right_name():
+    """路由与"这个文件里有没有"两腿**都要**成立；少任何一腿就该点名为 JUDGE-MISS。
+
+    反面样品（不靠真文件里的名字，全用现造的映射）：别的文件里有这个人 ⇒ 不许点头；
+    压根没有这个名字 ⇒ 不许点头；参数化后缀 ⇒ 必须点头（这一格就是上一批写错的那一档）。
+    """
+    h = _frontend_harness()
+    param = 'test_every_option_the_manager_reads_is_actually_injected[createViewpointManager]'
+    ok_map = {h.T: set(), h.WIRING: {param.split('[')[0]}, h.FUND: set()}
+    assert h._judge_lookup(param, ok_map) == (h.WIRING, True), \
+        '参数化后缀认不出 ⇒ 真在跑的接线闸会被判成 JUDGE-MISS（第 64 轮那个错）'
+    assert h._judge_lookup(param, {h.T: ok_map[h.WIRING], h.WIRING: set(), h.FUND: set()}) \
+        == (h.WIRING, False), '名字只在**别的**文件里有也点头 ⇒ 变异会送到错的判据上'
+    assert h._judge_lookup('test_a_judge_nobody_wrote', ok_map)[1] is False, \
+        '注册表里写一个不存在的判据名却仍被当成接上 ⇒ 这一问恒真'

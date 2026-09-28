@@ -25,14 +25,24 @@
 """
 import argparse
 import importlib.util
-import io
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+# 本机控制台默认 cp936，而这份工具的每一行回执都带 `⇒`：输出重定向到文件时 python 仍按 locale
+# 编码 ⇒ 会 `UnicodeEncodeError` 崩在体检锁里面（第 57 轮在隔壁那支上实测过同一签名）。
+# ⚠ 这里原来是 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, …)` —— 两支工具对同一件事
+# 两把尺子，而那一句**在导入时就把 stdout 换掉了**：任何用例想 import 这份工具问它自己的问题
+# （第 64 轮：注册表里的判据名指向哪儿）都会顺手动掉整个 pytest 会话的输出。
+# 与 `mutation_proof_lifecycle.py` 并成同一条：能 reconfigure 就 reconfigure，已被换成别的
+# 对象（捕获、StringIO）就跳过；`line_buffering` 保留（被强杀时前面那几行才落得出去）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+    except (AttributeError, ValueError):     # 已被换成别的对象（pytest 捕获、io.StringIO）
+        pass
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -45,8 +55,17 @@ _lock_spec = importlib.util.spec_from_file_location(
     'mutation_lock', ROOT / 'src' / 'utils' / 'mutation_lock.py')
 mutation_lock = importlib.util.module_from_spec(_lock_spec)
 _lock_spec.loader.exec_module(mutation_lock)
-assert 'src.models.database' not in sys.modules, \
-    '加载锁的时候把 ORM 拉起来了 ⇒ 这个进程会按 .env 建 engine，正是要避免的那种事'
+
+
+def _refuse_if_the_orm_is_already_built():
+    """这个进程不该按 `.env` 建出库连接 ⇒ 起体检前先问一句 ORM 有没有被拉起来。
+
+    ⚠ 这一问**原来写在模块顶层**（导入即抛），于是这份工具在自己那个仓里无法被任何用例
+    `import` 起来问它自己的问题（第 64 轮：注册表里的判据名指向哪个文件，只有它自己答得出）。
+    挪到 `main()` 起手：仍然排在第一个字节被改写之前，作用一字不减。
+    """
+    assert 'src.models.database' not in sys.modules, \
+        '这个进程已经导入了 ORM ⇒ 会按 .env 建 engine，正是要避免的那种事'
 
 HTML = 'web/index.html'
 JS = 'web/prediction-manager.js'
@@ -54,9 +73,49 @@ POST = 'web/post-manager.js'
 VP = 'web/viewpoint-manager.js'
 T = 'tests/unit/test_frontend_cold_start.py'
 WIRING = 'tests/unit/test_frontend_wiring.py'
-# 判据不止一个文件：接线闸（`test_frontend_wiring.py`）也得能被自己的变异打红。
+FUND = 'tests/unit/test_frontend_fund_update.py'
+# 判据不止一个文件：接线闸（`test_frontend_wiring.py`）与「更新所有基金」那条行为判据
+# （`test_frontend_fund_update.py`，第 64 轮 M-2 从文本断言改成跑真实调用链）也得能被自己的变异打红。
 WIRING_TESTS = ('test_every_option_the_manager_reads_is_actually_injected',
                 'test_everything_the_page_destructures_is_actually_exported')
+FUND_TESTS = ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',)
+JUDGE_FILES = {T: (), WIRING: WIRING_TESTS, FUND: FUND_TESTS}
+
+
+def _judge_file(test):
+    """判据住在哪个文件就跑哪个文件。
+
+    以前这里是"不是接线闸就送去 cold_start"那一个三元表达式 —— 加第三个判据文件时它会
+    安静地把变异送到错的文件（退码 4 ⇒ HARNESS-FAIL，不是绿，但至少不会被当成"判据有效"）。
+    现在按名单查，重名直接拒绝。
+    """
+    hits = [f for f, names in JUDGE_FILES.items() if names and test.startswith(names)]
+    assert len(hits) <= 1, '判据名单重叠：%s 同时属于 %s ⇒ 变异会被送到错的文件' % (test, hits)
+    return hits[0] if hits else T
+
+
+def _judge_defs():
+    """每个判据文件里真有哪些 `def test_` —— 由文件自己回答，不抄名单。
+
+    为什么要有这一问：注册表里写一个**不存在**的判据名时，旧写法照样把它送去某个文件跑，
+    子 pytest 报"没匹配到用例"（退码 4）⇒ HARNESS-FAIL，看起来像"工具坏了"，
+    而不是"这条变异指向错了"。现在先问一句，答不出就点名为 JUDGE-MISS。
+    """
+    return {f: set(re.findall(r'^def (test_\w+)', (ROOT / f).read_text(encoding='utf-8'), re.M))
+            for f in JUDGE_FILES}
+
+
+def _judge_lookup(test, judges):
+    """注册表里这条判据 id 落在哪个文件、那个文件里**真有没有**这条 `def test_`。
+
+    为什么单独成一条函数（第 64 轮）：这一问原来是 `main()` 循环里的一行，没有任何用例能
+    走到它 ⇒ 我把"比整串"写错成 JUDGE-MISS 误伤两条**真在跑**的接线闸时，全套件一声不响。
+    参数化后缀（`test_xxx[createViewpointManager]`）在注册表里有、文件里的 `def` 没有，
+    所以比的是中括号**前面**那一段；文件仍由 `_judge_file` 决定 —— 名字在别的文件里有，
+    这一处也不算接上（按名字跨文件放行＝把变异送到错的判据上）。
+    """
+    tfile = _judge_file(test)
+    return tfile, re.sub(r'\[.*$', '', test) in judges.get(tfile, ())
 
 # (判据函数, 变异名, 文件, 找, 换成, 是否正则)
 def _drop_isServiceDown(match):
@@ -484,8 +543,9 @@ MUTATIONS = [
      "if (navLagStale !== false) return", False),
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'a_failed_catch_up_keeps_the_day_locked', HTML,
-     "localStorage.removeItem(CATCH_UP_KEY);",
-     "", False),
+     "let funds = null, verify = null, stepError = '', unfinished = '';",
+     "localStorage.setItem(CATCH_UP_KEY, day);\n"
+     "                    let funds = null, verify = null, stepError = '', unfinished = '';", False),
     ('test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist',
      'the_first_screen_never_asks', HTML,
      r'\n[ \t]*void maybeCatchUpOnOpen\(\);',
@@ -499,29 +559,72 @@ MUTATIONS = [
      "stale = ev.data && ev.data.data ? ev.data.data.nav_lag_stale : null;",
      "stale = ev.data && ev.data.data ? (ev.data.data.nav_lag_days >= 3) : null;", False),
     # 第 63 轮真浏览器量到的那一格：`update-all` 是后台任务，POST 立刻回"已启动"。
-    # 不等它跑完就发验证 ⇒ 那 17 条还是拿旧净值判的，白跑一轮（判据看的是调用流水）。
+    # 不等它跑完就发验证 ⇒ 那批到期预测还是拿旧净值判的，白跑一轮（判据看的是调用流水）。
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'the_catch_up_verifies_without_waiting_for_the_nav', HTML,
-     "const fin = await waitFundUpdateToFinish();",
-     "const fin = { done: true };", False),
+     "if (fin.done) {",
+     "if (true) {", False),
+    # 第 64 轮 M-1 的第一半：不看 POST 自己答了什么 ⇒ "正在进行中"也被当成"本轮发起了"
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
-     'a_nav_update_that_never_finishes_still_verifies', HTML,
-     "if (!navStillRunning) verify = await axios.post('/api/predictions/verify-all');",
-     "verify = await axios.post('/api/predictions/verify-all');", False),
+     'the_catch_up_proves_it_started_the_run_too', HTML,
+     "if (funds.data && funds.data.success === true) {",
+     "if (true) {", False),
+    # 第 64 轮 M-1 的第二半：状态里换成别的那一轮之后，那份回执不是我们的
+    ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
+     'the_catch_up_adopts_another_runs_receipt', HTML,
+     "if (s.started_at !== since) {",
+     "if (false) {", False),
+    # 第 64 轮 M-3：并发门。设在第一次 await 之前才管得住两个几乎同时打开的页签
+    ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
+     'the_concurrency_gate_never_closes', HTML,
+     "if (catchUp.running) return;",
+     "if (false) return;", False),
+    ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
+     'the_concurrency_gate_is_set_too_late', HTML,
+     "catchUp.running = true;\n                    try {",
+     "try {", False),
+    # 问进度那一笔也得过唤醒门：Render 在补跑中途睡着时不该把整轮判成"中断"（第 64 轮风险 1）
+    ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
+     'the_progress_poll_skips_the_wake_gate', HTML,
+     "const res = await withWakeRetry(() => axios.get('/api/funds/update-status'));",
+     "const res = await axios.get('/api/funds/update-status');", False),
+    # 第 64 轮 m-5：重新打开时那句"今天补过了"要看得见，不许静默
+    ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
+     'a_silent_second_open_same_day', HTML,
+     "if (!catchUp.note && !catchUp.error) {",
+     "if (false) {", False),
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'a_half_done_catch_up_is_reported_as_a_whole_one', HTML,
-     "+ (navStillRunning",
-     "+ (''", False),
+     "+ '；这次没有发起验证，下一次打开会自动接着补。';",
+     "+ '；验证也跟着做完了。';", False),
     # `update-all` 只说"任务已启动"，真回执（更新了几只、失败几只）在 `update-status.last_result`
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'the_finished_nav_receipt_is_thrown_away', HTML,
-     "if (fin.result) funds = { data: fin.result };",
+     "funds = { data: fin.result };",
      "", False),
     # 接口那句自带换行，而这一格是普通 span ⇒ 不并句就会在屏幕上糊成一片
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'the_receipt_keeps_its_line_breaks', HTML,
      "String(d.message || '回执没给数').split('\\n')",
      "String(d.message || '回执没给数')", False),
+    # ── 第 64 轮 M-2：两条路共用一份轮询，这个按钮自己那条腿也得有变异盯着 ──
+    ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
+     'the_button_reports_the_process_not_the_result', HTML,
+     "alert(fin.result.message || '更新完成');",
+     "alert('任务已启动，正在后台更新…');", False),
+    ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
+     'the_button_keeps_the_global_lock_when_the_poll_ends', HTML,
+     "analyzing.value = false;\n                    if (!fin.done)",
+     "if (!fin.done)", False),
+    # 更新已经起来了 ⇒ 问不到进度不是"更新失败"（第 36 轮 #53 那一族换了位置复发）
+    ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
+     'the_progress_leg_blames_the_update', HTML,
+     "alert('更新已经在后台跑着，只是进度没问到（'",
+     "alert('更新失败（'", False),
+    ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
+     'the_refresh_leg_blames_the_update', HTML,
+     "alert('更新完成了，但基金列表没刷出来 ⇒ 手动刷新一次就能看到');",
+     "alert('更新失败: 列表没取到');", False),
 ]
 
 
@@ -542,6 +645,29 @@ def _apply(pristine, path, finding, replacement, is_regex):
     return new, n
 
 
+def _run_stamp():
+    """北京时刻（日志署名，不参与任何判定）。
+
+    第 59 轮 MINOR-4 给隔壁 `mutation_proof_lifecycle.py` 补过同一件事，理由在这儿一样成立：
+    没有运行头，"这一份日志是我这次真跑的"就只剩 md5 一句话。⚠ **不 import `src.*`** ——
+    这个进程会就地改写 `web/`，按 `.env` 建起全局 engine 正是本仓反复拦的那件事。
+    与隔壁那份**各留一份实现**（都是六行格式化，不是判据；两支体检工具互不 import 是既有边界，
+    把 `mutation_proof_lifecycle` 拉进来只为一个时间戳，等于让它那份 30 处变异载荷进这个进程）。
+    """
+    from datetime import datetime, timedelta, timezone
+    return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec='seconds')
+
+
+def _git_head():
+    """当时的 commit（短 sha）；拿不到就回 `unknown`，不许拿静态串冒充。"""
+    try:
+        out = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--short=12', 'HEAD'],
+                             capture_output=True, text=True, timeout=20)
+        return (out.stdout or '').strip() or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
 def main(list_only=False, only=None):
     todo = [m for m in MUTATIONS if not only or only in m[1]]
     if only and not todo:
@@ -555,12 +681,19 @@ def main(list_only=False, only=None):
         print('[提示] --only %r 只匹配 %d/%d 处、判据 %d 条 ⇒ 这不是全套体检'
               % (only, len(todo), len(MUTATIONS), len({m[0] for m in todo})))
     # 名单自己算：docstring 里不抄文件名（第 36 轮 A-MINOR-2 就是抄漏了 viewpoint-manager.js）
+    # 运行头排在它前面（第 59 轮 MINOR-4 给隔壁那支补过，本批对齐）：归档的日志要能自证是哪一次、
+    # 哪一版跑的 ⇒ 拿上一批那份冒充这一批，时刻与 git 都对不上。
+    print('# run @ %s  git=%s  python=%s  共 %d 处变异 / %d 个判据文件'
+          % (_run_stamp(), _git_head(), sys.version.split()[0],
+             len(todo), len({_judge_file(m[0]) for m in todo})))
     print('本批改写到的文件：%s' % '、'.join(sorted({m[2] for m in todo})))
     if list_only:
         for i, (test, name, path, *_rest) in enumerate(todo, 1):
             print('%2d. %-34s -> %s' % (i, name, test))
         print('共 %d 处变异，覆盖 %d 条判据' % (len(todo), len({m[0] for m in todo})))
         return []
+    # 这一问排在**抢锁与改写第一个字节之前**（原来它在模块顶层 ⇒ 谁 import 这份工具谁炸）。
+    _refuse_if_the_orm_is_already_built()
     if not mutation_lock.harness_may_start(ROOT):
         print('另一个 pytest 会话正在跑（%s 被持有）—— 体检会就地改写 web/，'
               '两边并发时报出来的红绿都不作数。等它跑完再启动。'
@@ -579,7 +712,7 @@ def main(list_only=False, only=None):
     # 对照组：干净代码上这一整份判据必须**全绿**。没有这一步，"每条变异都红了"可能是假的 ——
     # 子 pytest 只要起手就失败（conftest 报错、锁把子会话拦死、解释器不对），
     # 每一处都会报 RED，体检反而满分通过。
-    ctrl = subprocess.run([sys.executable, '-m', 'pytest', T, WIRING, '-q', '--no-header',
+    ctrl = subprocess.run([sys.executable, '-m', 'pytest', T, WIRING, FUND, '-q', '--no-header',
                            '-p', 'no:cacheprovider'],
                           cwd=str(ROOT), capture_output=True, env=env,
                           text=True, encoding='utf-8', errors='replace')
@@ -589,6 +722,11 @@ def main(list_only=False, only=None):
         guard.__exit__(None, None, None)      # 别让早退把锁留到进程退出才放（第 33 轮 A-MINOR-10）
         return ['control-run']
     print('CONTROL-GREEN（干净代码上判据通过，下面的红才有意义）')
+    # 每个判据文件里真有哪些 `def test_`，由文件自己回答（不抄名单）。为什么要这一问、
+    # 为什么比的是中括号**前面**那一段 —— 都写在 `_judge_defs` / `_judge_lookup` 里，
+    # 那两条现在有 `tests/unit/test_mutation_lock.py` 的用例钉着（第 64 轮：这一问原来是
+    # 循环里的一行，我把它写成"比整串"，误伤两条真在跑的接线闸而全套件一声不响）。
+    judges = _judge_defs()
     pristine = {p: (ROOT / p).read_text(encoding='utf-8')
                 for p in {m[2] for m in todo}}
     try:
@@ -610,7 +748,11 @@ def main(list_only=False, only=None):
                 print('%-36s NO-OP（替换后与底本相同 = 变异没生效）' % name)
                 failures.append(name + ':no-op')
                 continue
-            tfile = WIRING if test.startswith(WIRING_TESTS) else T
+            tfile, known = _judge_lookup(test, judges)
+            if not known:
+                print('%-36s JUDGE-MISS（判据 %s 不在 %s 里，这一处不作数）' % (name, test, tfile))
+                failures.append(name + ':judge-missing')
+                continue
             r = subprocess.run([sys.executable, '-m', 'pytest', '%s::%s' % (tfile, test),
                                 '-q', '--no-header', '-p', 'no:cacheprovider'],
                                cwd=str(ROOT), capture_output=True, env=env,

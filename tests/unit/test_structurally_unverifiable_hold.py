@@ -614,8 +614,29 @@ def _never_runs(test):
     而 `literal_eval` 根本不算比较，`1 == 0` 求不出来就当成活的。
     守卫侧那份（`test_script_db_guards._is_dead_test`）从第 45 轮起就在做常量折叠 +
     自己算常量比较，两条判据问的是**同一件事** ⇒ 只许有一份。
+    第 64 轮 m-8 补的是**壳**那一族：`while (d := []):` 与 `while []:` 是同一种死法，
+    而 `_is_dead_test` 只折常量 ⇒ 换个海象壳就买通。`_empty_container` 那份"明摆着是空的"
+    本来就在，这里把它接进同一把尺子（`if []:` / `assert []` / 三目 / guard 一起受益，
+    而不是给某一档单开一条腿 —— 那正是本仓反复扣分的"同一把尺子两种待遇"）。
     """
-    return _is_dead_test(test)
+    inner = _empty_shell(test)
+    return _is_dead_test(inner) or _empty_container(inner)
+
+
+def _empty_shell(node):
+    """剥掉那些"只是壳"的表达式：`*[]`（`Starred`，只出现在调用实参里）与 `(d := …)`（`NamedExpr`）。
+
+    第 61 轮的 `_provably_empty` 已经认了 `Starred` 那一档，`for`/`while`/`if` 那一族却
+    连海象这一档都没剥（第 64 轮 m-8 量到：`for _ in (d := []): release(…)` 判"已接线"）。
+    剥到底而不是只剥一层：`(d := (e := []))` 里外层的空是**可证的**，至于 `d`/`e` 这两个名字
+    之后被重新绑过没有，由 `_bound_value`（看见两次绑定就交回 None ⇒ 按活的走）负责，
+    这一格不在这儿猜。
+    """
+    import ast as _ast
+
+    while isinstance(node, (_ast.Starred, _ast.NamedExpr)):
+        node = node.value
+    return node
 
 
 def _empty_container(node):
@@ -779,8 +800,7 @@ def _provably_empty(node, nodes, fn=None):
     """
     import ast as _ast
 
-    if isinstance(node, _ast.Starred):
-        node = node.value
+    node = _empty_shell(node)          # `*[]` 与 `(d := [])` 两档壳（第 61 / 64 轮各补一档）
     if _empty_container(node):
         return True
     if isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)):
@@ -980,7 +1000,7 @@ def _never_iterated(node, empty_names):
     """
     import ast as _ast
 
-    it = node.iter
+    it = _empty_shell(node.iter)      # `for _ in (d := []):` 与 `for _ in []:` 是同一种死法
     return _empty_container(it) or (isinstance(it, _ast.Name) and it.id in empty_names)
 
 
@@ -1061,7 +1081,14 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
             arms = list(_ast.iter_child_nodes(root))
         else:
             if root is not fn and getattr(root, 'name', '') in names:
-                return                                # 从不被叫的内层 def ⇒ 整棵是死路
+                # 从不被叫的内层 def ⇒ **体**是死路。但它的 `decorator_list` 不一样：
+                # 那几句在"定义这一刻"就求值了（`@release_it def inner(): …` 里那次装饰器调用
+                # 真发生），连着整棵一起剪就会把**诚实写法**拦掉 ⇒ 闸过宽（第 64 轮 m-8：
+                # 上一版就是这么剪的，`deco` 唯一的读取点在被剪掉的那格 decorator 里 ⇒
+                # `deco` 跟着变死、它体内的解锁一起消失）。
+                for dec in root.decorator_list:
+                    yield from _live_nodes(dec, fn, dead, empty_names)
+                return
             arms = _kids(root)
     else:
         arms = _kids(root)
@@ -1668,6 +1695,37 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             'def f(self, db, code, inserted):\n'
             '    db.add(FundHistory(fund_code=code))\n'
             '    x = (release_holds_after_nav_commit(db, code, inserted)) if False else 0\n'),
+        # ↓ 第 64 轮 m-8 两族。① **壳**那一族：`for _ in []` 上一批就认了，换个海象壳
+        #   `(d := [])` 就买通整条闸（`_never_iterated` / `_never_runs` 都只看里层那一格）；
+        #   ② 装饰器那一族的**反面**：解锁只在被剪的那个**体**里时，必须仍然判"没接" ——
+        #   补"decorator_list 在定义这一刻会求值"不等于把整棵死 def 一起放行。
+        'for 迭代的是海象绑出来的空容器': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    for _x in (d := []):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        '推导式 over 海象空容器': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    [release_holds_after_nav_commit(db, code, inserted) for _ in (d := [])]\n'),
+        'while 的海象条件是空容器': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    while (d := []):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        'if 的海象条件是空容器': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    if (d := []):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        '解锁只在"从不被叫、但被人装饰过"的那个体内': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    def deco(fn):\n        return fn\n'
+            '    @deco\n'
+            '    def _inner():\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return 0\n'),
     }
     if not _match_supported():
         evasions.pop('match 的恒假 guard')          # 这台解释器没有 match 语法，喂不进去
@@ -1958,6 +2016,27 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    (tmp := d)\n'
             '    tmp.append(code)\n'
             '    release_holds_after_nav_commit(db, code, d)\n'),
+        # ↓ 第 64 轮 m-8 的另一面：`@deco def inner(): …` 里 **decorator_list 在定义那一刻就求值**
+        #   （上一版把整棵死 def 一起剪 ⇒ `deco` 唯一的读取点跟着消失 ⇒ 诚实写法判"没接"＝闸过宽）；
+        #   海象壳那一族"里层有东西"必须仍算接上（修的是壳，不是这一族语法）。
+        '装饰器自己就接了锁（被装饰的那个 def 没人叫）': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    def deco(fn):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'
+            '        return fn\n'
+            '    @deco\n'
+            '    def _inner():\n        pass\n'),
+        'for 迭代海象绑出来的非空字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    for _x in (d := [code]):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        'if 的海象条件里有东西': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    if (d := [code]):\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
     }
     if _match_supported():
         honest_live['match 的 guard 不恒假'] = (
