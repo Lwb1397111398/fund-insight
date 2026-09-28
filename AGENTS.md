@@ -294,7 +294,121 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 15:0x（北京），**任务 #149：第 62 轮复评 76/100 —— 过 75 这条线，本批已推
+最近一次核对（2026-09-28 19:0x（北京），**任务 #151 + #152：第 63 轮复评 73/100 —— 不到 75 这条线，
+所以这一批先修完、再评、分数够了才推**（六条 MAJOR 全在判据侧，条目号取自第 63 轮报告结论表、正文不随
+仓库走，下面按**修法**记，不抄它的编号）——
+
+① **恒假规则只接了 `If` 一臂**：同一把 `_live_nodes` 里 `IfExp`（三目）、`While`、`match` 的 guard
+三臂要么不把测试式当活节点、要么恒假时不剪那一支 ⇒ `x = 1 if 1 == 0 else release(...)`、`while 1 == 0:`、
+`case ... if 1 == 0:` 与诚实的 `if release(...):` 四种臂三种待遇。**这是我上一批提交信息里那句"五腿同判"
+被当场驳回的那一条**（第 56~62 轮"说满话"那一族第七次扣分）。修法：四臂同规则（恒假 ⇒ 收 `test` +
+够得着的那臂、不收够不到的身体；诚实 ⇒ 测试式自己进活节点集），每臂正反两格各一。
+② **`_kids` 这一族第三批复发，只是换了个位置**：默认值不是一串节点而是 `arguments.defaults` 与位置参数
+**zip 出来的偏移** ⇒ "签名里 `days` 的默认值"这一腿此前有两份各自实现（`_param_default` 与扫描器自己那段），
+一份算错位就把诚实写法判红。现在并成一把 `_signature_defaults`（posonly + args 共享一段 defaults、
+kwonly 各自一段），并配两格样品：`def f(code=[], /, days=30)` 与 `def f(code, *, days=31)` 都要报对格位
+（`/, days=30` 上一批是**碰巧**被抓到的，`*, days=30` 才是真漏 —— 评审原文那句"posonly 那一格没接"
+按实测收窄，不照抄）。
+③ **别名链只认 `Assign`**：`d: list = []` 与 `(d := [])` 绑出来的别名不进 `_accumulation_names`
+⇒ 诚实的"先建容器再填"被判"没递"。补 `AnnAssign` / `NamedExpr` 两种目标形状，且**这个名字后来又绑过别的东西
+就不认**（`_bindings` 数 store 次数，>1 直接跳过）⇒ 反面样品：只绑不填 / 填的是别的容器仍判"没递"。
+④ **`**payload` 摊进调用那一腿不查键**：`f(**{'changed_dates': []})` 把"新日期递没递"这把尺子买通。
+新增 `_splat_value`：字面量字典查键、名字回溯一跳；**查不清就放行**（`_SPLAT_UNCLEAR`）而不是硬猜
+（本仓尺度：猜 = 把正常写法打死）。
+⑤ **`TryStar` 在 3.9 上取不到就把工具弄崩**：`_try_nodes()` 按语言版本现取 `('Try','TryStar')`，
+不支持的那一档不参与、也不恒空。
+⑥ **归档那把的 `setdefault` 只数一格**：`d.setdefault(列)`（没给值）此前直接 `IndexError`（`args[1]`）
+⇒ 补 `len(n.args) > 1` 这道门，两格样品：裸的那格**不崩且不数**、填上值的那格仍数成写。
+⇒ 判据文件当场 **48 passed**；样品表 **evasions 49 / honest_live 44**（条数一律现数，命令写在那个文件的注释里）。
+**这一批 ①~⑥ 全在判据侧，`src/` 行为一字未动** ⇒ 体检不新增条目（30 处，末行数）。
+
+⑦ **产品这一半：任务 #132「打开网站就补一次」落地** —— 老板那句"打开后我不会看到任何应该验证、
+或过了验证期间仍然没被验证的预测"的最后一格。`web/index.html` 两条登录出口（本机存过口令 / 刚输口令）
+之后自动做一次：**每个北京日一次**（`beijingDay()` 与验证队列那把 `current_as_of()` 同一口径，
+判据两格钉 UTC 边界 17:00→次日 / 15:59→当日）；该不该动手只问接口给的那两个数
+（`/api/stats/evidence` 的 `nav_lag_stale` + `/api/predictions` 的 `meta.facets.due`），页面**不比大小**
+（"落后几天算旧"这个阈值仍只有 `NAV_LAG_WARN_DAYS` 一个出处）；**两个数没取到就不动手、也不占掉今天这一次**；
+跑失败 ⇒ 放开键（一次抖动不许哑一整天）。它把 #132 的账说得更准了：这 17 条**设计上会自愈**，
+前提从"明天有人点那两个按钮"换成"明天有人打开网站"。
+⚠ **这一条不是评审给的，是我自己真浏览器跑出来的第二版缺陷**：第一版把 `POST /api/funds/update-all`
+当成同步接口，而它是后台任务 ⇒ 回执印「更新净值：基金更新任务已启动；验证：已开始后台验证 17 个预测」——
+那 17 条是拿**旧净值**判的，正是 #132 要消灭的那次白跑（生产 09-28 那次是老板手点、中间等了 4 分钟）。
+现在 `waitFundUpdateToFinish()` 轮 `GET /api/funds/update-status` 到 `in_progress:false` 才发验证，
+并把给老板看的那句换成**跑完之后**那份回执（`last_result.message`；接口自己分两行 ⇒ 页面这一格是普通
+`<span>`，换行会塌成一片连字，所以并成一句 —— 这条由 node 判据负责，不再靠浏览器看）；
+超过 12.5 分钟没跑完 ⇒ 只补一半并明说"这次没有发起验证，明天打开会自动接上"（这一格**不放开**当天的键：
+后台任务已经在跑，再点一次是重复发起）。镜像 09-28 18:3x~18:5x 真浏览器两遍：调用流水
+`GET evidence → GET predictions → POST update-all → GET update-status ×N → POST verify-all`，
+屏上那句现在是「打开网站补了一次 ⇒ 更新净值：同步完成：检测 1611 个预测…更新 236 个基金；6 只基金域查无此码…；
+验证：已开始后台验证 17 个预测，请稍后等待完成」。
+**另一件由已有闸替我拦住的（这一族本批又复发一次）**：`test_a_write_that_succeeded_is_never_reported_as_a_failure`
+把这条轮询腿判成"写后刷新没单独 try"⇒ 那是**闸过宽**（轮询是这件事自己的一步，不是事后的装饰，
+它失败时说"补跑中断"是真话）。收窄成按**腿**判："这条之后还有一笔写 ⇒ 不是刷新腿"，并配两格控制
+（光秃秃一条 `await` 必须仍红；两笔写之间豁免、最后那条刷新腿必须仍点红 ⇒ 证明豁免是按腿不是按函数）。
+判据：`tests/unit/test_frontend_cold_start.py` **+3 条**（49→52，A 该不该动手 / B 一天一次 + 失败放开 +
+调用流水 / C 只借那两个接口），变异：`scripts/mutation_proof_frontend.py` 新增 **10 处**、本批逐条跑过全 RED。
+
+⑧ **老板 09-28 授权"没妨碍的数据可以删"这一条，现读到的答案是"没有可删的"**（两库各量一遍，日期现算）：
+```
+D=$(date -u -d '+8 hours' +%F)
+python scripts/q.py --production "select count(*) filter (where is_deleted=false) active, count(*) filter (where is_deleted=true) archived, count(*) filter (where is_deleted=false and is_correct is null and target_date < date '$D' - interval '180 day') half_year_overdue_unjudged, min(target_date) filter (where is_deleted=false and is_correct is null) oldest_open_target from predictions"
+# 镜像同一句、把 `date '$D' - interval '180 day'` 换成 sqlite 写法 date('$D','-180 day')
+```
+今天印：生产 `active 1601 / archived 577 / half_year_overdue_unjudged 0 / oldest_open_target 2026-09-28`；
+镜像 `1611 / 567 / 0 / 2026-07-09` ⇒ **"很早期、验证代价极大、收益极小"那一档在活预测里是 0 条**
+（最早的未判目标日就是当天），要清的那批早就走回收站了（577/567 行已经不在任何活视图里）。
+⚠ 那句 `interval '180 day'` 是 PostgreSQL 写法，sqlite 上直接 `OperationalError` ⇒ 两库各一条拼法，
+别再写成"一条命令两库通用"（第 54 轮 ⑥ 同一族）。**物理硬删回收站那批需要新开一条可还原通道**
+（`HARD_DELETE_DISABLED=True`），换来的用户可见收益为 0 ⇒ 本批不动手，等真有一批"占着库又永不复活"的行再说。
+
+⑨ **一条门禁账，写在最前面防下一轮的我**：我把 #149 那批（`ae8c943` + `0e21673`）在**它自己那份复评
+（第 63 轮 = 73 分）回来之前就推上去并部署了** —— 门禁判的是"这一批 ≥75 才推"，而"这一批"指的是
+**被推的那一版**。线上现在跑的是一版**已知 73 分**的代码（`/api/health/detail` 自报
+`git_commit=0e216731ea76`、`scheduler_running=False` ⇒ #132 那件事一个字没变）。
+⇒ 这一批改完必须先拿一份**新的**独立复评，≥75 才推；不许再拿"分数还在路上"当已推的理由。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话；
+⚠ 本批两个口径都比上一批慢（746.86s / 721.32s vs 565s / 453s）——本机内存负载高、不是回归，
+判回归看的是 passed/skipped/failed 三个数与退码）：
+
+- `pytest tests/unit -q` → **1232 passed / 16 skipped / 0 failed**（746.86 秒）。
+- `pytest tests/ -q` → **1241 passed / 16 skipped / 0 failed**（721.32 秒）。
+  （上一基线 1229/1238 → 本批 **+3 条 / 两个口径同增** = `test_frontend_cold_start.py` 49→**52**
+  （#132 那三条：A 该不该动手 / B 一天一次 + 失败放开 + 调用流水 / C 只借两个接口）。
+  **判据侧那六条一律改契约不增条数**，分布用
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_structurally_unverifiable_hold.py 32 → 32`、`test_one_ruler_per_question.py 5 → 5`。
+  判据文件当场：`python -m pytest tests/unit/test_one_ruler_per_question.py
+  tests/unit/test_structurally_unverifiable_hold.py -q` ⇒ **48 passed**。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（CONTROL-GREEN = 7 个判据文件
+  在干净代码上全绿；无 ANCHOR-MISS / 无 HARNESS-FAIL / 无 `[还原失败]`；跑完 `git status --porcelain -- src/`
+  为空、无 `.mutbackup` 残留）。原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round63-lifecycle-mutations.txt`（首行
+  `# run @ 2026-09-28T18:27:09+08:00  git=0e216731ea76  python=3.12.10  共 30 处变异 / 7 个判据文件`，
+  md5 `28af7cde8c600d78f5a38d146d0d7386`，与上一批那份 `2dfadcd74e29e567cd1c0f55a8e03d07` 不同）。
+  ⚠ 第一次跑它**起手就被自己的锁拒了**（`[abort] 已经有一个 pytest 会话握着 .pytest-session.lock`，
+  因为我为了追基线数字让 `pytest tests/` 在后台跑着）⇒ 退 0 只印一行，**这不是满分通过**；
+  并发这一条由锁守着，不是由我记得住守着（第 58 轮同签名，本批又复发一次）。
+  变异（前端）：本批改到 `web/index.html`，跑了与本批相关的 **10 处**（`--only catch_up` 五处 +
+  `a_nav_update_that_never_finishes_still_verifies` / `the_first_screen_never_asks` /
+  `the_page_starts_comparing_lag_days_itself` / `the_finished_nav_receipt_is_thrown_away` /
+  `the_receipt_keeps_its_line_breaks`）全 RED、CONTROL 全绿、逐文件回读还原一致。
+  ⚠ **全套 126 处本批没有逐条重跑** ⇒ 别说成"前端体检全绿"，那一句的凭据只到本批那 10 处。
+  `audit_doc_claims.py` 退 **0**（数字见下）。
+  **镜像此刻**（同日 18:4x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`（与上一批同数）；
+  **生产此刻**（同日 18:4x~19:0x，只读 + 日期现算）：`expired_unjudged 17 / held_by_lock 0 /
+  actionable_today 17`（还是那 17 条 `target_date=当天`，等明天的净值）；
+  `GET /api/stats/evidence` 自报 `as_of=2026-09-28`、`已判 1191 / 判对 638 = 53.57%`、
+  `区间 41.39%~63.64%`、`nav_as_of=2026-09-27`、`nav_lag_days=1`、`nav_lag_stale=False`、`nav_future_rows=0`；
+  `python scripts/audit_verdict_evidence.py --production` 那条独立路径印的
+  `已判 1191 / 对不上 265（22.3%）` 与分桶 `nav_rewritten 92 / verdict_under_other_fund 88 / nav_row_missing 85`
+  与接口同数 ⇒ **但"两条路径互印证"仍然只覆盖这三行**（区间与覆盖面那一行本批又没跑到底：
+  那条只读审计在"体检覆盖面"那一步会被 Supavisor 掐线，#150 一个字没动）。
+  线上跑的哪一版：`/api/health/detail` 自报 `git_commit=0e216731ea76`、`scheduler_running=False`
+  ⇒ **#132 到现在仍然没有任何东西在跑**，本批第 ⑦ 条那个"打开网站就补"就是去顶它的，**还没上线**。
+
+（上一批：2026-09-28 15:0x（北京），**任务 #149：第 62 轮复评 76/100 —— 过 75 这条线，本批已推
 （线上现在是 `3fbff95`，`/api/health/detail` 自报 `git_commit=3fbff9507845`）；返修的四条里两条是
 "同一把尺子两腿两种待遇"与"对某类节点取不存在的属性"连着两批复发**（条目号取自报告结论表，正文不随仓库走）——
 ① **MAJOR（M-1）：`_live_nodes` 的 `If` 分支不把 `root.test` 当活节点** ⇒ `if release(db, code, dates):`
@@ -401,7 +515,7 @@ python scripts/q.py --production "select nav_date, count(distinct fund_code) fun
   **生产此刻**（同日 14:2x~14:4x，只读 + 日期现算 `D=$(date -u -d '+8 hours' +%F)`）：
   `expired_unjudged 17 / held_by_lock 0 / actionable_today 17`，而这 17 条的 `target_date` **全是当天**
   ⇒ 走 `waiting_target_nav`（⑥ 现读到行），**生产仍然没有任何东西在跑**（#132）——
-  把"明天有人点"换成"打开网站就补"的实施清单已写成 `data/_review_tmp/r62-catchup-plan.md`，落在任务 #132。
+  把"明天有人点"换成"打开网站就补"的实施清单已写成 `data/_review_tmp/r62-catchup-plan.md`，落在任务 #132。）
 
 （上一批：2026-09-28 13:3x（北京），**任务 #148：第 61 轮复评 73/100 返修——三条 MAJOR 里最重的
 一条又是我上一批自己写的那句"没有一处过宽"（这次不是漏判，是**闸过宽** + **尺子会崩**），

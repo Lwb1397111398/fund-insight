@@ -276,13 +276,12 @@ def _literal_backfill_windows(trees):
                                     % (rel, node.lineno, fn, slot, a.value))
             elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) \
                     and node.name in names:
-                args = node.args
-                defaults = args.defaults
-                posnames = args.args + args.posonlyargs + args.kwonlyargs
-                offset = len(posnames) - len(defaults)
-                for i, d in enumerate(defaults):
-                    if isinstance(d, _ast.Constant) and isinstance(d.value, int) \
-                            and posnames[offset + i].arg == 'days':
+                # 签名上的写死默认值：下标算术交给 `_signature_defaults`（第 63 轮 m-8：
+                # 上一版这里自己搓了一份 `args.args + args.posonlyargs + args.kwonlyargs`，
+                # 于是 `*, days=30` 一格都不数，而 `x=[], /, days=30` 会把 `x` 的默认值算给 days）
+                for argname, d in _signature_defaults(node.args):
+                    if argname == 'days' and isinstance(d, _ast.Constant) \
+                            and isinstance(d.value, int):
                         hits.append('%s:%s def %s(days=%s 默认值)'
                                     % (rel, node.lineno, node.name, d.value))
     return hits
@@ -313,6 +312,18 @@ def test_the_sync_lookback_is_not_hard_coded_at_any_call_site():
     assert len(caught) == 3 and all('fake/sync.py' in c for c in caught), \
         '扫描器抓不到"签名默认值 + 关键字实参 + 位置实参"这三种写法 ⇒ 上面那条零违规是空判：%s' \
         % caught
+    # 第 63 轮 m-8：签名那一条腿的**下标算术**。上一版把 `kwonlyargs` 并进位置段一起算，
+    # 于是 `*, days=30` 一格都不数（漏），而 `x=[], /, days=45` 会把 `x` 的默认值算给 `days`
+    # （张冠李戴 —— 比漏数更难发现，因为它印出来的是一句看起来像答案的话）。
+    slots = ('def update_fund_history(self, code, days=30, /):\n    return days\n'
+             'def _update_fund_history(self, code, *, days=31):\n    return days\n')
+    hits_slot = _literal_backfill_windows([('fake/slot.py', _ast.parse(slots), slots)])
+    assert len(hits_slot) == 2 and '30' in hits_slot[0] and '31' in hits_slot[1], \
+        '签名默认值那一腿对 posonly / keyword-only 两种槽位数不全（实测 %r）' % hits_slot
+    mixup = 'def update_fund_history(self, code=[], /, days=45):\n    return days\n'
+    hits_mix = _literal_backfill_windows([('fake/mix.py', _ast.parse(mixup), mixup)])
+    assert len(hits_mix) == 1 and '45' in hits_mix[0], \
+        '把 `code` 的默认值报成了 `days` 的（错位）⇒ 实测 %r' % hits_mix
     # 第 56 轮 M-1 的本体：位置参数那一腿单独验一次，**并且它不许顺手把正常写法拦成违规**
     positional_only = ('def update_fund_history(self, fund_code, days=None, db=None):\n'
                        '    return days\n'
@@ -644,6 +655,29 @@ def _bound_value(nodes, name):
     return found[0] if len(found) == 1 else None
 
 
+def _bindings(nodes, name):
+    """这些节点里对 `name` 的**每一次绑定**（赋值 / 带标注赋值 / 海象 / `for` 目标 / `with … as`
+    / `except … as` / 推导式目标……一律按"这个名字被 Store 过"算，一种拼法都不落下）。"""
+    import ast as _ast
+
+    return [n for n in nodes if isinstance(n, _ast.Name)
+            and n.id == name and isinstance(n.ctx, _ast.Store)]
+
+
+def _alias_source(value):
+    """这个绑定的右值是不是"就是那个名字"：认 `tmp = d` / `tmp: list = d` / `(tmp := d)` 三种，
+    外加 `Starred` 壳（`(a, *rest) = d` 那种不认 —— 它拿到的是新列表，不是同一个对象）。"""
+    import ast as _ast
+
+    if isinstance(value, _ast.Assign):
+        return value.value
+    if isinstance(value, _ast.AnnAssign) and value.value is not None:
+        return value.value
+    if isinstance(value, _ast.NamedExpr):
+        return value.value
+    return None
+
+
 def _accumulation_names(nodes, name):
     """`name` 自己，加上"这个函数里 `别名 = name`"传开的那几个名字（第 62 轮 P1-②，认**值**不认名字）。
 
@@ -653,6 +687,15 @@ def _accumulation_names(nodes, name):
     沿赋值链迭代到不动点（`b = a; c = b`），只走 `Name → Name` 这一种可证同一对象的绑法；
     **helper 收容器当形参**（`def collect(bucket): bucket.append(…)` + `collect(inserted)`）
     那一档不在这儿 —— 它要的是跨函数的参数位数据流，写在 `_is_accumulated` 的边界里说明白。
+
+    第 63 轮把这条腿补了两半（两半都是"同一件事两种待遇"）：
+    ① M-11：绑法认全**三种**（`tmp = d` / `tmp: list = d` / `(tmp := d)`），与 `_bound_value`
+      自第 59 轮起的规矩一致 —— 上一版只认 `ast.Assign`，于是带标注与海象的诚实写法被判"没递"。
+    ② M-3：**别名自己被重新绑走 ⇒ 不再算它填过本名**。`d = []; tmp = d; tmp = []; tmp.append(1)`
+      运行时 `tmp` 已经是另一个列表、`d` 明摆着空，而上一版看见"有个叫 tmp 的 append 过"就点头。
+      判据是可证的那一句：这个别名在整个节点集里**只被绑定过一次**（那一次就是 `tmp = d`）才认；
+      绑过两次就不认（宁缺毋滥 —— 认错了就是把规避写成诚实，而这一格本来也没有"看不清算递到了"
+      的余地：`d` 自己唯一一次绑定就是空容器）。
     """
     import ast as _ast
 
@@ -660,12 +703,17 @@ def _accumulation_names(nodes, name):
     while True:
         grown = False
         for n in nodes:
-            if isinstance(n, _ast.Assign) and isinstance(n.value, _ast.Name) \
-                    and n.value.id in names:
-                for t in n.targets:
-                    if isinstance(t, _ast.Name) and t.id not in names:
-                        names.add(t.id)
-                        grown = True
+            src = _alias_source(n)
+            if src is None or not isinstance(src, _ast.Name) or src.id not in names:
+                continue
+            targets = n.targets if isinstance(n, _ast.Assign) else [n.target]
+            for t in targets:
+                if not (isinstance(t, _ast.Name) and t.id not in names):
+                    continue
+                if len(_bindings(nodes, t.id)) != 1:
+                    continue                # 这个别名后来又绑过别的东西 ⇒ 证不了它还是那个对象
+                names.add(t.id)
+                grown = True
         if not grown:
             return names
 
@@ -694,16 +742,33 @@ def _is_accumulated(nodes, name):
         for c in nodes)
 
 
+def _signature_defaults(a):
+    """形参默认值的**唯一一份**下标算术：交出 `[(形参名, 默认值节点), …]`（第 63 轮 m-8）。
+
+    位置段是 `posonlyargs + args`，而 `defaults` 对齐**这一整串**的尾部；keyword-only 段
+    另走 `kw_defaults`。`_param_default` 与 `_literal_backfill_windows` 的签名那一腿共用这把，
+    不再各搓一份 —— 上一批正是那两份各错一半（一把看不见 `/, dates=[]`，一把看不见 `*, days=30`）。
+    """
+    pos = list(a.posonlyargs) + list(a.args)
+    out = list(zip([p.arg for p in pos[len(pos) - len(a.defaults):]], a.defaults)) \
+        if a.defaults else []
+    out += [(k.arg, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+    return out
+
+
 def _param_default(fn, name):
-    """形参 `name` 的默认值节点（没有这个形参、或没写默认值 ⇒ `None`）。"""
+    """形参 `name` 的默认值节点（没有这个形参、或没写默认值 ⇒ `None`）。
+
+    ⚠ 下标算术只在 `_signature_defaults` 里有一份。第 63 轮 M-2：上一版这里只拿 `a.args` ⇒
+    带 `/` 的形参根本看不见（`def f(code, dates=[], /)` 判"没默认值"），而更坏的是它会**错位**：
+    `def f(x=[], /, days=30)` 量出来的 `days` 默认值是 `[]` —— 拿别人的默认值回答你的问题，
+    比"看不见"难发现得多（这一族本仓叫"按下标取不存在的槽位"）。
+    """
     import ast as _ast
 
     if fn is None or not isinstance(getattr(fn, 'args', None), _ast.arguments):
         return None
-    a = fn.args
-    pairs = list(zip(a.args[len(a.args) - len(a.defaults):], a.defaults)) if a.defaults else []
-    pairs += [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
-    return next((d for n, d in pairs if getattr(n, 'arg', None) == name), None)
+    return next((d for n, d in _signature_defaults(fn.args) if n == name), None)
 
 
 def _provably_empty(node, nodes, fn=None):
@@ -725,6 +790,35 @@ def _provably_empty(node, nodes, fn=None):
         return (bound is not None and _provably_empty(bound, nodes, fn)
                 and not _is_accumulated(nodes, node.id))
     return False
+
+
+_SPLAT_UNCLEAR = object()
+
+
+def _splat_value(value, wanted, nodes):
+    """`f(a, **表达式)` 摊进调用时，那一份字典里 `wanted` 这一格的值节点。
+
+    交回三档：节点＝看得见；`None`＝**明摆着没有**这一格；`_SPLAT_UNCLEAR`＝看不清摊的是什么。
+    第三档必须由调用方按"递到了"处理 —— 这条闸拦的是"明着掏空"，不是"我看不出你递了什么"
+    （第 57 轮起就写明的方向；把它当成没递＝把诚实写法打成没接＝闸过宽）。
+    """
+    import ast as _ast
+
+    d = value
+    if isinstance(d, _ast.Name):
+        bound = _bound_value(nodes, d.id) if nodes is not None else None
+        if isinstance(bound, _ast.Dict):
+            d = bound                       # `p = {'changed_dates': x}` 再 `**p`：一跳回溯
+        else:
+            return _SPLAT_UNCLEAR
+    if isinstance(d, _ast.Dict):
+        for k, v in zip(d.keys, d.values):
+            if k is None:                   # `{**别人, 'changed_dates': x}`：还有一整包看不见
+                return _SPLAT_UNCLEAR
+            if isinstance(k, _ast.Constant) and k.value == wanted:
+                return v
+        return None
+    return _SPLAT_UNCLEAR                   # 函数调用 / 推导式搓出来的字典：不猜
 
 
 def _passes_the_new_dates(call, fn=None, live=None):
@@ -749,6 +843,18 @@ def _passes_the_new_dates(call, fn=None, live=None):
 
     dates = call.args[2] if len(call.args) > 2 else next(
         (k.value for k in call.keywords or [] if k.arg == 'changed_dates'), None)
+    if dates is None:
+        # `release(db, code, **{"changed_dates": inserted})`：整包摊进调用也算递到了
+        # （第 63 轮 M-4：隔壁归档那把自第 59 轮就认 `**` 这一族，这把不认 ⇒ 同一件事两把尺子。
+        # 字面量字典直接看键；名字则照参数的老规矩回溯"这个函数里唯一一次赋值"那一格）
+        nodes = live if live is not None else (list(_ast.walk(fn)) if fn is not None else [])
+        for kw in [k for k in (call.keywords or []) if k.arg is None]:
+            got = _splat_value(kw.value, 'changed_dates', nodes)
+            if got is _SPLAT_UNCLEAR:
+                return True             # 看不清摊的是什么 ⇒ 算递到了（只拦"明着没递"）
+            if got is not None:
+                dates = got
+                break
     if dates is None or _provably_empty(dates, None):
         return False
     if isinstance(dates, _ast.Starred):            # `release(db, code, *[])`：壳里的才是那个容器
@@ -785,6 +891,21 @@ def _match_supported():
         return True
     except SyntaxError:
         return False
+
+
+def _try_nodes():
+    """`try` 那一档在这台解释器上有几个节点类：3.11 起多一个 `TryStar`（`except*`）。
+
+    上面 `_match_supported` 的 docstring 逐字写着"与 `ast.TryStar` 需要 3.11 同一族"，
+    而这一族今天只开了一道门（第 63 轮 m-10）：`isinstance(root, (_ast.Try, _ast.TryStar))`
+    在 3.10 上取一个不存在的属性 ⇒ **整条判据崩**，不是那一格跳过。
+    """
+    import ast as _ast
+
+    return tuple(getattr(_ast, n) for n in ('Try', 'TryStar') if hasattr(_ast, n))
+
+
+_TRY_NODES = _try_nodes()
 
 
 def _call_names(node):
@@ -870,17 +991,20 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
     （名字 = 从不被叫的内层 `def` 与"属性位绑的 lambda"；节点 id = 从不被叫的 `lambda`）。
 
     剪枝规则与判"接没接"用的是**同一套**（两边各搓一份就是两把尺子）：
-    - 恒假 `if` 的主体不进（`orelse` 照进）、恒假三目只走另一臂、`while 恒假` 的循环体不进；
-      **但 `if` 的测试式两臂都照进**（第 62 轮 MAJOR：`if release(...):` 那次调用真发生，
-      上一版两条臂都不交回 `test` ⇒ `while`/`assert`/`return`/赋值右侧/推导式 iter 五档都算接上、
-      只有 `if` 这一档判"没接"，方向是**过宽**）；
+    - 恒假 `if` 的主体不进（`orelse` 照进）、`while 恒假` 的循环体不进；
+      **但"测试式会被求值"这条不分哪一档**：`if` / 三目 / `while` / `match` 的 guard 四处都要把
+      测试式本身交回活节点（第 62 轮 MAJOR 立了 `if` 那一腿，第 63 轮 M-1 量出另三腿照旧剪掉它 ⇒
+      `x = 1 if release(…) else 0`、`while release(…) and False:`、`case C() if release(…)` 三格
+      诚实写法全判"没接"，方向是**过宽**；`while`/`assert`/`return`/赋值右侧/推导式 iter 早就算接上，
+      只有这四档不算 —— 同一把尺子四种待遇）；
     - **`for … in 空容器字面量` 的循环体不进**（第 58 轮 m-1：`for _ in ():` 与 `while False:` 同一种死法，
       而 `For` 上一版压根不在剪枝表里）；
       **第 59 轮 M-3 补同一族的第二半**：迭代的是"这个函数里唯一一次绑成空容器、此后没有任何累加"
       的那个**名字**（`d = []; for _ in d: release(...)`）也不进 —— 只认字面量等于换了个变量名就放行；
     - **推导式同理**（第 60 轮 M-1）：`[release(...) for _ in []]` 与
       `d = []; {release(...) for _ in d}` 一次都不叫 ⇒ 迭代对象本身照样求值， elt / 条件不进；
-    - **`match` 的恒假 guard**那一档不进（`case _ if False:` 与 `if False:` 同一种死法）；
+    - **`match` 的恒假 guard**那一档的 **body** 不进（`case _ if False:` 与 `if False:` 同一种死法），
+      guard 自己照进（上面那条"测试式会被求值"不分档）；
     - **无条件 `return`/`raise`/`break`/`continue` 之后的同一套件语句不进**；
       **`assert` 恒假那一格也算**（`assert False` 当场抛 ⇒ 它后面那行运行时到不了，第 61 轮 MAJOR）；
     - `except` 那一支不进（出事了才走的路径不算正常接线），**`try` 的 `else` 照进**
@@ -901,9 +1025,13 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
         arms = list(root.orelse) + [root.test] if _never_runs(root.test) \
             else _prune_suite(root.body) + list(root.orelse) + [root.test]
     elif isinstance(root, _ast.IfExp):
-        arms = [root.orelse] if _never_runs(root.test) else [root.body, root.orelse]
+        # ⚠ 与上面 `If` **同一条规矩**：三目的测试式也会被求值（第 63 轮 M-1：上一批把这条
+        # 只装进了 `If` 那一腿，`x = 1 if release(…) else 0` 判"没接"＝同一件事两种待遇）
+        arms = [root.orelse, root.test] if _never_runs(root.test) \
+            else [root.body, root.orelse, root.test]
     elif isinstance(root, _ast.While) and _never_runs(root.test):
-        arms = list(root.orelse)                      # 循环体不进，`else` 照进
+        # 循环体不进，`else` 照进；**测试式照样求值**（同一批的第三格：`while release(…) and False:`）
+        arms = list(root.orelse) + [root.test]
     elif isinstance(root, (_ast.For, _ast.AsyncFor)) and _never_iterated(root, empty_names):
         arms = list(root.orelse)                      # 一次都不进体，`else` 照进
     elif isinstance(root, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)):
@@ -913,10 +1041,14 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
         arms = [g.iter for g in gens] if any(
             _never_iterated(g, empty_names) for g in gens) else list(_ast.iter_child_nodes(root))
     elif type(root).__name__ == 'Match':        # 3.10 起才有；按类名认，不在 3.9 上取属性
-        arms = [root.subject] + [c for case in root.cases
-                                 if not (case.guard is not None and _never_runs(case.guard))
-                                 for c in _kids(case)]
-    elif isinstance(root, (_ast.Try, _ast.TryStar)):
+        # ⚠ 恒假 guard 只剪 **body**，**guard 本身照进**：pattern 对上就要问它，
+        # 那次调用真发生（第 63 轮 M-1 的第四格：`case C() if release(…) and False:` 判"没接"）
+        arms = [root.subject]
+        for case in root.cases:
+            arms += ([case.pattern] + ([] if case.guard is None else [case.guard])
+                     if case.guard is not None and _never_runs(case.guard)
+                     else list(_kids(case)))
+    elif isinstance(root, _TRY_NODES):
         # `except` 那一支不进（出事了才走的路径不算正常接线），但 **`else` 是"没出事才走"= 正常路径**
         # ⇒ 必须照进（第 61 轮 MAJOR：上一版只交回 body + finalbody，把 `else` 整段剪了 ⇒
         #   诚实写法 `try/except/else: release(...)` 判"没接"＝这道闸过宽；与 For/While 那两档
@@ -1513,6 +1645,29 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    other = []\n'
             '    other.append(code)\n'
             '    release_holds_after_nav_commit(db, code, d)\n'),
+        # ↓ 第 63 轮四格（M-3 / M-2 / M-4 反向 / M-1 反向）。每一格在 honest_live 里都有一条
+        #   同形状的对照 —— 只补一个方向就是把这道闸翻成恒真（能被买通）或恒假（冤枉诚实写法）。
+        '别名后来被重新绑走（运行时那个容器还是空的）': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    tmp = d\n'
+            '    tmp = []\n'
+            '    tmp.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '形参默认空容器写成 posonly（带斜杠）': (
+            'def f(self, db, code, dates=[], /):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, dates)\n'),
+        '整包摊出来的那一格是空容器': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    p = {'changed_dates': []}\n"
+            '    release_holds_after_nav_commit(db, code, **p)\n'),
+        '恒假三目里不跑的那一臂': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    x = (release_holds_after_nav_commit(db, code, inserted)) if False else 0\n'),
     }
     if not _match_supported():
         evasions.pop('match 的恒假 guard')          # 这台解释器没有 match 语法，喂不进去
@@ -1768,6 +1923,41 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    db.add(FundHistory(fund_code=code))\n'
             '    hooks = [lambda: release_holds_after_nav_commit(db, code, inserted)]\n'
             '    return hooks\n'),
+        # ↓ 第 63 轮 M-1 / M-4 / M-11：三档"测试式"（`if` / 三目 / `while`）与 match 的 guard
+        #   都会被求值 ⇒ 把解锁写在测试式里是**诚实**写法，不许判"没接"；`**` 整包递参与
+        #   别名带标注·走海象与 `tmp = d` 同等待遇（同上面那四格反面对照成对）。
+        '三目的测试式里就接锁': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    x = 1 if release_holds_after_nav_commit(db, code, inserted) else 0\n'),
+        '恒假 while 的测试式里接锁': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    while release_holds_after_nav_commit(db, code, inserted) and False:\n'
+            '        pass\n'),
+        '整包摊进调用（**{"changed_dates": inserted}）': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    release_holds_after_nav_commit(db, code, **{'changed_dates': inserted})\n"),
+        '整包摊的是变量（一跳回溯到真列表）': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    p = {'changed_dates': inserted}\n"
+            '    release_holds_after_nav_commit(db, code, **p)\n'),
+        '别名带标注（tmp: list = d 之后 tmp.append）': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    tmp: list = d\n'
+            '    tmp.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '别名走海象（(tmp := d) 之后 tmp.append）': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    (tmp := d)\n'
+            '    tmp.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
     }
     if _match_supported():
         honest_live['match 的 guard 不恒假'] = (
@@ -1776,6 +1966,15 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    match code:\n'
             '        case _ if 1 == 1:\n'
             '            release_holds_after_nav_commit(db, code, inserted)\n')
+        # 第 63 轮 M-1 的第四格：guard 会被求值 ⇒ 恒假 guard **的测试式里**接锁算接上，
+        # 而它的 body 那一支仍然不算（这两格是一对，缺一半就是恒真或恒假）。
+        honest_live['match 的恒假 guard 里就接锁'] = (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    match code:\n'
+            '        case _ if release_holds_after_nav_commit(db, code, inserted) and False:\n'
+            '            pass\n')
+        # （body 那一支的反面对照已在 `evasions` 里，名叫 'match 的恒假 guard'）
     for label, src in honest_live.items():
         assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {
             ('src/fund/fund_api.py', 'f'): True}, \

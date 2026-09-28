@@ -313,7 +313,7 @@ def _is_dead_test(test):
     """这条分支会不会被走到？—— 条件恒假就是**死路**，死路里的 `[abort]` 不挡任何事。
 
     第 45 轮 B-M1① 立的是"`and False` 也算死"，第 46 轮 A-M3 指出实现退化成两种拼写：
-    现在按**求值**判（见 `_const_false`），`while 0:` / `if ():` / `if 1 == 0:` 一起收口。
+    现在按**求值**判（见 `_try_const`），`while 0:` / `if ():` / `if 1 == 0:` 一起收口。
     """
     if test is None:
         return True

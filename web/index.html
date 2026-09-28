@@ -101,6 +101,13 @@
                         </template>
                         <template v-else>结论证据体检数据加载中…</template>
                     </div>
+                    <!-- 「打开网站就补」进行到哪一步、补出了什么、为什么没补，都写在这句话出现的地方
+                         （任务 #132）。放在预测视图里等于看不见：老板第一屏读到"净值已落后 N 天"时，
+                          next 一句就该告诉他有没有人正在补。 -->
+                    <div v-if="catchUp.note || catchUp.error" class="text-xs" style="margin: 2px 0 8px 0;">
+                        <span v-if="catchUp.note" style="color:#8c8c8c;">{{ catchUp.note }}</span>
+                        <span v-if="catchUp.error" style="color:#d4380d;">{{ catchUp.error }}</span>
+                    </div>
                     <div class="data-table" v-if="bloggers.length > 0">
                         <!-- 第 41 轮 A-M2：表已经渲染出来了，失败的那句红字却只写在 `v-else`
                              的空状态里 ⇒ 结构上永远到不了，老板看到的是一份**没有任何标记**的旧榜。
@@ -2189,6 +2196,8 @@
                             authReady.value = true;
                             // 密码有效，加载数据
                             fetchStats(); fetchBloggers();
+                            // 「打开网站就补」的唯一触发点：口令过了、第一屏开始取数之后（任务 #132）。
+                            void maybeCatchUpOnOpen();
                             window.setTimeout(() => restorePredictionVerifyTask(), 0);
                             return;
                         } catch (e) {
@@ -2225,6 +2234,8 @@
                             authReady.value = true;
                             // 密码验证成功，加载数据
                             fetchStats(); fetchBloggers();
+                            // 「打开网站就补」的唯一触发点：口令过了、第一屏开始取数之后（任务 #132）。
+                            void maybeCatchUpOnOpen();
                             window.setTimeout(() => restorePredictionVerifyTask(), 0);
                         } else {
                             const errMsg = res.data?.error || '未知错误';
@@ -2469,6 +2480,127 @@ const fetchWeChatBatch = async () => {
                     }
                 };
                 const spanText = () => evidenceReport.value ? (evidenceReport.value.span_low_pct + '%~' + evidenceReport.value.span_high_pct + '%') : '-';
+                // ── 「打开网站就补」一次（任务 #132，第 63 轮）──────────────────────────────
+                // 根因：生产上没有任何东西在跑（调度器只在 `python -m src` 里起、Render Cron 属于
+                // 那份从未生效的 blueprint），于是"到期未判"一天天变旧，而它**设计上会自愈**的前提是
+                // "今天还有人点那两个按钮"。这一处把"点按钮"挪到打开网站之后自动做一次：
+                // 每个北京日一次、只在确实欠补时动手、只报回执真说过的数（不新造阈值、不新造第二个"今天"）。
+                const catchUp = reactive({ running: false, note: '', error: '' });
+                const CATCH_UP_KEY = 'fundInsight.catchUpDay';
+                // "今天"取北京日，与验证队列/分类同一把钟（`current_as_of()`）。浏览器墙上日期在
+                // UTC+8 之外打开时会把"每天一次"错开一天 —— 第 52 轮 B-3 那一族换到前端自己身上。
+                const beijingDay = () => {
+                    return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+                };
+                // 两个输入：接口自报的 `nav_lag_stale`（净值旧到该告警了吗）与队列里的到期未判条数。
+                // ⚠ 这里**不比大小** —— "落后几天算旧"这个阈值只许有一个出处（后端 `NAV_LAG_WARN_DAYS`，
+                // 第 49 轮那条规矩），所以这一腿读的是接口算好的布尔。
+                // 只取到一边时不动手 —— 拿一个没取到的数当"没事"是这一族最常见的撒谎方向。
+                const shouldCatchUp = (navLagStale, dueUnjudged) => {
+                    const due = Number(dueUnjudged);
+                    const hasDue = Number.isFinite(due);
+                    if (navLagStale === true) return { go: true, why: '净值已经旧到该告警' };
+                    if (hasDue && due > 0) return { go: true, why: '有 ' + due + ' 条到期还没结论' };
+                    if (!hasDue) return { go: false, why: '到期条数没取到'
+                        + (typeof navLagStale === 'boolean' ? '' : '、净值新鲜度也没取到') + '，不动手' };
+                    return { go: false, why: '净值是新的，也没有到期未判' };
+                };
+                // 回执只转述接口给的 `message`；缺字段就说"回执没给数"，不许替它下结论。
+                // 接口那句话自己是分行的（"同步完成：…\n\n6 只基金域查无此码…"），而页面这一格是
+                // 普通 `<span>` ⇒ 换行会塌成一片连字；这里把它并成一句，而不是去改渲染层。
+                const catchUpReceipt = (step) => {
+                    const d = step && step.data ? step.data : null;
+                    if (!d) return '没答话';
+                    if (d.success === false) return '没成（' + (d.message || d.error || '回执没给原因') + '）';
+                    return String(d.message || '回执没给数').split('\n').map((s) => s.trim()).filter(Boolean).join('；');
+                };
+                // 「更新净值」这个接口是**后台任务**：POST 立刻回一句"任务已启动"，真活还在后面跑。
+                // 所以绝不能紧接着就发起验证 —— 那等于拿旧净值去判那 17 条，白跑一轮、还替它说了
+                // "已开始验证"（生产上 09-28 那次是我手点，等 4 分钟才点的第二步；自动化必须自己等）。
+                const FUND_POLL_INTERVAL_MS = 5000;
+                const FUND_POLL_MAX_TRIES = 150;          // 5 秒 × 150 ＝ 12.5 分钟
+                const waitFundUpdateToFinish = async () => {
+                    for (let i = 0; i < FUND_POLL_MAX_TRIES; i++) {
+                        const res = await axios.get('/api/funds/update-status');
+                        const s = res && res.data && res.data.data ? res.data.data : null;
+                        if (!s) return { done: false, why: '状态接口没答话' };
+                        // 跑完之后把那份真回执一起交回去：`update-all` 自己只说过"任务已启动"，
+                        // "检测 N 个预测、更新 M 只、失败 K 只"这句话在这里（接口有字段≠看得见）。
+                        if (!s.in_progress) return { done: true, result: s.last_result || null };
+                        await new Promise((r) => setTimeout(r, FUND_POLL_INTERVAL_MS));
+                    }
+                    return { done: false, why: '净值更新超过 12.5 分钟还没结束' };
+                };
+                const maybeCatchUpOnOpen = async () => {
+                    if (catchUp.running) return;
+                    const day = beijingDay();
+                    if (localStorage.getItem(CATCH_UP_KEY) === day) return;      // 今天已经补过一次
+                    // 自己取那两个数，而不是挂在 `fetchEvidence` 后面：
+                    // ① 首屏那两笔是并发跑的，挂进去会读到还没落地的空值；
+                    // ② `fetchEvidence` 每次刷新统计都会跑（每个写操作之后），把副作用塞进去就等于
+                    //    "每次保存后都可能自动发起一次补跑"——那已经不是"打开网站"这一件事了。
+                    // 代价是多一笔 evidence 的 GET（接口侧本来就有 TTL 缓存），换掉的是上面两个坑。
+                    let stale = null, due = null;
+                    try {
+                        // 两笔取数都走唤醒门：Render 冷启动那 30~90 秒里，页面其他取数会等，
+                        // 这里若不等就会"取不到 ⇒ 不动手"，那一刀永远落在第一个打开的人身上。
+                        const [ev, list] = await Promise.all([
+                            withWakeRetry(() => axios.get('/api/stats/evidence')),
+                            // 到期条数读的是预测视图那三个队列按钮用的同一个数（`meta.facets.due`），
+                            // 不另起一把尺子；只要一行所以 page_size=1。
+                            withWakeRetry(() => axios.get('/api/predictions', { params: { page: 1, page_size: 1 } })),
+                        ]);
+                        stale = ev.data && ev.data.data ? ev.data.data.nav_lag_stale : null;
+                        due = list.data && list.data.meta && list.data.meta.facets
+                            ? list.data.meta.facets.due : null;
+                    } catch (e) {
+                        return;     // 两个数都没取到 ⇒ 不动手，也不占掉"今天这一次"
+                    }
+                    const gate = shouldCatchUp(stale, due);
+                    if (!gate.go) {
+                        // "没动手"也要说一句，但那是**正常状态**，不许长成红字（红字留给真失败）。
+                        catchUp.error = '';
+                        catchUp.note = '这次没有自动补（' + gate.why + '）。';
+                        return;
+                    }
+                    localStorage.setItem(CATCH_UP_KEY, day);
+                    catchUp.running = true;
+                    catchUp.error = '';
+                    catchUp.note = '正在顺手补一次（' + gate.why + '）：先更新净值，再发起验证批次，约几分钟…';
+                    let funds = null, verify = null, stepError = '', navStillRunning = '';
+                    try {
+                        funds = await axios.post('/api/funds/update-all');
+                        const fin = await waitFundUpdateToFinish();
+                        // 那份跑完的回执比"任务已启动"有话可说，能换就换（换不掉就留着原话）
+                        if (fin.result) funds = { data: fin.result };
+                        if (!fin.done) navStillRunning = fin.why;
+                        // 净值没落库之前不发起验证：那一轮只会把 17 条再判一次"等待中"
+                        if (!navStillRunning) verify = await axios.post('/api/predictions/verify-all');
+                    } catch (e) {
+                        // 没跑完就不能占掉"今天这一次"：下次打开还要能再试（否则一次抖动就哑一整天）
+                        stepError = e && e.message ? e.message : String(e);
+                    } finally {
+                        catchUp.running = false;
+                    }
+                    if (stepError) {
+                        localStorage.removeItem(CATCH_UP_KEY);
+                        catchUp.note = '';
+                        catchUp.error = '自动补跑中断（' + stepError + '）——这两个按钮仍然可以手点。';
+                        return;
+                    }
+                    catchUp.note = '打开网站补了一次 ⇒ 更新净值：' + catchUpReceipt(funds)
+                        + (navStillRunning
+                            ? '；净值还在更新（' + navStillRunning + '），这次没有发起验证，明天打开会自动接上'
+                            : '；验证：' + catchUpReceipt(verify));
+                    // 刷新是另一件事：补跑本身已经成功了，刷新失败不许把这句话改写成"中断"
+                    //（页面里那条"写后刷新"的扫描器盯的就是这个混淆）。
+                    try {
+                        await fetchStats();
+                        if (currentView.value === 'predictions') await fetchPredictions();
+                    } catch (e) {
+                        catchUp.note += '（数没刷出来，切到预测页或再打开一次就能看到）';
+                    }
+                };
                 // 净值新鲜度（第 48 轮 A-9 / B-8：生产净值停在 09-13 十天没人知道，而页面那行
                 // "截至 <今天>"会替它撒谎）。第 49 轮三席又指出更坏的一面：**全表最晚那一行**
                 // 可以由一只会预签发净值的货币基金代言，所以"引用了 N 只、其中 M 只停更"必须一起说。
@@ -3292,7 +3424,7 @@ const fetchWeChatBatch = async () => {
                 };
                 // 数据加载已移至 checkAuth/submitPassword 中，密码验证通过后才加载
                 return {
-                    theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError,
+                    theme, toggleTheme, loading, currentView, stats, evidenceReport, evidenceError, catchUp,
                     serviceWaking, serviceUnreachable, serviceProblem, serviceWaited, retryConnect,
                     bloggersError, bloggersStale, statsError, statVal, numOrDash, viewErrors, emptyText,
                     taskStalled, stallText, adviceError, aliasError, configError, testDataError, topNote,

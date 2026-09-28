@@ -597,7 +597,12 @@ def _archive_writes(node):
             if isinstance(n.func, ast.Attribute) and n.func.attr in ('update', 'setdefault') \
                     and _instance_dict(n.func.value):
                 dicts = [a for a in n.args if isinstance(a, ast.Dict)]
-                if n.func.attr == 'setdefault' and n.args and isinstance(n.args[0], ast.Constant):
+                if n.func.attr == 'setdefault' and len(n.args) > 1 \
+                        and isinstance(n.args[0], ast.Constant):
+                    # ⚠ `len(n.args) > 1` 不是装饰：`row.__dict__.setdefault('deleted_at')` 只递一个实参
+                    # （运行时合法，返回 None），上一版这里只判 `n.args` 就去取 `args[1]` ⇒ IndexError。
+                    # 同一函数 `:571` 那腿自己写着 `len(n.args) > 1` —— 两条 setdefault 腿两种待遇，
+                    # 而"取不存在的槽位"这一族到这批已经是第三处（61 轮 `Dict.elts`、62 轮 `Global.names`）。
                     key = n.args[0].value
                     if isinstance(key, str) and key in ARCHIVE_COLUMNS:
                         _add(n.lineno, n.args[0].col_offset, key, _source_of(n.args[1]))
@@ -886,6 +891,18 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
                        '    return db.query(Prediction).update(payload)\n')
     assert _archive_writes(ast.parse(dict_setdefault).body[0]) == \
         [(3, 'restore_before', 'other')], ('`setdefault` 组字典那一格认不出 ⇒ 同上一格同族')
+    # ⚠ "对某类节点取不存在的属性/槽位"这一族的**第三处**（61 轮 `Dict.elts`、62 轮 `Global.names`、
+    # 63 轮 `Call.args[1]`）：`row.__dict__.setdefault('deleted_at')` 只递**一个**实参（运行时合法，
+    # 返回 None），而那条腿只判了 `n.args` 就去取 `args[1]` ⇒ **整把尺子崩在样品之外**。
+    # 两格成对：一条验不崩、一条验"递了值仍然数得到"——只补长度门会把牙一起磨掉。
+    bare_setdefault = ('def f(row):\n'
+                       "    row.__dict__.setdefault('deleted_at')\n")
+    assert _archive_writes(ast.parse(bare_setdefault).body[0]) == [], (
+            '单实参 setdefault 又把这条腿弄崩了 ⇒ 第 63 轮 M-5 回来')
+    filled_setdefault = ('def f(row):\n'
+                         "    row.__dict__.setdefault('deleted_at', datetime.now())\n")
+    assert _archive_writes(ast.parse(filled_setdefault).body[0]) == \
+        [(2, 'deleted_at', 'other')], ('补长度门时把 setdefault 那一腿判成恒空 ⇒ 过宽的反方向')
     # 上面两格的**反面**：字典没递进库（只是回显给前端）就一处都不许数 —— 少了这两格，
     # "收件人得长得像查询"那条边界会被我为了数全拼法而悄悄放弃（第 57 轮 m-4 的过宽教训）
     echo_subscript = ('def f(p):\n'
