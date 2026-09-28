@@ -607,6 +607,16 @@ MUTATIONS = [
      'the_receipt_keeps_its_line_breaks', HTML,
      "String(d.message || '回执没给数').split('\\n')",
      "String(d.message || '回执没给数')", False),
+    # 第 65 轮 MAJOR-1 + MAJOR-2：净值那一轮"跑完了但自己报失败"这一格，补跑当时既没判也不红
+    ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
+     'the_failed_nav_round_still_verifies', HTML,
+     "if (fin.result && fin.result.success === false) {",
+     "if (false && fin.result) {", False),
+    # 任务 #154：那句"最多等 N 分钟"是从两个常数算出来的，抄回字面量必须红
+    ('test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist',
+     'the_in_progress_note_hard_codes_the_wait', HTML,
+     "+ fundPollMinutes() + ' 分钟，服务在唤醒时要更久），等它跑完再发起验证…';",
+     "+ '约几分钟…';", False),
     # ── 第 64 轮 M-2：两条路共用一份轮询，这个按钮自己那条腿也得有变异盯着 ──
     ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
      'the_button_reports_the_process_not_the_result', HTML,

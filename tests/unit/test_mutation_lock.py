@@ -268,6 +268,10 @@ def test_the_harness_own_child_is_let_through():
         guard.__exit__(None, None, None)
 
 
+
+def _frontend_harness_source():
+    return (PROJECT_ROOT / 'scripts' / 'mutation_proof_frontend.py').read_text(encoding='utf-8')
+
 def _frontend_harness():
     """按**文件路径**把前端体检加载进来（`scripts/` 不是包，没有第二条路）。
 
@@ -314,3 +318,21 @@ def test_the_judge_lookup_needs_both_the_right_file_and_the_right_name():
         == (h.WIRING, False), '名字只在**别的**文件里有也点头 ⇒ 变异会送到错的判据上'
     assert h._judge_lookup('test_a_judge_nobody_wrote', ok_map)[1] is False, \
         '注册表里写一个不存在的判据名却仍被当成接上 ⇒ 这一问恒真'
+
+
+def test_the_orm_refusal_runs_before_the_harness_touches_anything():
+    """第 65 轮 MINOR-7：那句 ORM 守卫从模块顶层挪进 `main()` 之后，"它排在哪儿"这件事没有判据。
+
+    挪回顶层 ⇒ 用例想 import 这份工具就打死（第 64 轮的根因）；挪到抢锁之后 ⇒ 它在已经改写
+    `web/*.py` 第一个字节之后才拒绝，那正是它要防的事。所以判的是**先后**，不是"有没有这句"
+    （与第 57~58 轮"一把闸存在过 ≠ 它拦得住"同一把尺子）。
+    """
+    src = _frontend_harness_source()
+    body = src[src.index('def main('):]
+    guard = body.index('_refuse_if_the_orm_is_already_built()')
+    lock = body.index('mutation_lock.harness_may_start')
+    first_write = body.index('.write_text(')
+    assert guard < lock < first_write,         'ORM 守卫(第%d) / 抢锁(第%d) / 第一次改写文件(第%d) 的先后不对 ⇒ 要么它来得太晚，'         '要么这份工具压根没启动就被打死' % (guard, lock, first_write)
+    # 顶层不许留那句 assert：否则这份工具连"被用例问一句"都做不到（第 64 实测过的形状）
+    top = src[:src.index('def main(')]
+    assert "assert 'src.models.database' not in sys.modules" not in top.split('def _refuse')[0],         '那句 assert 又回到模块顶层 ⇒ 任何用例 import 这份工具都会被当场打死'

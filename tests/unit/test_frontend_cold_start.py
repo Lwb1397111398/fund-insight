@@ -2155,8 +2155,14 @@ const begin = (k) => { posts.length = 0; gets.length = 0; seq.length = 0; wakes.
   const blind = { posts: posts.slice(), gets: gets.slice(), note: catchUp.note,
                   error: catchUp.error, key: store[CATCH_UP_KEY] || null,
                   running: catchUp.running };
+  // ⑬ 净值那一轮**跑完了、但自己报失败** ⇒ 与"没等到"同一种结局：不发验证、不占掉今天
+  //    （第 65 轮 MAJOR-1：按钮那条路 :2928 早就判这一格，补跑这一条当时漏了、而且零判据）
+  begin(false); navLeft = 0; navResult = { success: false, message: '净值那一轮说：源端超时' };
+  await maybeCatchUpOnOpen();
+  const navFailed = { posts: posts.slice(), note: catchUp.note, error: catchUp.error,
+                      key: store[CATCH_UP_KEY] || null };
   process.stdout.write(JSON.stringify({ today, first, again, already, nextDay, failed, retried,
-                                        stuck, lost, foreign, busy, parallel, blind }));
+                                        stuck, lost, foreign, busy, parallel, blind, navFailed }));
 })();
 """, prelude)
     assert out['first']['posts'] == ['/api/funds/update-all', '/api/predictions/verify-all'], \
@@ -2195,6 +2201,14 @@ const begin = (k) => { posts.length = 0; gets.length = 0; seq.length = 0; wakes.
         '两行的回执被并坏了或压根没并：%s' % out['first']['note']
     assert '\n' not in out['first']['note'], '那句话带着换行进了 span ⇒ 屏幕上会糊成一片'
     assert out['first']['running'] is False and out['first']['error'] == ''
+    # ⑬ 净值那轮自己报失败：不发验证、不写键、话要说成"这一轮没补完"而不是"补好了"
+    assert out['navFailed']['posts'] == ['/api/funds/update-all'],         '净值那一轮报了失败还是发起了验证 ⇒ 那批预测拿的还是没落库的旧净值：%s' % out['navFailed']['posts']
+    assert out['navFailed']['key'] is None,         '失败那一轮把今天这一次占掉了 ⇒ 明天打开也不会再补（%r）' % out['navFailed']['key']
+    assert '源端超时' in out['navFailed']['note'], '那句话没转述失败原因：%s' % out['navFailed']['note']
+    for phrase in ('补了一次', '验证：'):
+        assert phrase not in out['navFailed']['note'],             '失败那一轮回执里出现了"%s" ⇒ 把没做成的事报成做完了：%s' % (phrase, out['navFailed']['note'])
+    assert out['navFailed']['error'] == '', '这一格是"没补完、下次接着补"，不是中断 ⇒ 不许长成红字'
+
     assert out['again'] == {'posts': 0, 'gets': 0, 'key': out['today']}, \
         '同一个北京日里第二次打开又补了一遍 ⇒ 每天一次那把门没生效'
     assert '已经自动补过一次' in out['already']['note'] and out['already']['posts'] == 0, \
@@ -2275,6 +2289,15 @@ def test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist():
     assert "'/api/funds/update-all'" in block and "'/api/predictions/verify-all'" in block
     assert block.index('/api/funds/update-all') < block.index('/api/predictions/verify-all'), \
         '顺序倒了：净值还没补就去验证，那批到期数一个也判不出来'
+    # 「正在补一次」那句里的等待时间不许写死（任务 #154：上限从 12.5 分钟改到 30 分钟时它不会跟着变）
+    prog = [ln for ln in block.splitlines() if '正在顺手补一次' in ln]
+    assert len(prog) == 1, '那句话不止一处 ⇒ 改一处忘一处'
+    _i = block.index('正在顺手补一次')
+    _seg = block[_i:_i + 260]
+    assert 'fundPollMinutes()' in _seg,         '「正在补一次」那句里的时间是写死的 ⇒ 上限一改，屏幕上那句话就与真实等待漂开：%s' % _seg
+    assert '约几分钟' not in _seg, '又把分钟数抄回字面量了：%s' % _seg
+    assert '最多等' not in _seg,         '把轮询上限说成"最多等"是说过头 ⇒ 冷启动那晚 withWakeRetry 就坐在循环里，真实耗时会超过它'
+
     assert html.count('void maybeCatchUpOnOpen();') == 2, \
         '两条登录出口（本机存过口令 / 刚输口令）少接一条 ⇒ 有一类打开方式永远不补'
     # 这两处直接触发点**只在两条"口令过了"的出口里**：`checkAuth`（本机存过口令）与

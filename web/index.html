@@ -2603,7 +2603,11 @@ const fetchWeChatBatch = async () => {
                         return;
                     }
                     catchUp.error = '';
-                    catchUp.note = '正在顺手补一次（' + gate.why + '）：先更新净值，等它跑完再发起验证，约几分钟…';
+                    // 这一句里的时间要说"最多等多久"，而那个数只有一个出处（`fundPollMinutes()`）——
+                    // 上一批写死「约几分钟」，上限改成 30 分钟它也不会跟着变（任务 #154）。
+                    // 说成"最多"而不是"约"：withWakeRetry 坐在轮询循环里，冷启动那一晚真实耗时会超过它。
+                    catchUp.note = '正在顺手补一次（' + gate.why + '）：先更新净值（这一步的轮询上限 '
+                        + fundPollMinutes() + ' 分钟，服务在唤醒时要更久），等它跑完再发起验证…';
                     let funds = null, verify = null, stepError = '', unfinished = '';
                     try {
                         funds = await axios.post('/api/funds/update-all');
@@ -2614,10 +2618,17 @@ const fetchWeChatBatch = async () => {
                             const fin = await waitFundUpdateToFinish(
                                 funds.data.data ? funds.data.data.started_at : undefined);
                             if (fin.done) {
-                                // 那份跑完的回执比"任务已启动"有话可说，换掉启动回执
-                                funds = { data: fin.result };
-                                // 净值落库之后才发起验证：那一轮拿的才是新净值
-                                verify = await axios.post('/api/predictions/verify-all');
+                                // 跑完了 ≠ 成功了。按钮那一路早就问这一句（`:2928`），补跑这一条漏了
+                                // ⇒ 净值没落库时仍然发起验证、还把今天这一次占掉，明天不再补
+                                //（第 65 轮 MAJOR-1：这一条腿当时零判据零变异 ⇒ 任务 #155）。
+                                if (fin.result && fin.result.success === false) {
+                                    unfinished = '净值那一轮自己报了失败：' + catchUpReceipt({ data: fin.result });
+                                } else {
+                                    // 那份跑完的回执比"任务已启动"有话可说，换掉启动回执
+                                    funds = { data: fin.result };
+                                    // 净值落库之后才发起验证：那一轮拿的才是新净值
+                                    verify = await axios.post('/api/predictions/verify-all');
+                                }
                             } else {
                                 unfinished = fin.why;
                             }
