@@ -294,7 +294,116 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 13:3x（北京），**任务 #148：第 61 轮复评 73/100 返修——三条 MAJOR 里最重的
+最近一次核对（2026-09-28 15:0x（北京），**任务 #149：第 62 轮复评 76/100 —— 过 75 这条线，本批已推
+（线上现在是 `3fbff95`，`/api/health/detail` 自报 `git_commit=3fbff9507845`）；返修的四条里两条是
+"同一把尺子两腿两种待遇"与"对某类节点取不存在的属性"连着两批复发**（条目号取自报告结论表，正文不随仓库走）——
+① **MAJOR（M-1）：`_live_nodes` 的 `If` 分支不把 `root.test` 当活节点** ⇒ `if release(db, code, dates):`
+这种**诚实**写法被判"没接"（运行时那一把明明被叫了）。方向与第 60/61 轮那批相反：这一格不是买通闸，
+是**闸过宽**，而本仓记过的教训是"过宽的结局就是整条闸被关掉"。修法把测试式一起进活节点集，且恒假时
+只收 `orelse + test`、不收 `body`：
+`arms = list(root.orelse) + [root.test] if _never_runs(root.test) else _prune_suite(root.body) + list(root.orelse) + [root.test]`
+⇒ 两格样品各配：`if release(…):` 必须仍判**接上**、`if 恒假:` 分支里的调用必须仍判**没接**。
+同一次返修又量出**同族的第二、第三格**（都判"过宽"方向、`src/` 今天一个对应物都没有，
+但按本仓尺度"过宽的闸活不过一轮"必须当场收）：
+②′ **别名累加**——`d = []` + `tmp = d` + `tmp.append(…)` 判"明着掏空"。现在 `_accumulation_names`
+沿"`Name → Name` 的赋值链迭代到不动点"认别名，并配**两格反面对照**（只绑不填、填的是别的容器 ⇒
+必须仍判"没递"，否则这条腿从"过宽"翻成"恒真"）。**边界**：`def collect(bucket): bucket.append(…)`
+而 `collect(d)` 在别处 ⇒ **仍然不认**（那要跨函数的参数位数据流），写在 `_is_accumulated` 的
+docstring 里并给出"今天没有这种形状"的复核命令（`grep -rn "release_holds_after_nav" src/`）。
+③′ **整个内层 `def` 交给外面**——`@deco def inner(): release(…)` + `return inner` 判"没人叫"⇒ 整棵剪掉，
+而同义的 `hooks = {'r': λ}` + `return hooks`（λ 那一腿）判接上 ⇒ 两种待遇；现在"活路径上有任何一处
+**不是被调位置**的名字读取（`return` / 递进别的调用 / 赋给别人）"就算交出去，与 λ 那条 exemption
+并成同一条规则（"它叫它自己"仍然不算）。
+② **MAJOR（M-2）：`_kids` 会当场崩**（与上一批 `ast.Dict.elts` **同一族、连着第二批**）：`Global.names` /
+`Nonlocal.names` / `MatchClass.kwd_attrs` 是 **str 列表**不是节点列表，下钻时取属性 ⇒
+`AttributeError`（评审自己的探针崩过一次、我复现三格：函数体里有 `global`、嵌套 `nonlocal`、
+`case C(x=1)`）。⚠ 光补"我喂过的那几类"仍然是半族 ⇒ 现在在**唯一的下钻入口**过滤
+`items = [x for x in value if isinstance(x, _ast.AST)]`，一把闸盖住整族而不是三格。
+反面样品：`global` 之后紧跟诱饵死 def 必须仍判"没接"（过滤不能把剪枝一起滤掉）。
+③ **MAJOR（M-3）：λ 递进字面量容器、整包 return 出去 ⇒ holder 逃逸**。上一批的 holder 规则只认
+"作为**实参**递进调用"那一档（`dict(r=λ)` / `.setdefault('r', λ)` / `.append(λ)`），而
+`hooks = {'r': lambda: release(…)}` + `return hooks` 与 `hooks = [λ]` 两档**没接** ⇒ 同一件事两种待遇
+（第 56~61 轮那一族第六次）。修法：字面量绑定也走 holder 规则，并且要用
+`owned = {id(x) for group in held.values() for x in group}` 让 holder 规则**压过** key-dispatch 规则 ——
+否则 `@r`/`#0` 那条先把它当"按键派发"剪掉，holder 规则永远轮不到（这一层顺序依赖是实测撞出来的，不是推的）。
+④ **MINOR：归档那把补一条腿、把一条族登记成边界而不是"已封"**。新腿 `d.__setitem__(列, 值)`（受
+`_dict_sink_names` 门控：只有那份字典真会递给库才数，`get_detail` 那种回显字典照旧不许数成写）；
+`setattr(row, *['deleted_at', datetime.now()])` 这一档**不补**，写进 docstring 边界④：列名与值都在
+运行时才定，与已登记的"列名是变量"同族 ⇒ 按本仓尺度"看不见就明说看不见"，别假装数得到。
+⇒ 判据文件当场 **48 passed**；两把尺子的样品表**一律 AST 现数**（复核命令与上一批同一条，今天印
+`evasions 45 / honest_live 38`）。**这批的账如实记**：①②③④ 全在**判据侧/文字侧**（① 里那三格
+"过宽"各配反面对照），`src/` 行为
+**一字未动** ⇒ 体检**不新增条目**（条数一律 `python scripts/mutation_proof_lifecycle.py --list` 看末行）。
+⑤ **上线与生产 runbook（#133）的两步已经跑完，而且这次是**我替老板点的**（走既有 HTTP 接口，
+没碰任何库连接）**：推 `dee6371..3fbff95` ⇒ 线上 `git_commit=3fbff9507845`、
+`git_commit_source=RENDER_GIT_COMMIT`、`started_at=2026-09-28T14:03:50+08:00`、
+`web/index.html`（LF 归一后）md5 `cce67fc57888e05cb6e94b3827d307cd`；`scheduler_running=False`
+⇒ **#132 那件事一个字都没变**。`POST /api/funds/update-all`（14:05→14:09 北京）回执
+"检测 1601 / 新增 0 只 / 关联 0 / already_ok 131 / 更新 164 / 失败 0"，`unsyncable` 逐行点名只剩
+`603758`；`POST /api/predictions/verify-all`（14:10→14:12）`total 17 / not_processed 0`、
+`failure_summary = 目标日净值尚未发布，等待中（17 条）`。
+⑥ **那 17 条不是新坏的、也不是"没人管"——现读到行**：`target_date` **全部 = 2026-09-28（就是今天）**，
+压在 11 只标的上（`515000`×5、`159928`/`160221` 各 2、其余各 1），标的库内末条净值 09-24
+（`006105` 宏利印度 QDII 是 09-23）⇒ 走的是 `prediction_verify_service.py:643` 那条既有分支
+`waiting_target_nav`（等待期 `data_wait_days` 内不判；到期后用目标日前最近净值判）⇒
+**设计上会自愈**。它同时把 #132 说得更准了：**自愈的前提是"明天还有人点那两个按钮"**。
+复核（只读，日期必须现算）：
+```
+D=$(date -u -d '+8 hours' +%F)
+python scripts/q.py --production "select p.target_date, count(*) n, max(h.last_nav) last_nav from predictions p left join (select fund_code, max(nav_date) last_nav from fund_history group by fund_code) h on h.fund_code=p.fund_code where p.is_deleted=false and p.is_correct is null and p.prediction_type<>'flat' and p.target_date <= date '$D' and (p.next_verify_date is null or p.next_verify_date <= date '$D') group by 1 order by 1"
+python scripts/q.py --production "select nav_date, count(distinct fund_code) funds from fund_history where nav_date >= date '2026-09-14' group by 1 order by 1 desc"
+```
+第二条今天印 `09-27/1 · 09-26/1 · 09-25/1 · 09-24/152 · 09-23~09-21 各 156 · 09-18~09-14 各 155~158`
+⇒ **09-25 是周五却只有 1 只**（货币基金 `000725`），"绝对只数"仍分不清"周五缺行 / 休市 / 没补到"
+（#135 那条根因一字未动；别拿它当休市凭据）。
+⑦ **线上四数（部署 + 跑完两步之后，14:2x~14:4x，只读）**：`GET /api/stats/evidence` 自报
+`database = 线上生产库（postgresql+psycopg2://aws-1-ap-south-1.pooler.supabase.com:6543/postgres）`、
+`as_of = 2026-09-28`、**`已判 1191 / 判对 638 = 53.57%`、`⚠ 265（22.25%）`、`区间 41.39% ~ 63.64%`**、
+`nav_as_of = 2026-09-27`、`nav_lag_days = 1`、`nav_lag_stale = False`、`nav_future_rows = 0`；
+`python scripts/audit_verdict_evidence.py --production` 那一条独立路径印的 `已判 1191 / 对不上 265（22.3%）`
+与分桶 `nav_rewritten 92 / verdict_under_other_fund 88 / nav_row_missing 85` **与接口逐字同数**
+（两条路径互印证 ⇒ 这些数不是"我说的"）。`GET /api/predictions?lifecycle=due|unverifiable|all` 的
+`meta.total` = **17 / 0 / 1601**。⚠ **一条运行账（不是回归）**：那次审计脚本跑到"体检覆盖面"那一步
+`psycopg2.OperationalError: SSL connection has been closed unexpectedly` **中途崩**（Supavisor 池子把
+长连接掐了；主账三行已经落盘，缺的是区间与覆盖面那两行 —— 我从接口那一侧取到了同数才敢这么说），
+而本机走代理打 Render 接口同一个晚上重试了 5 次才通 ⇒ **只读工具对"线上会断"没有重试**，
+登记成新任务（脚本侧补退避重跑，不改判据）。
+⑧ **一条关于"怎么跑"的新账（我自己撞的，写在这儿防下一轮）**：这一批第一次跑 `pytest tests/unit -q`
+**崩在半路**——退码 **139**、`Windows fatal exception: access violation`，崩点在子进程的
+`subprocess` 读线程里。根因不是代码：**我让 `scripts/audit_verdict_evidence.py --production` 与基线并发了**，
+而那两把锁只挡 pytest↔pytest 与 pytest↔体检，**挡不住一个长时远程读脚本**（它不起 pytest、不抢锁）。
+⇒ 规矩从"跑基线期间不许起第二个 pytest 会话"再收窄一步：**也不许并发起任何长任务**
+（远程只读体检、生产接口轮询都算）。判"这次跑数能不能信"看退码 + 日志字节数；139 那一类
+`access violation` 直接作废重跑，别拿它当回归。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话，
+也不起任何长任务 —— 就是上面 ⑧ 那一条；本次五步串成一条链 `data/_review_tmp/r62_chain.sh`，逐步取退码）：
+
+- `pytest tests/unit -q` → **1229 passed / 16 skipped / 0 failed**（732.36 秒，退 0）。
+- `pytest tests/ -q` → **1238 passed / 16 skipped / 0 failed**（567.37 秒，退 0）。
+  （与上一批**同数** —— 每一组新样品都并进已有用例的样品表，`def test_` 条数一条没增；分布用
+  `for f in $(git diff --name-only HEAD~1 -- tests/); do echo "$f $(git show HEAD~1:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_one_ruler_per_question.py 5 -> 5`、`test_structurally_unverifiable_hold.py 32 -> 32`。
+  判据文件当场：`python -m pytest tests/unit/test_one_ruler_per_question.py
+  tests/unit/test_structurally_unverifiable_hold.py -q` ⇒ **48 passed**；
+  两把尺子的样品表 AST 现数 ⇒ `evasions 45 / honest_live 38`。）
+  变异：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（CONTROL-GREEN = 7 个判据文件在干净代码上
+  全绿；无 ANCHOR-MISS / 无 HARNESS-FAIL / 无 `[还原失败]`；跑完 `git status --porcelain -- src/` 为空、
+  无 `.mutbackup` 残留），原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round62-lifecycle-mutations.txt`
+  （首行 `# run @ 2026-09-28T15:31:15+08:00  git=ae8c94308975  python=3.12.10  共 30 处变异 / 7 个判据文件`，
+  md5 `2dfadcd74e29e567cd1c0f55a8e03d07`，与上一批那份 `13b4022a90e599297a5286af416b1030` 不同 ⇒
+  ⚠ 这一笔的 `git=` 是**判据那一笔提交**（`ae8c943`），不是文档这一笔 —— 体检改的是 `src/`，
+  与判据文件同一份代码，所以日志里那个哈希才是它真正跑在上的版本）。
+  `audit_doc_claims.py` 退 **0**（"全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
+  另有 16 条'看得见但不判'"）。
+  **镜像此刻**（同日 15:38，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`（与上一批同数）；
+  **生产此刻**（同日 14:2x~14:4x，只读 + 日期现算 `D=$(date -u -d '+8 hours' +%F)`）：
+  `expired_unjudged 17 / held_by_lock 0 / actionable_today 17`，而这 17 条的 `target_date` **全是当天**
+  ⇒ 走 `waiting_target_nav`（⑥ 现读到行），**生产仍然没有任何东西在跑**（#132）——
+  把"明天有人点"换成"打开网站就补"的实施清单已写成 `data/_review_tmp/r62-catchup-plan.md`，落在任务 #132。
+
+（上一批：2026-09-28 13:3x（北京），**任务 #148：第 61 轮复评 73/100 返修——三条 MAJOR 里最重的
 一条又是我上一批自己写的那句"没有一处过宽"（这次不是漏判，是**闸过宽** + **尺子会崩**），
 评审同时确认第 60 轮那条 BLOCKER 撤谎改对了**（条目号取自报告结论表，正文不随仓库走）——
 ① **MAJOR（M-1）：`_live_nodes` 的 `Try` 分支把 `else` 整段剪了** ⇒ `try: … except: … else: release(…)`
