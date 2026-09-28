@@ -473,7 +473,7 @@ def _archive_writes(node):
       ⚠ **这条边界今天站得住，但依据不是"这种拼法不存在"**（第 60 轮 Q1-B 点的正是这一层区别）：
       `src/services/base.py:99-101` 的 `for key, value in obj_in.items(): setattr(db_obj, key, value)`
       就是**载荷驱动**地写列名，而 `PredictionService` / `ViewpointService` 都继承它、模型上都有那两列。
-      今天数不到归档列的真实依据是**调用方名单**：`grep -rn .update( src/` 里走这条 helper 的
+      今天数不到归档列的真实依据是**调用方名单**：`grep -rn "self.update(" src/services/` 里走这条 helper 的
       只有 `blogger_service.py:162/174`（`{"is_active": …}`）与 `post_service.py:115/132`（字面量键），
       两个归档模型的服务**零调用方**；`config.py:1454` 那个 `setattr(row, field, value)` 循环写的是
       `SectorFundMapping`，而那张表**没有**归档列（`python -c` 现数：`deleted_at`/`restore_before` 均 False）。
@@ -486,12 +486,23 @@ def _archive_writes(node):
     第 60 轮 Q1-B 另外那几格**已经补上**（不是边界，是当时"只补了一半"的拼法）：
     `row.__dict__.update({列: 值})`、`vars(row)[列] = 值` / `vars(row).update({…})`、
     `db.session.set(row, {列: 值})`、以及"先 `p.update({列: 值})` 组字典、再 `q.update(p)` 整份递进库"。
-    仍然没补的是**别名**（`s = object.__setattr__` 再 `s(row, 'deleted_at', v)`）—— 与第 43 轮
-    `create_engine as ce` 同族，那一族要给整把尺子加"别名追踪"，是独立一件事，别当已封。
+    仍然没补的是**别名**（`s = object.__setattr__` 再 `s(row, 'deleted_at', v)`）—— ⚠ **这句到第 60 轮
+    提交信息里被写成了"补了五格"之一，实测回 `[]`，那句话是说过头**（同一批的这段 docstring 当时写的
+    才是对的）。第 61 轮才真补：`alias_names` 只认"这个函数里唯一一次把名字绑到 `setattr` /
+    `object.__setattr__`"，绑到别处的不算 ⇒ 与第 43 轮 `create_engine as ce` 同一判法（认**值**不认名字）；
+    同一批补上 `row.__dict__ |= {列: 值}`（运行时真换字典，上一版只认 `.update({...})` 与下标赋值）。
     """
     stamp = _stamp_names(node)
     query_vars = _query_named(node)
     sink_names = _dict_sink_names(node)
+    # `s = setattr` / `s = object.__setattr__` 这种**别名**（第 61 轮 MINOR：上一批把它写成"补了"，
+    # 实测回 `[]` ⇒ 那句话是说过头；这一批才真补）。只认"这个函数的名字里唯一一次绑到那两个"，
+    # 绑到别处的（`s = row.setter`）不算 ⇒ 不按名字猜 callee，与第 43 轮 `create_engine as ce` 同一判法。
+    alias_names = {t.id for a in ast.walk(node) if isinstance(a, ast.Assign)
+                   for t in a.targets if isinstance(t, ast.Name)
+                   and (getattr(a.value, 'id', '') == 'setattr'
+                        or (isinstance(a.value, ast.Attribute)
+                            and a.value.attr == '__setattr__'))}
     policy = _sql_policy()
     sql_vars = policy.resolve_assigned_sql(node)
     hits = []
@@ -539,6 +550,14 @@ def _archive_writes(node):
                 name, key, value = _dict_target_key(n)
                 if key in ARCHIVE_COLUMNS and name in sink_names:
                     _add(n.lineno, n.col_offset, key, _source_of(value))
+            # `row.__dict__ |= {'deleted_at': …}`（第 61 轮 MINOR）：运行时**真的**换掉了实例字典
+            # （`python -c` 实测 `row.__dict__` 里那一列进去了），而上一版只认 `.update({...})`
+            # 与下标赋值两种 ⇒ 同一件事第三种拼法隐身。合并进上面那份"改实例字典"的扫描。
+            if isinstance(n, ast.AugAssign) and _instance_dict(n.target) \
+                    and isinstance(n.value, ast.Dict):
+                for k, v in zip(n.value.keys, n.value.values):
+                    if isinstance(k, ast.Constant) and k.value in ARCHIVE_COLUMNS:
+                        _add(n.lineno, k.col_offset, k.value, _source_of(v))
         if isinstance(n, ast.Call):
             fn = getattr(n.func, 'id', '') or getattr(n.func, 'attr', '')
             if fn == '__setattr__' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
@@ -552,6 +571,11 @@ def _archive_writes(node):
                     and getattr(n.func.value, 'id', '') in sink_names:
                 _add(n.lineno, n.args[0].col_offset, n.args[0].value, _source_of(n.args[1]))
             if fn == 'setattr' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
+                    and n.args[1].value in ARCHIVE_COLUMNS:
+                _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
+            # 别名那一腿：`s = object.__setattr__` 再 `s(row, 'deleted_at', …)`（第 61 轮 MINOR）
+            if isinstance(n.func, ast.Name) and n.func.id in alias_names \
+                    and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
                     and n.args[1].value in ARCHIVE_COLUMNS:
                 _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
             # `row.__dict__.update({'deleted_at': …})` / `vars(row).update({…})`（第 60 轮 MINOR）：
@@ -919,6 +943,29 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
                         '    return detail\n')
     assert _archive_writes(ast.parse(echo_dict_update).body[0]) == [], (
             '把回显字典的 `.update({…})` 数成写 ⇒ 过宽：与 `get_detail` 那一格同族')
+    # ↓ 第 61 轮 MINOR 的两格：上一批的**提交信息**把"别名"算进"补了五格"，实测回 `[]`
+    #   （同一批的 docstring 当时诚实写着"仍然没补"）⇒ 这一批才真补，每格各配反面对照。
+    alias_setattr = ('def f(row, s):\n'
+                     '    s = object.__setattr__\n'
+                     "    s(row, 'deleted_at', datetime.now())\n")
+    assert _archive_writes(ast.parse(alias_setattr).body[0]) == [(3, 'deleted_at', 'other')], (
+            '`s = object.__setattr__` 再 `s(row, 列, 值)` 数不到 ⇒ 别名那一族第 43 轮就给'
+            '`create_engine as ce` 补过，这把不认就是两把尺子')
+    alias_plain = ('def f(row):\n'
+                   '    s = setattr\n'
+                   "    s(row, 'restore_before', archive_stamp()[1])\n")
+    assert _archive_writes(ast.parse(alias_plain).body[0]) == [(3, 'restore_before', 'stamp')], (
+            '值明明出自那只钟，只因为写的是别名调用就判"别处" ⇒ 归因错，那条 stray 检查会天天红')
+    alias_other = ('def f(row, s):\n'
+                   '    s = row.get\n'
+                   "    s('deleted_at')\n")
+    assert _archive_writes(ast.parse(alias_other).body[0]) == [], (
+            '绑到**别的东西**上的名字（`s = row.get`）也被当成 setattr ⇒ 按名字猜 callee，这道闸过宽')
+    dunder_or_update = ('def f(row):\n'
+                        "    row.__dict__ |= {'deleted_at': datetime.now()}\n")
+    assert _archive_writes(ast.parse(dunder_or_update).body[0]) == [(2, 'deleted_at', 'other')], (
+            '`row.__dict__ |= {列: 值}` 运行时真换掉了实例字典（`python -c` 实测那一列进去了），'
+            '而尺子只认 `.update({...})` 与下标赋值 ⇒ 同一件事第三种拼法隐身')
 
     # 控制三（M-4 的本体）：往真实登记在册的 `_soft_archive` 注入一处墙钟写 ⇒ 处数 +1 且是 other
     rel, name = 'src/services/prediction_service.py', '_soft_archive'

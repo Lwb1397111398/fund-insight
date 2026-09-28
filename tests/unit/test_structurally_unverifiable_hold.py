@@ -613,8 +613,10 @@ def _empty_container(node):
 
     if isinstance(node, _ast.Constant):
         return not node.value if node.value is not None else True   # None / 0 / '' 都算空
-    if isinstance(node, (_ast.List, _ast.Tuple, _ast.Set, _ast.Dict)) and not node.elts:
+    if isinstance(node, (_ast.List, _ast.Tuple, _ast.Set)) and not node.elts:
         return True
+    if isinstance(node, _ast.Dict):        # `ast.Dict` 没有 `elts`（第 61 轮 MAJOR：上一版把它和
+        return not node.keys               # 上面三个并列取 `.elts` ⇒ 一喂 `{}` 就 AttributeError 崩）
     return (isinstance(node, _ast.Call) and not node.args and not node.keywords
             and getattr(node.func, 'id', '') in ('list', 'set', 'tuple', 'dict'))
 
@@ -643,13 +645,54 @@ def _bound_value(nodes, name):
 
 
 def _is_accumulated(nodes, name):
-    """这些节点里有没有对 `name` 的**累加**（`append/extend/add/insert/update`）。"""
+    """这些节点里有没有对 `name` 的**累加**（`append/extend/add/insert/update`，或 `d += […]`）。
+
+    第 61 轮 MAJOR：上一版只数**方法调用** ⇒ `d = []` 后一路 `d += [code]`（`src/` 里今天有 3 处
+    `+= [ ]` 形状）判"没累加"、再递进去就判"明着掏空" —— 那是把正常写法打成没接（过宽）。
+    `AugAssign` 的op 不猜内容：`+=`、`|=`、`*=` 一律算"这个容器后来被填过/换过"，
+    因为要证明它填完还是空的得知道右值，而"看不清就算递到了"是本条闸自第 57 轮起就写明的方向。
+    """
     import ast as _ast
 
     return any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
                and isinstance(c.func.value, _ast.Name) and c.func.value.id == name
                and c.func.attr in ('append', 'extend', 'add', 'insert', 'update')
-               for c in nodes)
+               for c in nodes) or any(
+        isinstance(c, _ast.AugAssign) and isinstance(c.target, _ast.Name) and c.target.id == name
+        for c in nodes)
+
+
+def _param_default(fn, name):
+    """形参 `name` 的默认值节点（没有这个形参、或没写默认值 ⇒ `None`）。"""
+    import ast as _ast
+
+    if fn is None or not isinstance(getattr(fn, 'args', None), _ast.arguments):
+        return None
+    a = fn.args
+    pairs = list(zip(a.args[len(a.args) - len(a.defaults):], a.defaults)) if a.defaults else []
+    pairs += [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+    return next((d for n, d in pairs if getattr(n, 'arg', None) == name), None)
+
+
+def _provably_empty(node, nodes, fn=None):
+    """这个表达式是不是**明摆着给不出东西**（第 61 轮 MAJOR 补的三档，与 `_empty_container` 同尺度）：
+    ① 空容器字面量（含 `*[]` 那个 `Starred` 壳）；② 任一档生成器迭代对象可证为空的推导式
+    （`[x for x in []]` 一个值也不产出）；③ 唯一一次绑成空、此后没有任何累加的那个名字。
+    要跑到运行时才知道的（`range(0)`、空生成器函数、参数递进来的查询）一律**不猜** ⇒ 算"有东西"。
+    """
+    import ast as _ast
+
+    if isinstance(node, _ast.Starred):
+        node = node.value
+    if _empty_container(node):
+        return True
+    if isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)):
+        return any(_provably_empty(g.iter, nodes, fn) for g in node.generators)
+    if isinstance(node, _ast.Name) and nodes is not None:
+        bound = _bound_value(nodes, node.id)
+        return (bound is not None and _provably_empty(bound, nodes, fn)
+                and not _is_accumulated(nodes, node.id))
+    return False
 
 
 def _passes_the_new_dates(call, fn=None, live=None):
@@ -674,17 +717,28 @@ def _passes_the_new_dates(call, fn=None, live=None):
 
     dates = call.args[2] if len(call.args) > 2 else next(
         (k.value for k in call.keywords or [] if k.arg == 'changed_dates'), None)
-    if dates is None or _empty_container(dates):
+    if dates is None or _provably_empty(dates, None):
         return False
+    if isinstance(dates, _ast.Starred):            # `release(db, code, *[])`：壳里的才是那个容器
+        dates = dates.value
+        if _provably_empty(dates, None):
+            return False
     if isinstance(dates, _ast.Name) and (live is not None or fn is not None):
         nodes = live if live is not None else list(_ast.walk(fn))
         assigned = _bound_value(nodes, dates.id)
         # 关键分界：`inserted = []` 然后一路 `inserted.append(...)` 是**正常累加**（真代码就是这个形状），
         # 而 `d = []` 之后一个字没加就递进去才是"明着掏空"。少了这一句，回溯会把每条正常同步
         # 都判成没接 —— 过宽的闸活不过一轮就会被整条关掉（本仓第 47 轮那条教训）。
-        if assigned is not None and _empty_container(assigned) \
+        if assigned is not None and _provably_empty(assigned, nodes) \
                 and not _is_accumulated(nodes, dates.id):
             return False
+        if assigned is None and fn is not None:
+            # 这个名字**不是**函数里赋的 ⇒ 只剩两种来路：形参（默认值就写在签名上）或外层递进来的变量。
+            # 只有"形参且默认值是明摆着的空容器"才拦得住（`def f(self, db, code, dates=[])` 一路原样递
+            # 进去 ＝ 第一道闸当场失效，第 56 轮 M-2 那一格换个位置写）；外层变量看不见 ⇒ 算递到了，不猜。
+            default = _param_default(fn, dates.id)
+            if default is not None and _provably_empty(default, None):
+                return False
     return True
 
 
@@ -714,9 +768,16 @@ def _call_names(node):
 
 
 def _terminates(stmt):
-    """这条语句一执行，同一套件里它后面的那些就再也走不到（第 60 轮 M-1 第⑦格）。"""
+    """这条语句一执行，同一套件里它后面的那些就再也走不到（第 60 轮 M-1 第⑦格）。
+
+    `assert` 只在**测试式恒假**时算（`assert False` 当场抛 `AssertionError`）；
+    `assert x` 那种要到运行时才知道的按"继续往下走"处理 —— 与 `_never_runs` 同一尺度，
+    不猜（第 61 轮 MAJOR：上一版四种转移之外全不算终止，`assert False` 后面那行判"已接线"）。
+    """
     import ast as _ast
 
+    if isinstance(stmt, _ast.Assert):
+        return _never_runs(stmt.test)
     return isinstance(stmt, (_ast.Return, _ast.Raise, _ast.Break, _ast.Continue))
 
 
@@ -779,7 +840,10 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
       `d = []; {release(...) for _ in d}` 一次都不叫 ⇒ 迭代对象本身照样求值， elt / 条件不进；
     - **`match` 的恒假 guard**那一档不进（`case _ if False:` 与 `if False:` 同一种死法）；
     - **无条件 `return`/`raise`/`break`/`continue` 之后的同一套件语句不进**；
-    - `except` 那一支不进（出事了才走的路径不算正常接线）；
+      **`assert` 恒假那一格也算**（`assert False` 当场抛 ⇒ 它后面那行运行时到不了，第 61 轮 MAJOR）；
+    - `except` 那一支不进（出事了才走的路径不算正常接线），**`try` 的 `else` 照进**
+      （"没出事"正是正常路径；上一版把它跟着 `except` 一起剪了 ⇒ 诚实写法判"没接"＝闸过宽，
+      与 `For`/`While` 那两档注释里逐字写的"`else` 照进"自相矛盾）；
     - 名字落在 `dead['names']` 里的内层 `def`、节点落在 `dead['node_ids']` 里的 `lambda` 整棵不进。
     **边界**：`for` 与推导式只认"空字面量"与"唯一一次绑成空容器且无累加的名字"这两种**可证**不进入；
     `range(0)`、空生成器表达式这些要靠数据流才看得出来，这一版不猜（与 `_proves_sqlite` 同尺度）。
@@ -808,7 +872,11 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
                                  if not (case.guard is not None and _never_runs(case.guard))
                                  for c in _kids(case)]
     elif isinstance(root, (_ast.Try, _ast.TryStar)):
-        arms = _prune_suite(root.body) + list(root.finalbody or [])
+        # `except` 那一支不进（出事了才走的路径不算正常接线），但 **`else` 是"没出事才走"= 正常路径**
+        # ⇒ 必须照进（第 61 轮 MAJOR：上一版只交回 body + finalbody，把 `else` 整段剪了 ⇒
+        #   诚实写法 `try/except/else: release(...)` 判"没接"＝这道闸过宽；与 For/While 那两档
+        #   注释里逐字写的"`else` 照进"是同一件事两种待遇）
+        arms = _prune_suite(root.body) + list(root.orelse or []) + list(root.finalbody or [])
     elif isinstance(root, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda)):
         if isinstance(root, _ast.Lambda):
             if id(root) in node_ids:
@@ -897,12 +965,22 @@ def _dead_inner_defs(fn):
     `AnnAssign`/`NamedExpr`，这一腿还停在三种绑法 ⇒ **同一把尺子两腿两种待遇**，本批主账的第四面）：
     ⑤ `r: callable = lambda: …`（带标注）；⑥ `(r := lambda: …)`（海象）；
     ⑦ `[lambda: …]` / `(lambda: …,)`（列表/元组字面量，靠 `hooks[0]()` 叫）；
-    ⑧ `hooks['r'] = lambda: …` / `hooks[0] = lambda: …`（**下标位**上的赋值）。
+    ⑧ `hooks['r'] = lambda: …` / `hooks[0] = lambda: …`（**下标位**上的赋值）；
+    ⑨ **第 61 轮 MAJOR**：λ 当**调用实参**塞进一个看得见归属的容器 ——
+      `hooks = dict(r=λ)`、`hooks.setdefault('r', λ)`、`hooks.append(λ)`。
+      这一档**不猜 callee 会不会叫它**（按名字猜是本仓反复驳回的），而是问一句可证的：
+      **那个容器后来有没有被取用** —— 除了"绑它那一处"和"递 λ 那一处的接收者"之外，
+      `hooks` 再没出现在任何活节点里（不 return、不递进别的调用、不下标取、不迭代），
+      那个 λ 对象就谁也拿不到 ⇒ 谁也调不了它。反面样品：`return hooks['r']()`、`hooks[0]()`、
+      `for _h in hooks: _h()`、`xs = sorted(…, key=λ); return xs`、模块级/形参容器（跨模块看不见）
+      ⇒ 全部仍算接上。
     ⇒ 每种绑法各按自己"被叫得上"的键去对（名字看叶子名、`@键`/`#下标` 看容器派发），
     对不上就是死路；诚实写法（真去 `C.r()` / `hooks['r']()` / `hooks[0]()`）仍然算接上，见那些反面样品。
-    **边界（不许说成"补全了"）**：下标是**变量或表达式**时（`hooks[i] = λ`、`hooks[key()]()`）
-    认不出派发键 ⇒ 那一棵按"没人叫"处理不了，也不硬猜（与 `for` 只认空字面量同一尺度）；
-    属性链上的 λ（`a.b.r = λ`）只认叶子名 `r`，与调用点那一腿同一个宽松度。
+    **边界（清单就是上面那份样品表，别抄"补全了"）**：① 下标是**变量或表达式**时（`hooks[i] = λ`、
+    `hooks[key()]()`）认不出派发键 ⇒ 不硬猜（与 `for` 只认空字面量同一尺度）；
+    ② 属性链上的 λ（`a.b.r = λ`）只认叶子名 `r`，与调用点那一腿同一个宽松度；
+    ③ λ 交给**说不清归属**的调用（`return dict(r=λ)`、`do(map(λ, xs))`）⇒ 按活的走，
+      因为"结果被丢弃时 callee 仍可能已把 λ 叫过一遍"这件事静态答不出来。
     """
     import ast as _ast
 
@@ -934,10 +1012,53 @@ def _dead_inner_defs(fn):
             for k, v in zip(n.keys, n.values):
                 if isinstance(v, _ast.Lambda):
                     _bind(_const_dispatch_key(k), v)     # ④ `{'r': λ}` / `{0: λ}`
+
+    # ⑨ λ 当**调用实参**递进一个"看得见归属"的容器（第 61 轮 MAJOR 的三格）：
+    #   `hooks = dict(r=λ)`、`hooks.setdefault('r', λ)`、`hooks.append(λ)`。
+    #   这一档不靠"猜 callee 会不会叫它"（那是本仓反复驳回的按名字猜），而是问一句可证的：
+    #   **这个容器后来有没有被取用** —— 一次都没被 `hooks[...]()`、没有出现在 return / 别的调用实参里 /
+    #   任何一处读取里，那个 λ 对象就谁也拿不到，自然谁也调不了它。
+    #   反面（必须仍算接上）：`return hooks['r']()`、`hooks['r']()`、`hooks[0]()`、
+    #   以及**根本没有容器可归属**的 `do(map(λ, xs))` / `return dict(r=λ)` ⇒ 一律按活的走。
+    #   只在"这个容器名字是本函数里绑定的那个 Name"时启用 ⇒ 形参与模块级容器一律免检（跨模块取用看不见）。
+    held, call_holders = {}, {}
+    for n in _ast.walk(fn):
+        if not isinstance(n, _ast.Call):
+            continue
+        args = list(n.args) + [k.value for k in (n.keywords or [])]
+        lams = [a for a in args if isinstance(a, _ast.Lambda)]
+        if not lams:
+            continue
+        recv = n.func.value if isinstance(n.func, _ast.Attribute) else None
+        if isinstance(recv, _ast.Name):
+            holder = recv.id                       # 原地塞进已有容器：`hooks.append(λ)`
+            call_holders[id(n)] = recv
+        else:
+            holder = None                          # `hooks = dict(r=λ)`：容器名要往上一层找赋值目标
+            for a in _ast.walk(fn):
+                if isinstance(a, (_ast.Assign, _ast.AnnAssign, _ast.NamedExpr)) and a.value is n:
+                    tg = a.targets if isinstance(a, _ast.Assign) else [a.target]
+                    if len(tg) == 1 and isinstance(tg[0], _ast.Name):
+                        holder = tg[0].id
+                        break
+        if holder and any(
+                isinstance(x, (_ast.Assign, _ast.AnnAssign, _ast.NamedExpr))
+                and any(isinstance(t, _ast.Name) and t.id == holder for t in
+                        (x.targets if isinstance(x, _ast.Assign) else [x.target]))
+                for x in _ast.walk(fn)):
+            held.setdefault(holder, []).extend(lams)
+
+    excluded = {id(c) for c in call_holders.values()}          # 递 λ 那处的接收者不算"被取用"
+    for n in _ast.walk(fn):
+        if isinstance(n, (_ast.Assign, _ast.AnnAssign, _ast.NamedExpr)):
+            for t in (n.targets if isinstance(n, _ast.Assign) else [n.target]):
+                if isinstance(t, _ast.Name) and t.id in held:
+                    excluded.add(id(t))
+
     dead_names, dead_ids = set(), set()
-    for _ in range(len(inner) + sum(len(v) for v in lambdas.values()) + 1):
-        live_calls = [c for c in _live_nodes(fn, fn, {'names': dead_names, 'node_ids': dead_ids})
-                      if isinstance(c, _ast.Call)]
+    for _ in range(len(inner) + sum(len(v) for v in lambdas.values()) + len(held) + 1):
+        live_nodes = list(_live_nodes(fn, fn, {'names': dead_names, 'node_ids': dead_ids}))
+        live_calls = [c for c in live_nodes if isinstance(c, _ast.Call)]
         nxt_names, nxt_ids = set(), set()
         for d in inner:
             if not d.name:
@@ -949,6 +1070,12 @@ def _dead_inner_defs(fn):
             # `@键` / `#下标` 那种是容器派发（`hooks['r']()` / `hooks[0]()`），
             # 其余按名字/属性叶子名对 ⇒ 两种都走 `_call_keys`
             if not any(name in _call_keys(c) for c in live_calls):
+                for lam in lams:
+                    nxt_ids.add(id(lam))
+        for holder, lams in held.items():
+            # 容器除了"绑它那一处"和"递 λ 那处的接收者"之外再没被读过 ⇒ 里面的 λ 谁也拿不到
+            if not any(isinstance(x, _ast.Name) and x.id == holder and id(x) not in excluded
+                       for x in live_nodes):
                 for lam in lams:
                     nxt_ids.add(id(lam))
         if nxt_names == dead_names and nxt_ids == dead_ids:
@@ -1230,6 +1357,54 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    match code:\n'
             '        case _ if False:\n'
             '            release_holds_after_nav_commit(db, code, inserted)\n'),
+        # ↓ 第 61 轮 MAJOR 的三格：λ 当**调用实参**塞进一个看得见归属的容器，而没人来取它
+        'dict(r=λ) 之后没人按 key 叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    hooks = dict(r=lambda: release_holds_after_nav_commit(db, code, inserted))\n"),
+        'setdefault 塞进去而没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = {}\n'
+            "    hooks.setdefault('r', lambda: release_holds_after_nav_commit(db, code, inserted))\n"),
+        'append 塞进去而没人按下标叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = []\n'
+            '    hooks.append(lambda: release_holds_after_nav_commit(db, code, inserted))\n'),
+        # 第三个实参"明摆着给不出东西"的另外三种位置（第 56 轮 M-2 那一族的换形状）
+        '第三实参是空推导式': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, [x for x in []])\n'),
+        '第三实参是星号空列表': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, *[])\n'),
+        '形参默认空容器原样递': (
+            'def f(self, db, code, dates=[]):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, dates)\n'),
+        'assert False 之后那一行': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    assert False\n'
+            '    release_holds_after_nav_commit(db, code, inserted)\n'),
+        # 空**字典**那一族：`ast.Dict` 没有 `.elts`，上一版把它和 List/Tuple/Set 并列 ⇒ 直接抛
+        'for 一个空字典字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    for _x in {}:\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        'd = {} 原样递进去': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = {}\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '推导式 over 空字典': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, [k for k in {}])\n'),
     }
     if not _match_supported():
         evasions.pop('match 的恒假 guard')          # 这台解释器没有 match 语法，喂不进去
@@ -1356,6 +1531,78 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    db.add(FundHistory(fund_code=code))\n'
             '    try:\n        return 0\n'
             '    finally:\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        # ↓ 上面那些"剪不可达"的档位各自的**反面对照**：正常运行路径必须仍算接上（过宽的闸活不过一轮）
+        'try 的 else 那一支是正常路径': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    try:\n        pass\n'
+            '    except Exception:\n        pass\n'
+            '    else:\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        'd += [code] 是累加，不是掏空': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    d += [code]\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        'dict(r=λ) 之后真按 key 叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    hooks = dict(r=lambda: release_holds_after_nav_commit(db, code, inserted))\n"
+            "    return hooks['r']()\n"),
+        'setdefault 塞进去而真被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = {}\n'
+            "    hooks.setdefault('r', lambda: release_holds_after_nav_commit(db, code, inserted))\n"
+            "    hooks['r']()\n"),
+        'append 塞进去后按下标真叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = []\n'
+            '    hooks.append(lambda: release_holds_after_nav_commit(db, code, inserted))\n'
+            '    hooks[0]()\n'),
+        '容器被 for 迭代、逐个叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = []\n'
+            '    hooks.append(lambda: release_holds_after_nav_commit(db, code, inserted))\n'
+            '    for _h in hooks:\n        _h()\n'),
+        'λ 交给 callee 而结果继续被用（ callee 会不会叫它看不见 ⇒ 不猜)': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    xs = sorted(inserted, key=lambda d: release_holds_after_nav_commit(db, code, inserted))\n'
+            '    return xs\n'),
+        '星号递真名字（不是空列表)': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    nd = []\n'
+            '    nd.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, *nd)\n'),
+        '形参默认 None 而函数里重新绑过': (
+            'def f(self, db, code, dates=None):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    dates = list(inserted)\n'
+            '    release_holds_after_nav_commit(db, code, dates)\n'),
+        '形参压根没有默认值（来路在调用方)': (
+            'def f(self, db, code, dates):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, dates)\n'),
+        '推导式 over 真递进来的名字': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, [x for x in inserted])\n'),
+        '空字典但后来填了东西再递': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = {}\n'
+            '    d.update({code: 1})\n'
+            '    release_holds_after_nav_commit(db, code, list(d))\n'),
+        'for 一个非空字典字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    for _x in {code: 1}:\n'
             '        release_holds_after_nav_commit(db, code, inserted)\n'),
     }
     if _match_supported():

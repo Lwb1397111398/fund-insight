@@ -294,7 +294,78 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 12:2x（北京），**任务 #147：第 60 轮复评 72/100 返修——最重的一条又是我自己写的
+最近一次核对（2026-09-28 13:3x（北京），**任务 #148：第 61 轮复评 73/100 返修——三条 MAJOR 里最重的
+一条又是我上一批自己写的那句"没有一处过宽"（这次不是漏判，是**闸过宽** + **尺子会崩**），
+评审同时确认第 60 轮那条 BLOCKER 撤谎改对了**（条目号取自报告结论表，正文不随仓库走）——
+① **MAJOR（M-1）：`_live_nodes` 的 `Try` 分支把 `else` 整段剪了** ⇒ `try: … except: … else: release(…)`
+判"没接"。同一个函数里 `For`/`While` 两档的注释逐字写着"`else` 照进" ⇒ **同一把尺子两腿两种待遇**
+（本仓第 45 轮起反复扣分那一族）。另一格：`_is_accumulated` 只数**方法调用**、不数 `AugAssign`
+⇒ `d = []` 后 `d += [code]`（`src/` 里真有 3 处 `+= [`）被判"明着掏空"。两格**在父提交同样判 False**
+⇒ 前批遗留，而我上一批把它写成"已封"。修法：`Try` 补 `+ list(root.orelse or [])`、`_is_accumulated`
+认 `AugAssign`（右值不猜，看不清就算累加），各配反面样品。
+⚠ 从此"过宽"这一族只许说"这 N 格内没复发"，不许说"没有一处过宽"。
+② **MAJOR（M-2）：字典那一腿不是漏判，是崩**。`_empty_container` 把 `ast.Dict` 与 List/Tuple/Set 并列取
+`.elts` ⇒ 一喂 `{}` 就 `AttributeError: 'Dict' object has no attribute 'elts'`，而它自己的 docstring
+逐字点名 `{}` 算空（复现三格：`for _ in {}`、`d = {}` 再递进去、`[k for k in {}]`；父提交也崩 ⇒ 又是遗留；
+`{k: release(…) for k in {}}` 父提交是**静默判已接线**、改成崩之后方向不算坏）。
+⇒ `Dict` 单独看 `.keys`；这一格也说明"清单就是那份样品表"有一个前提：**样品得真把那一腿喂过**，
+没喂过的列等于没有清单。
+③ **MAJOR（M-3）：解锁那把仍被 7 格买通**（评审给 8 格，⚠ **其中一格不成立**：`for _ in (d := []): release(…, d)`
+实测已判 False，不改，写在这儿防下一轮照抄评审原文）。成立的七格与修法（**都不靠按名字猜 callee**）：
+`hooks = dict(r=λ)` / `hooks.setdefault('r', λ)` / `hooks.append(λ)` ⇒ 问一句可证的"**那个容器后来有没有被取用**"
+（不 return、不递进别的调用、不下标取、不迭代 ⇒ 谁也拿不到那个 λ）；绑到别处的名字、模块级/形参容器、
+`return dict(r=λ)`、`xs = sorted(…, key=λ); return xs` ⇒ 全部仍算接上（反面样品各一格）。
+`release(db, code, [x for x in []])` / `*[]` / 形参默认 `dates=[]` ⇒ 新的 `_provably_empty`（空推导式、
+`Starred` 壳、只在"这名字不是本函数赋的"时才看签名默认值）；`assert False` 之后那一行 ⇒ `_terminates`
+认**恒假的 `assert`**（`assert x` 那种要到运行时才知道的照旧不剪）。
+⇒ 规避样品表 **32 → 42** 格、诚实表 **17 → 30** 格，**条数一律 AST 现数**：
+`python -c "import ast,io;t=ast.parse(io.open('tests/unit/test_structurally_unverifiable_hold.py',encoding='utf-8').read());print([(n.targets[0].id,len(n.value.keys)) for n in ast.walk(t) if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','') in ('evasions','honest_live')])"`
+④ **MINOR：上一批的提交信息把没补的写成了补的**。"别名 `s = object.__setattr__`"当时实测回 `[]`
+（同一批的 docstring 写的才是对的："仍然没补"）⇒ 这一批真补：`alias_names` 只认"本函数里唯一一次把名字绑到
+`setattr` 或 `object.__setattr__`"（认**值**不认名字，与第 43 轮 `create_engine as ce` 同判法），并配
+"`s = row.get` 不许被当成 setattr"的反面对照；另补 `row.__dict__ |= {列: 值}`（`python -c` 实测运行时真换字典）。
+复现命令也修了一把：登记注释里那句 `grep -rn .update( src/` **量不出"只有 4 条"** ⇒ 换成
+`grep -rn "self.update(" src/services/`（AGENTS ⑤ 段用的这把才是对的）。
+⑤ **精度一句（结论不变、话得说准）**：§2d 那句"读出来的数就在页面上"**用错了键** —— `:447` 记的是
+`protected_counts["active_viewpoints"]`（`:448/:454`），而页面 `web/index.html:667-671` 只渲染五档
+`protected_counts`、不含这一档（`grep -rn active_viewpoints web/` ⇒ 0）⇒ 屏上真会动的是**补集**
+`counts['viewpoints']`（候选侧，`:657` 那个 `v-for`），并且它挂着 `v-show="count > 0"` ⇒ 单桶减到 0 时整块消失、
+"没数"与"归零"同形。两处文字已按这一层收窄（"补那一列会动页面上那个数"仍然成立，动的是候选数）。
+⑥ **产品侧新账写进 #146 的 D 段**（只立项不动手，三条都是我现读复核过的）：
+`bloggers.py:72` 的"近 7 天"墙钟直接决定博主榜 `active_posts_count`（`:82` 筛 → `:109` 交出 → `index.html:148`）；
+`viewpoint_workflow_service.py:920` 那把墙钟既是"今天已汇总过"的幂等闸、又写进台账 `run_date`
+⇒ 北京 00:00~08:00 点「每日汇总」会**再跑一次**；`prediction_service.py:558/673/800` 三处墙钟分属
+`get_expiring_predictions`(`:548`)/`get_anomaly_predictions`(`:597`)/`get_history_lookup`(`:769`)，
+`grep -rn <名字> src/ scripts/ web/ tests/` **除定义外零命中**（只剩 `.pyc`）⇒ 死路、不进产品账；
+顺带清掉一条假活路：`config.py:602 GET /cleanup/preview-legacy` 函数体第一句就 `return`（`:604`），
+底下约 150 行（含第二把墙钟 `:616`）是**不可达代码**、且 `grep -rn preview-legacy web/` ⇒ 0
+⇒ 上一批数"几个预览用哪把钟"时它容易被误数成一站；删这段死代码是独立决定项（改公共接口面）。
+**这批的账也要如实记**：①②③④⑤ 全在**判据侧/文字侧**，`src/` 行为**一字未动** ⇒ 体检**不新增条目**
+（30 处与上一批同数，条数一律 `python scripts/mutation_proof_lifecycle.py --list` 看末行）。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话；
+⚠ 本次两条口径**都比上一批慢**（565s / 453s vs 323s / 310s），是本机内存负载高、不是回归 —— 判回归看的是
+**passed/skipped/failed 三个数与退码**，不是秒数）：
+
+- `pytest tests/unit -q` → **1229 passed / 16 skipped / 0 failed**（565.04 秒）。
+- `pytest tests/ -q` → **1238 passed / 16 skipped / 0 failed**（453.14 秒）。
+  （与上一批**同数** —— 每一组新样品都并进已有用例的样品表，`def test_` 条数一条没增；分布用
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_one_ruler_per_question.py 5 -> 5`、`test_structurally_unverifiable_hold.py 32 -> 32`。
+  判据文件当场：`python -m pytest tests/unit/test_one_ruler_per_question.py
+  tests/unit/test_structurally_unverifiable_hold.py -q` ⇒ **48 passed**。）
+  变异：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（CONTROL-GREEN = 7 个判据文件在干净代码上全绿；
+  无 ANCHOR-MISS / 无 HARNESS-FAIL / 无 `[还原失败]`；跑完 `git status --porcelain -- src/` 为空、无 `.mutbackup` 残留），
+  原始日志随仓库走 `docs/迭代计划/run-20260927-mutation/round61-lifecycle-mutations.txt`
+  （首行 `# run @ 2026-09-28T13:27:15+08:00  git=c705b788895c  python=3.12.10  共 30 处变异 / 7 个判据文件`，
+  md5 `13b4022a90e599297a5286af416b1030`，与上一批那份 `d3142579ea444a1aa90c7f690290cf25` 不同）。
+  `audit_doc_claims.py` 退 **0**（"全部对得上（条数 3 条、数据源 4 行…）；另有 16 条'看得见但不判'"）。
+  **镜像此刻**（同日 13:3x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`；
+  **生产此刻**（同日 13:3x，只读探针 + 日期现算 `D=$(date -u -d '+8 hours' +%F)`）：
+  `expired_unjudged 17 / held_by_lock 0 / actionable_today 17` —— 与上一批同数，因为
+  **生产仍然没有任何东西在跑**（#132），这 17 条一天天变旧。
+
+（上一批：2026-09-28 12:2x（北京），**任务 #147：第 60 轮复评 72/100 返修——最重的一条又是我自己写的
 假话（这一次错在"依据"、结论那半句站得住），第二条是同一把解锁尺子又被八种拼法买通、而其中两种拼法
 本批刚在隔壁那把里认下过**（条目号是报告那张结论表的编号，报告正文不随仓库走）——
 ① **BLOCKER（条目 7）："今天没有活消费面读观点那一列"是假话**（第 58~60 轮**连续第三个批次**犯
@@ -325,15 +396,21 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 `_dead_inner_defs` 按 Name / Attribute / 下标常量键三种绑法收 λ 并迭代到不动点、`_kids`/`_prune_suite` 剪掉终止语句之后、
 `match` 按**类名**认（不在 3.9 上取属性；`_match_supported()` 判语言支持，不支持就跳过那一格，不许恒空）。
 ⇒ 规避样品表 **22 → 32** 格、诚实写法表 **9 → 17** 格，逐格真跑：10 格新形状 `releases_live` True→False，
-17 格诚实写法仍 True（**没有一处过宽**——真函数 `update_fund_history` 的 `inserted = []` 仍判"递了"）。
+17 格诚实写法仍 True（~~**没有一处过宽**~~ ⇒ ⚠ **这句被第 61 轮当场证伪**：`try/except/else` 里接锁、
+`d = []` 后 `d += [code]` 再递进去两格都判"没接"＝**过宽**，同一把尺子 `For`/`While` 那两档注释里逐字写着
+"`else` 照进"。两格在第 61 轮补腿 + 各配反面样品；"过宽这一族"从此不许再说成"已封"，只许说"这 N 格内没复发"）。
+**表条数一律现数**：`python -c "import ast,io;t=ast.parse(io.open('tests/unit/test_structurally_unverifiable_hold.py',encoding='utf-8').read());print([(n.targets[0].id,len(n.value.keys)) for n in ast.walk(t) if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','') in ('evasions','honest_live')])"`。
 ⚠ 这些形状 `src/`+`scripts/` **今天一个都没有**（`match` 全仓 0 处、空迭代推导式 0 处）⇒ 这一条扣的是
 **"补全"那句承诺说过头**与尺子自身的洞，不是产品行为坏了；docstring 那句"把 λ 的绑法**补全**"已改成
 "清单就是那份样品表"，③ 段那句"三种绑法"也收窄成同一写法（**说满话这一族第 56~60 轮第五次扣分**）。
 ④ **MINOR（条目 10）：归档那把还漏五种隐身拼法**——`row.__dict__.update({...})`、`vars(row)[...]`、
-`s = object.__setattr__` 再 `s(...)`、`db.session.set(row, {...})`、`p = {}` + `p.update({...})` + `q.update(p)`
+~~`s = object.__setattr__` 再 `s(...)`~~、`db.session.set(row, {...})`、`p = {}` + `p.update({...})` + `q.update(p)`
 实测全回 `[]`。现在 `_instance_dict()` 认 `x.__dict__` 与 `vars(x)` 两种、`.setdefault` / `__dict__.update` /
 `vars(...).update` 各补一腿、`session` 这个收件人算"像查询"、组字典那一腿按 sink 动词门控
 （`echo_dict_update` 那格——返回给前端的字典——必须仍为空，第一版不门控就是过宽，被新控制当场点红）。
+⚠ **上面那句"补了五格"里有一格是假的**（第 61 轮 MINOR）：别名 `s = object.__setattr__` 当时实测仍回 `[]`
+（同一批的 docstring 写的才是对的："仍然没补"），`row.__dict__ |= {列: 值}` 也没数到 ⇒ 两格到第 61 轮才真补，
+各配"绑到别的东西上的名字不算 setattr"的反面对照。
 ⚠ **仓库里今天没有活对应物** ⇒ 按本仓尺度定 MINOR，不许写成"产品洞补上了"。
 ⑤ **两条边界的前提以前没写进文字**（条目 11 / 18）："列名是变量的 `setattr` 看不见"之所以**成立**，依据是
 "**当前调用方名单里递不进能写归档列的载荷**"（`src/services/base.py:99-101` 那条载荷驱动写列名**真实存在**，
@@ -399,6 +476,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 `protected_counts`，:355）→ `web/index.html:2549 fetchCleanupPreview`；另有
 `config.py:300 /cleanup/orphan-funds/preview`（**页面不打它**，`grep -rn orphan web/` ⇒ 0）
 与 `src/tasks/cleanup_tasks.py:769` ⇒ **补那一列确实会把行从候选挪进保护**，别把它当死列处理掉。
+⚠ **"读出来的数就在页面上"这一句在第 61 轮又被收窄一次**：`:447` 记的是 `protected_counts["active_viewpoints"]`
+（`:448/:454`），而页面 `web/index.html:667-671` 只渲染五档 `protected_counts`、**不含这一档**
+（`grep -rn active_viewpoints web/` ⇒ 0）⇒ 屏上真会动的是**补集** `counts['viewpoints']`（候选侧，`:657` 那个 `v-for`），
+且它挂着 `v-show="count > 0"` —— 单桶减到 0 时整块消失，"没数"与"归零"在屏幕上同形。细节与复现命令写在
+`docs/模块总览/预测验证与准确率统计.md` §2d（结论一个字不变，措辞按这一层收窄）。
 要说清的分裂是"**预览保护得到、真删保护不到**"：预览这一把认那一列，而线上唯一会删行的三桶
 那一把（`retention_three_buckets.py:584/592`）只比 `deleted_at < cutoff`、一个字都不看那一列，
 加上旧执行器永久下线 ⇒ 补列能改**页面上那个数**，改不了**会不会被删**。
