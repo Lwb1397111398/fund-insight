@@ -294,7 +294,95 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 06:4x（北京），**任务 #141：第 58 轮复评 74/100 返修——三条 MAJOR 里
+最近一次核对（2026-09-28 10:2x（北京），**任务 #143：第 59 轮复评 70/100 返修——三条 MAJOR 里最重的
+一条是"我上一批用来收尾的那段『我自己驳回自己』，把同一个错（死路当产品事实）又写了一遍"；
+第二条是这把尺子对"整包摊进构造函数"失明、而它有一个活的对应物；第三条是同一把尺子内部两腿
+用了两种遍历**（条目号 M-*/m-* 落在 #143 的 metadata 里，报告正文不随仓库走）——
+① **"我更正一下"本身是一句要被现读的断言**（M-1，本批最贵）：第 58 轮那段驳回 M-1 的新文字里，
+我把 `viewpoint_service.delete_viewpoint` 写成"页面那条按钮走它"、把 `cleanup_enhanced.SoftDeleteManager`
+写成"会把两列一起填上的通路"。两句都错（命令与逐字纠正见上面 #141 那段里第 59 轮新加的 ⚠⚠ 块，
+和 `docs/模块总览/预测验证与准确率统计.md` §2d ①~④）：服务层那条**零调用方**、页面那条是
+带 `X-Danger-Confirm` 的**硬删**、那个模块**全仓零 import** ⇒ 连"药方"都是把活路接到死路上。
+真正活着的是 AI 判拒绝 `viewpoint_workflow_service.py:328`（两个时间戳一个都不写），
+而活的硬删要求 `deleted_at.isnot(None)` ⇒ 镜像那 **18** 行 `rejected:` 永远进不了清理桶
+⇒ **任务 #142 整条重写**（旧立论"补 `restore_before` 就有保护"是空转：今天没有活消费面读观点那一列）。
+② **归档那把尺子对"整包摊进构造函数"失明，而且有活的对应物**（M-2）：
+`Model(**{'deleted_at': …})` / `Model(**payload)` 实测都回 `[]`（第 56 轮 m-3 为 **NAV** 那把
+补过同一族，归档这把没接）。现在 `_splat_dicts` 认两档来路（字面量 / 一跳变量），**并且不要求**
+收件人长得像查询（建行本身就是写，与批量那一腿的边界不同）；样品与反面对照各若干格，
+**清单就是那份判据里的控制样品表**（第 59 轮 m-2 立的规矩：数一抄就过期）。⚠ **边界要说白**：
+`data_portability_service.py:231` 的
+`spec.model(**cleaned)` 里**列名是运行时从元数据拼出来的**，任何按 AST 数的尺子都看不见 ⇒
+这一族的闸不在这里，而在 `_clean_row` 剔列 + 行为判据（现在两样都没有 ⇒ **新任务 #144**，
+它属"改公共接口行为"，老板决定项）。⚠ 另外两族今天**仍然看不见**，按同一尺度写进那把尺子的
+docstring 而不是当已封：**列名是变量的 `setattr`**（免疫那把为此开了 `IMMUNITY_OPAQUE_SITES`
+登记通道，这把没有 ⇒ 两把尺子的又一处不对称）、以及**查询从函数参数递进来**（`q.update({列: 值})`
+而 `q` 是形参 —— 按参数名猜它是查询就是本仓反复驳回的"按名字猜"，所以宁可看不见）。
+③ **同一把尺子内部两腿用了两种遍历**（M-3）：`_releases_live` 还能被**五种**新拼法买通（探针实测
+`releases_live=True`）：`d: list = []`（AnnAssign）、`(d := [])`（海象）、
+lambda 绑在**属性**上（`C.r = lambda: …`）或塞进**字典字面量**而没人叫、
+`d = []` + `for _ in d:` 体里的解锁；另有一格"同一名字两次空赋值"上一批已写进豁免（只回溯唯一一次
+赋值），本批仍然按豁免处理、不算新账。根因两族：① **赋值那腿只认 `ast.Assign`**、而 `for` 那一腿
+不做同函数内回溯（参数做一跳、`for` 不做 ⇒ 同一把尺子两种待遇）；② **lambda 只认绑在 Name 上**，
+属性位与字典格里的没人管。现在 `_bound_value`（认 `Assign` / `AnnAssign` / `NamedExpr`，
+绑过两次算"看不清算递到了"）+ `_is_accumulated` 被**两腿共用**，`_empty_container_names` 从同一份
+活节点里推出"可证为空"的名字、`_live_nodes` 第二遍据此剪掉整个 `for` 体，
+`_dead_inner_defs` 按 Name / Attribute / 字典 `@key` 三种绑法收 lambda。
+反面样品同步补（λ 真被叫、`for` 过非空字面量、活 def 里真累加、带标注但真累加……）
+⇒ 剪的是"不可达"，不是"这一族写法"；条数一律看那两份 dict，别在这里抄。
+④ **同一件事在两份文档里给了两种引用**（m-1）：AGENTS 说"两处消费面都比北京 today 减 N 天"、
+模块总览只引三桶 —— 实测前者第二半不成立（`retention_cleanup_service.py:447` 是
+`restore_before >= self.today` 的**窗口检查**，且那个服务的 `today` 是 `date.today()` :157 墙钟）。
+两处现已统一成"只有三桶那一处 + 那一站跑墙钟"。**顺带量出一条产品侧的账**：两个清理服务的"今天"
+是两把钟，而页面三个清理预览都在用墙钟那把的 `build_plan` ⇒ 换北京钟会让硬删**提前** ⇒
+**新任务 #145，决定项、不顺手改**。
+⑤ **会过时的数又不留文字版了**（m-2 / m-3）：`archive_stamp()` 的 docstring 与两份判据注释都写着
+"五种拼法"，而第 57~59 轮实际连着往里补了批量三档来路、裸 SQL 一整族、`object.__setattr__` /
+下标组字典 / `setdefault` / 整包 `**` 摊进构造函数 ⇒ 那三处文字全改成"清单就是那份控制样品表"。
+"回收站那三条活路"里有一站挂在零 import 的模块上 ⇒ 注释改成"三站里两站活着，第三站的意思是
+'以后接回去不许换墙钟'"。
+⑥ **体检日志要能自证是真重跑**（m-4）：`round58-lifecycle-mutations.txt` 与 `round57` 那份
+**逐字节相同**（md5 `19acd5b822c563495ae444cd9f400dce`）而里面没有任何运行时刻 ⇒
+"原始日志随仓库走"这一件事上一批无法自证。现在 `scripts/mutation_proof_lifecycle.py` 起手印一行
+`# run @ <北京 ISO 时刻>  git=<HEAD>  python=<版本>  共 N 处变异 / M 个判据文件`；
+时刻按固定 UTC+8 偏移现算，**不 import `src.*`**（那会把全局 engine 按 `.env` 建出来，
+而体检工具不该连任何库 —— 这条注释就写在函数里）。
+**这批的账也要如实记**：①②③ 全是**判据侧 / 文字侧**，`src/` 只改了一处 docstring（那只钟的
+说明）**、行为一字未动** ⇒ 变异体检**不新增条目**
+（条数一律 `python scripts/mutation_proof_lifecycle.py --list` 看末行），"新腿有没有牙"由那些
+控制样品负责，别拿"变异全 RED"当这一批的证据。
+⑦ **我这一批破了"冻结"这条规矩一次，代价是白跑一遍体检**（写在这儿防下一轮的我）：
+第一次体检跑到 M13 时我去往判据文件里补控制样品 —— **体检是"改写 `src/` → 从磁盘重读判据文件
+跑 pytest"**，所以 CONTROL 用的是旧判据、后面每一处 RED 用的却是新判据 ⇒ 这份日志只能作废。
+强杀（`taskkill /F`）会跳过 `finally` 的还原，当场 `src/fund/fund_api.py` 留着变异载荷
+（`days: int = 30` 顶掉了 `days: Optional[int] = None`）⇒ 收法是 `cp <文件>.mutbackup <文件>`
+再删那个 `.mutbackup`，**确认手段是 `git status --porcelain -- src/` 里那一行消失**，
+不是拿 `git show HEAD:<文件>` 比字节（那串是 LF、工作树是 CRLF，同一内容 56046 vs 57250 必然不等）。
+杀完 lock 文件仍在磁盘上但操作系统已放开 ⇒ 看见 `.mutation-harness.lock` 就 `rm` 是错的。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话）：
+
+- `pytest tests/unit -q` → **1229 passed / 16 skipped / 0 failed**（353.69 秒）。
+- `pytest tests/ -q` → **1238 passed / 16 skipped / 0 failed**（343.49 秒）。
+  （与上一批**同数** —— 本批每一组新样品都并进已有用例的样品表，`def test_` 条数一条没增；
+  分布用 `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_one_ruler_per_question.py 5 -> 5`、`test_structurally_unverifiable_hold.py 32 -> 32`。
+  判据文件当场：`python -m pytest tests/unit/test_one_ruler_per_question.py
+  tests/unit/test_structurally_unverifiable_hold.py -q` ⇒ **48 passed**。）
+  变异：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（M1~M28 含 M3b/M5b；
+  CONTROL-GREEN = 7 个判据文件在干净代码上全绿；无 ANCHOR-MISS / 无 HARNESS-FAIL / 无 `[还原失败]`），
+  原始日志随仓库走 `docs/迭代计划/run-20260927-mutation/round59-lifecycle-mutations.txt`
+  （首行 `# run @ 2026-09-28T09:53:09+08:00  git=0853e343e5e6  python=3.12.10`，
+  md5 `1188a3454943e0d2a3219c54f54a9811` **与上一批、上上批那两份 `19acd5b822c563495ae444cd9f400dce`
+  不同** ⇒ ⑥ 那行运行头生效，"我真重跑过"这句话从此有凭据）。
+  `audit_doc_claims.py` 退 **0**（"全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
+  另有 16 条'看得见但不判'"）。
+  **镜像此刻**（同日 10:1x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`；
+  **生产此刻**（同日 10:1x，只读探针 + 日期现算 `D=$(date -u -d '+8 hours' +%F)`）：
+  `expired_unjudged 17 / held_by_lock 0 / actionable_today 17` —— 与上一批同数，因为
+  **生产仍然没有任何东西在跑**（#132），这 17 条一天天变旧。
+
+（上一批：2026-09-28 06:4x（北京），**任务 #141：第 58 轮复评 74/100 返修——三条 MAJOR 里
 最重的一条不是代码错，是我把一条零调用方的死路写成了产品事实；另外两条都是"同一把尺子的第二份
 分身"（可达性与"有没有累加"用了两套遍历）；还有一条是我接共用尺子时只取了一半**（条目号 M-*/m-*
 落在 #141 的 metadata 里，报告正文不随仓库走）——
@@ -311,15 +399,34 @@ UPDATE"。实测驳回：`grep -rn "delete_viewpoints_by_ids" src/ scripts/ web/
 `restore_before` 挂在 `Prediction`(`database.py:252`) / **`Viewpoint`(:360)** / `CleanupItemLog`(:888)；
 真的那半句是"**页面不读它**"（`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0）。
 ② 我说"墙钟在观点那一站后果方向安全（UTC 让行显得更年轻 ⇒ 硬删**延后**）" —— **方向反了**：
-UTC 容器里 `datetime.now()` 比北京**早** 8 小时，两处消费面比的都是"北京 today 减 N 天"
-（`retention_three_buckets.py:584/592`、`retention_cleanup_service.py:447`）⇒ 那一行显得**更老**
-⇒ 阈值**提前**到 ⇒ 硬删**提前**，站在危险那一侧。
-顺着 ② 还量出一件更实在的（**新任务 #142**）：`delete_viewpoint` 只写 `is_deleted` + `deleted_at`、
-**从不写 `restore_before`** ⇒ `retention_cleanup_service._viewpoint_candidates` 里那句
-"还在可恢复窗口内 ⇒ 保护起来"对**页面删掉的观点恒不成立**（NULL 直接落进日期锚那一支）；
-会把这一对列一起填上的通路是 `cleanup_enhanced.SoftDeleteManager`（按 `hasattr` 填），而页面那条按钮不走它。
+UTC 容器里 `datetime.now()` 比北京**早** 8 小时 ⇒ 那一行显得**更老** ⇒ 阈值**提前**到 ⇒ 硬删**提前**，
+站在危险那一侧。**但"两处消费面"只有三桶那一处**（第 59 轮 m-1 驳回我这句话的第二半）：
+上一版并列引的 `retention_cleanup_service.py:447` 比的是 `restore_before >= self.today`
+（**窗口检查**，不是"today 减 N 天"），而那个服务的 `self.today` 是 `date.today()`（:157，墙钟）
+⇒ 它既不吃北京钟、也压根不读 `Viewpoint.deleted_at`。
+⚠⚠ **顺着 ② 写下的那件"更实在的"（旧任务 #142 的立论）在第 59 轮被整条驳回，而且驳回的正是
+第 58 轮 M-1 刚罚过的那个错**：那两句都不成立 ——
+① "`delete_viewpoint` 只写两列 ⇒ 对**页面删掉的观点**恒不成立"：**页面今天没有"软删观点"这一档**。
+`grep -rn "delete_viewpoint\b" src/ scripts/ web/ tests/` ⇒ 服务层那条 `viewpoint_service.py:254`
+除定义外**零调用方**（同名命中是路由 `viewpoints.py:463`，两条测试叫的也是路由）；
+前端 `viewpoint-manager.js:303` 打的是带 `X-Danger-Confirm: delete-viewpoint` 的
+`axios.delete('/api/viewpoints/${id}')`，路由里是 `db.delete(viewpoint)`（:477）＝**硬删、不进回收站**。
+② "会把这一对列一起填上的通路是 `cleanup_enhanced.SoftDeleteManager`"：那比死路更死 ——
+`grep -rn cleanup_enhanced --include=*.py src/ scripts/ tests/ | grep -i import` ⇒ **全仓零 import**
+⇒ 那句药方是"把活路接到死模块上"。
+**真正活着的那一站**（现读，第 59 轮 M-2）：观点唯一的活软删是 AI 判拒绝那一处
+`viewpoint_workflow_service.py:328`，它写 `is_deleted = True` + `analysis_summary='rejected:…'`，
+**两个时间戳一个都不写**；而活的硬删路（`retention_three_buckets._deleted_viewpoint_ids:591`）
+要求 `deleted_at.isnot(None)` ⇒ 那些行**永远进不了清理桶**（镜像 2026-09-28 实测：总 489 行 /
+软删 418 / 无恢复下界 418 / 无归档时刻 **18** ＝ 全部 `rejected:` 那 18 行。复现
+`python scripts/q.py "select count(*) total, count(*) filter (where is_deleted) soft,
+count(*) filter (where is_deleted and restore_before is null) no_deadline,
+count(*) filter (where is_deleted and deleted_at is null) no_stamp,
+count(*) filter (where is_deleted and analysis_summary like 'rejected:%') rejected from viewpoints"`）。
+⇒ 任务 #142 已按这个重写（旧的"补 `restore_before` 就能保护"根本没人读那一列，是空转）。
 **教训写给下一轮的我**：驳回别人的话之前，先按同一把尺子自己现读一遍代码 —— 这一批两句"更正"
-全是没核就写，与第 47 轮那次"凭印象重列评审条目"同族。
+全是没核就写，与第 47 轮那次"凭印象重列评审条目"同族；**而"我更正一下"本身也是一句要被现读的断言**
+（第 59 轮 M-1 就是这句更正里又犯的同一个错，连着两版）。
 ② **"调用点可达"与"参数递没递"是两把尺子**（M-2）：上一批我把 `_releases_live` 的调用点那一腿
 改成只走活路径，而 `_passes_the_new_dates` 里判"有没有累加"那一腿还走 `ast.walk` 整棵树 ⇒
 一行诱饵就买通整条判据：`d = []` + `def _never(): d.append(1)` + 递 `d`，运行时那个 def 从不被叫、
@@ -405,8 +512,8 @@ UPDATE"是假话**（第 58 轮 M-1）：`grep -rn "delete_viewpoints_by_ids" sr
 这句要有抓手；按本仓规矩（第 49 轮 `_save_fund_mapping`、第 54 轮 `sync_predictions_by_sector_mapping`）
 **死路不配绿灯判据，只配登记 + 写明它是死路**。它按"别的模型"登记（观点的 `deleted_at` 只当硬删年龄锚点，
 页面上没有一句观点的"保留到 X 日"：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0）。
-第 58 轮 M-3 / m-2 又给这一腿补上**三条**拼法：`.update(values={列: 值})`（关键字递字典）、
-`payload = {列: 值}` 再 `.update(payload)`（字典先交变量，一跳回溯；行号锚在**那一格字典**上，
+第 58 轮 M-3 / m-2 又给这一腿补上批量关键字递字典（`.update(values={列: 值})`）、
+字典先交变量再整份递进去（`payload = {列: 值}` 再 `.update(payload)`，一跳回溯；行号锚在**那一格字典**上，
 因为值在哪一行算出来就该在哪一行追责）、以及**裸 SQL 那一整族**（`db.execute(text("UPDATE … SET deleted_at = …"))`）——
 最后这一条不搓第二把尺子，直接问 `scripts/sql_write_policy.py`（"这句 SQL 在写哪一列"从第 48 轮起有共用那把，
 归档这一把当时没接上，等于第四份没写）。⚠ 接它时我先只取了 `classify_sql` 的 `granted` 那一半 ⇒
@@ -415,6 +522,12 @@ UPDATE"是假话**（第 58 轮 M-1）：`grep -rn "delete_viewpoints_by_ids" sr
 `src/` + `scripts/` 里 `execute`/`exec_driver_sql` 调用共 **101** 处，逐处问共用那把尺子，
 命中归档列的 0 处 —— 复核 `python -c` 走 `_functions('src')` / `_functions('scripts')` 那张表），
 所以登记名单没动 —— 但从现在起加一处就得登记并写明依据（`other` 那一档）。
+⚠ **这句话第 59 轮 M-2 只补上了一半**："加一处就得登记"目前成立的范围是**这把尺子看得见的拼法**。
+`Model(**payload)` 这一族（键落在列名上、整包摊进构造函数）现在数得到，**但泛型建行数不到**：
+`data_portability_service.py:231` 的 `spec.model(**cleaned)` 里列名是**运行期按元数据拼出来的**，
+静态看不见 ⇒ 这把尺子对它结构性失明（同一条第 56 轮 m-3 已为 **NAV 那把**补过腿：写净值的证据
+分"点名构造 / `TABLE_SPECS` 泛型建行"两腿，归档这把没有第二腿）。⇒ 那一族的闸不在这里，
+在 `_clean_row` 剔列 + 行为判据（见下面第 59 轮那条与任务 #144）。
 ⑤ **判据自己的红路径会崩**（同一处顺手抓到的）：那条"写站集合与名单不一致"的**解释语句**写成
 `registered - set(found)`（dict 减 set）⇒ 一有新站点就抛 `TypeError` 而不是说出"新增了哪一站"；
 补完批量那一腿的第一次跑就是它，报错长得像"工具坏了"。已改 `set(registered) - set(found)`。
@@ -470,6 +583,8 @@ python 仍按 locale 编码 ⇒ 实测跑到 CONTROL 那行就 `UnicodeEncodeErr
 `{(文件, 函数): 写那一列的语句条数}`，并要求回收站那三条活路**每一处**写的值都出自那只钟
 （来路三档 `stamp`/`none`/`other`，出现 `other` 即红）；三条控制（两处写算 2、
 "钟交给变量再逐列赋"不误判、现插一处正好 +1 且判成 `other`）+ 变异 **M27**。
+⚠ "三条活路"这措辞第 59 轮 m-3 收回：三站里两站活着，`cleanup_enhanced` 整模块零 import
+⇒ 第三格的意思改成"以后接回去不许换墙钟"，不是说页面在走它。
 ⑤ **"两条活路"是半句**（m-3）：合并式整库导入 `data_portability_service.import_data` 也往
 `fund_history` 灌行（`TABLE_SPECS` + `spec.model(**row)`，一个字没写 `FundHistory`）⇒
 那把扫描器对它结构性失明。现在写净值的证据分两腿（点名构造 / `TABLE_SPECS` 泛型建行），
@@ -566,7 +681,7 @@ python 仍按 locale 编码 ⇒ 实测跑到 CONTROL 那行就 `UnicodeEncodeErr
    `status` 那把（"有没有结论"），**归档那把仍然按 `(文件, 函数)` 收集合** ——
    探针往已登记的 `_soft_archive` 里插一行 `prediction.deleted_at = datetime.now()`，
    写站集合一个字不变、函数里那次 `archive_stamp()` 调用也还在 ⇒ 两条断言都不红。
-   **这一批才把它改对**：登记 `{(文件, 函数): 写那一列的语句条数}`，并且回收站那三条活路要求
+   **这一批才把它改对**：登记 `{(文件, 函数): 写那一列的语句条数}`，并且回收站那三处写要求
    **每一处**写的值都出自那只钟（来路三档 `stamp`/`none`/`other`，出现 `other` 即红）；
    三条控制（两处写算 2、正确写法与"先交给变量再逐列赋"不许误判、现插一处必须正好 +1 且判成
    `other`），变异 **M27** 就是那处现插。

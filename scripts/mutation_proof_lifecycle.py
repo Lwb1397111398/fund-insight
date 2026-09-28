@@ -225,6 +225,28 @@ MUTATIONS = [
 ]
 
 
+def _run_stamp():
+    """北京时刻（体检日志要能与"哪一次跑的"对上，见 main 里那行 `# run @`）。
+
+    ⚠ **不 import `src.*`**：这一份进程会在跑期间就地改写 `src/`，而 `src.services…` 一被导入
+    就可能按当时的 `.env` 建起全局 engine（本仓第 33/42 轮那条老规矩）⇒ 这里只按固定偏移算钟，
+    不碰应用代码。时刻只用于日志署名，不参与任何判定。
+    """
+    from datetime import datetime, timedelta, timezone
+    return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec='seconds')
+
+
+def _git_head():
+    """当前 commit（短 sha）；拿不到就回 `unknown`，不许拿静态串冒充。"""
+    import subprocess
+    try:
+        out = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'],
+                             capture_output=True, text=True, timeout=20)
+        return (out.stdout or '').strip() or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
 def _child_env():
     env = dict(os.environ)
     # 放行标记：这一份 pytest 是我自己起的子会话，别被 conftest 那把体检锁拦死
@@ -295,6 +317,12 @@ def main(argv=None):
         return 5
 
     cache, backups, rc = {}, [], 0
+    # 运行头（第 59 轮 MINOR-4）：这份日志以前**逐字节可复制** —— 同样 30 处全 RED 时，
+    # round58 归档的那份与 round57 的 md5 相同（`19acd5b8…`），"我真的重跑过"这句话没有凭据。
+    # 现在每次跑都落一行时刻 + 当时的 commit + 解释器 ⇒ 两次的日志不可能相同，也拦得住拿旧日志冒充。
+    print('# run @ %s  git=%s  python=%s  共 %d 处变异 / %d 个判据文件'
+          % (_run_stamp(), _git_head(), sys.version.split()[0],
+             len(todo), len({m[4] for m in todo})))
     try:
         bad = _control({m[4] for m in todo})
         if bad:

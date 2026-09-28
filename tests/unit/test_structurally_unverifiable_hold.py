@@ -619,6 +619,39 @@ def _empty_container(node):
             and getattr(node.func, 'id', '') in ('list', 'set', 'tuple', 'dict'))
 
 
+def _bound_value(nodes, name):
+    """这些节点里"唯一一次把值绑给 `name`"的那个数（第 59 轮 M-3 把三种绑法并成一处）。
+
+    上一版只认 `ast.Assign` ⇒ `d: list = []`（带标注）与 `(d := [])`（海象）两种日常写法
+    完全隐身：掏空的容器换个绑法就重新变成"递到了"。
+    来路不止一次 ⇒ 交回 `None`（看不清就算递到了，这条闸拦的是"明着掏空"）。
+    """
+    import ast as _ast
+
+    found = []
+    for n in nodes:
+        if isinstance(n, _ast.Assign) and any(
+                isinstance(t, _ast.Name) and t.id == name for t in n.targets):
+            found.append(n.value)
+        elif isinstance(n, _ast.AnnAssign) and isinstance(n.target, _ast.Name) \
+                and n.target.id == name and n.value is not None:
+            found.append(n.value)
+        elif isinstance(n, _ast.NamedExpr) and isinstance(n.target, _ast.Name) \
+                and n.target.id == name:
+            found.append(n.value)
+    return found[0] if len(found) == 1 else None
+
+
+def _is_accumulated(nodes, name):
+    """这些节点里有没有对 `name` 的**累加**（`append/extend/add/insert/update`）。"""
+    import ast as _ast
+
+    return any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
+               and isinstance(c.func.value, _ast.Name) and c.func.value.id == name
+               and c.func.attr in ('append', 'extend', 'add', 'insert', 'update')
+               for c in nodes)
+
+
 def _passes_the_new_dates(call, fn=None, live=None):
     """那次调用有没有真的把"新落的那几天"递进去（第 56 轮 M-2，第 57 轮补一跳回溯）。
 
@@ -634,6 +667,8 @@ def _passes_the_new_dates(call, fn=None, live=None):
     这里还在 `ast.walk` 整棵树 ⇒ 一行诱饵就买通整条判据 ——
     `d = []` + `def _never(): d.append(1)` + 递 `d`，运行时那个 def 从不被叫、`d` 永远是空的，
     而判据看见"有 append"就点头（实测 True）。
+    **第 59 轮 M-3**：那"一次赋值"必须认全**三种绑法**（`d = []` / `d: list = []` / `(d := [])`），
+    否则掏空的东西换个绑法就又是"递到了"（探针实测前两格回 True）。
     """
     import ast as _ast
 
@@ -643,17 +678,12 @@ def _passes_the_new_dates(call, fn=None, live=None):
         return False
     if isinstance(dates, _ast.Name) and (live is not None or fn is not None):
         nodes = live if live is not None else list(_ast.walk(fn))
-        assigned = [a.value for a in nodes if isinstance(a, _ast.Assign)
-                    and any(isinstance(t, _ast.Name) and t.id == dates.id for t in a.targets)]
+        assigned = _bound_value(nodes, dates.id)
         # 关键分界：`inserted = []` 然后一路 `inserted.append(...)` 是**正常累加**（真代码就是这个形状），
         # 而 `d = []` 之后一个字没加就递进去才是"明着掏空"。少了这一句，回溯会把每条正常同步
         # 都判成没接 —— 过宽的闸活不过一轮就会被整条关掉（本仓第 47 轮那条教训）。
-        appended = any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
-                       and isinstance(c.func.value, _ast.Name)
-                       and c.func.value.id == dates.id
-                       and c.func.attr in ('append', 'extend', 'add', 'insert', 'update')
-                       for c in nodes)
-        if len(assigned) == 1 and _empty_container(assigned[0]) and not appended:
+        if assigned is not None and _empty_container(assigned) \
+                and not _is_accumulated(nodes, dates.id):
             return False
     return True
 
@@ -670,20 +700,22 @@ def _call_names(node):
     return set()
 
 
-def _live_nodes(root, fn, dead):
+def _live_nodes(root, fn, dead, empty_names=frozenset()):
     """按"这条语句真会执行"剪过的遍历 —— 可达性只算**一跳**是会漏的（第 57 轮 M-1）。
 
     `dead` 是 `_dead_inner_defs` 交回的那份：`{'names': {…}, 'node_ids': {…}}`
-    （名字 = 从不被叫的内层 `def`；节点 id = 从不被叫的 `lambda`）。
+    （名字 = 从不被叫的内层 `def` 与"属性位绑的 lambda"；节点 id = 从不被叫的 `lambda`）。
 
     剪枝规则与判"接没接"用的是**同一套**（两边各搓一份就是两把尺子）：
     - 恒假 `if` 的主体不进（`orelse` 照进）、恒假三目只走另一臂、`while 恒假` 的循环体不进；
     - **`for … in 空容器字面量` 的循环体不进**（第 58 轮 m-1：`for _ in ():` 与 `while False:` 同一种死法，
       而 `For` 上一版压根不在剪枝表里）；
+      **第 59 轮 M-3 补同一族的第二半**：迭代的是"这个函数里唯一一次绑成空容器、此后没有任何累加"
+      的那个**名字**（`d = []; for _ in d: release(...)`）也不进 —— 只认字面量等于换了个变量名就放行；
     - `except` 那一支不进（出事了才走的路径不算正常接线）；
     - 名字落在 `dead['names']` 里的内层 `def`、节点落在 `dead['node_ids']` 里的 `lambda` 整棵不进。
-    **边界**：只认"迭代对象是空字面量"这一种可证不进入的 `for`；`range(0)`、空生成器表达式这些
-    要靠数据流才看得出来，这一版不猜（与 `_proves_sqlite` 那条"不到运行时去猜"同一个尺度）。
+    **边界**：`for` 那一腿只认"空字面量"与"唯一一次绑成空容器且无累加的名字"这两种**可证**不进入；
+    `range(0)`、空生成器表达式这些要靠数据流才看得出来，这一版不猜（与 `_proves_sqlite` 同尺度）。
     """
     import ast as _ast
 
@@ -696,7 +728,9 @@ def _live_nodes(root, fn, dead):
         arms = [root.orelse] if _never_runs(root.test) else [root.body, root.orelse]
     elif isinstance(root, _ast.While) and _never_runs(root.test):
         arms = list(root.orelse)                      # 循环体不进，`else` 照进
-    elif isinstance(root, (_ast.For, _ast.AsyncFor)) and _empty_container(root.iter):
+    elif isinstance(root, (_ast.For, _ast.AsyncFor)) and (
+            _empty_container(root.iter) or
+            (isinstance(root.iter, _ast.Name) and root.iter.id in empty_names)):
         arms = list(root.orelse)                      # 一次都不进体，`else` 照进
     elif isinstance(root, (_ast.Try, _ast.TryStar)):
         arms = list(root.body) + list(root.finalbody or [])
@@ -712,7 +746,41 @@ def _live_nodes(root, fn, dead):
     else:
         arms = list(_ast.iter_child_nodes(root))
     for arm in arms:
-        yield from _live_nodes(arm, fn, dead)
+        yield from _live_nodes(arm, fn, dead, empty_names)
+
+
+def _empty_container_names(fn, nodes):
+    """这个函数里"唯一一次绑成空容器、此后没有任何累加"的那些名字（第 59 轮 M-3 第⑤格）。
+
+    与 `_passes_the_new_dates` 的参数那一腿**共用** `_bound_value` / `_is_accumulated`，
+    不再搓第二把尺子。绑过不止一次 ⇒ 不认（看不清就当它进得去，这条闸拦"明着不执行"）。
+    """
+    import ast as _ast
+
+    out = set()
+    for n in nodes:
+        if isinstance(n, _ast.For) and isinstance(n.iter, _ast.Name):
+            name = n.iter.id
+            bound = _bound_value(nodes, name)
+            if bound is not None and _empty_container(bound) and not _is_accumulated(nodes, name):
+                out.add(name)
+    return out
+
+
+def _call_keys(node):
+    """这次调用"叫的是谁"的**全部键**：函数名、属性叶子名、以及 `d['键']()` 那种字典派发
+    （第 59 轮 M-3 的第④格：lambda 塞进字典字面量里、靠 `hooks['r']()` 叫，
+    上一版 `_call_names` 对 `Subscript` 交回空集 ⇒ 那棵 λ 的体照常进遍历）。
+    字典派发那一档用 `@键` 前缀，避免与真函数名撞车。
+    """
+    import ast as _ast
+
+    out = set(_call_names(node))
+    f = node.func
+    if isinstance(f, _ast.Subscript) and isinstance(f.slice, _ast.Constant) \
+            and isinstance(f.slice.value, str):
+        out.add('@' + f.slice.value)
+    return out
 
 
 def _dead_inner_defs(fn):
@@ -726,6 +794,11 @@ def _dead_inner_defs(fn):
        所以"这个 def 里有一次解锁"不等于接了线 ⇒ 认调用点时要**扣掉它自己体内那些**；
     ② `_r = lambda: release(...)` 绑在名字上而没人 `_r()` —— 与死 def 同一件事，
        以前 `Lambda` 的体照常进遍历。
+    **第 59 轮 M-3 把 λ 的绑法补全**（探针实测这两种仍判"已接线"）：
+    ③ `C.r = lambda: release(...)`（绑在**属性位**上，靠 `x.r()` 叫）；
+    ④ `{'r': lambda: release(...)}`（塞进**字典字面量**，靠 `hooks['r']()` 叫）。
+    ⇒ 三种绑法各按自己的"被叫得上"的键去对（属性看叶子名、字典看 `@键`），
+    对不上就是死路；诚实写法（真去 `C.r()` / `hooks['r']()`）仍然算接上，见那两条反面样品。
     """
     import ast as _ast
 
@@ -734,8 +807,17 @@ def _dead_inner_defs(fn):
     lambdas = {}
     for n in _ast.walk(fn):
         if isinstance(n, _ast.Assign) and isinstance(n.value, _ast.Lambda) \
-                and len(n.targets) == 1 and isinstance(n.targets[0], _ast.Name):
-            lambdas[n.targets[0].id] = n.value
+                and len(n.targets) == 1:
+            t = n.targets[0]
+            if isinstance(t, _ast.Name):
+                lambdas[t.id] = n.value               # `_r = lambda: …`
+            elif isinstance(t, _ast.Attribute):
+                lambdas[t.attr] = n.value             # `C.r = lambda: …`（第 59 轮 M-3 ③）
+        elif isinstance(n, _ast.Dict):
+            for k, v in zip(n.keys, n.values):
+                if isinstance(v, _ast.Lambda) and isinstance(k, _ast.Constant) \
+                        and isinstance(k.value, str):
+                    lambdas['@' + k.value] = v        # `{'r': lambda: …}`（第 59 轮 M-3 ④）
     dead_names, dead_ids = set(), set()
     for _ in range(len(inner) + len(lambdas) + 1):    # 单调收缩，最多这么多轮
         live_calls = [c for c in _live_nodes(fn, fn, {'names': dead_names, 'node_ids': dead_ids})
@@ -748,7 +830,8 @@ def _dead_inner_defs(fn):
             if not any(d.name in _call_names(c) and id(c) not in inside for c in live_calls):
                 nxt_names.add(d.name)
         for name, lam in lambdas.items():
-            if not any(name in _call_names(c) for c in live_calls):
+            # `@键` 那种是字典派发（`hooks['r']()`），其余按名字/属性叶子名对 ⇒ 用 `_call_keys`
+            if not any(name in _call_keys(c) for c in live_calls):
                 nxt_ids.add(id(lam))
         if nxt_names == dead_names and nxt_ids == dead_ids:
             break
@@ -767,7 +850,12 @@ def _releases_live(fn):
     """
     import ast as _ast
 
-    live = list(_live_nodes(fn, fn, _dead_inner_defs(fn)))
+    dead = _dead_inner_defs(fn)
+    # 两趟：第一趟先按"叫不到的 def / λ"剪出活节点，再从活节点里量出"哪些名字明摆着是空的"
+    # （`d = []; for _ in d: …` 那一格），第二趟把这份名单喂进剪枝。反过来一次算不成，
+    # 因为"这个名字是不是空容器"本身要看它有没有被活路径累加过。
+    first = list(_live_nodes(fn, fn, dead))
+    live = list(_live_nodes(fn, fn, dead, _empty_container_names(fn, first)))
     for node in live:
         if isinstance(node, _ast.Call) and \
                 (getattr(node.func, 'attr', None) or getattr(node.func, 'id', '')) == \
@@ -944,6 +1032,35 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    d = []\n'
             '    def _never():\n        d.append(1)\n'
             '    release_holds_after_nav_commit(db, code, d)\n'),
+        # 第 59 轮 M-3 的五格：掏空的东西**换个绑法**、λ **换个位置**、空容器**换个名字迭代**，
+        # 上一版四种判"接了"（探针实测），第五格是"迭代那个空名字本身"。
+        '带类型标注的空列表再递进去': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d: list = []\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '海象绑的空列表再递进去': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    (d := [])\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        'lambda 绑在属性位而没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    class C:\n        pass\n'
+            '    C.r = lambda: release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return 0\n'),
+        'lambda 塞进字典字面量而没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    hooks = {'r': lambda: release_holds_after_nav_commit(db, code, inserted)}\n"
+            '    return 0\n'),
+        '迭代那个本身为空的名字': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    for _x in d:\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
     }
     for label, src in evasions.items():
         assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {
@@ -993,6 +1110,37 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    def _fill():\n        d.append(code)\n'
             '    _fill()\n'
             '    release_holds_after_nav_commit(db, code, d)\n'),
+        # 第 59 轮 M-3 那五格的**反面样品**：换了绑法/换了位置的 λ 只要"真被叫到"、
+        # 空容器只要"真累加过"，就必须仍算接上 ⇒ 修的是"不可达"，不是"这一族写法"。
+        '带标注且真累加': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d: list = []\n'
+            '    d.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '海象绑且真累加': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    (d := [])\n'
+            '    d.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '属性位上的 lambda 真的被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    class C:\n        pass\n'
+            '    C.r = lambda: release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return C.r()\n'),
+        '字典里的 lambda 真的被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    hooks = {'r': lambda: release_holds_after_nav_commit(db, code, inserted)}\n"
+            "    return hooks['r']()\n"),
+        'for 迭代的是"先放过东西"的那个名字': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = [code]\n'
+            '    for _x in d:\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
     }
     for label, src in honest_live.items():
         assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {

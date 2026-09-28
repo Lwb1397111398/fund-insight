@@ -232,9 +232,14 @@ def _targets(n):
 
     第一版只认单个 `ast.Attribute`，于是解包赋值整个漏掉 —— 而共用那只钟的正确写法
     恰好就是 `pred.deleted_at, pred.restore_before = archive_stamp()`。
+    ⚠ `row.deleted_at: datetime = …`（带标注的赋值）也算一处写（第 59 轮探针 D1：同一份判据里的
+    `_query_named` 认 `AnnAssign`、这一腿不认 ⇒ 同一把尺子两种待遇）；
+    **纯声明**（`row.deleted_at: datetime` 没有值）不写任何东西，不许数。
     """
     if isinstance(n, (ast.Assign, ast.AugAssign)):
         raw = n.targets if isinstance(n, ast.Assign) else [n.target]
+    elif isinstance(n, ast.AnnAssign):
+        raw = [] if n.value is None else [n.target]
     else:
         raw = []
     out, stack = [], list(raw)
@@ -247,6 +252,23 @@ def _targets(n):
         elif isinstance(t, ast.Attribute):
             out.append(t)
     return out
+
+
+def _dunder_dict_key(assign):
+    """`row.__dict__['deleted_at'] = …` → `(列名, 值的表达式)`，不是就交回 None。
+
+    这一格与"组个字典再递进库"那一族**不是一件事**：直接改实例的 `__dict__` 等价于属性赋值，
+    所以**不要求**收件人长得像查询（`_dict_target_key` 那一腿要，因为它组的是普通字典）。
+    第 46 轮授予那把尺子认下标赋值，归档这一把上一版不认（探针 B3 实测回 `[]`）。
+    """
+    if not isinstance(assign, ast.Assign) or len(assign.targets) != 1:
+        return None
+    t = assign.targets[0]
+    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute) \
+            and t.value.attr == '__dict__' \
+            and isinstance(t.slice, ast.Constant) and isinstance(t.slice.value, str):
+        return t.slice.value, assign.value
+    return None
 
 
 def _stamp_names(node):
@@ -346,6 +368,69 @@ def _sql_policy():
     return sp
 
 
+def _splat_dicts(node, call):
+    """`Model(**{列: 值})` 与 `Model(**payload)` 里那些字典（第 59 轮 M-2）。
+
+    属性赋值 / 解包 / setattr / 关键字 / 批量 `.update()` 之外还有这一族：**整包摊进构造函数**。
+    `Prediction(**{'deleted_at': datetime.now()})` 与 `Prediction(deleted_at=datetime.now())`
+    是同一件事，而上一版只认后者 ⇒ 这一格实测回 `[]`。
+    `**payload` 那一腿只回溯一跳（函数里**唯一一次**字典赋值才认），与批量那一腿同一个尺度。
+    **边界要说清**：`spec.model(**cleaned)`（合并导入整库那条泛型建行）里**列名静态看不见**，
+    这把尺子对它结构性失明 —— 与第 56 轮 NAV 那把遇到的完全同族，那一洞不在这里数，
+    由任务 #143 M-2 记着（`_clean_row` 只剔免疫两列 ⇒ 自带 `deleted_at=60 天前` 的 JSON
+    能给任意行伪造"回收站年龄"，而 `/api/config/import` 合并模式既无总开关也无确认头）。
+    """
+    out = []
+    for kw in call.keywords or []:
+        if kw.arg is not None:                # `**{…}` 的 `kw.arg` 是 None
+            continue
+        if isinstance(kw.value, ast.Dict):
+            out.append(kw.value)
+        elif isinstance(kw.value, ast.Name):
+            cands = [a.value for a in ast.walk(node)
+                     if isinstance(a, ast.Assign) and len(a.targets) == 1
+                     and isinstance(a.targets[0], ast.Name)
+                     and a.targets[0].id == kw.value.id and isinstance(a.value, ast.Dict)]
+            if len(cands) == 1:
+                out.append(cands[0])
+    return out
+
+
+def _dict_sink_names(node):
+    """这个函数里"最终落到库上"的那些字典变量的名字（第 59 轮 M-2 的第二半）。
+
+    `payload['deleted_at'] = 墙钟` / `payload.setdefault('deleted_at', 墙钟)` 这种**组字典**的写法，
+    单看一句话分不清它是要 `.update(payload)` 进库、还是 `return` 给前端 ——
+    上一版正因为分不清，只对"收件人长得像查询"的批量写计分（那是防过宽的边界）。
+    这里补的是另一半：**同一个函数里这个字典真的被递进批量写 / 摊进构造函数**，
+    那它组装的每一格就是写库的一部分，必须数。没被递出去（`get_detail` 那种整份 return）→ 不数。
+    """
+    sinks = set()
+    for n in ast.walk(node):
+        if not isinstance(n, ast.Call):
+            continue
+        fn = getattr(n.func, 'id', '') or getattr(n.func, 'attr', '')
+        if fn in _BULK_WRITE_CALLS and isinstance(n.func, ast.Attribute):
+            for a in list(n.args) + [k.value for k in (n.keywords or [])]:
+                if isinstance(a, ast.Name):
+                    sinks.add(a.id)
+        for k in n.keywords or []:
+            if k.arg is None and isinstance(k.value, ast.Name):   # `Model(**payload)`
+                sinks.add(k.value.id)
+    return sinks
+
+
+def _dict_target_key(assign):
+    """`payload['deleted_at'] = …` 这种下标赋值 → `(收件人名, 键名, 值的表达式)`，不是就交回 None。"""
+    if not (isinstance(assign, ast.Assign) and len(assign.targets) == 1):
+        return None
+    t = assign.targets[0]
+    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) \
+            and isinstance(t.slice, ast.Constant) and isinstance(t.slice.value, str):
+        return t.value.id, t.slice.value, assign.value
+    return None
+
+
 def _archive_writes(node):
     """这个函数往"归档那一对列"写了几次、每次的值出自哪里。
 
@@ -354,7 +439,7 @@ def _archive_writes(node):
     `none`＝清空（还原那一支）、
     `other`＝**别处算出来的时间**（墙钟、`date.today()+…`、外面传进来的参数……）。
     第 56 轮 M-4：上一版只交回"写过哪几列"的**集合** ⇒ 一个函数里两处写与一处写在名单上
-    长得一模一样，而"回收站那三条必须共用那只钟"那半句只核到"函数里调用过 archive_stamp"
+    长得一模一样，而"回收站那几处必须共用那只钟"那半句只核到"函数里调用过 archive_stamp"
     —— 在已登记的 `_soft_archive` 里再插一行 `row.deleted_at = datetime.now()`，
     集合不变、那次调用也还在 ⇒ 两条断言都不红（实测）。
     第 57 轮 m-4 补三种边：
@@ -363,10 +448,20 @@ def _archive_writes(node):
     ② **批量写** —— `.update({col: …})` / `.values({col: …})` 里字典的**键**在列名上，
        这一路以前一格都不数 ⇒ 有人把归档改成批量 UPDATE，那条"每处都必须出自那只钟"当场失明；
     ③ **同一行同名的两处** 不能再被 `set` 并成一处，去重按 `(行, 列, 来路, **那次出现的位置**)`。
-    属性赋值 / 解包赋值 / setattr / 关键字参数 / 批量字典五种拼法都算一次写。
+    认到哪几种拼法为止**以那份判据里的控制样品为准**（属性赋值 / 解包 / 带标注的赋值 / `setattr` /
+    `object.__setattr__` / 关键字 / 改实例的 `__dict__` / 下标组字典 / `setdefault` /
+    整包 `**` 摊进构造函数 / 裸 SQL …… 第 57~59 轮各补了一批），别在下面抄个数 —— 抄的那个数每次加拼法都会过期。
+    ⚠ **仍然要说清它看不见哪两族**（第 59 轮探针 B1/B4，与上面那些"补了就数得到"的不是同一档）：
+    ① `setattr(row, 变量, …)` / `getattr` 式写 —— 列名是变量 ⇒ 这一把**没有**登记通道
+      （免疫那把为这一档开了 `IMMUNITY_OPAQUE_SITES`，两把尺子对同一件事两种待遇，写在这儿防下轮误当已封）；
+    ② `spec.model(**cleaned)` 那种**泛型建行** —— 列名运行时从元数据拼出来，任何按 AST 数的尺子
+      都看不见 ⇒ 那一族的闸在 `_clean_row` 剔列 + 行为判据，不在这里（任务 #144）；
+    ③ **查询从函数参数递进来**（`def f(q): q.update({列: 值})`）—— 收件人是不是查询要到调用方才知，
+      而"按变量名猜它是 q 还是 query"本仓一贯拒绝（第 45 轮"方向要来自值"同一族）⇒ 不猜、也不数。
     """
     stamp = _stamp_names(node)
     query_vars = _query_named(node)
+    sink_names = _dict_sink_names(node)
     policy = _sql_policy()
     sql_vars = policy.resolve_assigned_sql(node)
     hits = []
@@ -399,12 +494,33 @@ def _archive_writes(node):
         hits.append((lineno, col, attr, kind))
 
     for n in ast.walk(node):
-        if isinstance(n, (ast.Assign, ast.AugAssign)):
+        if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             for t in _targets(n):
                 if t.attr in ARCHIVE_COLUMNS:
                     _add(n.lineno, t.col_offset, t.attr, _source_of(n.value))
+            # `row.__dict__['deleted_at'] = …`：改的就是那个实例，等价于属性赋值 ⇒ 不受"收件人
+            # 得像查询"那条边界管（探针 B3：免疫那把尺子认这一族，归档这一把上一版不认）
+            dd = _dunder_dict_key(n)
+            if dd and dd[0] in ARCHIVE_COLUMNS:
+                _add(n.lineno, n.col_offset, dd[0], _source_of(dd[1]))
+            # 组字典那一族：`payload['deleted_at'] = 墙钟` —— 只有这个字典**在本函数里真的递进了库**
+            # （批量写 / 摊进构造函数）才算写库，否则它是回显给前端的字典（`get_detail` 的形状）。
+            if isinstance(n, ast.Assign) and isinstance(_dict_target_key(n), tuple):
+                name, key, value = _dict_target_key(n)
+                if key in ARCHIVE_COLUMNS and name in sink_names:
+                    _add(n.lineno, n.col_offset, key, _source_of(value))
         if isinstance(n, ast.Call):
             fn = getattr(n.func, 'id', '') or getattr(n.func, 'attr', '')
+            if fn == '__setattr__' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
+                    and n.args[1].value in ARCHIVE_COLUMNS:
+                # `object.__setattr__(row, 'deleted_at', …)`：第 46 轮授予那把尺子认这一族，
+                # 归档这一把上一版不认（探针实测回 `[]`）⇒ 同一件事两种判法就是两把尺子
+                _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
+            if fn == 'setdefault' and len(n.args) > 1 \
+                    and isinstance(n.args[0], ast.Constant) and n.args[0].value in ARCHIVE_COLUMNS \
+                    and isinstance(n.func, ast.Attribute) \
+                    and getattr(n.func.value, 'id', '') in sink_names:
+                _add(n.lineno, n.args[0].col_offset, n.args[0].value, _source_of(n.args[1]))
             if fn == 'setattr' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
                     and n.args[1].value in ARCHIVE_COLUMNS:
                 _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
@@ -421,6 +537,14 @@ def _archive_writes(node):
                                 _add(k.lineno, k.col_offset, k.value, _source_of(v))
                             elif isinstance(k, ast.Attribute) and k.attr in ARCHIVE_COLUMNS:
                                 _add(k.lineno, k.col_offset, k.attr, _source_of(v))
+            # 整包摊进构造函数那一族（`Model(**{列: 值})` / `Model(**payload)`，第 59 轮 M-2）：
+            # 建行本身就是写，所以**不要求**收件人长得像查询（与上面批量那一腿的边界不同）。
+            for payload in _splat_dicts(node, n):
+                for k, v in zip(payload.keys, payload.values):
+                    if isinstance(k, ast.Constant) and k.value in ARCHIVE_COLUMNS:
+                        _add(k.lineno, k.col_offset, k.value, _source_of(v))
+                    elif isinstance(k, ast.Attribute) and k.attr in ARCHIVE_COLUMNS:
+                        _add(k.lineno, k.col_offset, k.attr, _source_of(v))
             # 裸 SQL 那一腿（第 58 轮 m-2）："这句 SQL 在写哪一列"问共用那把尺子，
             # 值出自哪只钟它答不出（SQL 文本里的 `now()` / `:ts` 都不是 `archive_stamp()`）
             # ⇒ 一律记 `other`：**任何**用裸 SQL 写归档列的站点都必须登记并写明依据。
@@ -445,8 +569,8 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
     第 54 轮 A-1 / B-2：`_soft_archive` 改成北京钟时，页面「合并相似预测」那条活路没跟上，
     而它的 docstring 就写着"唯一实现"。登记名单按 (文件, 函数) 数**语句条数**：
     加一处不登记就红；登记了却不再写那一列也红。
-    第 57 轮 m-4 把 `_archive_writes` 补到能数**五种拼法**（属性赋值 / 解包 / setattr /
-    关键字 / 批量 `.update({...})`），并认下"钟先交出来再取下标"那一腿 ——
+    第 57 轮 m-4 把 `_archive_writes` 从"只认属性赋值"补到能认批量写那一族，并把去重键
+    换成"每次出现的位置"（下面那一大串控制样品就是它现在认的全集，第 58~59 轮又各补一批）——
     补上批量这一腿**当场量到**的站点里有 `delete_viewpoints_by_ids`，
     而它**是零调用方的死路**（第 58 轮 M-1 抓到：上一版我把死路写成"页面「批量删除观点」一直在用"，
     那是假话 —— 登记它的理由是"它会写那一列"，与有没有人调无关，见下面那条注释）。
@@ -461,22 +585,28 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         ('src/tasks/cleanup_enhanced.py', 'restore'): 2,
         # —— 只读审计：把列名放进清单里打印（`CleanupItemLog` 自己那行日志的时间戳）
         ('src/services/retention_cleanup_service.py', '_audit_item'): 1,
-        # —— 别的模型（观点）自己的软删。⚠ 这一条注释**上一版里两句都是假的**，现读代码逐句改正：
-        # ① 我写过"`Viewpoint` 模型压根没有 `restore_before` 这一列" —— **错**：
-        #    `python -c "import ast,io;…"` 按类数一遍 ⇒ `restore_before` 挂在
-        #    `Prediction`(database.py:252) / **`Viewpoint`(database.py:360)** / `CleanupItemLog`(:888) 三张表上。
+        # —— 别的模型（观点）自己的软删。**⚠ 这条注释连着两版都写过假话，第 59 轮全部按代码重做**：
+        # ① 第 57 轮我写"`Viewpoint` 模型压根没有 `restore_before` 这一列" —— 错。AST 按类数
+        #    `src/models/database.py`：`Prediction:252` / **`Viewpoint:360`** / `CleanupItemLog:888` 三张表都有。
         #    真的那半句是**页面不读它**：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0。
-        # ② 我写过"墙钟在那里的后果方向安全（UTC 让行显得更年轻 ⇒ 硬删延后）" —— **反了**：
-        #    `datetime.now()` 在 UTC 容器里比北京**早 8 小时**，而两处消费面都比的是
-        #    "北京 today 减 N 天"（`retention_three_buckets.py:584/592` 的 `Viewpoint.deleted_at < cutoff`、
-        #    `retention_cleanup_service.py:447`）⇒ 那一行显得**更老** ⇒ 阈值**提前**到 ⇒ 硬删**提前**，
-        #    不是延后。方向本身就站在危险那一侧，这一条因此单独立成任务 #142。
-        # ③ 顺着 ② 现读到一件更实在的：`delete_viewpoint` 只写 `is_deleted` + `deleted_at`、
-        #    **从不写 `restore_before`** ⇒ `retention_cleanup_service._viewpoint_candidates` 那句
-        #    "还在可恢复窗口内 ⇒ protected"对**页面删掉的观点恒不成立**（NULL 直接落进日期锚那一支）。
-        #    写这一对列的正当通路是 `cleanup_enhanced.SoftDeleteManager`（它按 `hasattr` 会把
-        #    `restore_before` 一起填上），而页面的那条按钮不走它。⇒ 任务 #142，登记在这儿是为了
-        #    别让"已登记"被读成"这一站没问题"。
+        # ② 第 58 轮我写"页面「删除观点」那条按钮走 `viewpoint_service.delete_viewpoint`，
+        #    所以它拿不到恢复窗口" —— **又错，而且错的正是第 58 轮 M-1 刚罚过的那个错**（把死路当产品事实）：
+        #    `grep -rn "delete_viewpoint\b" src/ scripts/ web/ tests/` ⇒ 这个方法在 src/scripts/web
+        #    **零调用方**（同名命中的是 `src/api/routes/viewpoints.py:463` 那个**路由**，两条测试叫的也是路由）；
+        #    前端 `web/viewpoint-manager.js:303` 打的是
+        #    `axios.delete('/api/viewpoints/${id}', {headers:{'X-Danger-Confirm':'delete-viewpoint'}}`)
+        #    ⇒ 页面那条是**带确认头的硬删**（`db.delete(viewpoint)`，回执"观点已永久删除"）。
+        #    我当时当药方引用的 `cleanup_enhanced.SoftDeleteManager` 同样**全仓零 import**。
+        #    ⇒ 这两条登记项今天都是死路，登记理由只剩"它会写那一列"（与有没有人调无关）。
+        # ③ 现在按代码写清**活的**那一站在哪、以及这把尺子为什么看不见它：
+        #    活的观点软删只有 AI 拒绝那一处 `viewpoint_workflow_service.py:328`（`viewpoint.is_deleted = True`），
+        #    而它**这两个时间戳一个都不写** ⇒ 这把按"写归档列"收站点的尺子对它**结构性失明**，
+        #    另一面是 `retention_three_buckets._deleted_viewpoint_ids:591` 要求 `deleted_at.isnot(None)`
+        #    ⇒ 那些行永远进不了清理桶（镜像实测 18 行 = 418 软删 − 400 带戳）。⇒ 任务 #142 已按这个重写。
+        # ④ 还有一处两把钟：`retention_cleanup_service.py:157` 是 `self.today = today or date.today()`
+        #    而三处调用方一个 `today` 都不传 ⇒ 它跑**墙钟**；同做清理的 `retention_three_buckets.py:185`
+        #    用北京 `current_as_of()`。上一版我在 AGENTS 里把 :447 那句
+        #    （`restore_before >= self.today`，是**窗口检查**、不是"today 减 N 天"）说成"北京那把钟" —— 也是错的。
         ('src/services/viewpoint_service.py', 'delete_viewpoint'): 1,
         # ⚠ **这一条是死路**（第 58 轮 M-1 抓到我把死路说成产品事实）：
         # `grep -rn "delete_viewpoints_by_ids" src/ scripts/ web/` ⇒ **只命中定义那一行**
@@ -504,6 +634,11 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
             '这些函数里"写归档那一对列"的**处数**与登记不符（实测, 登记）：%s ⇒ '
             '在一条已登记的活路里再加一处写，以前这条闸一个字都不报（第 56 轮 M-4）' % wrong)
 
+    # 逐处核"来路"：这三处都登记在名单里、都往那一对列写，但**只有前两处今天活着**。
+    # ⚠ `src/tasks/cleanup_enhanced.py` 整模块**零 import**（`grep -rn cleanup_enhanced
+    # --include=*.py src/ scripts/ tests/ | grep -i import` ⇒ 只剩我这行注释），
+    # 所以第三格不是"页面在走的一条活路"，而是"谁把它接回去时不许换成墙钟"（第 59 轮 m-3：
+    # 上一版把这三处一起叫"回收站那三条活路"，与刚被驳回的 M-1 同一族）。
     for rel, name in (('src/services/prediction_service.py', '_soft_archive'),
                       ('src/services/prediction_maintenance_service.py',
                        'deduplicate_predictions'),
@@ -615,6 +750,66 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
                           'WHERE deleted_at IS NOT NULL"))\n')
     assert _archive_writes(ast.parse(raw_sql_where_only).body[0]) == [], (
             '只在 WHERE 里出现那一列被数成写 ⇒ 过宽：那把共用尺子的第一条反向对照就是它')
+    # 第 59 轮 M-2 剩下的三格：整包摊进构造函数 / `object.__setattr__` / **组字典**
+    splat = ('def f():\n'
+             "    return Prediction(**{'deleted_at': datetime.now()})\n")
+    assert _archive_writes(ast.parse(splat).body[0]) == [(2, 'deleted_at', 'other')], (
+            '`Model(**{列: 值})` 认不出 ⇒ 建行时把归档年龄一起摊进去就脱开这把尺子'
+            '（合并导入 `data_portability_service.py:231` 那条泛型建行正是这族）')
+    splat_from_stamp = ('def f():\n'
+                        "    return Prediction(**{'deleted_at': archive_stamp()[0]})\n")
+    assert _archive_writes(ast.parse(splat_from_stamp).body[0]) == [(2, 'deleted_at', 'stamp')], (
+            '同一个位置、值出自那只钟却被判成"别处" ⇒ 过宽')
+    obj_setattr = ('def f(row):\n'
+                   "    object.__setattr__(row, 'deleted_at', datetime.now())\n")
+    assert _archive_writes(ast.parse(obj_setattr).body[0]) == [(2, 'deleted_at', 'other')], (
+            '`object.__setattr__` 这一族第 46 轮授予那把尺子就认，归档这一把不认 ⇒ '
+            '同一件事两种判法（探针实测上一版回 []）')
+    dict_payload_into_bulk = ('def f(db):\n'
+                              '    payload = {}\n'
+                              "    payload['deleted_at'] = datetime.now()\n"
+                              '    return db.query(Prediction).update(payload)\n')
+    assert _archive_writes(ast.parse(dict_payload_into_bulk).body[0]) == \
+        [(3, 'deleted_at', 'other')], ('组完字典再整份递进 UPDATE 认不出 ⇒ 又一条隐身拼法')
+    dict_setdefault = ('def f(db):\n'
+                       '    payload = {}\n'
+                       "    payload.setdefault('restore_before', datetime.now())\n"
+                       '    return db.query(Prediction).update(payload)\n')
+    assert _archive_writes(ast.parse(dict_setdefault).body[0]) == \
+        [(3, 'restore_before', 'other')], ('`setdefault` 组字典那一格认不出 ⇒ 同上一格同族')
+    # 上面两格的**反面**：字典没递进库（只是回显给前端）就一处都不许数 —— 少了这两格，
+    # "收件人得长得像查询"那条边界会被我为了数全拼法而悄悄放弃（第 57 轮 m-4 的过宽教训）
+    echo_subscript = ('def f(p):\n'
+                      '    d = {}\n'
+                      '    d[\'deleted_at\'] = p.deleted_at\n'
+                      '    return d\n')
+    assert _archive_writes(ast.parse(echo_subscript).body[0]) == [], (
+            '把回显字典的下标赋值数成写 ⇒ 过宽：`_serialize` 那一族会天天红')
+    echo_setdefault = ('def f(opts):\n'
+                       "    opts.setdefault('deleted_at', None)\n"
+                       '    return opts\n')
+    assert _archive_writes(ast.parse(echo_setdefault).body[0]) == [], (
+            '没递进库的 setdefault 被数成写 ⇒ 过宽（同上一条同族）')
+    # 第 59 轮探针剩下的两格：**带标注的赋值** 与 **改实例的 `__dict__`**
+    annotated = ('def f(row):\n'
+                 '    row.deleted_at: datetime = datetime.now()\n')
+    assert _archive_writes(ast.parse(annotated).body[0]) == [(2, 'deleted_at', 'other')], (
+            '`row.deleted_at: datetime = 墙钟` 数不到 ⇒ 同一把尺子内部两种待遇'
+            '（同文件的 `_query_named` 认 AnnAssign，探针 D1 实测上一版回 []）')
+    annotated_decl_only = ('def f(row):\n'
+                           '    row.deleted_at: datetime\n')
+    assert _archive_writes(ast.parse(annotated_decl_only).body[0]) == [], (
+            '纯声明（没有值）被数成写 ⇒ 过宽：那种一行什么都没写')
+    dunder_dict = ('def f(row):\n'
+                   "    row.__dict__['deleted_at'] = datetime.now()\n")
+    assert _archive_writes(ast.parse(dunder_dict).body[0]) == [(2, 'deleted_at', 'other')], (
+            '直接改实例的 `__dict__` 等价于属性赋值，上一版一格都不数 ⇒ '
+            '免疫那把尺子（第 46 轮）认下标赋值，这把不认就是两把尺子')
+    dunder_dict_from_stamp = ('def f(row):\n'
+                              "    row.__dict__['restore_before'] = archive_stamp()[1]\n")
+    assert _archive_writes(ast.parse(dunder_dict_from_stamp).body[0]) == \
+        [(2, 'restore_before', 'stamp')], (
+            '同一个位置、值出自那只钟却判成"别处" ⇒ 过宽（那条 stray 检查会天天红）')
 
     # 控制三（M-4 的本体）：往真实登记在册的 `_soft_archive` 注入一处墙钟写 ⇒ 处数 +1 且是 other
     rel, name = 'src/services/prediction_service.py', '_soft_archive'
