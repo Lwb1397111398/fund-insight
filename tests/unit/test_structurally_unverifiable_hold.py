@@ -644,21 +644,53 @@ def _bound_value(nodes, name):
     return found[0] if len(found) == 1 else None
 
 
+def _accumulation_names(nodes, name):
+    """`name` 自己，加上"这个函数里 `别名 = name`"传开的那几个名字（第 62 轮 P1-②，认**值**不认名字）。
+
+    `inserted = []` + `tmp = inserted` + `tmp.append(…)` 在运行时填的就是 `inserted` 那个对象 ⇒
+    只按名字对 receiver 会把它判成"明着掏空"，那是**过宽**（`src/` 今天没有这种别名，但作者自己在
+    `:729-731` 写下过分界："过宽的闸活不过一轮就会被整条关掉"）。
+    沿赋值链迭代到不动点（`b = a; c = b`），只走 `Name → Name` 这一种可证同一对象的绑法；
+    **helper 收容器当形参**（`def collect(bucket): bucket.append(…)` + `collect(inserted)`）
+    那一档不在这儿 —— 它要的是跨函数的参数位数据流，写在 `_is_accumulated` 的边界里说明白。
+    """
+    import ast as _ast
+
+    names = {name}
+    while True:
+        grown = False
+        for n in nodes:
+            if isinstance(n, _ast.Assign) and isinstance(n.value, _ast.Name) \
+                    and n.value.id in names:
+                for t in n.targets:
+                    if isinstance(t, _ast.Name) and t.id not in names:
+                        names.add(t.id)
+                        grown = True
+        if not grown:
+            return names
+
+
 def _is_accumulated(nodes, name):
-    """这些节点里有没有对 `name` 的**累加**（`append/extend/add/insert/update`，或 `d += […]`）。
+    """这些节点里有没有对 `name`（或它的别名）的**累加**（`append/extend/add/insert/update`，或 `d += […]`）。
 
     第 61 轮 MAJOR：上一版只数**方法调用** ⇒ `d = []` 后一路 `d += [code]`（`src/` 里今天有 3 处
     `+= [ ]` 形状）判"没累加"、再递进去就判"明着掏空" —— 那是把正常写法打成没接（过宽）。
     `AugAssign` 的op 不猜内容：`+=`、`|=`、`*=` 一律算"这个容器后来被填过/换过"，
     因为要证明它填完还是空的得知道右值，而"看不清就算递到了"是本条闸自第 57 轮起就写明的方向。
+    **边界（第 62 轮 P1-②）**：认得动的是"同名 receiver"与"`别名 = 本名`之后同名的累加"；
+    `def collect(bucket): bucket.append(…)` 而 `collect(inserted)` 在别处 ⇒ 这一版仍然判"没累加"，
+    因为跨函数的参数位数据流要从**调用点**倒推到**被调函数**，而 `_is_accumulated` 只拿到一份节点集。
+    仓库里今天没有这种形状（复核 `grep -rn "release_holds_after_nav" src/` ⇒ 两处咽喉调用、
+    日期容器一律同名 `.append`），所以它记在边界里而不是当已封。
     """
     import ast as _ast
 
+    names = _accumulation_names(nodes, name)
     return any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
-               and isinstance(c.func.value, _ast.Name) and c.func.value.id == name
+               and isinstance(c.func.value, _ast.Name) and c.func.value.id in names
                and c.func.attr in ('append', 'extend', 'add', 'insert', 'update')
                for c in nodes) or any(
-        isinstance(c, _ast.AugAssign) and isinstance(c.target, _ast.Name) and c.target.id == name
+        isinstance(c, _ast.AugAssign) and isinstance(c.target, _ast.Name) and c.target.id in names
         for c in nodes)
 
 
@@ -797,13 +829,20 @@ def _prune_suite(stmts):
 
 
 def _kids(node):
-    """子节点，但每个语句套件都先过一遍 `_prune_suite`。"""
+    """子节点，但每个语句套件都先过一遍 `_prune_suite`。
+
+    ⚠ **list 字段里不全是节点**（第 62 轮 MAJOR）：`Global.names` / `Nonlocal.names` /
+    `MatchClass.kwd_attrs` 是**字符串列表** ⇒ 上一版把它们当节点往下走，带 `global`/`nonlocal`/
+    `case C(x=1)` 的函数一喂就 `AttributeError: 'str' object has no attribute '_fields'`，
+    整条判据（连带那份 CONTROL 对照）当场崩 —— 而 `src/` 里这种函数今天有 17 个，
+    只是恰好都不在被扫的 5 站上 ⇒ 今天无回归，一次普通编辑就坏全轮。
+    """
     import ast as _ast
 
     out = []
     for _name, value in _ast.iter_fields(node):
         if isinstance(value, list):
-            items = list(value)
+            items = [x for x in value if isinstance(x, _ast.AST)]     # str 字段（names/kwd_attrs）直接丢
             out.extend(_prune_suite(items)
                        if items and all(isinstance(x, _ast.stmt) for x in items) else items)
         elif isinstance(value, _ast.AST):
@@ -832,6 +871,9 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
 
     剪枝规则与判"接没接"用的是**同一套**（两边各搓一份就是两把尺子）：
     - 恒假 `if` 的主体不进（`orelse` 照进）、恒假三目只走另一臂、`while 恒假` 的循环体不进；
+      **但 `if` 的测试式两臂都照进**（第 62 轮 MAJOR：`if release(...):` 那次调用真发生，
+      上一版两条臂都不交回 `test` ⇒ `while`/`assert`/`return`/赋值右侧/推导式 iter 五档都算接上、
+      只有 `if` 这一档判"没接"，方向是**过宽**）；
     - **`for … in 空容器字面量` 的循环体不进**（第 58 轮 m-1：`for _ in ():` 与 `while False:` 同一种死法，
       而 `For` 上一版压根不在剪枝表里）；
       **第 59 轮 M-3 补同一族的第二半**：迭代的是"这个函数里唯一一次绑成空容器、此后没有任何累加"
@@ -853,8 +895,11 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
     names, node_ids = dead['names'], dead['node_ids']
     yield root
     if isinstance(root, _ast.If):
-        arms = list(root.orelse) if _never_runs(root.test) \
-            else _prune_suite(root.body) + list(root.orelse)
+        # ⚠ **测试式本身会被求值**（`if release(...):` 那次调用真发生了）⇒ 两条臂都要交回 `root.test`
+        # （第 62 轮 MAJOR：上一版两条臂都不交回 ⇒ `while`/`assert`/`return`/赋值右侧/推导式 iter
+        #  五档都算接上，只有 `if` 这一档判"没接"＝同一把尺子两腿两种待遇，且方向是**过宽**）
+        arms = list(root.orelse) + [root.test] if _never_runs(root.test) \
+            else _prune_suite(root.body) + list(root.orelse) + [root.test]
     elif isinstance(root, _ast.IfExp):
         arms = [root.orelse] if _never_runs(root.test) else [root.body, root.orelse]
     elif isinstance(root, _ast.While) and _never_runs(root.test):
@@ -980,7 +1025,10 @@ def _dead_inner_defs(fn):
     `hooks[key()]()`）认不出派发键 ⇒ 不硬猜（与 `for` 只认空字面量同一尺度）；
     ② 属性链上的 λ（`a.b.r = λ`）只认叶子名 `r`，与调用点那一腿同一个宽松度；
     ③ λ 交给**说不清归属**的调用（`return dict(r=λ)`、`do(map(λ, xs))`）⇒ 按活的走，
-      因为"结果被丢弃时 callee 仍可能已把 λ 叫过一遍"这件事静态答不出来。
+      因为"结果被丢弃时 callee 仍可能已把 λ 叫过一遍"这件事静态答不出来；
+    ④ 同一个 λ 同时被"键派发"与"容器归属"两把尺子看着时**以容器归属为准**
+      （第 62 轮 MINOR：`hooks = {'r': λ}; return hooks` 与 `hooks = dict(r=λ); return hooks` 同义，
+      上一版只有后者判接上 ⇒ 同义翻转）。
     """
     import ast as _ast
 
@@ -1048,6 +1096,23 @@ def _dead_inner_defs(fn):
                 for x in _ast.walk(fn)):
             held.setdefault(holder, []).extend(lams)
 
+    # 同一把尺子也要装在**字面量那一腿**上（第 62 轮 MINOR）：`hooks = {'r': λ}` 之后 `return hooks`
+    # 与 `hooks = dict(r=λ)` 之后 `return hooks` 是同一件事，而上一版只有后者认"容器被取走"⇒ 同义翻转。
+    for n in _ast.walk(fn):
+        if isinstance(n, (_ast.Assign, _ast.AnnAssign, _ast.NamedExpr)):
+            tg = n.targets if isinstance(n, _ast.Assign) else [n.target]
+            if len(tg) != 1 or not isinstance(tg[0], _ast.Name):
+                continue
+            container = n.value
+            if isinstance(container, _ast.Dict):
+                lams = [v for v in container.values if isinstance(v, _ast.Lambda)]
+            elif isinstance(container, (_ast.List, _ast.Tuple, _ast.Set)):
+                lams = [e for e in container.elts if isinstance(e, _ast.Lambda)]
+            else:
+                lams = []
+            for lam in lams:
+                held.setdefault(tg[0].id, []).append(lam)
+
     excluded = {id(c) for c in call_holders.values()}          # 递 λ 那处的接收者不算"被取用"
     for n in _ast.walk(fn):
         if isinstance(n, (_ast.Assign, _ast.AnnAssign, _ast.NamedExpr)):
@@ -1055,23 +1120,42 @@ def _dead_inner_defs(fn):
                 if isinstance(t, _ast.Name) and t.id in held:
                     excluded.add(id(t))
 
+    # 一个 λ 同时被"键派发"与"容器归属"两把尺子看着时，**以容器归属为准**：
+    # `hooks = {'r': λ}` 之后 `return hooks` 里那个键 `r` 并没被谁叫过，但 λ 随容器一起交了出去 ⇒
+    # 上一版只按键判 ⇒ 这一格判"没人叫"，与同义的 `hooks = dict(r=λ); return hooks` 翻转
+    # （第 62 轮 MINOR）。容器归属那一腿自己会决定"取没取走"，不许两把尺子互相否决。
+    owned = {id(x) for group in held.values() for x in group}
+
     dead_names, dead_ids = set(), set()
     for _ in range(len(inner) + sum(len(v) for v in lambdas.values()) + len(held) + 1):
         live_nodes = list(_live_nodes(fn, fn, {'names': dead_names, 'node_ids': dead_ids}))
         live_calls = [c for c in live_nodes if isinstance(c, _ast.Call)]
+        # 被调位置上的那个 Name 不算"把它交出去了"（那正是"有人叫"，走下面第一条）
+        called_positions = {id(c.func) for c in live_calls if isinstance(c.func, _ast.Name)}
         nxt_names, nxt_ids = set(), set()
         for d in inner:
             if not d.name:
                 continue
             inside = {id(x) for x in _ast.walk(d)}    # 只有"它叫它自己"不算有人叫
-            if not any(d.name in _call_names(c) and id(c) not in inside for c in live_calls):
-                nxt_names.add(d.name)
+            if any(d.name in _call_names(c) and id(c) not in inside for c in live_calls):
+                continue
+            # **整包交给外面**（`return inner`、`f(inner)`、`t = inner`）⇒ 按活的走（第 62 轮 P1-③）：
+            # 与下面 λ 那条"交给说不清归属的调用 ⇒ 按活的走"是同一件事，而上一版对 def 只认
+            # "活路径上有没有一次**调用**它的名字" ⇒ `@deco def inner(): release(…)` + `return inner`
+            # 整棵被剪，同义的 `hooks = {'r': λ}` + `return hooks` 却判接上 ⇒ 两种待遇。
+            # 反面（必须仍判死）：`def _never(): release(…)` 而本函数里再没别的句子提过它。
+            if any(isinstance(x, _ast.Name) and x.id == d.name
+                   and isinstance(x.ctx, _ast.Load) and id(x) not in inside
+                   and id(x) not in called_positions for x in live_nodes):
+                continue
+            nxt_names.add(d.name)
         for name, lams in lambdas.items():
             # `@键` / `#下标` 那种是容器派发（`hooks['r']()` / `hooks[0]()`），
             # 其余按名字/属性叶子名对 ⇒ 两种都走 `_call_keys`
             if not any(name in _call_keys(c) for c in live_calls):
                 for lam in lams:
-                    nxt_ids.add(id(lam))
+                    if id(lam) not in owned:       # 有容器归属的按 `held` 那把判（见上）
+                        nxt_ids.add(id(lam))
         for holder, lams in held.items():
             # 容器除了"绑它那一处"和"递 λ 那处的接收者"之外再没被读过 ⇒ 里面的 λ 谁也拿不到
             if not any(isinstance(x, _ast.Name) and x.id == holder and id(x) not in excluded
@@ -1405,6 +1489,30 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             'def f(self, db, code, inserted):\n'
             '    db.add(FundHistory(fund_code=code))\n'
             '    release_holds_after_nav_commit(db, code, [k for k in {}])\n'),
+        # 第 62 轮：`global` 那一族以前让整条判据崩（`_kids` 把 `Global.names` 当节点走），
+        # 崩之前它算"接了" ⇒ 这里按"诱饵死 def"判：函数里有一行 `global` 不该改变结论。
+        'global + 只有诱饵死 def': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    global _CACHE\n'
+            '    def _never():\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        # 第 62 轮 P1-② 的**反面对照**：认别名是为了"填过的算填过"，不是为了"绑过的算填过"。
+        # 少这两格，别名那一腿就从"过宽"翻成"恒真"（本族第 57 轮那句"闸过宽的结局是被整条关掉"
+        # 的反方向同样要防）。
+        '别名只绑不填': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    tmp = d\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        '累加的是别的容器': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    other = []\n'
+            '    other.append(code)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
     }
     if not _match_supported():
         evasions.pop('match 的恒假 guard')          # 这台解释器没有 match 语法，喂不进去
@@ -1546,6 +1654,25 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    d = []\n'
             '    d += [code]\n'
             '    release_holds_after_nav_commit(db, code, d)\n'),
+        # 第 62 轮 P1-②：容器靠**别名**填，运行时填的就是同一个对象 ⇒ 只按名字对 receiver 会把它
+        # 判成"明着掏空"（过宽）。反面（下面 evasion 那两格）：光绑别名不填、填的是别的容器 ⇒
+        # 必须仍判"没递"，否则这条闸从"过宽"翻成"恒真"。
+        '累加走别名（tmp = d 之后 tmp.append）': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    tmp = d\n'
+            '    for r in rows:\n        tmp.append(r.date)\n'
+            '    release_holds_after_nav_commit(db, code, d)\n'),
+        # 第 62 轮 P1-③：`return inner` 是"整个 def 交给外面"，与 λ 那一档 `return hooks['r']`
+        # 同一件事 ⇒ 按活的走（上一版只认"有没有一次调用它的名字"⇒ 同义两种待遇）。
+        '装饰器包住的内层 def 被 return 出去': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    @deco\n'
+            '    def _r():\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return _r\n'),
         'dict(r=λ) 之后真按 key 叫': (
             'def f(self, db, code, inserted):\n'
             '    db.add(FundHistory(fund_code=code))\n'
@@ -1604,6 +1731,43 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    db.add(FundHistory(fund_code=code))\n'
             '    for _x in {code: 1}:\n'
             '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        # ↓ 第 62 轮三条：`if` 的测试式会求值、list-of-str 字段不许把尺子弄崩、
+        #   字面量绑的 λ 随容器一起交出去＝被取用（与 `dict(r=λ); return hooks` 同义，不许翻转）
+        'if 的测试式里就接锁': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    if release_holds_after_nav_commit(db, code, inserted):\n'
+            '        pass\n'),
+        '函数体里有 global 照常算接上': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    global _CACHE\n'
+            '    release_holds_after_nav_commit(db, code, inserted)\n'),
+        'nonlocal 那一族照常算接上': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    x = 0\n'
+            '    def g():\n'
+            '        nonlocal x\n'
+            '        x = 1\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return g()\n'),
+        'match 的类模式照常算接上': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    match code:\n'
+            '        case C(x=1):\n'
+            '            release_holds_after_nav_commit(db, code, inserted)\n'),
+        '字典字面量绑的 λ 随容器一起 return': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    hooks = {'r': lambda: release_holds_after_nav_commit(db, code, inserted)}\n"
+            '    return hooks\n'),
+        '列表字面量绑的 λ 随容器一起 return': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = [lambda: release_holds_after_nav_commit(db, code, inserted)]\n'
+            '    return hooks\n'),
     }
     if _match_supported():
         honest_live['match 的 guard 不恒假'] = (

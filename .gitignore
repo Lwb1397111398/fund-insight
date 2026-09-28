@@ -94,3 +94,7 @@ docs/迭代计划/run-*/*probe*.csv
 
 # pytest 会话锁（体检反向互斥用；操作系统级，进程退出自动放开）
 .pytest-session.lock
+
+# 跑基线时留下的临时目录（本账号连列目录都没权限，git status 每次报两行 warning）
+.codex-pytest-tmp-full/
+.pytest-tmp-baseline/

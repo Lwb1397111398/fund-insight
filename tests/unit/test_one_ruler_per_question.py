@@ -483,6 +483,9 @@ def _archive_writes(node):
       都看不见 ⇒ 那一族的闸在 `_clean_row` 剔列 + 行为判据，不在这里（任务 #144）；
     ③ **查询从函数参数递进来**（`def f(q): q.update({列: 值})`）—— 收件人是不是查询要到调用方才知，
       而"按变量名猜它是 q 还是 query"本仓一贯拒绝（第 45 轮"方向要来自值"同一族）⇒ 不猜、也不数。
+    ④ **实参是星号展开**（`setattr(row, *['deleted_at', 墙钟])`）—— 列表字面量里那两个值静态看得见，
+      但"哪个槽落到 `name`、哪个落到 `value`"要按位置算，而 `setattr` 的形参名对本尺子是外部知识
+      （与 ①/③ 同族，第 62 轮评审点到后写在这儿，别当已封）。
     第 60 轮 Q1-B 另外那几格**已经补上**（不是边界，是当时"只补了一半"的拼法）：
     `row.__dict__.update({列: 值})`、`vars(row)[列] = 值` / `vars(row).update({…})`、
     `db.session.set(row, {列: 值})`、以及"先 `p.update({列: 值})` 组字典、再 `q.update(p)` 整份递进库"。
@@ -573,6 +576,15 @@ def _archive_writes(node):
             if fn == 'setattr' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
                     and n.args[1].value in ARCHIVE_COLUMNS:
                 _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
+            # `d.__setitem__('deleted_at', 值)` ＝ `d['deleted_at'] = 值`（第 62 轮 MINOR）：
+            # 上面那腿只认下标赋值 ⇒ 换个 dunder 拼法就隐身，与"只补一半"同族。
+            # 仍然要求那个字典**真的递进过库**（`sink_names`），否则它也是回显字典。
+            if fn == '__setitem__' and isinstance(n.func, ast.Attribute) \
+                    and getattr(n.func.value, 'id', '') in sink_names \
+                    and n.args and isinstance(n.args[0], ast.Constant) \
+                    and n.args[0].value in ARCHIVE_COLUMNS:
+                _add(n.lineno, n.args[0].col_offset, n.args[0].value,
+                     _source_of(n.args[1] if len(n.args) > 1 else None))
             # 别名那一腿：`s = object.__setattr__` 再 `s(row, 'deleted_at', …)`（第 61 轮 MINOR）
             if isinstance(n.func, ast.Name) and n.func.id in alias_names \
                     and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
