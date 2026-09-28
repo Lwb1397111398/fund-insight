@@ -227,8 +227,8 @@ MUTATIONS = [
      HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
     # ── 第 66 轮 任务 #157：板块没有可用标的 ⇒ 从内置表补一只。五道门各一处变异 ──
     ('M29_the_guard_that_keeps_servable_rows_is_blind', MAINT,
-     '            if via_gap and prediction.fund_code and \\\n',
-     '            if False and via_gap and prediction.fund_code and \\\n',
+     "            if own_answer in ('evidenced', 'not_due', 'unknown'):\n",
+     "            if False and own_answer in ('evidenced', 'not_due', 'unknown'):\n",
      GAP_TESTS, 'test_a_row_that_can_already_be_evidenced_is_left_alone'),
     ('M30_mapping_rows_are_created_even_when_nothing_moves', MAINT,
      '        gap_used = sorted({candidate["sector"] for candidate in candidates\n'
