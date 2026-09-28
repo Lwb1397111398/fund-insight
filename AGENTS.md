@@ -294,10 +294,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-29 03:5x（北京），**任务 #157：新机制「板块没有可用标的 ⇒ 从内置表补一只」收口，
-含第 66 轮复评（72/100）九条的返修与"返修的返修"（⑨ —— 我修 MI-6 那一腿时拆掉了两轮前就在跑的老功能）；
+最近一次核对（2026-09-29 05:4x（北京），**任务 #157：新机制「板块没有可用标的 ⇒ 从内置表补一只」收口，
+含第 66 轮复评（72/100）九条的返修与"返修的返修"（⑨ —— 我修 MI-6 那一腿时拆掉了两轮前就在跑的老功能），
+**再含第 67 轮复评（63/100）七条的返修**（归一那把尺子会把板块改成另一块板块、那道门把"还没到期"说成
+"自己就给得出净值"）；
 本批另一件是第 65 轮 MAJOR-1 的**第二半** —— 那把"跑完了 ≠ 成功了"的尺子在同一个页面里被抄成两份，
-我上一批只改了补跑那一侧**（评审条目正文不随仓库走，下面按**修法**记）——
+我上一批只改了补跑那一侧**（两轮评审条目正文不随仓库走，下面按**修法**记）——
 
 ① **产品这一半（#157）**：镜像现读 **101 个板块标签里 32 个在库里没有 `is_active=1` 的映射行，
 压着 180 条未判预测**（生产同形 287 条；2026-09-29 04:36 现数，命令在
@@ -448,38 +450,52 @@ early return 之后 ⇒ 全套件没有任何一条用例走到"板块可补、�
 ⇒ 注释按四个改，并写清"页面看得见的仍是三档话"的前提（两条腿对 `unknown`/`unfinished` 同处理）。
 
 最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
-也不起任何长任务；六步串成一条链 `data/_review_tmp/r66b_chain.sh`，逐步记时刻与退码。
-⚠ 这一条链跑的是 **⑨ 修完之后**的代码：上一版跑基线时 `tests/unit` 是 `4 failed / 1242 passed`，
-那四条就是 ⑨ 那一族 —— **基线数字与"哪个时刻的代码"必须一起交出来**，不然"跑过基线"这句话
-盖着一版红的代码）：
+也不起任何长任务；六步串成一条链 `data/_review_tmp/r67_chain.sh`，逐步记时刻与退码。
+⚠ 这一条链跑的是**第 67 轮返修（`8174567`）+ 锚点补修（`cce6b01`）之后**的代码，
+05:05 起、05:36 收（北京 05:37 那一次重跑逻辑侧体检除外，见下面"锚点"那一段）：
 
-- `pytest tests/unit -q` → **1248 passed / 16 skipped / 0 failed**（443.58 秒，退 0）。
-- `pytest tests/ -q` → **1257 passed / 16 skipped / 0 failed**（459.51 秒，退 0）。
-  （上一基线 1241/1250 → 本批 **+7 条 / 两个口径同增**：`tests/unit/test_sector_gap_fill.py`
-  13→**15** 个 `def`（⑨ 那两条边界：映射那一路不许被门挡下、查映射用原样标签），
-  `test_frontend_fund_update.py` 2→2（格数加在既有的真实调用链那条里：`nullish` 那一格）。
-  分布复核：`for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`）
-  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **42 处全 RED**（含本批新增 M29~M40；
-  CONTROL-GREEN = **8 个判据文件**在干净代码上全绿；无 ANCHOR-MISS / HARNESS-FAIL / `[还原失败]`；
-  跑完 `git status --porcelain -- src/` 只剩本批那三处真改动、无 `.mutbackup` 残留）。原始日志随仓库走
-  `docs/迭代计划/run-20260927-mutation/round66-lifecycle-mutations.txt`（首行
-  `# run @ 2026-09-29T03:24:39+08:00  git=48c95e7d12fc  python=3.12.10  共 42 处变异 / 8 个判据文件`）。
-  ⚠ 首行那个 `git=` 是**跑当时的 HEAD**（`48c95e7` ＝ 上一批最后一笔），本批改动当时还没提交 ⇒
-  它只自证"哪一次跑的、从哪一版起的"，**别拿它当"跑的就是被审的那一版"**。
-  两处新变异各自单独跑过（`--only sector_synonyms` / `--only tightening_gate`）⇒
-  M39 换锚点（⑨ 改了那一行的形状，旧锚点会变 ANCHOR-MISS 而不是绿）与 M40 新增都有凭据。
+- `pytest tests/unit -q` → **1255 passed / 16 skipped / 0 failed**（361.37 秒，退 0）。
+- `pytest tests/ -q` → **1264 passed / 16 skipped / 0 failed**（351.35 秒，退 0）。
+  （上一基线 1248/1257 → 本批 **+7 条 / 两个口径同增**：`tests/unit/test_sector_gap_fill.py`
+  15→**22** 个 `def`（第 67 轮那几条：归一改板块名、两种前后缀共用一条计划、事前报清要清几条结论、
+  "还没到期"不许说成"给得出"、没有档案不许说成"给得出"、完成时那句读回查那份数、三种没被走过的拒收）。
+  分布复核：`for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  —— 这条比的是 `HEAD`，本批代码已先提交 ⇒ 今天印为空是正常的。跨批对表用
+  `git diff --name-only 3fbff95..HEAD -- tests/`，今天印 `test_sector_gap_fill.py 0 -> 22`（新文件）、
+  `test_frontend_cold_start.py 49 -> 52`、`test_frontend_fund_update.py 4 -> 2`、`test_mutation_lock.py 8 -> 11`、
+  其余四个文件不动 ⇒ `def` 净增 **+26**。
+  ⚠ **这与收集数的 +23（1232→1255）不是一个口径，别拿来互相验证**：`def test_` 数的是函数条数，
+  基线数的是 pytest 收集到的用例数（参数化会展开、合并进同一函数的样品不算新条数）⇒
+  本批 `test_frontend_fund_update.py` 把文本断言换成跑真实调用链，`def` 少了 2 条而收集数没跟着少。
+  对表只看同口径：**上一基线 1248/1257（第 66 轮那一次）→ 本批 1255/1264，两个口径各 +7**，
+  正好对上 `test_sector_gap_fill.py` 那 7 条新用例（15→22 个 `def`，本批无参数化）。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **48 处全 RED**（含本批新增 M41~M46 与
+  第 66 轮的 M29~M40；CONTROL-GREEN = **8 个判据文件**在干净代码上全绿；无 ANCHOR-MISS / HARNESS-FAIL /
+  `[还原失败]`；跑完 `git status --porcelain -- src/ web/` 为空、无 `.mutbackup` 残留）。原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round67-lifecycle-mutations.txt`（首行
+  `# run @ 2026-09-29T05:37:24+08:00  git=cce6b01a596b  worktree=clean  python=3.12.10  共 48 处变异 / 8 个判据文件`
+  —— 这一份的 `git=` 与 `worktree=clean` 同时成立，所以它**是** HEAD 的凭据，与上一批那种"跑在未提交工作树"不同）。
+  ⚠ **本批第一次跑它是退 1 的：`M29_the_guard_that_keeps_servable_rows_is_blind` 报 ANCHOR-MISS（锚点命中 0 次）**，
+  根因是我自己：第 67 轮 MAJOR-8 把那道门从 `if via_gap and prediction.fund_code and …` 改成一段三目 +
+  `if own_answer in (...)`，我只给 M43/M44 换了锚点，**M29 那一处漏了** ⇒ 它与第 54 轮 M11、第 66 轮 M39 同签名，
+  第三次栽在"改了被扫的那一行却没改锚点"。修的是锚点不是判据（`cce6b01`）：M29 问的仍是"保住给得出证据的
+  那一行那道门瞎掉"，载荷换成把那道门整条恒假，判据 `test_a_row_that_can_already_be_evidenced_is_left_alone`
+  一个字没动。
+  ⚠ **那一份退 1 的日志没有留下来**：重跑写的是同一个文件名，我没有另存 ⇒ 磁盘与仓库里都只有重跑那份。
+  能复核的只剩链日志 `data/_review_tmp/r67b-chain.log` 里那三行（`exit=1` / RED 计数 47 / 异常计数 2），
+  而 `data/` 整目录不入库 ⇒ **那三行只能算我说的，别拿它当凭据**。真正立得住的是另一件事：
+  ANCHOR-MISS 让整步退 1，而链没有把它当成满分通过（`set -u` 不带 `-e`，后面五步照跑，但退码已经落进日志）。
   变异（前端）：`python scripts/mutation_proof_frontend.py` **141 处全 RED**（CONTROL-GREEN，3 个判据文件；
   无 ANCHOR-MISS / GREEN / JUDGE-MISS / NOT-LANDED / NO-OP）。日志
-  `docs/迭代计划/run-20260927-mutation/round66-frontend-mutations.txt`
-  （首行 `# run @ 2026-09-29T03:33:07+08:00  git=48c95e7d12fc  python=3.12.10  共 141 处变异 / 3 个判据文件`）。
-  ⚠ **上面那两条路径我上一版写成了 `round66b-*.txt`，磁盘与仓库里都没有那两个文件**（第 67 轮复评
-  MAJOR-6：干净克隆照那句话找不到凭据 —— "原始日志随仓库走"这句话的全部意义就是有人能复核它）。
-  真实文件名是 `round66-*`，两份首行的时刻/`git=`/条数与文档写的逐字一致 ⇒ 是**我把归档名写错**，
-  不是日志丢了。复核：`git ls-tree -r HEAD --name-only -- docs/迭代计划/run-20260927-mutation | grep round66`。
+  `docs/迭代计划/run-20260927-mutation/round67-frontend-mutations.txt`
+  （首行 `# run @ 2026-09-29T05:23:42+08:00  git=81745673ebd5  worktree=clean  python=3.12.10  共 141 处变异 / 3 个判据文件`；
+  ⚠ 它的 `git=` 是**返修那一笔**，`cce6b01` 只动体检脚本、没动 `web/` 与判据文件 ⇒ 这一份仍然对着被审的那一版）。
+  复核文件名：`git ls-tree -r HEAD --name-only -- docs/迭代计划/run-20260927-mutation | grep round67`。
+  （上一批那一次是 42 处 / `round66-lifecycle-mutations.txt`、`git=48c95e7d12fc`，本批加到 48 处。）
   `audit_doc_claims.py` 退 **0**（`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
   另有 16 条"看得见但不判"`）。
-  **镜像此刻**（同日 03:50，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
-  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`（与上一批同数；数一律现跑，别抄）。
+  **镜像此刻**（同日 05:36，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`（数一律现跑，别抄）。
   **那道门的开/关那对数量在 ⑨ 修完之后重测过一遍**（两趟只差一个 `if False`，跑完按原文还原并核 md5
   一致；复现命令逐字写在 `docs/模块总览/板块与基金匹配.md` 末尾那一节 —— **不指 `data/` 里的一次性
   脚本**，那个目录整目录不入库，第 43 轮那次"随仓库走"就栽在指了一个干净克隆上不存在的路径）。印的是
