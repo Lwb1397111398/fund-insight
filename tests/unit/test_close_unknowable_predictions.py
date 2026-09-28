@@ -136,7 +136,11 @@ def test_the_archive_stamp_and_the_restore_deadline_come_from_the_beijing_clock(
     from src.services import prediction_lifecycle as lc
 
     mod = _import_script()
-    beijing = date(2026, 9, 27)
+    # 锚在**真今天**上：上一版写死 `date(2026, 9, 27)` 而 `_seed` 的日期取 `date.today()`，
+    # 于是这条判据的通过与否取决于哪天跑 —— 跨过北京零点 3 天它就永远红（2026-09-29 00:11
+    # 由体检的 CONTROL 当场抓到）。要造"两把钟差一天"不需要写死日历，只需要让**另一把**
+    # 钟比今天早一天。
+    beijing = date.today()
     monkeypatch.setattr(lc, 'current_as_of', lambda: beijing)
 
     class ConflictDate(date):
@@ -147,7 +151,8 @@ def test_the_archive_stamp_and_the_restore_deadline_come_from_the_beijing_clock(
     class ConflictDateTime(real_datetime):
         @classmethod
         def now(cls, tz=None):
-            return real_datetime(2026, 9, 26, 23, 30)
+            return real_datetime.combine(beijing - timedelta(days=1),
+                                         real_datetime.min.time()) + timedelta(minutes=1410)
 
     monkeypatch.setattr(ps, 'date', ConflictDate)
     monkeypatch.setattr(ps, 'datetime', ConflictDateTime)

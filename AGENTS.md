@@ -294,7 +294,75 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 23:1x（北京），**任务 #154 / #155 / #156：第 65 轮复评 76/100 过线之后，
+最近一次核对（2026-09-29 01:5x（北京），**任务 #157：新机制「板块没有可用标的 ⇒ 从内置表补一只」收口；
+本批另一件是第 65 轮 MAJOR-1 的**第二半** —— 那把"跑完了 ≠ 成功了"的尺子在同一个页面里被抄成两份，
+我上一批只改了补跑那一侧**（评审条目正文不随仓库走，下面按**修法**记）——
+
+① **产品这一半（#157）**：镜像现读 **33 个板块标签压着约 200 条未判预测、库里一行映射都没有**
+（`sector_alias` 0 行 ⇒ 别名那条路也救不了），旧同步器只数 `predictions_no_mapping` 然后一个字不做
+⇒ 这些预测永远躺在「待验证到期」。现在 `sync_sector_mappings` 按**板块**（不按预测）走既有的
+`get_fund_for_sector`，过三道本库现读的门（内置表答得出 / 有 `fund_info` 档案 / 至少一笔净值）后
+**建或改那一行映射**，再由整条链上原有的 `calendar_gap` 逐条判证据、`retag_prediction` 落台账 ——
+不新增 UI、不新开咽喉。全部细节、为什么"已有行只能改不能添"、镜像真跑那一条（2695 从停更的 `003033`
+改到 `518880 黄金ETF华安`）写在 `docs/模块总览/板块与基金匹配.md` 末尾那一节。
+② **那道"只紧不松"的门是本批最该记的一条**：新补的标的**只抢"用自己那只标的问不出这段窗口净值"的预测**。
+我第一版没有它 ⇒ 镜像 `would_update` 从 200 涨到 **657**，其中 **664 条自己那只标的好好的** ——
+那正是第 18 轮"一键清空 515 条结论"的形状，而这次是**我自己新造出来的**。有档案但库里零净值也**不动**
+（那是"还没同步过"，不是"确认没办法"）。这条数现在自己开口：回执里 `predictions_kept_own_target`。
+③ **一把尺子、两处共用（第 65 轮 MAJOR-1 的第二半）**：`navRoundVerdict(fin)` 交出三种结局
+（没等到 / 跑完了但它自己说失败 / 跑完了且成功），「更新所有基金」按钮与首屏补跑**都走它**。
+上一批我在补跑那一侧新加 `if` 时，把按钮那侧的**同款判断整行删掉**了 —— 54 条判据一声不响
+⇒ "同一件事两份实现"不是 refactor 洁癖，是改一处必忘一处的结构性事故。
+④ **我自己的判据脚手架坏了 ⇒ 我把没跑到的格子当成跑过了**：`test_frontend_fund_update.py` 里 `run()`
+收第七个参数 `override`，函数体却从没把它赋给 `resultOverride` ⇒ 那格"净值那一轮回执说失败"喂进去的
+是 `null`，用例绿在默认成功路径上。**判据的夹具与判据本体一样要被怀疑**（第 33 轮"桩的键必须来自真返回值"
+同族）。修好那一格之后它当场点红，才逼出 ③ 那把尺子。
+⑤ **M30 第一次是 GREEN（判据无效），不是满分**：那句 `sectors_filled == 0` 藏在 `candidates` 为空时的
+early return 之后 ⇒ 全套件没有任何一条用例走到"板块可补、但一条预测都不用动"那一格。补了
+`test_a_fillable_sector_with_nothing_to_move_gets_no_row` 它才有牙 —— **一条只在"验的事情"变坏时才红的
+用例才叫判据**，这一课第 52 / 55 / 66 轮各记过一次。
+⑥ **跨零点假判据由体检自己的 CONTROL 抓到**：`test_close_unknowable_predictions.py` 把北京日写成
+`date(2026, 9, 27)` 字面量，而同一个文件的夹具用 `date.today()` ⇒ 跨过北京零点它自己变红（第 27 轮
+"写死的日付会替过期事实作保"的又一格）。现在锚回 `date.today()` 且判**差值**。
+⑦ **唯一出处那把棘轮逮到我新写的那一腿**：我在 `_gap_fill_candidate` 里写了 `func.max(FundHistory.nav_date)`
+⇒ `test_the_nav_cutoff_date_has_exactly_one_implementation` 第一次跑基线就把它点红。修法不是登记，
+是**接上共用的 `nav_calendar`**（第 44 轮"闸门逮到作者本人"的第三次）。
+⑧ **一句关于取证的取证**：我在验证链里写 `grep -c '^\[RED\]'` 数体检结果，它回 **0** ——
+而日志格式其实是 `NAME ⇒ RED（判据有效）`。**取证脚本自己也要过"它量的是那个形状吗"这一问**，
+否则"0 处红"与"一条都没跑"在屏幕上同形（与第 54 轮 B-5 那条"没人能照它复现"同族）。
+⚠ **本批尚未推** ⇒ 线上跑的仍是 `origin/main`（`c408dcd`，第 64 轮那一版）之前的构建，
+`#132`「打开网站就补」与 `#157` 都还没到生产；推完以 `/api/health/detail` 的 `git_commit` 与
+`index.html` 的 md5 为准（下面那行"线上此刻"是**推之后**量的，别拿它当本批的前提）。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+也不起任何长任务；五步串成一条链 `data/_review_tmp/r66_chain.sh`，逐步记时刻与退码）：
+
+- `pytest tests/unit -q` → **1241 passed / 16 skipped / 0 failed**（485.51 秒，退 0）。
+- `pytest tests/ -q` → **1250 passed / 16 skipped / 0 failed**（444.24 秒，退 0）。
+  （上一基线 1233/1242 → 本批 **+8 条 / 两个口径同增**，全部来自新文件
+  `tests/unit/test_sector_gap_fill.py`（`grep -c '^def test_'` 与
+  `python -m pytest tests/unit/test_sector_gap_fill.py --collect-only -q` 都印 **8**）。**改契约不增条数**：
+  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_close_unknowable_predictions.py 15→15`（⑥ 那处日期锚）、`test_frontend_cold_start.py 52→52`、
+  `test_frontend_fund_update.py 2→2`（③④：文本断言换成跑真实调用链的那格 + 补 `override` 那一格）。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **35 处全 RED**（含新增 M29~M33；
+  CONTROL-GREEN = **8 个判据文件**在干净代码上全绿；无 ANCHOR-MISS / HARNESS-FAIL / `[还原失败]`；
+  跑完 `git status --porcelain -- src/` 只剩本批那两处真改动、无 `.mutbackup` 残留）。原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round66-lifecycle-mutations.txt`（首行
+  `# run @ 2026-09-29T01:34:49+08:00  git=4a0fdb60350c  python=3.12.10  共 35 处变异 / 8 个判据文件`）。
+  ⚠ 首行那个 `git=` 是**跑当时的 HEAD**（`4a0fdb6` ＝ 上一批最后一笔），本批改动当时还没提交 ⇒
+  它只自证"哪一次跑的、从哪一版起的"，**别拿它当"跑的就是被审的那一版"**。
+  变异（前端）：`python scripts/mutation_proof_frontend.py` **140 处全 RED**（CONTROL-GREEN，3 个判据文件；
+  无 ANCHOR-MISS / GREEN / JUDGE-MISS / NOT-LANDED / NO-OP）。日志
+  `docs/迭代计划/run-20260927-mutation/round66-frontend-mutations.txt`
+  （首行 `# run @ 2026-09-29T01:41:03+08:00  git=4a0fdb60350c  python=3.12.10  共 140 处变异 / 3 个判据文件`）。
+  `audit_doc_claims.py` 退 **0**（`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
+  另有 16 条"看得见但不判"`）。
+  **镜像此刻**（同日 01:57，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`（上一批 13 条 ⇒ 这一档随净值
+  追平自然变多，不是新坏的；数一律现跑，别抄）。
+
+（上一批：2026-09-28 23:1x（北京），**任务 #154 / #155 / #156：第 65 轮复评 76/100 过线之后，
 把它量出的七条里能当场修的修掉了 —— 最重的一条是产品行为，而且我修它之前那几分钟它正在线上跑：
 净值那一轮自己报失败时，补跑仍然发起验证、仍然把今天占掉**（条目号取自第 65 轮报告结论表，正文不随仓库走）——
 

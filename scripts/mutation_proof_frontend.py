@@ -562,8 +562,11 @@ MUTATIONS = [
     # 不等它跑完就发验证 ⇒ 那批到期预测还是拿旧净值判的，白跑一轮（判据看的是调用流水）。
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'the_catch_up_verifies_without_waiting_for_the_nav', HTML,
-     "if (fin.done) {",
-     "if (true) {", False),
+     # ⚠ 第 66 返修：旧锚点 `if (fin.done) {` 随那份独立实现一起没了 ⇒ 这一处报的是
+     # ANCHOR-MISS（"这条判据有没有效"当场没答上来），改成问共用那把尺子的调用点：
+     # "没等到结果"也照样发验证，正是这一条要拦的形状。
+     "if (v.ok) {",
+     "if (v.ok || v.kind === 'unfinished') {", False),
     # 第 64 轮 M-1 的第一半：不看 POST 自己答了什么 ⇒ "正在进行中"也被当成"本轮发起了"
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'the_catch_up_proves_it_started_the_run_too', HTML,
@@ -608,10 +611,12 @@ MUTATIONS = [
      "String(d.message || '回执没给数').split('\\n')",
      "String(d.message || '回执没给数')", False),
     # 第 65 轮 MAJOR-1 + MAJOR-2：净值那一轮"跑完了但自己报失败"这一格，补跑当时既没判也不红
+    # ⚠ 第 66 返修：两条腿同判之后这一支的锚点换成了共用那把尺子的调用点（旧锚点
+    # `if (fin.result && fin.result.success === false) {` 随那份独立实现一起没了 ⇒ 会 ANCHOR-MISS）
     ('test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again',
      'the_failed_nav_round_still_verifies', HTML,
-     "if (fin.result && fin.result.success === false) {",
-     "if (false && fin.result) {", False),
+     "if (v.ok) {",
+     "if (v.ok || v.kind === 'failed') {", False),
     # 任务 #154：那句"最多等 N 分钟"是从两个常数算出来的，抄回字面量必须红
     ('test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist',
      'the_in_progress_note_hard_codes_the_wait', HTML,
@@ -620,12 +625,18 @@ MUTATIONS = [
     # ── 第 64 轮 M-2：两条路共用一份轮询，这个按钮自己那条腿也得有变异盯着 ──
     ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
      'the_button_reports_the_process_not_the_result', HTML,
-     "alert(fin.result.message || '更新完成');",
+     "alert(v.message || '更新完成');",
      "alert('任务已启动，正在后台更新…');", False),
     ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
      'the_button_keeps_the_global_lock_when_the_poll_ends', HTML,
-     "analyzing.value = false;\n                    if (!fin.done)",
-     "if (!fin.done)", False),
+     "analyzing.value = false;\n                    const v = navRoundVerdict(fin);",
+     "const v = navRoundVerdict(fin);", False),
+    # 第 66 返修 MAJOR-1 的第二半：按钮这一腿以前对"跑完了但它自己说失败"零判据
+    # （把下面那道门删掉，第 65 轮那 54 条一声不响）。现在同判由两条腿各一处变异钉住。
+    ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
+     'the_button_throws_away_the_shared_verdict', HTML,
+     "if (!v.ok) {",
+     "if (false && !v.ok) {", False),
     # 更新已经起来了 ⇒ 问不到进度不是"更新失败"（第 36 轮 #53 那一族换了位置复发）
     ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
      'the_progress_leg_blames_the_update', HTML,

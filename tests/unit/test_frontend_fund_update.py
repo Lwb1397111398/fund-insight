@@ -38,7 +38,7 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
         "const ref = (v) => ({ value: v });",
         "const analyzing = ref(false);",
         "const ourRun = '本轮那一跑';",
-        "let navLeft = 0, reportedRun = ourRun, resultNull = false, locked = false;",
+        "let navLeft = 0, reportedRun = ourRun, resultNull = false, locked = false, resultOverride = null;",
         "let throwPoll = false, throwList = false;",
         "let fundsRefreshed = 0, wakes = 0;",
         # 定时器接管掉：数到上限那一格也能秒级跑完
@@ -51,7 +51,7 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
         "    const running = navLeft-- > 0;",
         "    return { data: { data: { in_progress: running, started_at: reportedRun,",
         "      last_result: (running || resultNull) ? null",
-        "        : { success: true, message: '更新完成：更新 156 只' } } } }; },",
+        "        : (resultOverride || { success: true, message: '更新完成：更新 156 只' }) } } }; },",
         "  post: async (url) => { got.push('POST ' + url);",
         "    if (locked) return { data: { success: false, message: '基金更新正在进行中，请稍后再试' } };",
         "    return { data: { success: true, message: '任务已启动', data: { started_at: ourRun } } }; },",
@@ -60,15 +60,17 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
         _const(html, 'FUND_POLL_INTERVAL_MS'), _const(html, 'FUND_POLL_MAX_TRIES'),
         _decl(html, 'fundPollMinutes = () =>'),
         _decl(html, 'waitFundUpdateToFinish = async (since) =>'),
+        _decl(html, 'navRoundVerdict = (fin) =>'),
         _decl(html, 'pollFundUpdateStatus = async (since) =>'),
         _decl(html, 'updateAllFunds = async () =>'),
     ])
     out = _run_chain_js("""
 (async () => {
-  const run = async (left, runId, nul, isLocked, badPoll, badList) => {
+  const run = async (left, runId, nul, isLocked, badPoll, badList, override) => {
     alerts.length = 0; got.length = 0; fundsRefreshed = 0; wakes = 0;
     navLeft = left; reportedRun = runId; resultNull = nul; locked = !!isLocked;
     throwPoll = !!badPoll; throwList = !!badList;
+    resultOverride = override || null;
     analyzing.value = true;
     await updateAllFunds();
     return { alerts: alerts.slice(), analyzing: analyzing.value,
@@ -83,7 +85,14 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
   const busy = await run(0, ourRun, false, true);              // POST 自己说"正在进行中"
   const pollDead = await run(0, ourRun, false, false, true);   // 更新起来了，进度问不到
   const listDead = await run(0, ourRun, false, false, false, true);  // 更新成了，列表没刷出来
-  process.stdout.write(JSON.stringify({ done, slow, foreign, lost, stuck, busy, pollDead, listDead }));
+  // 第 66 轮 MAJOR-1 的第二半：跑完了、但它自己说失败。补跑那一侧第 65 轮已有格，
+  // 按钮这一侧当时零判据（把那句 if 整行删掉，54 条判据一声不响）。这两格是同判的凭据。
+  const failed = await run(0, ourRun, false, false, false, false,
+                           { success: false, message: '更新失败：源端这页没答' });
+  // 回执里压根没有「成没成」这一项 ⇒ 不许失败开放读成成功
+  const unreadable = await run(0, ourRun, false, false, false, false, { message: '只给了话没给结论' });
+  process.stdout.write(JSON.stringify({ done, slow, foreign, lost, stuck, busy, pollDead, listDead,
+                                        failed, unreadable }));
 })();
 """, prelude)
     assert out['done']['alerts'] == ['更新完成：更新 156 只'], \
@@ -123,7 +132,20 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
         and not any('更新失败' in a for a in out['listDead']['alerts']), \
         '刷列表这一腿把已成功的更新说成了失败：%s' % out['listDead']['alerts']
 
+    # 跑完但失败 / 读不出成败：不许报「更新完成」、不许刷列表、必须放开那把压着 13 个按钮的锁
+    assert out['failed']['alerts'] == ['更新失败：源端这页没答'], out['failed']['alerts']
+    assert out['failed']['refreshed'] == 0, '失败那一轮还去刷了列表（把没成功的更新报成了事）'
+    assert out['failed']['analyzing'] is False, '失败那一轮没放开全局锁 ⇒ 13 个按钮永久灰掉'
+    assert out['unreadable']['refreshed'] == 0 and out['unreadable']['analyzing'] is False, out['unreadable']
+    assert any(('成没成' in x) or ('认不出' in x) for x in out['unreadable']['alerts']), \
+        '回执里没有 success 这一项时被当成了成功（失败开放）：%s' % out['unreadable']['alerts']
+    for cell in ('failed', 'unreadable'):
+        assert '更新完成' not in ' '.join(out[cell]['alerts']), '%s 那一格里冒出更新完成：%s' % (cell, out[cell])
+
     # 两份循环合一处：页面里只有一份"问净值进度"的实现
+    # 这一问只许有一处实现：定义 1 处 + 按钮 1 处 + 补跑 1 处（第 66 轮：两条腿共用一把尺子）
+    assert html.count('navRoundVerdict') == 3, \
+        '「这一轮算不算成功」出现了 %d 处（应为定义 1 + 两条腿各 1）⇒ 判法又多了一份' % html.count('navRoundVerdict')
     assert html.count('waitFundUpdateToFinish') == 3, \
         '引用点对不上（定义 1 处 + 按钮 1 处 + 补跑 1 处），现 %d 处' % html.count('waitFundUpdateToFinish')
     assert html.count('/api/funds/update-status') == 1, \

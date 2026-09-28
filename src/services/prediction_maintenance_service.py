@@ -1,14 +1,16 @@
 """预测维护操作：默认只读预览，写入必须由路由显式确认。"""
 
+import json
 from collections import defaultdict
 from datetime import date
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.models.database import (Blogger, FundInfo, Prediction, SectorAlias,
-                             SectorFundMapping)
+from src.models.database import (Blogger, FundInfo, Prediction,
+                                 SectorAlias, SectorFundMapping)
 from src.services.prediction_change_log_service import (
     add_prediction_change_log,
     snapshot_prediction,
@@ -142,6 +144,96 @@ class PredictionMaintenanceService:
             "removed": removed,
         }
 
+    GAP_FILL_SOURCE = 'seed_builtin'
+
+    def _gap_fill_candidate(self, sector: str, blocked_codes) -> Dict:
+        """这个板块能不能从**内置表**拿到一只"本库给得出净值"的标的。
+
+        为什么要有这一步（2026-09-28 实测）：镜像上 33 个板块标签压着 200 条未判预测，
+        它们在库里**一行映射都没有**（`sector_alias` 0 行），旧写法只把它们数成
+        `predictions_no_mapping` 然后一个字不做 ⇒ 这些预测永远躺在「待验证到期」里。
+        老板要的正是这一档的处置："板块对应的基金抓取不到且确认没有办法 ⇒ 把该板块
+        变成其他好的基金"，而板块→基金那条链早就有了（`get_fund_for_sector`：内置表
+        + 硬编码/库内别名 + "不许硬凑"名单），这里只是把它接进同步器。
+
+        只回答三件事，都在**本库**现读，不打网络：
+          ① 内置表说得出这只标的（名单里的板块答不出 ⇒ 不猜，交给 agent/人工）；
+          ② 本库有 `fund_info` 档案（`sector_fund_mapping.fund_code` 有外键，
+             没档案插进去就是 IntegrityError，第 50 轮那族悬空行）；
+          ③ 档案至少有一笔净值。
+        **窗口够不够证据不在这里判** —— 那一问仍由 `calendar_gap` 一把尺子逐条回答，
+        本方法不立第二个数字（否则会重演第 56 轮"门与队列两种判法"）。
+        `blocked_codes` 让这个板块**库里已有**的行用过的代码：内置表给的就是那只
+        已确认拿不到净值的标的 ⇒ 换了等于没换，要说出来而不是新建一行同码的映射。
+        """
+        if not sector or len(sector) > 50:
+            # 列宽 String(50)：长过它 INSERT 在生产 PostgreSQL 上会直接报错
+            return {'refused': '板块名空着或长过列宽，不猜'}
+        from src.constants.sector_fund_map import get_fund_for_sector
+        from src.services.prediction_lifecycle import nav_calendar
+        hit = get_fund_for_sector(sector) or {}
+        code = (hit.get('code') or '').strip()
+        if not code:
+            return {'refused': '内置表也说不出这个板块的对口标的 ⇒ 交给人工或 agent 匹配'}
+        if code in blocked_codes:
+            return {'code': code, 'name': hit.get('name') or code,
+                    'refused': '内置表给的正是库里那只标的（%s）⇒ 换个标的得先有人给出更好的答案' % code}
+        info = self.db.query(FundInfo).filter(FundInfo.fund_code == code).first()
+        if not info:
+            return {'code': code, 'name': hit.get('name') or code,
+                    'refused': '本库还没有 %s 的档案 ⇒ 先跑一次「更新基金」再对齐' % code}
+        # "这只标的最末一笔在哪天"问的是**共用那把日历**（`nav_calendar`），不在这里
+        # 再造一份 `max(nav_date)`：那道"全库最新净值日只许一个出处"的棘轮
+        # （`test_the_nav_cutoff_date_has_exactly_one_implementation`）第一次跑就把这一腿
+        # 点红了 —— 登记成"另一把尺子"是把它当借口，接上共用那把才是修。
+        days = nav_calendar(self.db, [code]).get(code) or []
+        if not days:
+            return {'code': code, 'name': info.fund_name or code,
+                    'refused': '%s 在库里一行净值都没有 ⇒ 现在绑上也验证不了' % code}
+        return {'code': code, 'name': info.fund_name or hit.get('name') or code,
+                'last_nav': str(max(days))}
+
+    def _apply_gap_fill(self, sector: str, cand: Dict,
+                        rows: List[SectorFundMapping]) -> None:
+        """把某板块的新标的落到映射表上：已有行就**改写那一行**，一行都没有才新增。
+
+        为什么已有行不能"另加一行"：生产库里有一条模型没声明的
+        `sector_fund_mapping_sector_name_key UNIQUE(sector_name)`（2026-09-22 直连
+        `pg_constraint` 实测，镜像没有）⇒ 同一板块再插一行在生产直接撞约束，
+        镜像却静默成功（第 49 轮那条"镜像演练通过不等于生产能过"的同一个坑）。
+
+        为什么这算"机器审过"而不是绕过审查：这一档的标的来自 `SECTOR_FUND_MAP`，
+        那张表由 `scripts/audit_static_sector_map.py` 按"板块↔名册官方名"字面相关
+        逐行体检（退码 0 才算干净，新增不登记就红，见 `tests/unit/test_sector_map_guard.py`），
+        而标的本身能进 `fund_info` 已经过了一道建档身份门（判"不是基金"就拒建，
+        第 49/50 轮装在 `SectorFundService.ensure_fund_info_exists` 咽喉上）。
+        `reviewed_by='seed'` 不是老板署名：`row_unservable()` 的 owner 例外不认它，
+        下一次身份体检照样能把这一行判下去。
+        """
+        from src.services.prediction_lifecycle import current_as_of
+        evidence = json.dumps({
+            'source': self.GAP_FILL_SOURCE, 'sector': sector,
+            'code': cand['code'], 'name': cand['name'],
+            'last_nav': cand.get('last_nav'), 'decided_at': str(current_as_of()),
+            'why': '这个板块在库里没有可用的映射行 ⇒ 按内置板块表补上它答得出的对口标的',
+        }, ensure_ascii=False)
+        note = '库里没有可用的映射行 ⇒ 按内置板块表补上对口标的'
+        if cand['mode'] == 'update' and rows:
+            row = rows[0]
+            row.fund_code, row.fund_name = cand['code'], cand['name']
+            row.reviewed, row.reviewed_by = True, 'seed'
+            row.match_source, row.match_kind = self.GAP_FILL_SOURCE, 'direct'
+            # 换标的就把"可服务"那一列清回"从没体检过"：留着旧标的的结论替新标的代言，
+            # 正是第 8/9 轮那族幽灵行的成因（agent 换标的时做的也是同一件事）。
+            row.is_fetchable = None
+            row.evidence, row.verify_message = evidence, note
+            return
+        self.db.add(SectorFundMapping(
+            sector_name=sector, fund_code=cand['code'], fund_name=cand['name'],
+            is_active=True, reviewed=True, reviewed_by='seed',
+            match_source=self.GAP_FILL_SOURCE, match_kind='direct',
+            verify_message=note, evidence=evidence))
+
     def sync_sector_mappings(self, *, dry_run: bool = True,
                              min_confidence: float = 0.85,
                              run_id: Optional[str] = None) -> Dict:
@@ -186,6 +278,48 @@ class PredictionMaintenanceService:
         # 差的就是 900+ 次远程往返。语义不变：仍是"本次跑批现读"，不吃进程内那份可能过期的缓存。
         alias_targets = {a.alias_name: a.sector_name
                          for a in self.db.query(SectorAlias).all()}
+
+        # 没有可用映射的板块**按板块**算一遍，而不是按预测：一条预测各查一次库正是
+        # 生产那次「100 秒零字节」的根因（第 51 轮）。第二遍逐条判证据时只在内存里查。
+        missing_labels = []
+        for prediction in predictions:
+            label = prediction.sector or prediction.sector_type
+            if label and label not in missing_labels and \
+                    not self._lookup_mapping(sector_map, label, alias_targets):
+                missing_labels.append(label)
+        existing_rows = {}
+        if missing_labels:
+            # 排序与上面建 sector_map 那一条**同一把尺子**（更新的在前）：真要改写已有行时，
+            # 改的必须就是"这个板块当前代表它的那一行"，不是随便捞到的某一行。
+            for row in self.db.query(SectorFundMapping).filter(
+                    SectorFundMapping.sector_name.in_(missing_labels)).order_by(
+                    SectorFundMapping.updated_at.desc(),
+                    SectorFundMapping.id.desc()).all():
+                existing_rows.setdefault(row.sector_name, []).append(row)
+        gap_plan = {}
+        for label in missing_labels:
+            rows = existing_rows.get(label, [])
+            cand = self._gap_fill_candidate(label, {r.fund_code for r in rows})
+            # 库里已经有行、而且那一行是老板署名挑定的（"有意代理"）⇒ 不自动换标的。
+            # 生产上还有一条模型没声明的 `sector_name UNIQUE` 约束（2026-09-22 实测），
+            # 所以"同一板块再加一行"在生产会直接撞约束 —— 已有行只能改、不能添。
+            owner_backed = [r for r in rows if getattr(r, 'owner_locked', None)
+                            or getattr(r, 'reviewed_by', None) == 'owner']
+            if owner_backed:
+                cand = {'code': cand.get('code'), 'refused':
+                        '这个板块库里那行的标的是老板署名挑定的 ⇒ 不自动换，要换请你在板块匹配页改'}
+            gap_plan[label] = dict(cand, mode=('update' if rows and not cand.get('refused')
+                                               else 'insert'))
+        # 预览不写库，但"这块要补哪只标的、为什么补不了"必须当场看得见；
+        # 实跑这边只**记计划**，真的动库排在这里之后 —— 只有真有预测落到某个板块的
+        # 新标的上才写那一行（否则会留下"一行映射建了、一条预测都没动"的孤儿行）。
+        gap_targets = {}
+        for label, cand in gap_plan.items():
+            if cand.get('refused'):
+                continue
+            gap_targets[label] = SimpleNamespace(
+                sector_name=label, fund_code=cand['code'], fund_name=cand['name'])
+
         candidates = []
         unservable = []
         unchanged = 0
@@ -193,7 +327,8 @@ class PredictionMaintenanceService:
         pairs = []
         for prediction in predictions:
             sector = prediction.sector or prediction.sector_type
-            mapping = self._lookup_mapping(sector_map, sector, alias_targets)
+            mapping = self._lookup_mapping(sector_map, sector, alias_targets) \
+                or gap_targets.get(sector)
             if not mapping:
                 no_mapping += 1
                 continue
@@ -208,8 +343,34 @@ class PredictionMaintenanceService:
         # 首笔净值晚于窗口的新产品）当场会变成"到期永不判"。日历一次读全，别在循环里查。
         from src.services.prediction_lifecycle import calendar_gap, nav_calendar
 
-        calendar = nav_calendar(self.db, [m.fund_code for _, m, _ in pairs])
+        # 日历里连**预测自己那只标的**一起读：下面"它现在问得出证据吗"那一问要用它，
+        # 而分开两次查就是同一把尺子两腿两种待遇（第 54 轮那一族）。
+        wanted_codes = set()
+        for prediction, mapping, _ in pairs:
+            wanted_codes.add(mapping.fund_code)
+            if prediction.fund_code:
+                wanted_codes.add(prediction.fund_code)
+        calendar = nav_calendar(self.db, sorted(code for code in wanted_codes if code))
+        # 有没有档案要**一次读全**：逐条预测各查一次 `fund_info` 就是生产那次
+        # 「预览 100 秒零字节」的同一个形状（第 51 轮）。
+        archived = {row[0] for row in self.db.query(FundInfo.fund_code).filter(
+            FundInfo.fund_code.in_(sorted(code for code in wanted_codes if code))).all()}
+        kept_own_target = 0
         for prediction, mapping, sector in pairs:
+            via_gap = sector in gap_targets
+            # 补标的这一档多一道**只紧不松**的门：板块本来没有可用映射时，只动"问不出
+            # 这段窗口净值"的那些 —— 老板那句话圈定的是「抓取不到且确认没有办法」。
+            # 少了这道门，一次按钮就会把 600+ 条本来有结论的行换成板块代理标的、顺手清掉
+            # 结论：镜像 2026-09-28 实测不加它 `would_update` 从 200 涨到 657，而那 657 条
+            # 里 664 条自己那只标的好好的（第 18 轮"一键清空 515 条结论"的同一个形状）。
+            # 有档案、库里却一行净值都没有 ⇒ **不动**：那是"还没同步过"（跑一次「更新基金」
+            # 就补上），不是"确认没办法"；`calendar_gap` 对这种窗口本来就是放行不拦。
+            if via_gap and prediction.fund_code and \
+                    prediction.fund_code in archived and not calendar_gap(
+                    calendar, prediction.fund_code,
+                    prediction.prediction_date, prediction.target_date):
+                kept_own_target += 1
+                continue
             # "这行还挂着结论吗"只有一个判据源（`has_verdict_trace`）：这里以前自己抄了一份，
             # 与 retag 用的 `is_correct is not None` 是同一件事的两套定义（第 18 轮 M-2）。
             row = {
@@ -221,6 +382,7 @@ class PredictionMaintenanceService:
                 "new_fund_code": mapping.fund_code,
                 "new_fund_name": mapping.fund_name,
                 "reset_verified": has_verdict_trace(prediction),
+                "via_gap_fill": sector in gap_targets,
             }
             gap = calendar_gap(calendar, mapping.fund_code,
                                prediction.prediction_date, prediction.target_date)
@@ -235,6 +397,10 @@ class PredictionMaintenanceService:
              if key not in ("prediction", "evidence")}
             for candidate in candidates
         ]
+        # 只有"真有预测要动"的板块才会为它建/改映射行 —— 预览与实跑用同一个集合，
+        # 否则预览说补 50 块、实跑只动 1 块，又是一次"预览与实跑不同数"（第 51 轮 B-2 那族）。
+        gap_used = sorted({candidate["sector"] for candidate in candidates
+                           if candidate["via_gap_fill"]})
         result = {
             "dry_run": dry_run,
             "total_mappings": len(sector_map),
@@ -245,6 +411,26 @@ class PredictionMaintenanceService:
             "predictions_updated": 0,
             "predictions_unchanged": unchanged,
             "predictions_no_mapping": no_mapping,
+            # "板块新补的标的"没抢走任何一条自己就问得出证据的预测 —— 这个数要说出口，
+            # 它是那道"只紧不松"的门真的在挡事的凭据。
+            "predictions_kept_own_target": kept_own_target,
+            # 板块没有标的这一档：数出来就必须说出口"补几块、各补哪只、哪些补不了以及为什么"
+            "sectors_without_target": len(gap_plan),
+            "sectors_fillable": [
+                {"sector": label, "fund_code": cand["code"], "fund_name": cand["name"],
+                 "last_nav": cand.get("last_nav"), "mode": cand["mode"]}
+                for label, cand in gap_plan.items() if not cand.get("refused")],
+            "sectors_to_fill": [
+                {"sector": label, "fund_code": gap_plan[label]["code"],
+                 "fund_name": gap_plan[label]["name"],
+                 "last_nav": gap_plan[label].get("last_nav"),
+                 "mode": gap_plan[label]["mode"]} for label in gap_used],
+            "predictions_via_gap_fill": sum(1 for candidate in candidates
+                                            if candidate["via_gap_fill"]),
+            "sectors_refused_to_fill": [
+                {"sector": label, "fund_code": cand.get("code"), "reason": cand["refused"]}
+                for label, cand in gap_plan.items() if cand.get("refused")],
+            "sectors_filled": 0,
             # 数出来就得说出口：这几条是"板块映射想改、但那只标的给不出证据"，
             # 不动它们才是对的，可"预览 326 / 实跑 320"那种差值必须在回执里看得见。
             "predictions_skipped_unservable": len(unservable),
@@ -264,6 +450,12 @@ class PredictionMaintenanceService:
         affected_funds = set()
         try:
             from src.fund.fund_sync_manager import FundSyncManager
+
+            # 映射行与预测改标写在**同一个事务**里：只落一半就是"映射说这块是 518880、
+            # 预测还挂在死码上"那种自相矛盾的行；任何一步抛错，下面 except 整批回滚。
+            for label in gap_used:
+                self._apply_gap_fill(label, gap_plan[label], existing_rows.get(label, []))
+            result["sectors_filled"] = len(gap_used)
 
             for candidate in candidates:
                 prediction = candidate["prediction"]

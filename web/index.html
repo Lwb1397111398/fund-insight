@@ -2508,6 +2508,27 @@ const fetchWeChatBatch = async () => {
                 // 回执只转述接口给的 `message`；缺字段就说"回执没给数"，不许替它下结论。
                 // 接口那句话自己是分行的（"同步完成：…\n\n6 只基金域查无此码…"），而页面这一格是
                 // 普通 `<span>` ⇒ 换行会塌成一片连字；这里把它并成一句，而不是去改渲染层。
+                // 「跑完了」与「成功了」是两件事，而这两件事**按钮与自动补跑问的是同一句话**
+                // ⇒ 只许一处实现（第 66 轮 MAJOR-1 的第二半：第 65 轮我只在补跑那一侧加了 `if`，
+                // 把按钮那一侧的同款判断整行删掉，54 条判据一声不响）。
+                // 三种结局各说各话：没等到（含认不出本轮、回执丢了、数到上限）、跑完了但它自己说失败、
+                // 跑完了且成功。**回执里压根没有"成没成"这一项 ⇒ 算认不出**，不许失败开放读成成功。
+                const navRoundVerdict = (fin) => {
+                    if (!fin || !fin.done) {
+                        return { ok: false, kind: 'unfinished',
+                                 why: (fin && fin.why) ? fin.why : '没等到结果' };
+                    }
+                    const r = fin.result;
+                    if (!r || typeof r.success === 'undefined') {
+                        return { ok: false, kind: 'unknown',
+                                 why: '本轮的回执没带"成没成"这一项 ⇒ 认不出结果，不敢替你当成功' };
+                    }
+                    if (r.success === false) {
+                        return { ok: false, kind: 'failed',
+                                 message: r.message || '净值那一轮说失败了，但没给原因' };
+                    }
+                    return { ok: true, message: r.message };
+                };
                 const catchUpReceipt = (step) => {
                     const d = step && step.data ? step.data : null;
                     if (!d) return '没答话';
@@ -2617,20 +2638,16 @@ const fetchWeChatBatch = async () => {
                         if (funds.data && funds.data.success === true) {
                             const fin = await waitFundUpdateToFinish(
                                 funds.data.data ? funds.data.data.started_at : undefined);
-                            if (fin.done) {
-                                // 跑完了 ≠ 成功了。按钮那一路早就问这一句（`:2928`），补跑这一条漏了
-                                // ⇒ 净值没落库时仍然发起验证、还把今天这一次占掉，明天不再补
-                                //（第 65 轮 MAJOR-1：这一条腿当时零判据零变异 ⇒ 任务 #155）。
-                                if (fin.result && fin.result.success === false) {
-                                    unfinished = '净值那一轮自己报了失败：' + catchUpReceipt({ data: fin.result });
-                                } else {
-                                    // 那份跑完的回执比"任务已启动"有话可说，换掉启动回执
-                                    funds = { data: fin.result };
-                                    // 净值落库之后才发起验证：那一轮拿的才是新净值
-                                    verify = await axios.post('/api/predictions/verify-all');
-                                }
+                            const v = navRoundVerdict(fin);
+                            if (v.ok) {
+                                // 那份跑完的回执比"任务已启动"有话可说，换掉启动回执
+                                funds = { data: fin.result };
+                                // 净值落库**并且真成功**之后才发起验证：那一轮拿的才是新净值
+                                verify = await axios.post('/api/predictions/verify-all');
+                            } else if (v.kind === 'failed') {
+                                unfinished = '净值那一轮自己报了失败：' + v.message;
                             } else {
-                                unfinished = fin.why;
+                                unfinished = v.why;
                             }
                         } else {
                             unfinished = '更新净值那一步本轮没发起：' + catchUpReceipt(funds);
@@ -2935,9 +2952,13 @@ const fetchWeChatBatch = async () => {
                     }
                     // 无论走到哪一支都要先放开那把全局锁：它压着 13 个按钮（第 32 轮 A-M1）
                     analyzing.value = false;
-                    if (!fin.done) { alert('净值更新没等到结果：' + fin.why); return; }
-                    if (fin.result.success === false) { alert(fin.result.message || '更新失败'); return; }
-                    alert(fin.result.message || '更新完成');
+                    const v = navRoundVerdict(fin);
+                    if (!v.ok) {
+                        alert(v.kind === 'failed' ? (v.message || '更新失败')
+                                                  : '净值更新没等到结果：' + v.why);
+                        return;
+                    }
+                    alert(v.message || '更新完成');
                     try {
                         await fetchFunds();
                     } catch (e) {

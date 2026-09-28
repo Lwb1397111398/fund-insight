@@ -2080,6 +2080,7 @@ def test_a_catch_up_runs_once_per_beijing_day_and_a_failure_frees_it_again():
         _const(html, 'FUND_POLL_INTERVAL_MS'), _const(html, 'FUND_POLL_MAX_TRIES'),
         _decl(html, 'fundPollMinutes = () =>'),
         _decl(html, 'waitFundUpdateToFinish = async (since) =>'),
+        _decl(html, 'navRoundVerdict = (fin) =>'),
         _decl(html, 'catchUpOnce = async (day) =>'),
         _decl(html, 'maybeCatchUpOnOpen = async () =>'),
     ])

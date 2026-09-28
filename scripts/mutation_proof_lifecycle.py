@@ -58,6 +58,8 @@ QUERY_TESTS = 'tests/unit/test_prediction_query.py'
 SAFE_TESTS = 'tests/unit/test_prediction_management_safety.py'
 MIGRATE_TESTS = 'tests/unit/test_prediction_migrations.py'
 RULER_TESTS = 'tests/unit/test_one_ruler_per_question.py'
+MAINT = 'src/services/prediction_maintenance_service.py'
+GAP_TESTS = 'tests/unit/test_sector_gap_fill.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -222,6 +224,29 @@ MUTATIONS = [
      "                release_holds_after_nav_commit(db, fund_code, _empties, "
      "where='每日基金同步')\n",
      HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
+    # ── 第 66 轮 任务 #157：板块没有可用标的 ⇒ 从内置表补一只。五道门各一处变异 ──
+    ('M29_the_guard_that_keeps_servable_rows_is_blind', MAINT,
+     '            if via_gap and prediction.fund_code and \\\n',
+     '            if False and via_gap and prediction.fund_code and \\\n',
+     GAP_TESTS, 'test_a_row_that_can_already_be_evidenced_is_left_alone'),
+    ('M30_mapping_rows_are_created_even_when_nothing_moves', MAINT,
+     '        gap_used = sorted({candidate["sector"] for candidate in candidates\n'
+     '                           if candidate["via_gap_fill"]})\n',
+     '        gap_used = sorted(label for label in gap_plan\n'
+     '                          if not gap_plan[label].get("refused"))\n',
+     GAP_TESTS, 'test_a_fillable_sector_with_nothing_to_move_gets_no_row'),
+    ('M31_an_existing_sector_row_is_duplicated_not_rewritten', MAINT,
+     "        if cand['mode'] == 'update' and rows:",
+     "        if False and rows:",
+     GAP_TESTS, 'test_a_dead_sector_row_is_rewritten_in_place_not_added_alongside'),
+    ('M32_the_owner_signed_target_is_overwritten', MAINT,
+     '            if owner_backed:',
+     '            if False and owner_backed:',
+     GAP_TESTS, 'test_an_owner_picked_target_is_never_swapped_by_the_machine'),
+    ('M33_a_missing_archive_still_buys_a_refusal_reason', MAINT,
+     "        if not info:\n",
+     "        if False and not info:\n",
+     GAP_TESTS, 'test_a_candidate_without_an_archive_is_refused_and_says_why'),
 ]
 
 

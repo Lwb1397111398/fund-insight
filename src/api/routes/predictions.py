@@ -215,6 +215,34 @@ def sync_sector_mapping(
             parts.append(f"{skipped} 条没动：板块映射挑的那只标的给不出这段窗口的净值证据"
                          f"（绑过去会变成到期也判不了的预测），逐条原因见明细")
 
+        # 板块压根没有标的这一档（2026-09-28 老板授权："可以把该板块对应的基金变成其他
+        # 好的基金"）：预览要说"给哪几块补哪只"，实跑要说"补了几块"。补不了的也要点名说
+        # 为什么补不了 —— 只报"同步完成"就是把"这块还是没标的"藏起来。
+        to_fill = result.get('sectors_to_fill') or []
+        fillable = result.get('sectors_fillable') or []
+        filled = result.get('sectors_filled') or 0
+        via = result.get('predictions_via_gap_fill') or 0
+        sample = "、".join(f"{item['sector']}→{item['fund_code']} {item['fund_name']}"
+                           for item in to_fill[:3])
+        if dry_run and to_fill:
+            parts.append(f"{len(to_fill)} 个板块本来没有任何可用标的，而它们身上 {via} 条预测"
+                         f"用自己那只标的问不出这段窗口的净值 ⇒ 会按内置板块表给这些板块补上"
+                         f"对口标的（{sample}{'……' if len(to_fill) > 3 else ''}）")
+        if not dry_run and filled:
+            parts.append(f"已给 {filled} 个原本没有可用标的的板块补上标的，"
+                         f"并把 {via} 条问不出证据的预测改到它身上")
+        if dry_run and fillable and not to_fill:
+            parts.append(f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测"
+                         f"现在那只标的就给得出净值 ⇒ 这一轮一块都不动")
+        refused = result.get('sectors_refused_to_fill') or []
+        if refused:
+            parts.append(f"{len(refused)} 个板块仍然没有标的：内置表也说不出对口品种，"
+                         f"逐块原因见明细")
+        kept = result.get('predictions_kept_own_target') or 0
+        if kept:
+            parts.append(f"{kept} 条预测没动：它们自己那只标的就给得出这段窗口的净值，"
+                         f"没必要换成板块标的（换了反而白清一次已有结论）")
+
         if parts:
             message = f"{'预览' if dry_run else '同步'}完成：" + "，".join(parts)
         else:
