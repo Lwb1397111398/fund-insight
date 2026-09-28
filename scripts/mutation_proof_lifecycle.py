@@ -322,6 +322,12 @@ MUTATIONS = [
      GAP_TESTS, 'test_the_execute_sentence_uses_the_recount_not_the_plan'),
     # 同轮 MINOR-10：六种拒收里三种（长名 / 同码 / 零净值）从没被走到过 —— 那句话的计数分支
     # 是空跑出来的。把 `same_as_current` 那一档的判定摘掉 ⇒ 三条新断言必须当场红。
+    # 第 68 轮复评 MAJOR-1：完成时那句「带着已判结论 ⇒ 已清掉」念的是建候选时的计划数。
+    # 摘掉 `dry_run` 这一腿 ⇒ 执行也照说那一句 ⇒ 新判据必须红（M45 同族，只差这句没接）。
+    ('M47_the_receipt_promises_what_the_plan_said', ROUTES,
+     '        if dry_run and wiped:\n',
+     '        if wiped:\n',
+     GAP_TESTS, 'test_the_verdict_count_is_promised_in_the_preview_not_claimed_in_the_receipt'),
     ('M46_the_same_code_as_current_is_not_a_refusal', MAINT,
      "                    'kind': 'same_as_current'}\n",
      "                    'kind': 'no_static_hit'}\n",

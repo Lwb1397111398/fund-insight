@@ -285,11 +285,14 @@ def sync_sector_mapping(
         # 带结论的那几条要说在**点执行之前**：`reset_verified` 一直在逐行明细里，
         # 可预览回执从来没把它数成一句人话 ⇒ 老板只能事后翻台账才知道清了多少
         # （第 67 轮复评 MAJOR-5：这一档的暴露面必须事前看得见）。
+        # ⚠ 这一句**只在预览说**（第 68 轮复评 MAJOR-1 + MINOR-2）：`predictions_with_verdict` 是
+        # 建候选时数的**计划值**，而执行那一路会把结论数重算成回查值 `verified_reset` —— 上面
+        # 刚用它说过一句「重置 N 个已验证预测」。拿计划值说"已清掉"是本批自己在同函数上方 60 行
+        # 立下的规矩②（完成时只配真做完的数），也是 M45 刚治过的同一族；两句并存就是同一件事说两遍。
         wiped = result.get('predictions_with_verdict') or 0
-        if wiped:
+        if dry_run and wiped:
             parts.append(f"其中 {wiped} 条带着已判结论 ⇒ "
-                         + ("这一轮还没动库；执行会把它们的旧结论清掉、之后按新标的重新判"
-                            if dry_run else "这些行的旧结论已清掉，等一次验证按新标的重新判"))
+                         f"这一轮还没动库；执行会把它们的旧结论清掉、之后按新标的重新判")
 
         if parts:
             message = f"{'预览' if dry_run else '同步'}完成：" + "，".join(parts)

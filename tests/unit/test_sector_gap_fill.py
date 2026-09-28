@@ -630,7 +630,10 @@ def test_the_preview_says_out_loud_how_many_conclusions_it_will_clear(test_db):
     `reset_verified` 一直在逐行明细里，可从没人把它数成一句给老板看的话 ⇒ 页面上那句
     "预计更新 N 条"读起来像"挪一挪没事"，而镜像当天真会动的 28 条里 21 条带着结论
     （2026-09-29 现数，命令见 `docs/模块总览/板块与基金匹配.md` 末尾）。
-    两条腿（预览 / 执行）各说一句、时态分开：预览说"还没动库"，执行说"已清掉、等重判"。
+    两条腿分开、但**各说各的数**（第 68 轮复评 MAJOR-1 + MINOR-2 改的就是这一格）：
+    预览用计划数**预告**"执行会把旧结论清掉"；执行那一腿只报回查数 `verified_reset`
+    （上方那句「重置 N 个已验证预测」），不许拿计划数再说一遍"已清掉"——
+    上一批那句完成时念的是建候选时的计划值，桩掉唯一入口就会说出"0 条没做成、1 条已清掉"。
     """
     _nav_in_window(test_db, 'MAP02', '映射行指定的标的')
     _nav_in_window(test_db, 'OWN02', '自己有好标的')
@@ -650,8 +653,10 @@ def test_the_preview_says_out_loud_how_many_conclusions_it_will_clear(test_db):
     done = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
                                                  dry_run=False, db=test_db)
     assert done['data']['predictions_with_verdict'] == 1, done['data']
-    assert '这些行的旧结论已清掉' in done['message'], done['message']
+    assert done['data']['verified_reset'] == 1, done['data']
+    assert '重置 1 个已验证预测' in done['message'], done['message']
     assert '还没动库' not in done['message'], '执行完了还说"没动库"是反话'
+    assert '带着已判结论' not in done['message'] and '已清掉' not in done['message'],         '执行这一腿只许说回查到的清除数，不许拿计划数把同一件事再说一遍：%s' % done['message']
 
 
 def test_the_mapping_lookup_still_asks_with_the_raw_sector_label(test_db):
@@ -822,3 +827,35 @@ def test_the_three_refusal_kinds_nobody_had_ever_asked_about(test_db):
     message = body['message']
     for phrase in ('内置表给的就是库里那只标的', '在库里一行净值都没有', '长过列宽'):
         assert phrase in message, '%s 那句话没被说出来：\n%s' % (phrase, message)
+
+def test_the_verdict_count_is_promised_in_the_preview_not_claimed_in_the_receipt(test_db, monkeypatch):
+    """「其中 N 条带着已判结论」是一句**预告**，不是收据（第 68 轮复评 MAJOR-1 + MINOR-2）。
+
+    `predictions_with_verdict` 数的是建候选时那份**计划**；执行那一路真清掉几条由 `verified_reset`
+    回查得出，而路由上方已经用它说过一句「重置 N 个已验证预测」。上一批这句按 `dry_run` 分了两支，
+    **完成时那一支念的还是计划数** —— 与本批自己在同函数上方 60 行立的规矩②（完成时只配真做完的数）
+    直接打脸，也正是 M45 刚治过的那一族。这里拿作者自己那格招（桩掉唯一入口）把两个数掰开：
+    计划 1 / 做到 0 ⇒ 执行那一句不许出现"带着已判结论 / 已清掉"，预览那一句必须有。
+    """
+    from src.fund import fund_sync_manager
+
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db)
+    pred = _prediction(test_db)
+    pred.is_correct = True          # 带着已判结论 ⇒ 改标要把旧结论清掉
+    pred.verify_score = 40
+    test_db.commit()
+
+    preview = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
+                                                    dry_run=True, db=test_db)
+    assert preview['data']['predictions_with_verdict'] == 1, preview['data']
+    assert '其中 1 条带着已判结论' in preview['message'], preview['message']
+
+    monkeypatch.setattr(fund_sync_manager.FundSyncManager, 'retag_prediction',
+                        staticmethod(lambda *a, **k: False))
+    body = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
+                                                 dry_run=False, db=test_db)
+    data = body['data']
+    assert data['predictions_with_verdict'] == 1 and data['verified_reset'] == 0, data
+    assert '带着已判结论' not in body['message'] and '已清掉' not in body['message'],         '一条结论都没清（桩什么都没做），却拿计划数说"已清掉"：%s' % body['message']
