@@ -254,8 +254,25 @@ def _targets(n):
     return out
 
 
+def _instance_dict(call_or_subscript):
+    """这个表达式是不是"某个对象的 `__dict__`"：`row.__dict__` 或 `vars(row)`（第 60 轮 MINOR）。
+
+    两条拼法写的是同一个东西 —— 实例自己的属性字典，所以等价于属性赋值，**不受**
+    "收件人得长得像查询"那条边界管；上一版只认下标赋值那一半（`row.__dict__[列] = v`），
+    `row.__dict__.update({列: v})` 与 `vars(row)[列] = v` 两种拼法实测一格都不数。
+    """
+    import ast as _ast
+
+    if isinstance(call_or_subscript, _ast.Attribute):
+        return call_or_subscript.attr == '__dict__'
+    if isinstance(call_or_subscript, _ast.Call):
+        return (getattr(call_or_subscript.func, 'id', '') or
+                getattr(call_or_subscript.func, 'attr', '')) == 'vars'
+    return False
+
+
 def _dunder_dict_key(assign):
-    """`row.__dict__['deleted_at'] = …` → `(列名, 值的表达式)`，不是就交回 None。
+    """`row.__dict__['deleted_at'] = …` / `vars(row)['deleted_at'] = …` → `(列名, 值的表达式)`。
 
     这一格与"组个字典再递进库"那一族**不是一件事**：直接改实例的 `__dict__` 等价于属性赋值，
     所以**不要求**收件人长得像查询（`_dict_target_key` 那一腿要，因为它组的是普通字典）。
@@ -264,8 +281,7 @@ def _dunder_dict_key(assign):
     if not isinstance(assign, ast.Assign) or len(assign.targets) != 1:
         return None
     t = assign.targets[0]
-    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute) \
-            and t.value.attr == '__dict__' \
+    if isinstance(t, ast.Subscript) and _instance_dict(t.value) \
             and isinstance(t.slice, ast.Constant) and isinstance(t.slice.value, str):
         return t.slice.value, assign.value
     return None
@@ -377,7 +393,7 @@ def _splat_dicts(node, call):
     `**payload` 那一腿只回溯一跳（函数里**唯一一次**字典赋值才认），与批量那一腿同一个尺度。
     **边界要说清**：`spec.model(**cleaned)`（合并导入整库那条泛型建行）里**列名静态看不见**，
     这把尺子对它结构性失明 —— 与第 56 轮 NAV 那把遇到的完全同族，那一洞不在这里数，
-    由任务 #143 M-2 记着（`_clean_row` 只剔免疫两列 ⇒ 自带 `deleted_at=60 天前` 的 JSON
+    由任务 **#144** 记着（`_clean_row` 只剔免疫两列 ⇒ 自带 `deleted_at=60 天前` 的 JSON
     能给任意行伪造"回收站年龄"，而 `/api/config/import` 合并模式既无总开关也无确认头）。
     """
     out = []
@@ -451,13 +467,27 @@ def _archive_writes(node):
     认到哪几种拼法为止**以那份判据里的控制样品为准**（属性赋值 / 解包 / 带标注的赋值 / `setattr` /
     `object.__setattr__` / 关键字 / 改实例的 `__dict__` / 下标组字典 / `setdefault` /
     整包 `**` 摊进构造函数 / 裸 SQL …… 第 57~59 轮各补了一批），别在下面抄个数 —— 抄的那个数每次加拼法都会过期。
-    ⚠ **仍然要说清它看不见哪两族**（第 59 轮探针 B1/B4，与上面那些"补了就数得到"的不是同一档）：
+    ⚠ **仍然要说清它看不见哪三族**（第 59 轮探针 B1/B4 + 第 60 轮 Q1-B，与上面那些"补了就数得到"的不是同一档）：
     ① `setattr(row, 变量, …)` / `getattr` 式写 —— 列名是变量 ⇒ 这一把**没有**登记通道
-      （免疫那把为这一档开了 `IMMUNITY_OPAQUE_SITES`，两把尺子对同一件事两种待遇，写在这儿防下轮误当已封）；
+      （免疫那把为这一档开了 `IMMUNITY_OPAQUE_SITES`，两把尺子对同一件事两种待遇，写在这儿防下轮误当已封）。
+      ⚠ **这条边界今天站得住，但依据不是"这种拼法不存在"**（第 60 轮 Q1-B 点的正是这一层区别）：
+      `src/services/base.py:99-101` 的 `for key, value in obj_in.items(): setattr(db_obj, key, value)`
+      就是**载荷驱动**地写列名，而 `PredictionService` / `ViewpointService` 都继承它、模型上都有那两列。
+      今天数不到归档列的真实依据是**调用方名单**：`grep -rn .update( src/` 里走这条 helper 的
+      只有 `blogger_service.py:162/174`（`{"is_active": …}`）与 `post_service.py:115/132`（字面量键），
+      两个归档模型的服务**零调用方**；`config.py:1454` 那个 `setattr(row, field, value)` 循环写的是
+      `SectorFundMapping`，而那张表**没有**归档列（`python -c` 现数：`deleted_at`/`restore_before` 均 False）。
+      ⇒ 谁哪天给 `base.update` 接上"载荷能递任意列"的路由，这把尺子与那道登记名单**同时失明**；
+      那一族的闸得开在载荷层（白名单剔列，与 #144 同一条），不是在这里给正则加形状。
     ② `spec.model(**cleaned)` 那种**泛型建行** —— 列名运行时从元数据拼出来，任何按 AST 数的尺子
       都看不见 ⇒ 那一族的闸在 `_clean_row` 剔列 + 行为判据，不在这里（任务 #144）；
     ③ **查询从函数参数递进来**（`def f(q): q.update({列: 值})`）—— 收件人是不是查询要到调用方才知，
       而"按变量名猜它是 q 还是 query"本仓一贯拒绝（第 45 轮"方向要来自值"同一族）⇒ 不猜、也不数。
+    第 60 轮 Q1-B 另外那几格**已经补上**（不是边界，是当时"只补了一半"的拼法）：
+    `row.__dict__.update({列: 值})`、`vars(row)[列] = 值` / `vars(row).update({…})`、
+    `db.session.set(row, {列: 值})`、以及"先 `p.update({列: 值})` 组字典、再 `q.update(p)` 整份递进库"。
+    仍然没补的是**别名**（`s = object.__setattr__` 再 `s(row, 'deleted_at', v)`）—— 与第 43 轮
+    `create_engine as ce` 同族，那一族要给整把尺子加"别名追踪"，是独立一件事，别当已封。
     """
     stamp = _stamp_names(node)
     query_vars = _query_named(node)
@@ -524,12 +554,31 @@ def _archive_writes(node):
             if fn == 'setattr' and len(n.args) > 2 and isinstance(n.args[1], ast.Constant) \
                     and n.args[1].value in ARCHIVE_COLUMNS:
                 _add(n.lineno, n.args[1].col_offset, n.args[1].value, _source_of(n.args[2]))
+            # `row.__dict__.update({'deleted_at': …})` / `vars(row).update({…})`（第 60 轮 MINOR）：
+            # 与上面那格下标赋值写的是**同一个实例字典**，所以同样**不要求**收件人长得像查询。
+            # 上一批补了 `row.__dict__[列] = v` 却没补 `.update({...})` ⇒ 同一实例写法两种拼法，
+            # 只补一半等于没补（探针实测这一格回 `[]`）。
+            if isinstance(n.func, ast.Attribute) and n.func.attr in ('update', 'setdefault') \
+                    and _instance_dict(n.func.value):
+                dicts = [a for a in n.args if isinstance(a, ast.Dict)]
+                if n.func.attr == 'setdefault' and n.args and isinstance(n.args[0], ast.Constant):
+                    key = n.args[0].value
+                    if isinstance(key, str) and key in ARCHIVE_COLUMNS:
+                        _add(n.lineno, n.args[0].col_offset, key, _source_of(n.args[1]))
+                for arg in dicts:
+                    for k, v in zip(arg.keys, arg.values):
+                        if isinstance(k, ast.Constant) and k.value in ARCHIVE_COLUMNS:
+                            _add(k.lineno, k.col_offset, k.value, _source_of(v))
             # 批量写：字典字面量的**键**是列名才算，值是时间；并且收件人得是查询而不是返回给
             # 前端的字典（`detail.update({...})` 那一格是回显）。
             if fn in _BULK_WRITE_CALLS and isinstance(n.func, ast.Attribute):
                 recv = n.func.value
                 looks_like_query = bool(_chain_call_names(recv) & set(_QUERY_VERBS)) or \
-                    (isinstance(recv, ast.Name) and recv.id in query_vars)
+                    (isinstance(recv, ast.Name) and recv.id in query_vars) or \
+                    (isinstance(recv, ast.Attribute) and recv.attr == 'session')
+                # 最后那一臂不是"按名字猜"：`Session.set(obj, {...})` 是 SQLAlchemy 2.0 的
+                # 身份图写入 API，收件人写的就是 `session`（探针实测 `db.session.set(row, {列: 值})`
+                # 上一版一格都不数 —— 那条链上没有查询动词、也不是 `Name`）。
                 if looks_like_query:
                     for arg in _bulk_dicts(node, n, query_vars):
                         for k, v in zip(arg.keys, arg.values):
@@ -537,6 +586,17 @@ def _archive_writes(node):
                                 _add(k.lineno, k.col_offset, k.value, _source_of(v))
                             elif isinstance(k, ast.Attribute) and k.attr in ARCHIVE_COLUMNS:
                                 _add(k.lineno, k.col_offset, k.attr, _source_of(v))
+            # `p.update({'deleted_at': …})` 而 `p` 之后**整份递进库**（`q.filter(…).update(p)`）：
+            # 与上面 `p['deleted_at'] = …` 那一格是同一族，只差一个动词（第 60 轮 MINOR 探针实测：
+            # 下标赋值那一半上一批补了，`.update({...})` 这一半没补 ⇒ 同一件事两种待遇）。
+            # 收件人必须是"这个函数里真被递进库的那个字典名"，否则它就是回显给前端的字典。
+            if fn in _BULK_WRITE_CALLS and isinstance(n.func, ast.Attribute) \
+                    and isinstance(n.func.value, ast.Name) and n.func.value.id in sink_names:
+                for arg in [a for a in n.args if isinstance(a, ast.Dict)] + \
+                        [k.value for k in (n.keywords or []) if isinstance(k.value, ast.Dict)]:
+                    for k, v in zip(arg.keys, arg.values):
+                        if isinstance(k, ast.Constant) and k.value in ARCHIVE_COLUMNS:
+                            _add(k.lineno, k.col_offset, k.value, _source_of(v))
             # 整包摊进构造函数那一族（`Model(**{列: 值})` / `Model(**payload)`，第 59 轮 M-2）：
             # 建行本身就是写，所以**不要求**收件人长得像查询（与上面批量那一腿的边界不同）。
             for payload in _splat_dicts(node, n):
@@ -588,7 +648,10 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         # —— 别的模型（观点）自己的软删。**⚠ 这条注释连着两版都写过假话，第 59 轮全部按代码重做**：
         # ① 第 57 轮我写"`Viewpoint` 模型压根没有 `restore_before` 这一列" —— 错。AST 按类数
         #    `src/models/database.py`：`Prediction:252` / **`Viewpoint:360`** / `CleanupItemLog:888` 三张表都有。
-        #    真的那半句是**页面不读它**：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0。
+        #    真的那半句是**前端脚本里没有这几个字**：`grep -c restore_before web/index.html web/*-manager.js` ⇒ 0。
+        #    ⚠ **但别说成"这一列没人读"**（第 60 轮 BLOCKER）：后端 `retention_cleanup_service.py:443/447`
+        #    就在读它，而它读出来的数走 `build_plan()` → `GET /api/config/cleanup/preview`
+        #    （`config.py:333`）→ 页面 `web/index.html:2549` ⇒ 补那一列**会**把行从候选挪进 `protected_counts`。
         # ② 第 58 轮我写"页面「删除观点」那条按钮走 `viewpoint_service.delete_viewpoint`，
         #    所以它拿不到恢复窗口" —— **又错，而且错的正是第 58 轮 M-1 刚罚过的那个错**（把死路当产品事实）：
         #    `grep -rn "delete_viewpoint\b" src/ scripts/ web/ tests/` ⇒ 这个方法在 src/scripts/web
@@ -601,12 +664,22 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         # ③ 现在按代码写清**活的**那一站在哪、以及这把尺子为什么看不见它：
         #    活的观点软删只有 AI 拒绝那一处 `viewpoint_workflow_service.py:328`（`viewpoint.is_deleted = True`），
         #    而它**这两个时间戳一个都不写** ⇒ 这把按"写归档列"收站点的尺子对它**结构性失明**，
-        #    另一面是 `retention_three_buckets._deleted_viewpoint_ids:591` 要求 `deleted_at.isnot(None)`
-        #    ⇒ 那些行永远进不了清理桶（镜像实测 18 行 = 418 软删 − 400 带戳）。⇒ 任务 #142 已按这个重写。
+        #    另一面是 `retention_three_buckets._deleted_viewpoint_ids`（:582 起，条件在 :590-592）
+        #    要求 `deleted_at.isnot(None)` ⇒ 那些行永远进不了清理桶（镜像实测 18 行 = 418 软删 − 400 带戳）。
+        #    ⚠ **任务 #142 的立论到第 60 轮要改口径**：上一版在这里写"补 `restore_before` 也没人读、是空转"
+        #    —— 前半句是假的（见上面 ① 的更正，`_viewpoint_candidates:447` 读它、数就在清理预览上）。
+        #    站得住的那半是"**预览保护得到、真删保护不到**"：认那一列的只有 `build_plan` 这一把，
+        #    而它的 `execute()` 起手就 raise（`HARD_DELETE_DISABLED = True` :46 / raise :268，路由回 403），
+        #    线上真在删行的是三桶那一把，它一个字都不看那一列 ⇒ 补列改的是**页面上那个数**，改不了会不会被删。
         # ④ 还有一处两把钟：`retention_cleanup_service.py:157` 是 `self.today = today or date.today()`
-        #    而三处调用方一个 `today` 都不传 ⇒ 它跑**墙钟**；同做清理的 `retention_three_buckets.py:185`
-        #    用北京 `current_as_of()`。上一版我在 AGENTS 里把 :447 那句
+        #    而 `grep -rn "RetentionCleanupService(" src/` 数出的 **6** 处构造（`config.py:173/235/300/333`
+        #    ＋ `cleanup_tasks.py:769/783`）一个 `today=` 都不递 ⇒ 它处处跑**墙钟**；同做清理的
+        #    `retention_three_buckets.py:185` 用北京 `current_as_of()`。上一版我在 AGENTS 里把 :447 那句
         #    （`restore_before >= self.today`，是**窗口检查**、不是"today 减 N 天"）说成"北京那把钟" —— 也是错的。
+        #    ⚠ 而"页面三个清理预览都在用墙钟那把"同样说过头了（第 60 轮 MAJOR）：页面上打得到的
+        #    是**两个**清理预览、各用一把钟（`/cleanup/preview` 墙钟、`/cleanup/three-buckets/preview` 北京），
+        #    `/cleanup/orphan-funds/preview` 那第三个端点**页面不打**（`grep -rn orphan web/` ⇒ 0），
+        #    第三个按钮 `/api/test-data/find` 不看日历。⇒ 北京 00:00~08:00 里"预览"与"真删"不是同一个今天。
         ('src/services/viewpoint_service.py', 'delete_viewpoint'): 1,
         # ⚠ **这一条是死路**（第 58 轮 M-1 抓到我把死路说成产品事实）：
         # `grep -rn "delete_viewpoints_by_ids" src/ scripts/ web/` ⇒ **只命中定义那一行**
@@ -810,6 +883,42 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
     assert _archive_writes(ast.parse(dunder_dict_from_stamp).body[0]) == \
         [(2, 'restore_before', 'stamp')], (
             '同一个位置、值出自那只钟却判成"别处" ⇒ 过宽（那条 stray 检查会天天红）')
+    # 第 60 轮 Q1-B 的四格：上一批给 `__dict__` 那一族**只补了下标赋值的一半**。
+    # 同一件事的另一种拼法（`.update({...})`）与同一个对象的另一种拿法（`vars(row)`）
+    # 都实测回 `[]` ⇒ "补了这一族"必须补到整族，否则下一轮换拼法就是又一次"隐身多年"。
+    dunder_update = ('def f(row):\n'
+                     "    row.__dict__.update({'deleted_at': datetime.now()})\n")
+    assert _archive_writes(ast.parse(dunder_update).body[0]) == [(2, 'deleted_at', 'other')], (
+            '`row.__dict__.update({列: 值})` 数不到 ⇒ 与上面那格写的是同一个实例字典，'
+            '只差一个动词（探针 Q1-B 实测上一版回 []）')
+    vars_subscript = ('def f(row):\n'
+                      "    vars(row)['deleted_at'] = datetime.now()\n")
+    assert _archive_writes(ast.parse(vars_subscript).body[0]) == [(2, 'deleted_at', 'other')], (
+            '`vars(row)[列] = 值` 是 `row.__dict__[列] = 值` 的等价写法 ⇒ 只认一种就是半族')
+    vars_update_from_stamp = ('def f(row):\n'
+                               "    vars(row).update({'restore_before': archive_stamp()[1]})\n")
+    assert _archive_writes(ast.parse(vars_update_from_stamp).body[0]) == \
+        [(2, 'restore_before', 'stamp')], (
+            '同一格、值出自那只钟却判成"别处" ⇒ 过宽（诚实写法被打红的结局是整条闸被关掉）')
+    session_set = ('def f(db, row):\n'
+                   "    db.session.set(row, {'deleted_at': datetime.now()})\n")
+    assert _archive_writes(ast.parse(session_set).body[0]) == [(2, 'deleted_at', 'other')], (
+            'SQLAlchemy 2.0 的 `Session.set(对象, {列: 值})` 数不到 ⇒ 那条链上没有查询动词、'
+            '收件人也不是 `Name`，上一版的 `looks_like_query` 恒假（探针 Q1-B 实测回 []）')
+    dict_update_then_bulk = ('def f(db):\n'
+                             '    p = {}\n'
+                             "    p.update({'deleted_at': datetime.now()})\n"
+                             '    return db.query(Prediction).filter(Prediction.id == 1).update(p)\n')
+    assert _archive_writes(ast.parse(dict_update_then_bulk).body[0]) == \
+        [(3, 'deleted_at', 'other')], (
+            '"先 `p.update({列: 值})` 组字典、再 `q.update(p)` 整份递进库"数不到 ⇒ '
+            '与本批刚补的"下标组字典"那一族**只差一个动词**（同一件事两种待遇）')
+    # 上面那格的**反面**：字典没递进库 ⇒ 一处都不许数（`_serialize` 那一族天天红就是这条闸过宽）
+    echo_dict_update = ('def f(detail):\n'
+                        "    detail.update({'deleted_at': None})\n"
+                        '    return detail\n')
+    assert _archive_writes(ast.parse(echo_dict_update).body[0]) == [], (
+            '把回显字典的 `.update({…})` 数成写 ⇒ 过宽：与 `get_detail` 那一格同族')
 
     # 控制三（M-4 的本体）：往真实登记在册的 `_soft_archive` 注入一处墙钟写 ⇒ 处数 +1 且是 other
     rel, name = 'src/services/prediction_service.py', '_soft_archive'

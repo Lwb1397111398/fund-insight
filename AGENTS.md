@@ -294,7 +294,90 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 10:2x（北京），**任务 #143：第 59 轮复评 70/100 返修——三条 MAJOR 里最重的
+最近一次核对（2026-09-28 12:2x（北京），**任务 #147：第 60 轮复评 72/100 返修——最重的一条又是我自己写的
+假话（这一次错在"依据"、结论那半句站得住），第二条是同一把解锁尺子又被八种拼法买通、而其中两种拼法
+本批刚在隔壁那把里认下过**（条目号是报告那张结论表的编号，报告正文不随仓库走）——
+① **BLOCKER（条目 7）："今天没有活消费面读观点那一列"是假话**（第 58~60 轮**连续第三个批次**犯
+"死路 / 活路归因写反"同一族，本仓尺度里这一条最贵）：第 59 轮我为了纠正 #142 的旧立论写下这句，
+并把它同时用作 AGENTS ① 段与 `docs/模块总览/预测验证与准确率统计.md` §2d 的依据。现读驳回：
+`retention_cleanup_service.py:443` 的 SELECT 里带着 `Viewpoint.restore_before`、`:447` 比
+`restore_before >= self.today` ⇒ 还在窗口内的行挪进 `protected_counts`、**不进候选**；那条链是活的
+（`:194 build_plan()` → `config.py:333 GET /api/config/cleanup/preview`（回执含 `counts['viewpoints']`
+与 `protected_counts`）→ `web/index.html:2549 fetchCleanupPreview`），`cleanup_tasks.py:769` 与调度侧也 import 它
+⇒ **补那一列会动页面上那个数**，不许把它当死列处理掉。更要命的是它与**同一段文字 6 行前**我刚引用的
+`:447` 那句自相矛盾。**结论那半句仍然站得住**，正确的立论是"**预览保护得到、真删保护不到**"这一分裂：
+线上真在删观点行的是三桶那把（`retention_three_buckets._deleted_viewpoint_ids:582` 只比
+`deleted_at < cutoff`、一个字不看那一列，复核 `grep -c restore_before src/services/retention_three_buckets.py`），
+而这把 `build_plan` 背后的执行器已永久下线（`HARD_DELETE_DISABLED = True` :46、`execute()` 起手 raise、路由回 403）
+⇒ 补列能改**页面上那个数**，改不了**会不会被删**。两处文字已按这一分裂重写，#142 的立论跟着换。
+⚠ 由这一分裂又量出两件新账写进 §2d：`:447` 那个窗口用的是**墙钟**（`:157 self.today = today or date.today()`）
+⇒ 生产容器在 UTC 时恢复窗口今天就在**提前一天**关（#145 落在这一列上）；以及"那 18 行永远进不了清理桶"
+说的是**今天**，它靠的是那把旗 = True —— `scheduler.py:183` 的 import 排在 `:172` 的 return **之后**，而
+`cleanup_tasks.py:122` 那把旧尺子按 `viewpoint_date` 删、`is_deleted` 与 `deleted_at` 一个字都不看
+⇒ 旗一放就是另一件事（条目 18，这层前提现已写进 §2d）。
+② **MAJOR（条目 8）：「页面三个清理预览都在用墙钟那把的 `build_plan`」数量与"都"两处都不对** ⇒ 改成
+"两个预览各用一把（`/api/config/cleanup/preview` 走墙钟、`/cleanup/three-buckets/preview` 走北京钟）
++ 第三个按钮 `/api/test-data/find` 压根不看日历"⇒ 北京 00:00~08:00 之间"预览"与"真删"算的不是同一个今天。
+③ **MAJOR（条目 9）：`_releases_live` 又被 8 格 / ≥7 族买通**，而其中两种是本批刚在隔壁 `_bound_value` 认下的
+（同一件事两种待遇）：λ 绑在 `AnnAssign` / 海象 / 列表元组字面量槽位上、`for` 那一腿不认**推导式生成器**
+（`ListComp`/`SetComp`/`DictComp`/`GeneratorExp` over 空容器）、`return`/`raise` **之后**的语句、`match` 的恒假 guard。
+现在 `_empty_container_names` 与 `_live_nodes` 走同一份"可证为空"的名字（剪的是不可达，不是这一族写法）、
+`_dead_inner_defs` 按 Name / Attribute / 下标常量键三种绑法收 λ 并迭代到不动点、`_kids`/`_prune_suite` 剪掉终止语句之后、
+`match` 按**类名**认（不在 3.9 上取属性；`_match_supported()` 判语言支持，不支持就跳过那一格，不许恒空）。
+⇒ 规避样品表 **22 → 32** 格、诚实写法表 **9 → 17** 格，逐格真跑：10 格新形状 `releases_live` True→False，
+17 格诚实写法仍 True（**没有一处过宽**——真函数 `update_fund_history` 的 `inserted = []` 仍判"递了"）。
+⚠ 这些形状 `src/`+`scripts/` **今天一个都没有**（`match` 全仓 0 处、空迭代推导式 0 处）⇒ 这一条扣的是
+**"补全"那句承诺说过头**与尺子自身的洞，不是产品行为坏了；docstring 那句"把 λ 的绑法**补全**"已改成
+"清单就是那份样品表"，③ 段那句"三种绑法"也收窄成同一写法（**说满话这一族第 56~60 轮第五次扣分**）。
+④ **MINOR（条目 10）：归档那把还漏五种隐身拼法**——`row.__dict__.update({...})`、`vars(row)[...]`、
+`s = object.__setattr__` 再 `s(...)`、`db.session.set(row, {...})`、`p = {}` + `p.update({...})` + `q.update(p)`
+实测全回 `[]`。现在 `_instance_dict()` 认 `x.__dict__` 与 `vars(x)` 两种、`.setdefault` / `__dict__.update` /
+`vars(...).update` 各补一腿、`session` 这个收件人算"像查询"、组字典那一腿按 sink 动词门控
+（`echo_dict_update` 那格——返回给前端的字典——必须仍为空，第一版不门控就是过宽，被新控制当场点红）。
+⚠ **仓库里今天没有活对应物** ⇒ 按本仓尺度定 MINOR，不许写成"产品洞补上了"。
+⑤ **两条边界的前提以前没写进文字**（条目 11 / 18）："列名是变量的 `setattr` 看不见"之所以**成立**，依据是
+"**当前调用方名单里递不进能写归档列的载荷**"（`src/services/base.py:99-101` 那条载荷驱动写列名**真实存在**，
+`PredictionService`/`ViewpointService` 都继承它 ⇒ 潜伏面是真的），**不是**"这种拼法不存在" ⇒ docstring 按前者改写。
+调用方名单现读：`blogger_service.py:162/174`、`post_service.py:115/132` 四条字面量，
+`grep -rn "self.update(" src/services/` 只命中这些；另三个 `setattr(变量)` 站点逐个核过
+（`fund_service.py:110` 目标表**没有**归档列、`post_service.py:294` 键被白名单钉死、`core/config.py:197/224`
+写的是 `Settings` 类属性、不碰 ORM 行）。⚠ **评审自己第一版探针按 `ast.AnnAssign` 取列名** ⇒ 对
+`Prediction`/`Viewpoint` 报了 `deleted_at=False`，那是错的（本仓模型用 `deleted_at = Column(Date)` 这种
+`ast.Assign`）⇒ 下一轮别照那份抄，列名要 `Assign`/`AnnAssign` 两种都收。
+⑥ **产品侧新洞只立项、不动手**（条目 16 / 17）⇒ **任务 #146**：`rollback_invalid_verifications:1730`
+跑**墙钟**，而它的签名（`:1683-1685`）**压根没有 `today`/`as_of` 参数** ⇒ 连"两面钟冲突必须按北京"那条用例
+都没有抓手；同一个 helper 在 `verify_prediction` 那支是 `:1061-1066 today = current_as_of()`（第 52 轮 B-3 改的），
+而这条是**页面按钮、真会写**（`predictions.py:134/172` → `prediction-manager.js:255/270` → `index.html:306/314`）。
+同类两处创建排期（`llm_analyzer.py:1278`、`prediction_service.py:354`）与观点/建议侧"近 N 天"窗
+（`advice_service.py:54/56/238/330`、`viewpoint_service.py:101/114/148/290`）一并写进 #146 ——
+隔壁 `advice_evidence.py:8` 已逐条收 `as_of` ⇒ **相邻两个模块两种待遇**。**改哪一把都会动"撤几条结论 /
+哪些行还算在窗口内"** ⇒ 与 #145 一起定，不一处一处漂。
+**这批的账也要如实记**：①②③④⑤ 全是**判据侧 / 文字侧**，`src/` 行为**一字未动** ⇒ 变异体检**不新增条目**
+（30 处与上一批同数，条数一律 `python scripts/mutation_proof_lifecycle.py --list` 看末行），
+"新腿有没有牙"由那 18 格新样品（10 格规避 + 8 格诚实）与归档那把的 6 格负责，
+别拿"变异全 RED"当这一批的证据。
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话）：
+
+- `pytest tests/unit -q` → **1229 passed / 16 skipped / 0 failed**（323.22 秒）。
+- `pytest tests/ -q` → **1238 passed / 16 skipped / 0 failed**（310.44 秒）。
+  （与上一批**同数** —— 本批每一组新样品都并进已有用例的样品表，`def test_` 条数一条没增；
+  分布用 `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_one_ruler_per_question.py 5 -> 5`、`test_structurally_unverifiable_hold.py 32 -> 32`。
+  判据文件当场：`python -m pytest tests/unit/test_one_ruler_per_question.py
+  tests/unit/test_structurally_unverifiable_hold.py -q` ⇒ **48 passed**。）
+  变异：`python scripts/mutation_proof_lifecycle.py` **30 处全 RED**（M1~M28 含 M3b/M5b；
+  CONTROL-GREEN = 7 个判据文件在干净代码上全绿；无 ANCHOR-MISS / 无 HARNESS-FAIL / 无 `[还原失败]`），
+  原始日志随仓库走 `docs/迭代计划/run-20260927-mutation/round60-lifecycle-mutations.txt`
+  （首行 `# run @ 2026-09-28T12:00:15+08:00  git=548d7833bc40  python=3.12.10  共 30 处变异 / 7 个判据文件`，
+  md5 `d3142579ea444a1aa90c7f690290cf25` **与 round59 那份 `1188a3454943e0d2a3219c54f54a9811` 不同**）。
+  `audit_doc_claims.py` 退 **0**。
+  **镜像此刻**（同日 12:1x，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：29 条`；
+  **生产此刻**（同日 12:1x，只读探针 + 日期现算 `D=$(date -u -d '+8 hours' +%F)`）：
+  `expired_unjudged 17 / held_by_lock 0 / actionable_today 17` —— 与上一批同数，因为
+  **生产仍然没有任何东西在跑**（#132），这 17 条一天天变旧。
+
+（上一批：2026-09-28 10:2x（北京），**任务 #143：第 59 轮复评 70/100 返修——三条 MAJOR 里最重的
 一条是"我上一批用来收尾的那段『我自己驳回自己』，把同一个错（死路当产品事实）又写了一遍"；
 第二条是这把尺子对"整包摊进构造函数"失明、而它有一个活的对应物；第三条是同一把尺子内部两腿
 用了两种遍历**（条目号 M-*/m-* 落在 #143 的 metadata 里，报告正文不随仓库走）——
@@ -305,7 +388,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 带 `X-Danger-Confirm` 的**硬删**、那个模块**全仓零 import** ⇒ 连"药方"都是把活路接到死路上。
 真正活着的是 AI 判拒绝 `viewpoint_workflow_service.py:328`（两个时间戳一个都不写），
 而活的硬删要求 `deleted_at.isnot(None)` ⇒ 镜像那 **18** 行 `rejected:` 永远进不了清理桶
-⇒ **任务 #142 整条重写**（旧立论"补 `restore_before` 就有保护"是空转：今天没有活消费面读观点那一列）。
+⇒ **任务 #142 整条重写**（旧立论"补 `restore_before` 就有保护"**拦不住物理删除**：真在删行的
+是三桶那把，它的 `_deleted_viewpoint_ids` 只看 `deleted_at`，而这把尺子的 `execute()` 起手就 raise）。
+⚠⚠ **第 60 轮 BLOCKER：这一句当时给的"理由"半句是假话**（结论半句站得住，错在依据）——
+我写"今天没有活消费面读观点那一列"，而现读代码是**有人读、而且读出来的数就在页面上**：
+`retention_cleanup_service.py:443` 的 SELECT 里带着 `Viewpoint.restore_before`，`:447`
+`if is_deleted and restore_before and restore_before >= self.today:` ⇒ 还在窗口内的行挪进
+`protected_counts`、不再进候选。那条链一路活的：`:194 build_plan()` →
+`config.py:333 GET /api/config/cleanup/preview`（回执带 `counts['viewpoints']` 与
+`protected_counts`，:355）→ `web/index.html:2549 fetchCleanupPreview`；另有
+`config.py:300 /cleanup/orphan-funds/preview`（**页面不打它**，`grep -rn orphan web/` ⇒ 0）
+与 `src/tasks/cleanup_tasks.py:769` ⇒ **补那一列确实会把行从候选挪进保护**，别把它当死列处理掉。
+要说清的分裂是"**预览保护得到、真删保护不到**"：预览这一把认那一列，而线上唯一会删行的三桶
+那一把（`retention_three_buckets.py:584/592`）只比 `deleted_at < cutoff`、一个字都不看那一列，
+加上旧执行器永久下线 ⇒ 补列能改**页面上那个数**，改不了**会不会被删**。
+⚠ 而 :447 那个窗口用的是**墙钟**（`:157 self.today = today or date.today()`）⇒ 生产容器在 UTC
+时它今天就在**提前一天**关（这正是 #145 那件事落在这一列上，第 60 轮 BLOCKER 的另一半）。
 ② **归档那把尺子对"整包摊进构造函数"失明，而且有活的对应物**（M-2）：
 `Model(**{'deleted_at': …})` / `Model(**payload)` 实测都回 `[]`（第 56 轮 m-3 为 **NAV** 那把
 补过同一族，归档这把没接）。现在 `_splat_dicts` 认两档来路（字面量 / 一跳变量），**并且不要求**
@@ -328,13 +426,19 @@ lambda 绑在**属性**上（`C.r = lambda: …`）或塞进**字典字面量**�
 绑过两次算"看不清算递到了"）+ `_is_accumulated` 被**两腿共用**，`_empty_container_names` 从同一份
 活节点里推出"可证为空"的名字、`_live_nodes` 第二遍据此剪掉整个 `for` 体，
 `_dead_inner_defs` 按 Name / Attribute / 字典 `@key` 三种绑法收 lambda。
+⚠ **这句到第 60 轮只算"当时补了三种"**：同一批刚给参数那一腿认下 `AnnAssign`/`NamedExpr`，
+λ 这一腿没跟上 ⇒ 带标注、海象、列表/元组字面量、下标位**四种绑法**实测仍判"已接线"
+（第 60 轮 M-1，docstring 里那句"把 λ 的绑法**补全**"因此是说过头，已改）。
 反面样品同步补（λ 真被叫、`for` 过非空字面量、活 def 里真累加、带标注但真累加……）
 ⇒ 剪的是"不可达"，不是"这一族写法"；条数一律看那两份 dict，别在这里抄。
 ④ **同一件事在两份文档里给了两种引用**（m-1）：AGENTS 说"两处消费面都比北京 today 减 N 天"、
 模块总览只引三桶 —— 实测前者第二半不成立（`retention_cleanup_service.py:447` 是
 `restore_before >= self.today` 的**窗口检查**，且那个服务的 `today` 是 `date.today()` :157 墙钟）。
 两处现已统一成"只有三桶那一处 + 那一站跑墙钟"。**顺带量出一条产品侧的账**：两个清理服务的"今天"
-是两把钟，而页面三个清理预览都在用墙钟那把的 `build_plan` ⇒ 换北京钟会让硬删**提前** ⇒
+是两把钟，而页面**能取到的两个清理预览各用一把**（`/api/config/cleanup/preview` 走墙钟那把的
+`build_plan`、`/api/config/cleanup/three-buckets/preview` 走北京那把；第三个按钮
+`/api/test-data/find` 压根不看日历）⇒ ⚠ **上一版写"页面三个清理预览都在用墙钟那把"是说过头**
+（第 60 轮 MAJOR：数错了按钮、也把北京那把说成墙钟）。换北京钟会让硬删**提前** ⇒
 **新任务 #145，决定项、不顺手改**。
 ⑤ **会过时的数又不留文字版了**（m-2 / m-3）：`archive_stamp()` 的 docstring 与两份判据注释都写着
 "五种拼法"，而第 57~59 轮实际连着往里补了批量三档来路、裸 SQL 一整族、`object.__setattr__` /
@@ -423,7 +527,14 @@ UTC 容器里 `datetime.now()` 比北京**早** 8 小时 ⇒ 那一行显得**�
 count(*) filter (where is_deleted and restore_before is null) no_deadline,
 count(*) filter (where is_deleted and deleted_at is null) no_stamp,
 count(*) filter (where is_deleted and analysis_summary like 'rejected:%') rejected from viewpoints"`）。
-⇒ 任务 #142 已按这个重写（旧的"补 `restore_before` 就能保护"根本没人读那一列，是空转）。
+⇒ 任务 #142 已按这个重写（旧的"补 `restore_before` 就能保护"**拦不住物理删除**：真删行的三桶
+那一把只看 `deleted_at`，而旧执行器起手就 raise）。
+⚠ **第 60 轮 BLOCKER：当时给的那半句理由是假的** —— 我写"根本没人读那一列"，而
+`retention_cleanup_service.py:443/447` **就在读它**，并且那条链是活的（`build_plan()` →
+`config.py:333 GET /api/config/cleanup/preview` → `web/index.html:2549`）⇒ 补那一列**会**把行
+从"候选"挪进 `protected_counts`、那个数在页面上看得见。正确的分裂是"**预览保护得到、真删保护不到**"，
+不是"这一列没人读"。详见上面 #143 那一段 ① 的 ⚠⚠ 块（同一处还写着墙钟那把今天就在提前一天关这个窗，
+⇒ #145）。
 **教训写给下一轮的我**：驳回别人的话之前，先按同一把尺子自己现读一遍代码 —— 这一批两句"更正"
 全是没核就写，与第 47 轮那次"凭印象重列评审条目"同族；**而"我更正一下"本身也是一句要被现读的断言**
 （第 59 轮 M-1 就是这句更正里又犯的同一个错，连着两版）。

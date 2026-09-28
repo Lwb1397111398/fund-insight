@@ -688,6 +688,19 @@ def _passes_the_new_dates(call, fn=None, live=None):
     return True
 
 
+def _match_supported():
+    """这台解释器认不认 `match` 语法（3.10 起）。不认时那两格样品**喂不进去** ⇒ 跳过它，
+    而不是让用例因为 `SyntaxError` 红在"工具坏了"上（与 `ast.TryStar` 需要 3.11 同一族）。
+    """
+    import ast as _ast
+
+    try:
+        _ast.parse('match _x:\n    case _: pass\n')
+        return True
+    except SyntaxError:
+        return False
+
+
 def _call_names(node):
     """这次调用"叫的是谁"：`f(...)` ⇒ `f`，`a.b(...)` ⇒ `b`（叶子名，用来配内层 `def` 的名字）。"""
     import ast as _ast
@@ -698,6 +711,56 @@ def _call_names(node):
     if isinstance(f, _ast.Attribute):
         return {f.attr}
     return set()
+
+
+def _terminates(stmt):
+    """这条语句一执行，同一套件里它后面的那些就再也走不到（第 60 轮 M-1 第⑦格）。"""
+    import ast as _ast
+
+    return isinstance(stmt, (_ast.Return, _ast.Raise, _ast.Break, _ast.Continue))
+
+
+def _prune_suite(stmts):
+    """一个语句套件剪到**第一条无条件转移**为止（含那一条本身）。
+
+    与 `while 恒假`、`for 空容器` 同量级的"明摆着进不去"：`return`/`raise`/`break`/`continue`
+    之后还写着一次解锁调用，运行时永远执行不到（探针实测上一版判"已接线"）。
+    只剪**同一个套件** ⇒ `try:` 里 return 不会把 `finally:` 一起剪掉（那是另一个套件）。
+    """
+    out = []
+    for s in stmts:
+        out.append(s)
+        if _terminates(s):
+            break
+    return out
+
+
+def _kids(node):
+    """子节点，但每个语句套件都先过一遍 `_prune_suite`。"""
+    import ast as _ast
+
+    out = []
+    for _name, value in _ast.iter_fields(node):
+        if isinstance(value, list):
+            items = list(value)
+            out.extend(_prune_suite(items)
+                       if items and all(isinstance(x, _ast.stmt) for x in items) else items)
+        elif isinstance(value, _ast.AST):
+            out.append(value)
+    return out
+
+
+def _never_iterated(node, empty_names):
+    """这个 `for` 语句 / 推导式的生成器是不是"明摆着一次都不迭代"（第 60 轮 M-1 第①②③格）。
+
+    第 58/59 轮把这条规则给了 **`For` 语句**，但推导式（`ListComp`/`SetComp`/`DictComp`/
+    `GeneratorExp`）里那个 `for` 是 `ast.comprehension` 节点、不是 `For` 语句 ⇒
+    **同一语义的两种形状被同一把尺子两种待遇**（这正是本批 ③ 主账的第三个方向）。
+    """
+    import ast as _ast
+
+    it = node.iter
+    return _empty_container(it) or (isinstance(it, _ast.Name) and it.id in empty_names)
 
 
 def _live_nodes(root, fn, dead, empty_names=frozenset()):
@@ -712,9 +775,13 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
       而 `For` 上一版压根不在剪枝表里）；
       **第 59 轮 M-3 补同一族的第二半**：迭代的是"这个函数里唯一一次绑成空容器、此后没有任何累加"
       的那个**名字**（`d = []; for _ in d: release(...)`）也不进 —— 只认字面量等于换了个变量名就放行；
+    - **推导式同理**（第 60 轮 M-1）：`[release(...) for _ in []]` 与
+      `d = []; {release(...) for _ in d}` 一次都不叫 ⇒ 迭代对象本身照样求值， elt / 条件不进；
+    - **`match` 的恒假 guard**那一档不进（`case _ if False:` 与 `if False:` 同一种死法）；
+    - **无条件 `return`/`raise`/`break`/`continue` 之后的同一套件语句不进**；
     - `except` 那一支不进（出事了才走的路径不算正常接线）；
     - 名字落在 `dead['names']` 里的内层 `def`、节点落在 `dead['node_ids']` 里的 `lambda` 整棵不进。
-    **边界**：`for` 那一腿只认"空字面量"与"唯一一次绑成空容器且无累加的名字"这两种**可证**不进入；
+    **边界**：`for` 与推导式只认"空字面量"与"唯一一次绑成空容器且无累加的名字"这两种**可证**不进入；
     `range(0)`、空生成器表达式这些要靠数据流才看得出来，这一版不猜（与 `_proves_sqlite` 同尺度）。
     """
     import ast as _ast
@@ -723,17 +790,25 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
     yield root
     if isinstance(root, _ast.If):
         arms = list(root.orelse) if _never_runs(root.test) \
-            else list(root.body) + list(root.orelse)
+            else _prune_suite(root.body) + list(root.orelse)
     elif isinstance(root, _ast.IfExp):
         arms = [root.orelse] if _never_runs(root.test) else [root.body, root.orelse]
     elif isinstance(root, _ast.While) and _never_runs(root.test):
         arms = list(root.orelse)                      # 循环体不进，`else` 照进
-    elif isinstance(root, (_ast.For, _ast.AsyncFor)) and (
-            _empty_container(root.iter) or
-            (isinstance(root.iter, _ast.Name) and root.iter.id in empty_names)):
+    elif isinstance(root, (_ast.For, _ast.AsyncFor)) and _never_iterated(root, empty_names):
         arms = list(root.orelse)                      # 一次都不进体，`else` 照进
+    elif isinstance(root, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)):
+        gens = root.generators
+        # 只要有一档生成器"明摆着一次都不迭代"，整条推导式就一个值也不产出；
+        # 但**迭代对象本身会求值**（`[f() for _ in g()]` 里的 `g()` 真会跑），所以那一半照进。
+        arms = [g.iter for g in gens] if any(
+            _never_iterated(g, empty_names) for g in gens) else list(_ast.iter_child_nodes(root))
+    elif type(root).__name__ == 'Match':        # 3.10 起才有；按类名认，不在 3.9 上取属性
+        arms = [root.subject] + [c for case in root.cases
+                                 if not (case.guard is not None and _never_runs(case.guard))
+                                 for c in _kids(case)]
     elif isinstance(root, (_ast.Try, _ast.TryStar)):
-        arms = list(root.body) + list(root.finalbody or [])
+        arms = _prune_suite(root.body) + list(root.finalbody or [])
     elif isinstance(root, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda)):
         if isinstance(root, _ast.Lambda):
             if id(root) in node_ids:
@@ -742,9 +817,9 @@ def _live_nodes(root, fn, dead, empty_names=frozenset()):
         else:
             if root is not fn and getattr(root, 'name', '') in names:
                 return                                # 从不被叫的内层 def ⇒ 整棵是死路
-            arms = list(_ast.iter_child_nodes(root))
+            arms = _kids(root)
     else:
-        arms = list(_ast.iter_child_nodes(root))
+        arms = _kids(root)
     for arm in arms:
         yield from _live_nodes(arm, fn, dead, empty_names)
 
@@ -759,27 +834,48 @@ def _empty_container_names(fn, nodes):
 
     out = set()
     for n in nodes:
-        if isinstance(n, _ast.For) and isinstance(n.iter, _ast.Name):
-            name = n.iter.id
+        iters = [n.iter] if isinstance(n, _ast.For) else \
+            [g.iter for g in n.generators] if isinstance(
+                n, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)) else []
+        for it in iters:                              # `For` 语句与推导式**同一把尺子**（第 60 轮 M-1）
+            if not isinstance(it, _ast.Name):
+                continue
+            name = it.id
             bound = _bound_value(nodes, name)
             if bound is not None and _empty_container(bound) and not _is_accumulated(nodes, name):
                 out.add(name)
     return out
 
 
+def _const_dispatch_key(value):
+    """字面量下标 ⇒ 这次派发"叫的是哪一个"：`hooks['r']` → `@r`、`hooks[0]` → `#0`。
+
+    第 60 轮 M-1 的第⑥格：λ 塞进**列表**字面量、靠 `hooks[0]()` 叫，而上一版只给字典的
+    字符串键开了一档（`@r`）⇒ 换个容器、换个下标类型就又是"看着接了"。
+    布尔不当键用（`hooks[True]()` 与 `hooks[1]()` 在 Python 里是同一个位置，猜不得）。
+    """
+    import ast as _ast
+
+    if isinstance(value, _ast.Constant) and not isinstance(value.value, bool) \
+            and isinstance(value.value, (str, int)):
+        return ('@' if isinstance(value.value, str) else '#') + str(value.value)
+    return None
+
+
 def _call_keys(node):
-    """这次调用"叫的是谁"的**全部键**：函数名、属性叶子名、以及 `d['键']()` 那种字典派发
-    （第 59 轮 M-3 的第④格：lambda 塞进字典字面量里、靠 `hooks['r']()` 叫，
+    """这次调用"叫的是谁"的**全部键**：函数名、属性叶子名、以及 `d['键']()` / `d[0]()` 那种
+    容器派发（第 59 轮 M-3 的第④格：lambda 塞进字典字面量里、靠 `hooks['r']()` 叫，
     上一版 `_call_names` 对 `Subscript` 交回空集 ⇒ 那棵 λ 的体照常进遍历）。
-    字典派发那一档用 `@键` 前缀，避免与真函数名撞车。
+    容器派发那一档用 `@键` / `#下标` 前缀，避免与真函数名撞车。
     """
     import ast as _ast
 
     out = set(_call_names(node))
     f = node.func
-    if isinstance(f, _ast.Subscript) and isinstance(f.slice, _ast.Constant) \
-            and isinstance(f.slice.value, str):
-        out.add('@' + f.slice.value)
+    if isinstance(f, _ast.Subscript):
+        key = _const_dispatch_key(f.slice)
+        if key:
+            out.add(key)
     return out
 
 
@@ -794,32 +890,52 @@ def _dead_inner_defs(fn):
        所以"这个 def 里有一次解锁"不等于接了线 ⇒ 认调用点时要**扣掉它自己体内那些**；
     ② `_r = lambda: release(...)` 绑在名字上而没人 `_r()` —— 与死 def 同一件事，
        以前 `Lambda` 的体照常进遍历。
-    **第 59 轮 M-3 把 λ 的绑法补全**（探针实测这两种仍判"已接线"）：
+    第 59 轮 M-3 补了两种位置（探针实测当时仍判"已接线"）：
     ③ `C.r = lambda: release(...)`（绑在**属性位**上，靠 `x.r()` 叫）；
     ④ `{'r': lambda: release(...)}`（塞进**字典字面量**，靠 `hooks['r']()` 叫）。
-    ⇒ 三种绑法各按自己的"被叫得上"的键去对（属性看叶子名、字典看 `@键`），
-    对不上就是死路；诚实写法（真去 `C.r()` / `hooks['r']()`）仍然算接上，见那两条反面样品。
+    **第 60 轮 M-1 把绑法这一族往 `_bound_value` 那一档对齐**（上一批刚给参数那一腿认下
+    `AnnAssign`/`NamedExpr`，这一腿还停在三种绑法 ⇒ **同一把尺子两腿两种待遇**，本批主账的第四面）：
+    ⑤ `r: callable = lambda: …`（带标注）；⑥ `(r := lambda: …)`（海象）；
+    ⑦ `[lambda: …]` / `(lambda: …,)`（列表/元组字面量，靠 `hooks[0]()` 叫）；
+    ⑧ `hooks['r'] = lambda: …` / `hooks[0] = lambda: …`（**下标位**上的赋值）。
+    ⇒ 每种绑法各按自己"被叫得上"的键去对（名字看叶子名、`@键`/`#下标` 看容器派发），
+    对不上就是死路；诚实写法（真去 `C.r()` / `hooks['r']()` / `hooks[0]()`）仍然算接上，见那些反面样品。
+    **边界（不许说成"补全了"）**：下标是**变量或表达式**时（`hooks[i] = λ`、`hooks[key()]()`）
+    认不出派发键 ⇒ 那一棵按"没人叫"处理不了，也不硬猜（与 `for` 只认空字面量同一尺度）；
+    属性链上的 λ（`a.b.r = λ`）只认叶子名 `r`，与调用点那一腿同一个宽松度。
     """
     import ast as _ast
 
     inner = [d for d in _ast.walk(fn)
              if isinstance(d, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and d is not fn]
     lambdas = {}
+
+    def _bind(key, lam):
+        if key is not None:
+            lambdas.setdefault(key, []).append(lam)      # 同一个键挂两棵 λ：都按这一个键判
+
     for n in _ast.walk(fn):
-        if isinstance(n, _ast.Assign) and isinstance(n.value, _ast.Lambda) \
-                and len(n.targets) == 1:
-            t = n.targets[0]
-            if isinstance(t, _ast.Name):
-                lambdas[t.id] = n.value               # `_r = lambda: …`
-            elif isinstance(t, _ast.Attribute):
-                lambdas[t.attr] = n.value             # `C.r = lambda: …`（第 59 轮 M-3 ③）
+        if isinstance(n, (_ast.Assign, _ast.AnnAssign)) and isinstance(n.value, _ast.Lambda):
+            for t in (n.targets if isinstance(n, _ast.Assign) else [n.target]):
+                if isinstance(t, _ast.Name):
+                    _bind(t.id, n.value)                 # `_r = λ` / ⑤ `r: callable = λ`
+                elif isinstance(t, _ast.Attribute):
+                    _bind(t.attr, n.value)               # ③ `C.r = λ`
+                elif isinstance(t, _ast.Subscript):
+                    _bind(_const_dispatch_key(t.slice), n.value)   # ⑧ 下标位上的赋值
+        elif isinstance(n, _ast.NamedExpr) and isinstance(n.value, _ast.Lambda) \
+                and isinstance(n.target, _ast.Name):
+            _bind(n.target.id, n.value)                  # ⑥ `(r := λ)`
+        elif isinstance(n, (_ast.List, _ast.Tuple, _ast.Set)):
+            for i, elt in enumerate(n.elts):
+                if isinstance(elt, _ast.Lambda):
+                    _bind('#%d' % i, elt)                # ⑦ 列表/元组字面量里的 λ
         elif isinstance(n, _ast.Dict):
             for k, v in zip(n.keys, n.values):
-                if isinstance(v, _ast.Lambda) and isinstance(k, _ast.Constant) \
-                        and isinstance(k.value, str):
-                    lambdas['@' + k.value] = v        # `{'r': lambda: …}`（第 59 轮 M-3 ④）
+                if isinstance(v, _ast.Lambda):
+                    _bind(_const_dispatch_key(k), v)     # ④ `{'r': λ}` / `{0: λ}`
     dead_names, dead_ids = set(), set()
-    for _ in range(len(inner) + len(lambdas) + 1):    # 单调收缩，最多这么多轮
+    for _ in range(len(inner) + sum(len(v) for v in lambdas.values()) + 1):
         live_calls = [c for c in _live_nodes(fn, fn, {'names': dead_names, 'node_ids': dead_ids})
                       if isinstance(c, _ast.Call)]
         nxt_names, nxt_ids = set(), set()
@@ -829,10 +945,12 @@ def _dead_inner_defs(fn):
             inside = {id(x) for x in _ast.walk(d)}    # 只有"它叫它自己"不算有人叫
             if not any(d.name in _call_names(c) and id(c) not in inside for c in live_calls):
                 nxt_names.add(d.name)
-        for name, lam in lambdas.items():
-            # `@键` 那种是字典派发（`hooks['r']()`），其余按名字/属性叶子名对 ⇒ 用 `_call_keys`
+        for name, lams in lambdas.items():
+            # `@键` / `#下标` 那种是容器派发（`hooks['r']()` / `hooks[0]()`），
+            # 其余按名字/属性叶子名对 ⇒ 两种都走 `_call_keys`
             if not any(name in _call_keys(c) for c in live_calls):
-                nxt_ids.add(id(lam))
+                for lam in lams:
+                    nxt_ids.add(id(lam))
         if nxt_names == dead_names and nxt_ids == dead_ids:
             break
         dead_names, dead_ids = nxt_names, nxt_ids
@@ -1061,7 +1179,60 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    d = []\n'
             '    for _x in d:\n'
             '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        # 第 60 轮 M-1 的八格：前两批把"不可达"给了 **`For` 语句**，可推导式里那个 `for` 是
+        # `ast.comprehension` 节点不是 `For` ⇒ 同一语义换个形状就全部失效；λ 那一腿同样落后于
+        # `_bound_value`（换绑法隐身）；而"无条件 return/raise 之后那一行"压根不在剪枝表里。
+        '推导式 over 空字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    [_x for _x in [] if release_holds_after_nav_commit(db, code, inserted)]\n'),
+        '推导式 over 可证为空的名字': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    [_x for _x in d if release_holds_after_nav_commit(db, code, inserted)]\n'),
+        '集合推导式同族': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    {release_holds_after_nav_commit(db, code, inserted) for _ in ()}\n'),
+        '生成器表达式同族': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    list(release_holds_after_nav_commit(db, code, inserted) for _ in [])\n'),
+        '带标注绑的 lambda 没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    r: callable = lambda: release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return 0\n'),
+        '海象绑的 lambda 没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    (r := lambda: release_holds_after_nav_commit(db, code, inserted))\n'
+            '    return 0\n'),
+        'lambda 塞进列表字面量而没人叫': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = [lambda: release_holds_after_nav_commit(db, code, inserted)]\n'
+            '    return 0\n'),
+        'return 之后的那一行': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    return 0\n'
+            '    release_holds_after_nav_commit(db, code, inserted)\n'),
+        'raise 之后的那一行': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    raise ValueError()\n'
+            '    release_holds_after_nav_commit(db, code, inserted)\n'),
+        'match 的恒假 guard': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    match code:\n'
+            '        case _ if False:\n'
+            '            release_holds_after_nav_commit(db, code, inserted)\n'),
     }
+    if not _match_supported():
+        evasions.pop('match 的恒假 guard')          # 这台解释器没有 match 语法，喂不进去
     for label, src in evasions.items():
         assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {
             ('src/fund/fund_api.py', 'f'): False}, \
@@ -1141,7 +1312,59 @@ def test_the_nav_unlock_path_is_wired_into_every_nav_writer():
             '    d = [code]\n'
             '    for _x in d:\n'
             '        release_holds_after_nav_commit(db, code, inserted)\n'),
+        # 第 60 轮 M-1 那八格的**反面样品**：推导式只要迭代对象**进得去**、换绑法的 λ 只要
+        # **真被叫到**、`match` 只要 guard 不恒假，就必须仍算接上 ⇒ 修的是"不可达"这一族，
+        # 不是"这一族语法"。少任何一格，下一轮正常的延迟解锁会被这道闸集体判死。
+        '推导式 over 非空字面量': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    [release_holds_after_nav_commit(db, code, inserted) for _ in (code,)]\n'),
+        '推导式 over 真累加过的名字': (
+            'def f(self, db, code):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    d = []\n'
+            '    d.append(code)\n'
+            '    [release_holds_after_nav_commit(db, code, d) for _ in d]\n'),
+        '带标注绑的 lambda 真被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    r: callable = lambda: release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return r()\n'),
+        '海象绑的 lambda 真被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    (r := lambda: release_holds_after_nav_commit(db, code, inserted))\n'
+            '    return r()\n'),
+        '列表里的 lambda 按下标真被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    hooks = [lambda: release_holds_after_nav_commit(db, code, inserted)]\n'
+            '    return hooks[0]()\n'),
+        '下标位上绑的 lambda 真被叫了': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            "    hooks = {}\n"
+            "    hooks['r'] = lambda: release_holds_after_nav_commit(db, code, inserted)\n"
+            "    return hooks['r']()\n"),
+        'return 之前那一行照常算（剪的是它后面，不是整个函数）': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    release_holds_after_nav_commit(db, code, inserted)\n'
+            '    return 0\n'),
+        'try 里 return 不把自己的 finally 剪掉': (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    try:\n        return 0\n'
+            '    finally:\n'
+            '        release_holds_after_nav_commit(db, code, inserted)\n'),
     }
+    if _match_supported():
+        honest_live['match 的 guard 不恒假'] = (
+            'def f(self, db, code, inserted):\n'
+            '    db.add(FundHistory(fund_code=code))\n'
+            '    match code:\n'
+            '        case _ if 1 == 1:\n'
+            '            release_holds_after_nav_commit(db, code, inserted)\n')
     for label, src in honest_live.items():
         assert _nav_writers([('src/fund/fund_api.py', _ast.parse(src), src)]) == {
             ('src/fund/fund_api.py', 'f'): True}, \
