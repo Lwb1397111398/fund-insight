@@ -1,4 +1,4 @@
-# run @ 2026-09-29T03:33:07+08:00  git=48c95e7d12fc  python=3.12.10  共 141 处变异 / 3 个判据文件
+# run @ 2026-09-29T01:41:03+08:00  git=4a0fdb60350c  python=3.12.10  共 140 处变异 / 3 个判据文件
 本批改写到的文件：web/index.html、web/post-manager.js、web/prediction-manager.js、web/viewpoint-manager.js
 CONTROL-GREEN（干净代码上判据通过，下面的红才有意义）
 unwrap_bloggers_fetch                index.html RED（判据有效）
@@ -139,7 +139,6 @@ the_in_progress_note_hard_codes_the_wait index.html RED（判据有效）
 the_button_reports_the_process_not_the_result index.html RED（判据有效）
 the_button_keeps_the_global_lock_when_the_poll_ends index.html RED（判据有效）
 the_button_throws_away_the_shared_verdict index.html RED（判据有效）
-a_null_success_is_read_as_all_clear  index.html RED（判据有效）
 the_progress_leg_blames_the_update   index.html RED（判据有效）
 the_refresh_leg_blames_the_update    index.html RED（判据有效）
 已还原 web/index.html、web/post-manager.js、web/prediction-manager.js、web/viewpoint-manager.js（逐文件回读比对一致）

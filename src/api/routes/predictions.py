@@ -213,31 +213,58 @@ def sync_sector_mapping(
         skipped = result.get('predictions_skipped_unservable') or 0
         if skipped:
             parts.append(f"{skipped} 条没动：板块映射挑的那只标的给不出这段窗口的净值证据"
-                         f"（绑过去会变成到期也判不了的预测），逐条原因见明细")
+                         f"（绑过去会变成到期也判不了的预测）")
 
         # 板块压根没有标的这一档（2026-09-28 老板授权："可以把该板块对应的基金变成其他
-        # 好的基金"）：预览要说"给哪几块补哪只"，实跑要说"补了几块"。补不了的也要点名说
-        # 为什么补不了 —— 只报"同步完成"就是把"这块还是没标的"藏起来。
+        # 好的基金"）：预览要说"给哪几块补哪只"，实跑要说"补了几块、真改了几条"。
+        # 补不了的也要点名说为什么补不了 —— 只报"同步完成"就是把"这块还是没标的"藏起来。
+        # ⚠ 两句关于"话从哪来"的规矩（第 66 轮复评 MA-3/MA-4 各抓到一处）：
+        # ① **这一路页面上只印 `message` 这一句**（预览面板只有一行"预计更新 N 条"，
+        #    真跑那一路是 `alert(response.data.message)）⇒ 不许写"见明细"，那是不存在的栏
+        #    （第 53 轮 A-1 那句"哪两种原因见上方…"同族）；原因要么自己说出口，要么别说。
+        # ② 完成时只配配真做完的数：`predictions_via_gap_fill` 是**改完之后**回查行上代码
+        #    数出来的，计划那份另有一个 `_planned` 键 —— 拿计划数说"已经改了"是第 51 轮 B-2。
         to_fill = result.get('sectors_to_fill') or []
         fillable = result.get('sectors_fillable') or []
         filled = result.get('sectors_filled') or 0
-        via = result.get('predictions_via_gap_fill') or 0
+        via_planned = result.get('predictions_via_gap_fill_planned') or 0
+        via_done = result.get('predictions_via_gap_fill') or 0
         sample = "、".join(f"{item['sector']}→{item['fund_code']} {item['fund_name']}"
                            for item in to_fill[:3])
         if dry_run and to_fill:
-            parts.append(f"{len(to_fill)} 个板块本来没有任何可用标的，而它们身上 {via} 条预测"
+            parts.append(f"{len(to_fill)} 个板块本来没有任何可用标的，而它们身上 {via_planned} 条预测"
                          f"用自己那只标的问不出这段窗口的净值 ⇒ 会按内置板块表给这些板块补上"
                          f"对口标的（{sample}{'……' if len(to_fill) > 3 else ''}）")
         if not dry_run and filled:
             parts.append(f"已给 {filled} 个原本没有可用标的的板块补上标的，"
-                         f"并把 {via} 条问不出证据的预测改到它身上")
+                         f"并把 {via_done} 条问不出证据的预测改到它身上")
         if dry_run and fillable and not to_fill:
             parts.append(f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测"
                          f"现在那只标的就给得出净值 ⇒ 这一轮一块都不动")
         refused = result.get('sectors_refused_to_fill') or []
         if refused:
-            parts.append(f"{len(refused)} 个板块仍然没有标的：内置表也说不出对口品种，"
-                         f"逐块原因见明细")
+            # "内置表也说不出对口品种"原来是一句**写死的**诊断，而服务侧实测有六种拒收：
+            # 板块名长过列宽 / 内置表答不出 / 内置表给的正是库里那只 / 本库没这只的档案 /
+            # 这只在库里一行净值都没有 / 那一行是老板署名挑定的。六种里只有第二种对得上
+            # 那句写死的话 ⇒ 按种类各数各的，话从数里长出来（不认识的种类照实说"原因各异"）。
+            labels = {
+                'label_unusable': '板块名空着或长过列宽',
+                'no_static_hit': '内置表也说不出对口品种',
+                'same_as_current': '内置表给的就是库里那只标的',
+                'no_archive': '本库还没有那只标的的档案',
+                'no_nav': '那只标的在库里一行净值都没有',
+                'owner_locked': '那行标的是老板署名挑定的',
+            }
+            counts: dict = {}
+            for item in refused:
+                key = item.get('kind') or 'other'
+                counts[key] = counts.get(key, 0) + 1
+            detail = "、".join(f"{labels.get(kind, '其它原因')} {n} 块"
+                               for kind, n in sorted(counts.items(),
+                                                     key=lambda kv: -kv[1]))
+            parts.append(f"{len(refused)} 个板块仍然没有可用标的：{detail}"
+                         + ("（要换署名那只请你去板块匹配页改，机器不动它）"
+                            if counts.get('owner_locked') else ""))
         kept = result.get('predictions_kept_own_target') or 0
         if kept:
             parts.append(f"{kept} 条预测没动：它们自己那只标的就给得出这段窗口的净值，"

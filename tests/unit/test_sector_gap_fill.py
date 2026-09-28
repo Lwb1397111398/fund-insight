@@ -14,13 +14,20 @@
     where m.is_active=1 and m.sector_name=t.s)=0 group by 1 order by n desc"
 
 这批自己踩到的一次（写在判据里防下一轮）：第一版没有"只动问不出证据的那几条"这道门，
-镜像 dry-run 印 `would_update 657` —— 一次按钮会清掉几百条已有结论，正是第 18 轮
-"一键清空 515 条结论"的形状。`test_a_row_that_can_already_be_evidenced_is_left_alone`
-钉的就是这道门；把那道 `continue` 摘掉，它必须当场红。
+镜像 2026-09-29 同一份代码只把门换成 `if False`，预览从 `would_update 28` 涨到 **655**
+（其中 627 条走补标那一路、**470 条带着已判结论**）—— 一次按钮就清掉几百条已有结论，
+正是第 18 轮"一键清空 515 条结论"的形状。`test_a_row_that_can_already_be_evidenced_is_left_alone`
+钉的就是这道门；把那道 `continue` 摘掉，它必须当场红（变异 M29）。
 """
 
 from datetime import date, timedelta
+from pathlib import Path
 
+import pytest
+from sqlalchemy import text
+from starlette.requests import Request
+
+from src.api.routes import predictions as prediction_routes
 from src.core import config
 from src.models.database import (
     Blogger,
@@ -34,6 +41,31 @@ from src.models.database import (
 from src.services.prediction_maintenance_service import PredictionMaintenanceService
 
 GOLD = '黄金'
+
+
+@pytest.fixture(autouse=True)
+def _foreign_keys_are_enforced(test_db):
+    """这份文件里的"没有档案就插不进去"必须是**库自己说的**，不是注释里说的。
+
+    共享夹具是裸 `create_engine("sqlite:///:memory:")`，而 SQLite **默认不强制外键** ⇒
+    "有外键所以插进去会 IntegrityError"这句话在这份夹具里结构性不可验证
+    （第 66 轮复评 MI-1，同一件事第 50 轮在 `test_fund_info_archive_gate.py:34` 已经踩过一次：
+    外键没开 ⇒ "档案被拒建、映射行却改到那个码上"这个形状在绿灯里过；
+    而生产 PostgreSQL 会直接撞墙、镜像静默留脏 —— 两个库各坏一种）。
+    """
+    test_db.execute(__import__('sqlalchemy').text('PRAGMA foreign_keys = ON'))
+    yield
+
+
+def _request(headers=None):
+    raw_headers = [
+        (key.lower().encode('latin-1'), value.encode('latin-1'))
+        for key, value in (headers or {}).items()
+    ]
+    return Request({'type': 'http', 'method': 'POST', 'path': '/', 'headers': raw_headers})
+
+
+CONFIRM = {'X-Danger-Confirm': 'sync-prediction-mapping'}
 
 
 def _builtin_target(label=GOLD):
@@ -155,7 +187,11 @@ def test_the_preview_and_the_run_agree_on_which_sectors_get_filled(test_db):
     run = service.sync_sector_mappings(dry_run=False, run_id='t-agree-1')
     assert [i['sector'] for i in plan['sectors_to_fill']] == \
         [i['sector'] for i in run['sectors_to_fill']]
-    assert plan['predictions_via_gap_fill'] == run['predictions_via_gap_fill']
+    # 计划那一份两边同数；**做到**那一份只有实跑才许非零（第 66 轮复评 MA-4：
+    # 原来只有一个键，语义跟着"预览还是实跑"漂，那正是"拿要不要做当做了"的形状）。
+    assert plan['predictions_via_gap_fill_planned'] == run['predictions_via_gap_fill_planned'] == 1
+    assert plan['predictions_via_gap_fill'] == 0, '预览就报"已经改过去了" ⇒ 完成时是假的'
+    assert run['predictions_via_gap_fill'] == 1, run
     assert plan['would_update'] == run['predictions_updated'], (plan['would_update'],
                                                                run['predictions_updated'])
 
@@ -287,3 +323,251 @@ def test_a_dead_sector_row_is_rewritten_in_place_not_added_alongside(test_db):
     assert rows[0].id == dead_id and rows[0].fund_code == code
     assert rows[0].is_fetchable is None, \
         '换了标的还留着旧标的的"可服务"结论 ⇒ 新标的从没体检过却被当成体检过（第 8/9 轮那族幽灵行）'
+
+
+def test_a_filled_row_is_usable_the_next_time_the_sync_runs(test_db):
+    """补完标的的那一行**必须重新被同步器自己认到**，否则"补上标的"只捞出当下这几条。
+
+    第 66 轮复评 MA-1/MA-2 量到的两格（都在 `update` 那一支，内存 sqlite 两遍跑批实测）：
+    ① 不恢复 `is_active` ⇒ 只有"本来对同步器不可见"的行才会走到这里，留着 False
+       就是下一次跑批这板块又是黑洞，而 `blocked_codes` 此时正好等于刚写进去的那只
+       ⇒ 从此永久回"内置表给的就是库里那只"，谁都不再动它；
+    ② 把署名从 `agent` 改成 `seed` 却留着旧标的的 0.70 分 ⇒ `_mapping_eligible`
+       不再走 agent 那一臂（proxy 0.68），退到 `min_confidence 0.85` 兜底 ⇒ 不合格。
+       那正是这个函数自己 docstring 写明"本轮修的就是"的死区（S4a M2）。
+    判据问的是**第二次跑批的行为**，不是那一行列值：列值对而同步器看不见，一样是黑洞。
+    """
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db)
+    old = SectorFundMapping(sector_name=GOLD, fund_code='DEAD01', fund_name='停更的标的',
+                            is_active=False, reviewed=False, reviewed_by='agent',
+                            match_kind='proxy', confidence=0.70)
+    test_db.add(old)
+    _prediction(test_db, fund_code='DEAD01')
+    test_db.commit()
+
+    first = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-usability-1')
+    assert first['sectors_filled'] == 1
+    row = test_db.query(SectorFundMapping).filter_by(sector_name=GOLD).first()
+    assert row is old and row.is_active and row.confidence is None, (
+        row.is_active, row.confidence)
+    assert PredictionMaintenanceService._mapping_eligible(row, 0.85), \
+        '补完的行不合格 ⇒ 下一次同步还是看不见这个板块'
+
+    # 同板块**新**的一条预测（今天还没被任何一次跑批看过）：第二次预览必须直接用它，
+    # 而不是"这块没有可用映射 ⇒ 再补一次"或"补不了，因为库里那只就是内置表给的"。
+    newer = _prediction(test_db, fund_code='DEAD01')
+    test_db.commit()
+    second = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=True)
+    refused = {item['sector']: item.get('kind') for item in second['sectors_refused_to_fill']}
+    assert GOLD not in refused, '第二次跑批把这块判成"补不了"：\n%s' % refused
+    assert [i['sector'] for i in second['sectors_to_fill']] == [], \
+        '补过一次又要补一次 ⇒ 第一次那一次根本没让它可用'
+    assert second['would_update'] >= 1, '新预测没被那块已补好的标的接走'
+    assert second['predictions_no_mapping'] == 0, second['predictions_no_mapping']
+    test_db.refresh(newer)
+    assert newer.fund_code == 'DEAD01', '预览就改了标 ⇒ dry_run 是假的'
+
+
+def test_the_route_names_the_reason_it_actually_hit(test_db):
+    """五种拒收各有原因，回执那句话**不许**把它们压成一句写死的诊断（MA-3）。
+
+    页面这一路只印 `message` 一句（预览面板只有一行"预计更新 N 条"，真跑是
+    `alert(response.data.message)）⇒ 原来那句"逐块原因见明细"指的是一个不存在的栏
+    （第 53 轮 A-1 那句"哪两种原因见上方…"同族），而写死的那半句"内置表也说不出
+    对口品种"对六种理由里的五种都是假话。现在话从 `kind` 数出来。
+    """
+    from src.constants.sector_fund_map import get_fund_for_sector
+    label = '白酒'
+    hit = get_fund_for_sector(label) or {}
+    assert hit.get('code'), '内置表里 白酒 这一行没了 ⇒ 换一个板块标签'
+    _prediction(test_db, sector=label, fund_code='DEAD09')     # 没档案 ⇒ no_archive
+    _archive(test_db, 'PROXY09', '老板挑的代理')
+    _stale_archive(test_db, code='DEAD10', name='停更的标的')
+    test_db.add(SectorFundMapping(sector_name=GOLD, fund_code='PROXY09', fund_name='老板挑的代理',
+                                  is_active=False, reviewed=True, reviewed_by='owner',
+                                  owner_locked=True, is_fetchable=False))
+    _prediction(test_db, sector=GOLD, fund_code='DEAD10')      # 署名行 ⇒ owner_locked
+    test_db.commit()
+
+    body = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
+    message = body['message']
+    assert '本库还没有那只标的的档案' in message, message
+    assert '那行标的是老板署名挑定的' in message, message
+    assert '内置表也说不出对口品种' not in message, \
+        '这一轮的两种拒收都不是"内置表答不出"，那句话是替别的原因撒的谎：\n%s' % message
+    assert '见明细' not in message, '页面上没有"明细"这一栏 ⇒ 指路的话要指到一个真在的地方'
+
+
+def test_the_execute_sentence_counts_rows_it_really_moved(test_db):
+    """完成时那句里的两个数都得是**做完之后**查出来的（MA-4：第 51 轮 B-2 同一族）。"""
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db)
+    pred = _prediction(test_db)
+    test_db.commit()
+
+    body = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
+                                                 dry_run=False, db=test_db)
+    data = body['data']
+    test_db.refresh(pred)
+    assert data['predictions_via_gap_fill'] == 1 == data['predictions_updated']
+    assert f"已给 1 个原本没有可用标的的板块补上标的，并把 1 条" in body['message'], body['message']
+    assert '会按内置板块表' not in body['message'], '实跑那一支不许再说"会"'
+    assert pred.fund_code == code
+
+
+def test_a_nav_row_without_an_archive_is_still_refused_and_the_db_proves_why(test_db):
+    """`fund_history` 有行而 `fund_info` 没档案 ⇒ 拒的是"没档案"，不是"没净值"（MI-1）。
+
+    两件事分不开就会把老板支错地方：话里让他"先跑一次更新基金"，而他真跑了也建不出档案
+    的话什么也不会变。另一半是这份文件开头那条 autouse 夹具的存在理由 ——
+    "插进去就是 IntegrityError"这句必须**当场长出来一次**，否则它只是注释。
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from src.constants.sector_fund_map import get_fund_for_sector
+    label = '白酒'
+    code = (get_fund_for_sector(label) or {}).get('code')
+    assert code, '内置表里 白酒 这一行没了 ⇒ 换一个板块标签'
+    # 净值行可以没有档案（`fund_history.fund_code` 没有外键 —— 生产/镜像都允许这个形状）
+    for offset in range(3):
+        test_db.add(FundHistory(fund_code=code, fund_name='有净值没档案',
+                                nav_date=date(2026, 7, 1) + timedelta(days=offset),
+                                nav=1.0, day_growth=0.1))
+    _prediction(test_db, sector=label, fund_code='DEAD11')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-orphan-nav-1')
+    refused = {item['sector']: item for item in result['sectors_refused_to_fill']}
+    assert refused.get(label, {}).get('kind') == 'no_archive', refused
+    assert '档案' in refused[label]['reason'], refused
+    assert test_db.query(SectorFundMapping).count() == 0
+
+    with pytest.raises(IntegrityError):
+        test_db.add(SectorFundMapping(sector_name=label, fund_code=code,
+                                      fund_name='有净值没档案', is_active=True))
+        test_db.flush()
+    test_db.rollback()
+
+
+def test_the_evidence_handed_to_the_retag_gate_is_the_window_slice():
+    """交给改标门的那份"窗口内净值日"必须出自 `window_from_calendar` 那一次切片。
+
+    第 66 轮复评 MA-4/MI-4：预览那一腿走 `calendar_gap`（内部切片），而实跑那一腿
+    原来把 `nav_calendar` 的**全量**历史当 `evidence` 第一元递进 `retag_prediction`
+    ⇒ 同一把尺子两种喂法，实跑只会更松，"预览与实跑同数"从构造成立退化成偶然成立。
+    这一格**没法用结果判**（超集只会放行更多行，找一个"切片拒、全量过"的形状，
+    在预览那一腿就已经被拦下了），所以按 AST 钉接线：那一次调用的参数必须来自
+    `window_from_calendar`，不许再出现 `calendar.get(...)` 直接喂 `evidence=`。
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parents[2]
+              / 'src' / 'services' / 'prediction_maintenance_service.py')
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    body = next(n for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name == 'sync_sector_mappings')
+    tuples = set()
+    for node in ast.walk(body):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) \
+                and getattr(node.value.func, 'id', None) == 'window_from_calendar':
+            for target in node.targets:
+                if isinstance(target, ast.Tuple):
+                    tuples.update(el.id for el in target.elts if isinstance(el, ast.Name))
+    assert tuples, '没找到 `days, latest = window_from_calendar(...)` 那一次解包 ⇒ 切片这一腿没接'
+    offenders = []
+    for node in ast.walk(body):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != 'evidence':
+                continue
+            if not any(isinstance(name, ast.Name) and name.id in tuples
+                       for name in ast.walk(kw.value)):
+                offenders.append(kw.value)
+    assert not offenders, \
+        'evidence= 里递的不是那一次切片的产物（%s）⇒ 全量历史当窗口证据，实跑那一腿只会更松' % offenders
+    # 也不许有人在这条路上自己抄一遍 `start <= d <= end`（切片只许在那一处）
+    text = ast.unparse(body)
+    assert 'prediction_date) and d <=' not in text and 'in_window = [' not in text, \
+        '这条路上又抄了一遍窗口切片 ⇒ 同一把尺子两处定义'
+    # 板块标签归一必须**两处都用**：建计划那一侧与查候选这一侧各用各的拼法，
+    # 就会出现"计划里给 `绿电` 补了标的、预测这一侧查 `绿色电力` ⇒ 谁也没沾上"（MI-6）。
+    calls = [node for node in ast.walk(body)
+             if isinstance(node, ast.Call)
+             and getattr(node.func, 'attr', None) == '_gap_label']
+    assert len(calls) == 2, \
+        '标签归一只接在 %d 处（应为建计划 + 查候选各一处）⇒ 同义板块又会各写一行映射' % len(calls)
+
+
+
+def _nav_in_window(db, code, name, start=date(2026, 7, 1), end=date(2026, 7, 8)):
+    """给这只标的在预测窗口里铺够点数（问得出证据的形状）。"""
+    db.add(FundInfo(fund_code=code, fund_name=name, sector_type=GOLD))
+    day, n = start, 0
+    while day <= end and n < max(2, config.VERIFY_MIN_DATA_POINTS):
+        db.add(FundHistory(fund_code=code, fund_name=name, nav_date=day,
+                           nav=1.0 + n * 0.01, day_growth=0.1))
+        day, n = day + timedelta(days=1), n + 1
+    db.flush()
+
+
+def test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill(test_db):
+    """那道"只紧不松"的门**只**圈补标那一路：板块自己有映射行 ⇒ 照常对齐，一条都不许挡。
+
+    这一格是第 66 轮返修的回归现场（变异 M40 的凭据）。我把 `via_gap` 推成"标签在不在
+    补标计划表里"，又把归一后的标签当映射键去查 —— 于是映射那一路也被这道门管上了，
+    `tests/unit/test_sector_remap.py` 四条一起红（`predictions_updated` 全成 0）。
+    老板那句话圈定的是「板块对应的基金抓取不到且确认没有办法」，不是"板块换了代表"。
+    """
+    builtin, builtin_name = _builtin_target()
+    _archive(test_db, builtin, builtin_name)          # 内置表给黄金的答案（补标那一路）
+    _nav_in_window(test_db, 'MAP01', '映射行指定的标的')
+    _nav_in_window(test_db, 'OWN01', '自己有好标的')
+    test_db.add(SectorFundMapping(sector_name=GOLD, fund_code='MAP01',
+                                  fund_name='映射行指定的标的', is_active=True,
+                                  reviewed=True, confidence=0.95))
+    pred = _prediction(test_db, fund_code='OWN01')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-mapped-1')
+    test_db.refresh(pred)
+    assert pred.fund_code == 'MAP01', \
+        '板块明明有映射行、对齐规则也够用，却被补标那道门挡下（它自己那只标的好好的）'
+    assert result['predictions_updated'] == 1, result
+    assert result['predictions_kept_own_target'] == 0, \
+        '"它自己问得出证据所以不动"这一档只属于补标那一路，映射那一路不许被它数进去'
+    assert result['predictions_via_gap_fill'] == 0
+    assert result['sectors_filled'] == 0, '这块有行，补标那一路根本不该为它动笔'
+
+
+def test_the_mapping_lookup_still_asks_with_the_raw_sector_label(test_db):
+    """查映射用**原样标签**：`normalize_sector_name` 会吃前缀（实测 `RMAP白酒 → 白酒`）。
+
+    先归一再查，库里那一行（键是 `RMAP黄金`）永远查不到 ⇒ "按板块对齐标的"整条路静默失效，
+    而这条路上还挂着一道归一（`_gap_label`）——两种拼法混在一起，谁也对不上谁。
+    归一**只**许用作补标计划表的键（`_lookup_mapping` 自己那三步里已经有归一那一臂）。
+    """
+    builtin, builtin_name = _builtin_target()
+    _nav_in_window(test_db, builtin, builtin_name)     # 补标那一路答得出、也真会答
+    _nav_in_window(test_db, 'MAPPED01', '带前缀板块的标的')
+    _stale_archive(test_db, code='DEAD09', name='停更的标的')
+    test_db.add(SectorFundMapping(sector_name='RMAP黄金', fund_code='MAPPED01',
+                                  fund_name='带前缀板块的标的', is_active=True,
+                                  reviewed=True, confidence=0.95))
+    pred = _prediction(test_db, sector='RMAP黄金', fund_code='DEAD09')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-rawlabel-1')
+    test_db.refresh(pred)
+    assert pred.fund_code == 'MAPPED01', \
+        '库里那一行是按预测自己那个标签登记的，却被归一后的键查走 ⇒ 换到了内置表那一只（%s）' \
+        % pred.fund_code
+    assert result['predictions_updated'] == 1 and result['sectors_filled'] == 0, result

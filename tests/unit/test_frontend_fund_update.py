@@ -91,8 +91,12 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
                            { success: false, message: '更新失败：源端这页没答' });
   // 回执里压根没有「成没成」这一项 ⇒ 不许失败开放读成成功
   const unreadable = await run(0, ourRun, false, false, false, false, { message: '只给了话没给结论' });
+  // 第 66 轮复评 MI-5：键**在**、值是 `null`（后端没算出来时 JSON 里就是这种形状）。
+  // 上一版只判 `undefined` ⇒ 这一格被读成成功、还去刷列表。两格必须同一待遇。
+  const nullish = await run(0, ourRun, false, false, false, false,
+                            { success: null, message: '回执把 null 当结果交回来了' });
   process.stdout.write(JSON.stringify({ done, slow, foreign, lost, stuck, busy, pollDead, listDead,
-                                        failed, unreadable }));
+                                        failed, unreadable, nullish }));
 })();
 """, prelude)
     assert out['done']['alerts'] == ['更新完成：更新 156 只'], \
@@ -139,7 +143,10 @@ def test_the_fund_button_waits_for_the_result_and_shares_the_one_poll():
     assert out['unreadable']['refreshed'] == 0 and out['unreadable']['analyzing'] is False, out['unreadable']
     assert any(('成没成' in x) or ('认不出' in x) for x in out['unreadable']['alerts']), \
         '回执里没有 success 这一项时被当成了成功（失败开放）：%s' % out['unreadable']['alerts']
-    for cell in ('failed', 'unreadable'):
+    assert out['nullish']['refreshed'] == 0 and out['nullish']['analyzing'] is False, out['nullish']
+    assert any(('成没成' in x) or ('认不出' in x) for x in out['nullish']['alerts']), \
+        'success 是 `null`（键在、值没算出来）时被读成成功：%s' % out['nullish']['alerts']
+    for cell in ('failed', 'unreadable', 'nullish'):
         assert '更新完成' not in ' '.join(out[cell]['alerts']), '%s 那一格里冒出更新完成：%s' % (cell, out[cell])
 
     # 两份循环合一处：页面里只有一份"问净值进度"的实现

@@ -387,6 +387,24 @@ def window_evidence(db: Session, fund_code: Optional[str],
     return [r[0] for r in rows], latest
 
 
+def window_from_calendar(calendar: Dict[str, List[date]], code: Optional[str],
+                         window_start: Optional[date],
+                         window_end: Optional[date]) -> tuple:
+    """从 `nav_calendar` 那份日历里切出 `(这段窗口里的净值日, 库里最后一笔净值日)`。
+
+    切片这件事**只许在这一处做**：`window_evidence` 是单行版（自己去库里按窗口查），
+    批量版如果每个调用方各抄一遍 `start <= d <= end`，就会出现"同一把尺子两腿两种喂法"
+    —— 第 66 轮复评 MA-4/MI-4 量到的正是这一格：预览那一腿走 `calendar_gap`（切片），
+    实跑那一腿把**全量**历史直接递给 `retag_prediction` 当"窗口内证据"，于是点数那一臂
+    收到超集、只会更松，"预览与实跑同数"从构造成立退化成偶然成立。
+    """
+    start, end = _as_date(window_start), _as_date(window_end)
+    days = calendar.get(code) or []
+    in_window = [d for d in days if start is not None and d >= start
+                 and (end is None or d <= end)]
+    return in_window, (max(days) if days else None)
+
+
 def calendar_gap(calendar: Dict[str, List[date]], code: Optional[str],
                  window_start: Optional[date], window_end: Optional[date],
                  today: Optional[date] = None) -> Optional[str]:
@@ -394,12 +412,11 @@ def calendar_gap(calendar: Dict[str, List[date]], code: Optional[str],
 
     把"切片"也收在这一个地方：每个调用方自己抄一遍 `start <= d <= end`，
     就等于每人再造一把尺子（第 47 轮那族"同一件事的两套定义"）。
+    切片那一腿现在在 `window_from_calendar` 里 —— 判"够不够证据"与交给改标门的那份证据
+    必须出自同一次切片，否则两条路各拿一份超集/子集。
     """
-    start, end = _as_date(window_start), _as_date(window_end)
-    days = calendar.get(code) or []
-    in_window = [d for d in days if start is not None and d >= start
-                 and (end is None or d <= end)]
-    return target_cannot_evidence_window(in_window, max(days) if days else None,
+    in_window, latest = window_from_calendar(calendar, code, window_start, window_end)
+    return target_cannot_evidence_window(in_window, latest,
                                          window_start, window_end, today=today)
 
 

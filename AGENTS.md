@@ -294,25 +294,44 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-29 01:5x（北京），**任务 #157：新机制「板块没有可用标的 ⇒ 从内置表补一只」收口；
+最近一次核对（2026-09-29 03:5x（北京），**任务 #157：新机制「板块没有可用标的 ⇒ 从内置表补一只」收口，
+含第 66 轮复评（72/100）九条的返修与"返修的返修"（⑨ —— 我修 MI-6 那一腿时拆掉了两轮前就在跑的老功能）；
 本批另一件是第 65 轮 MAJOR-1 的**第二半** —— 那把"跑完了 ≠ 成功了"的尺子在同一个页面里被抄成两份，
 我上一批只改了补跑那一侧**（评审条目正文不随仓库走，下面按**修法**记）——
 
-① **产品这一半（#157）**：镜像现读 **33 个板块标签压着约 200 条未判预测、库里一行映射都没有**
-（`sector_alias` 0 行 ⇒ 别名那条路也救不了），旧同步器只数 `predictions_no_mapping` 然后一个字不做
+① **产品这一半（#157）**：镜像现读 **36 个板块标签压着 197 条未判预测，它们在库里没有一行
+`is_active=1 且 reviewed=1` 的映射**（2026-09-29 02:40；`sector_alias` 0 行 ⇒ 别名那条路也救不了；
+命令在 `docs/模块总览/板块与基金匹配.md` 末尾那一节），旧同步器只数 `predictions_no_mapping` 然后一个字不做
 ⇒ 这些预测永远躺在「待验证到期」。现在 `sync_sector_mappings` 按**板块**（不按预测）走既有的
 `get_fund_for_sector`，过三道本库现读的门（内置表答得出 / 有 `fund_info` 档案 / 至少一笔净值）后
 **建或改那一行映射**，再由整条链上原有的 `calendar_gap` 逐条判证据、`retag_prediction` 落台账 ——
 不新增 UI、不新开咽喉。全部细节、为什么"已有行只能改不能添"、镜像真跑那一条（2695 从停更的 `003033`
 改到 `518880 黄金ETF华安`）写在 `docs/模块总览/板块与基金匹配.md` 末尾那一节。
 ② **那道"只紧不松"的门是本批最该记的一条**：新补的标的**只抢"用自己那只标的问不出这段窗口净值"的预测**。
-我第一版没有它 ⇒ 镜像 `would_update` 从 200 涨到 **657**，其中 **664 条自己那只标的好好的** ——
-那正是第 18 轮"一键清空 515 条结论"的形状，而这次是**我自己新造出来的**。有档案但库里零净值也**不动**
-（那是"还没同步过"，不是"确认没办法"）。这条数现在自己开口：回执里 `predictions_kept_own_target`。
-③ **一把尺子、两处共用（第 65 轮 MAJOR-1 的第二半）**：`navRoundVerdict(fin)` 交出三种结局
-（没等到 / 跑完了但它自己说失败 / 跑完了且成功），「更新所有基金」按钮与首屏补跑**都走它**。
-上一批我在补跑那一侧新加 `if` 时，把按钮那侧的**同款判断整行删掉**了 —— 54 条判据一声不响
-⇒ "同一件事两份实现"不是 refactor 洁癖，是改一处必忘一处的结构性事故。
+我第一版没有它 ⇒ 一次按钮就把几百条自己有好标的的预测换成板块代理标的、顺手清掉已有结论。
+镜像 2026-09-29 02:39 **同一份代码、只把这道门换成 `if False`**，两趟预览各印（两个口径对得上账）：
+
+```
+加门     would_update 28 / predictions_kept_own_target 636 / via_gap_fill_planned 0 / skipped_unservable 1
+不加门   would_update 655 / kept 0 / via_gap_fill_planned 627 / skipped_unservable 10
+                                        └── 这 627 条里 470 条带着已判结论（改标就会被清掉）
+655 = 28 + 627 ；636 = 627 + 9（那 9 条即使改标也会被新标的的证据门拦下 ⇒ skipped 从 1 涨到 10）
+```
+
+⇒ 少了这道门，那一次点按钮就是第 18 轮"一键清空 515 条结论"的**同一个量级**，而这次是我自己新造出来的。
+有档案但库里零净值也**不动**（那是"还没同步过"，跑一次「更新基金」就补上，不是"确认没办法"）。
+这条数现在自己开口：回执里 `predictions_kept_own_target`。
+⚠ **上一版在这里写的"从 200 涨到 657、其中 664 条自己那只标的好好的"是三句拼不成一句的假话**
+（第 66 轮复评 MI-3：`664 > 657`，任何读法都不成立，而且"600+ 条有结论"那一档压根没数过）
+—— 上面这一版是量出来的，两趟只差一个 `if False`，`470` 那一格从"我以为"变成回执里数出来的。
+③ **一把尺子、四处结局、两处共用（第 65 轮 MAJOR-1 的第二半）**：`navRoundVerdict(fin)` 交出
+没等到 / 跑完但它自己说失败 / **回执里没有"成没成"这一项** / 跑完且成功，
+「更新所有基金」按钮与首屏补跑**都走它**。
+⚠ 上一版那句"我上一批把按钮那侧的同款判断**整行删掉**了"是**假话**（复评 MI-3 第二条，
+`git log -S "if (fin.result.success === false)"` 驳回：那句从 `c408dcd` 起一直在按钮那一腿）
+⇒ 真实事实是**按钮那一腿对这一格零判据零变异**（本批才补 `the_button_throws_away_the_shared_verdict`）。
+"关于自己上一批的一句自述"也要现读 git 再说 —— 第 58~60 轮那一族（"『我更正一下』本身是一句要被现读的断言"）
+这次扣在我自己头上，而且**同一个错我在这同一段文字里连着写了两句**（②的那三个数与③的这句）。
 ④ **我自己的判据脚手架坏了 ⇒ 我把没跑到的格子当成跑过了**：`test_frontend_fund_update.py` 里 `run()`
 收第七个参数 `override`，函数体却从没把它赋给 `resultOverride` ⇒ 那格"净值那一轮回执说失败"喂进去的
 是 `null`，用例绿在默认成功路径上。**判据的夹具与判据本体一样要被怀疑**（第 33 轮"桩的键必须来自真返回值"
@@ -330,37 +349,65 @@ early return 之后 ⇒ 全套件没有任何一条用例走到"板块可补、�
 ⑧ **一句关于取证的取证**：我在验证链里写 `grep -c '^\[RED\]'` 数体检结果，它回 **0** ——
 而日志格式其实是 `NAME ⇒ RED（判据有效）`。**取证脚本自己也要过"它量的是那个形状吗"这一问**，
 否则"0 处红"与"一条都没跑"在屏幕上同形（与第 54 轮 B-5 那条"没人能照它复现"同族）。
+⑨ **第 66 轮返修：修 MI-6 那一腿时我把既有的一条活路拆了 —— `4 failed / 1242 passed`**
+（返修自己的返修，扣的是我这一批新写的 `_gap_label`）：我把归一后的标签**同时**当成
+① 查映射行的键、② `via_gap` 的判据（`sector in gap_targets`）。两句都是越界：
+⑴ `normalize_sector_name` 会**吃前缀**（现读实测 `RMAP白酒 → 白酒`、`黄金行情 → 黄金`），
+而 `_lookup_mapping` 自己那三步是"原样 → 归一 → **库内别名(原样)**"——我先归一，等于把别名那一步
+的输入换掉 ⇒ 库里按 `RMAP白酒` 登记的那一行永远查不到 ⇒ `tests/unit/test_sector_remap.py`
+四条一起红（`predictions_updated` 全成 0），"按板块对齐标的"这条**比 #157 早两轮就在跑的**路静默失效。
+归一只许当**补标计划表的键**（读写两侧同一把尺子这件事由那条 AST 判据管着，仍是一处一次调用）。
+⑵ "标签在不在补标计划表里"推不出"这一条走的是补标那一路"：命中库里映射行的预测也带着一个归一标签。
+⇒ 现在 `pairs` 递的是**显式 `via_gap`**，那道"只紧不松"的门只管补标那一路（变异 **M40**
+`the_tightening_gate_also_applies_to_mapped_rows`：把旗标恒真 ⇒ 新判据
+`test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill` 当场红）。
+另补 `test_the_mapping_lookup_stills_asks_with_the_raw_sector_label`（前缀那一格的方向钉死）。
+**教训写给下一轮的我**：接一把新尺子到既有链路上，**先问它换掉了谁的输入**，再问它够不够严 ——
+`pytest tests/unit` 那四条红不是我"改坏了新功能"，是改坏了**两轮前就在跑的老功能**，
+而老功能那四条判据恰好是全套件里唯一会替这件事响的人（新机制自己的 15 条全绿）。
 ⚠ **本批尚未推** ⇒ 线上跑的仍是 `origin/main`（`c408dcd`，第 64 轮那一版）之前的构建，
 `#132`「打开网站就补」与 `#157` 都还没到生产；推完以 `/api/health/detail` 的 `git_commit` 与
 `index.html` 的 md5 为准（下面那行"线上此刻"是**推之后**量的，别拿它当本批的前提）。
 
 最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
-也不起任何长任务；五步串成一条链 `data/_review_tmp/r66_chain.sh`，逐步记时刻与退码）：
+也不起任何长任务；六步串成一条链 `data/_review_tmp/r66b_chain.sh`，逐步记时刻与退码。
+⚠ 这一条链跑的是 **⑨ 修完之后**的代码：上一版跑基线时 `tests/unit` 是 `4 failed / 1242 passed`，
+那四条就是 ⑨ 那一族 —— **基线数字与"哪个时刻的代码"必须一起交出来**，不然"跑过基线"这句话
+盖着一版红的代码）：
 
-- `pytest tests/unit -q` → **1241 passed / 16 skipped / 0 failed**（485.51 秒，退 0）。
-- `pytest tests/ -q` → **1250 passed / 16 skipped / 0 failed**（444.24 秒，退 0）。
-  （上一基线 1233/1242 → 本批 **+8 条 / 两个口径同增**，全部来自新文件
-  `tests/unit/test_sector_gap_fill.py`（`grep -c '^def test_'` 与
-  `python -m pytest tests/unit/test_sector_gap_fill.py --collect-only -q` 都印 **8**）。**改契约不增条数**：
-  `for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
-  ⇒ `test_close_unknowable_predictions.py 15→15`（⑥ 那处日期锚）、`test_frontend_cold_start.py 52→52`、
-  `test_frontend_fund_update.py 2→2`（③④：文本断言换成跑真实调用链的那格 + 补 `override` 那一格）。）
-  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **35 处全 RED**（含新增 M29~M33；
+- `pytest tests/unit -q` → **1248 passed / 16 skipped / 0 failed**（443.58 秒，退 0）。
+- `pytest tests/ -q` → **1257 passed / 16 skipped / 0 failed**（459.51 秒，退 0）。
+  （上一基线 1241/1250 → 本批 **+7 条 / 两个口径同增**：`tests/unit/test_sector_gap_fill.py`
+  13→**15** 个 `def`（⑨ 那两条边界：映射那一路不许被门挡下、查映射用原样标签），
+  `test_frontend_fund_update.py` 2→2（格数加在既有的真实调用链那条里：`nullish` 那一格）。
+  分布复核：`for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` **42 处全 RED**（含本批新增 M29~M40；
   CONTROL-GREEN = **8 个判据文件**在干净代码上全绿；无 ANCHOR-MISS / HARNESS-FAIL / `[还原失败]`；
-  跑完 `git status --porcelain -- src/` 只剩本批那两处真改动、无 `.mutbackup` 残留）。原始日志随仓库走
-  `docs/迭代计划/run-20260927-mutation/round66-lifecycle-mutations.txt`（首行
-  `# run @ 2026-09-29T01:34:49+08:00  git=4a0fdb60350c  python=3.12.10  共 35 处变异 / 8 个判据文件`）。
-  ⚠ 首行那个 `git=` 是**跑当时的 HEAD**（`4a0fdb6` ＝ 上一批最后一笔），本批改动当时还没提交 ⇒
+  跑完 `git status --porcelain -- src/` 只剩本批那三处真改动、无 `.mutbackup` 残留）。原始日志随仓库走
+  `docs/迭代计划/run-20260927-mutation/round66b-lifecycle-mutations.txt`（首行
+  `# run @ 2026-09-29T03:24:39+08:00  git=48c95e7d12fc  python=3.12.10  共 42 处变异 / 8 个判据文件`）。
+  ⚠ 首行那个 `git=` 是**跑当时的 HEAD**（`48c95e7` ＝ 上一批最后一笔），本批改动当时还没提交 ⇒
   它只自证"哪一次跑的、从哪一版起的"，**别拿它当"跑的就是被审的那一版"**。
-  变异（前端）：`python scripts/mutation_proof_frontend.py` **140 处全 RED**（CONTROL-GREEN，3 个判据文件；
+  两处新变异各自单独跑过（`--only sector_synonyms` / `--only tightening_gate`）⇒
+  M39 换锚点（⑨ 改了那一行的形状，旧锚点会变 ANCHOR-MISS 而不是绿）与 M40 新增都有凭据。
+  变异（前端）：`python scripts/mutation_proof_frontend.py` **141 处全 RED**（CONTROL-GREEN，3 个判据文件；
   无 ANCHOR-MISS / GREEN / JUDGE-MISS / NOT-LANDED / NO-OP）。日志
-  `docs/迭代计划/run-20260927-mutation/round66-frontend-mutations.txt`
-  （首行 `# run @ 2026-09-29T01:41:03+08:00  git=4a0fdb60350c  python=3.12.10  共 140 处变异 / 3 个判据文件`）。
+  `docs/迭代计划/run-20260927-mutation/round66b-frontend-mutations.txt`
+  （首行 `# run @ 2026-09-29T03:33:07+08:00  git=48c95e7d12fc  python=3.12.10  共 141 处变异 / 3 个判据文件`）。
   `audit_doc_claims.py` 退 **0**（`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
   另有 16 条"看得见但不判"`）。
-  **镜像此刻**（同日 01:57，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
-  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`（上一批 13 条 ⇒ 这一档随净值
-  追平自然变多，不是新坏的；数一律现跑，别抄）。
+  **镜像此刻**（同日 03:50，只出计划不写库：`python scripts/close_unknowable_predictions.py`）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`（与上一批同数；数一律现跑，别抄）。
+  **那道门的开/关那对数量在 ⑨ 修完之后重测过一遍**（两趟只差一个 `if False`，跑完按原文还原并核 md5
+  一致；复现命令逐字写在 `docs/模块总览/板块与基金匹配.md` 末尾那一节 —— **不指 `data/` 里的一次性
+  脚本**，那个目录整目录不入库，第 43 轮那次"随仓库走"就栽在指了一个干净克隆上不存在的路径）。印的是
+  `would_update 28 / kept_own_target 636 / via_planned 0 / skipped 1` 对
+  `655 / 0 / 627 / 10`，与上面 ② 那一块**逐字相同** ⇒ ⑨ 换掉的是"查映射用哪个标签"，
+  没有改变镜像上这一档的覆盖面（镜像那 636 条自己那只标的全都给得出证据）。
+  ⚠ **同一趟现读还量出一件本批最该说出口的事**：加门之后镜像上 `sectors_to_fill` 是**空列表**、
+  `predictions_via_gap_fill_planned = 0` ⇒ **这一档在镜像今天一条都不动**，它的暴露面在**生产**
+  （33 个板块标签 / 约 200 条未判预测，命令在 `docs/模块总览/板块与基金匹配.md` 末尾）。
+  不许把"机制做完了"说成"镜像上看得见效果"——效果要到生产量。
 
 （上一批：2026-09-28 23:1x（北京），**任务 #154 / #155 / #156：第 65 轮复评 76/100 过线之后，
 把它量出的七条里能当场修的修掉了 —— 最重的一条是产品行为，而且我修它之前那几分钟它正在线上跑：

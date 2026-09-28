@@ -1,4 +1,4 @@
-# run @ 2026-09-29T03:24:39+08:00  git=48c95e7d12fc  python=3.12.10  共 42 处变异 / 8 个判据文件
+# run @ 2026-09-29T01:34:49+08:00  git=4a0fdb60350c  python=3.12.10  共 35 处变异 / 8 个判据文件
 CONTROL                                                    ⇒ CONTROL-GREEN（8 个判据文件在干净代码上全绿）
 M1_any_failure_is_structural                               ⇒ RED（判据有效）
 M2_degenerate_endpoint_becomes_closable                    ⇒ RED（判据有效）
@@ -35,13 +35,6 @@ M30_mapping_rows_are_created_even_when_nothing_moves       ⇒ RED（判据有�
 M31_an_existing_sector_row_is_duplicated_not_rewritten     ⇒ RED（判据有效）
 M32_the_owner_signed_target_is_overwritten                 ⇒ RED（判据有效）
 M33_a_missing_archive_still_buys_a_refusal_reason          ⇒ RED（判据有效）
-M34_the_rewritten_row_stays_invisible_to_the_next_sync     ⇒ RED（判据有效）
-M35_the_old_targets_score_keeps_the_new_row_ineligible     ⇒ RED（判据有效）
-M36_every_refusal_is_blamed_on_the_static_table            ⇒ RED（判据有效）
-M37_the_receipt_counts_rows_it_never_moved                 ⇒ RED（判据有效）
-M38_the_retag_gate_gets_the_whole_history_instead_of_the_window ⇒ RED（判据有效）
-M39_sector_synonyms_each_get_their_own_row                 ⇒ RED（判据有效）
-M40_the_tightening_gate_also_applies_to_mapped_rows        ⇒ RED（判据有效）
 已还原 src/services/prediction_lifecycle.py
 已还原 scripts/close_unknowable_predictions.py
 已还原 src/services/prediction_verify_service.py
@@ -52,4 +45,3 @@ M40_the_tightening_gate_also_applies_to_mapped_rows        ⇒ RED（判据有�
 已还原 alembic/env.py
 已还原 src/fund/fund_auto_manager.py
 已还原 src/services/prediction_maintenance_service.py
-已还原 src/api/routes/predictions.py

@@ -637,6 +637,12 @@ MUTATIONS = [
      'the_button_throws_away_the_shared_verdict', HTML,
      "if (!v.ok) {",
      "if (false && !v.ok) {", False),
+    # 第 66 轮复评 MI-5：`success` 这个键在、值是 `null` ⇒ 只判 `undefined` 会把它读成成功。
+    # 这一处变异必须被 `nullish` 那一格点红（上一版那格样品不存在，所以它谁也拦不住）。
+    ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
+     'a_null_success_is_read_as_all_clear', HTML,
+     "if (!r || typeof r.success !== 'boolean') {",
+     "if (!r || typeof r.success === 'undefined') {", False),
     # 更新已经起来了 ⇒ 问不到进度不是"更新失败"（第 36 轮 #53 那一族换了位置复发）
     ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',
      'the_progress_leg_blames_the_update', HTML,

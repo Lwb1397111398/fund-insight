@@ -2519,7 +2519,10 @@ const fetchWeChatBatch = async () => {
                                  why: (fin && fin.why) ? fin.why : '没等到结果' };
                     }
                     const r = fin.result;
-                    if (!r || typeof r.success === 'undefined') {
+                    // 「没带成没成」与「带了一个不是布尔的值」是同一件事：后端写的是布尔，
+                    // 而 `null` 恰好是"键在、值没拿到"那种形状 —— 只判 `undefined` 会把它
+                    // 读成成功（第 66 轮复评 MI-5；同页别处的口径是"没拿到 true 就是没成功"）。
+                    if (!r || typeof r.success !== 'boolean') {
                         return { ok: false, kind: 'unknown',
                                  why: '本轮的回执没带"成没成"这一项 ⇒ 认不出结果，不敢替你当成功' };
                     }

@@ -59,6 +59,7 @@ SAFE_TESTS = 'tests/unit/test_prediction_management_safety.py'
 MIGRATE_TESTS = 'tests/unit/test_prediction_migrations.py'
 RULER_TESTS = 'tests/unit/test_one_ruler_per_question.py'
 MAINT = 'src/services/prediction_maintenance_service.py'
+ROUTES = 'src/api/routes/predictions.py'
 GAP_TESTS = 'tests/unit/test_sector_gap_fill.py'
 
 MUTATIONS = [
@@ -246,7 +247,43 @@ MUTATIONS = [
     ('M33_a_missing_archive_still_buys_a_refusal_reason', MAINT,
      "        if not info:\n",
      "        if False and not info:\n",
-     GAP_TESTS, 'test_a_candidate_without_an_archive_is_refused_and_says_why'),
+     GAP_TESTS, 'test_a_nav_row_without_an_archive_is_still_refused_and_the_db_proves_why'),
+    # ── 第 66 轮复评（72 分）返修：MA-1/MA-2/MA-3/MA-4/MI-4/MI-6 各一处 ──
+    ('M34_the_rewritten_row_stays_invisible_to_the_next_sync', MAINT,
+     '            row.is_active = True\n',
+     '            row.is_active = row.is_active\n',
+     GAP_TESTS, 'test_a_filled_row_is_usable_the_next_time_the_sync_runs'),
+    ('M35_the_old_targets_score_keeps_the_new_row_ineligible', MAINT,
+     '            row.confidence = None\n',
+     '            row.confidence = row.confidence\n',
+     GAP_TESTS, 'test_a_filled_row_is_usable_the_next_time_the_sync_runs'),
+    ('M36_every_refusal_is_blamed_on_the_static_table', ROUTES,
+     'f"{len(refused)} 个板块仍然没有可用标的：{detail}"',
+     'f"{len(refused)} 个板块仍然没有标的：内置表也说不出对口品种"',
+     GAP_TESTS, 'test_the_route_names_the_reason_it_actually_hit'),
+    ('M37_the_receipt_counts_rows_it_never_moved', MAINT,
+     '                    result["predictions_via_gap_fill"] += 1\n',
+     '                    pass\n',
+     GAP_TESTS, 'test_the_execute_sentence_counts_rows_it_really_moved'),
+    ('M38_the_retag_gate_gets_the_whole_history_instead_of_the_window', MAINT,
+     '                days, latest = window_from_calendar(\n'
+     '                    calendar, candidate["new_fund_code"],\n'
+     '                    prediction.prediction_date, prediction.target_date)\n',
+     '                days = calendar.get(candidate["new_fund_code"]) or []\n'
+     '                latest = max(days) if days else None\n',
+     GAP_TESTS, 'test_the_evidence_handed_to_the_retag_gate_is_the_window_slice'),
+    ('M39_sector_synonyms_each_get_their_own_row', MAINT,
+     '                for key in (self._gap_label(raw), raw):\n',
+     '                for key in (raw,):\n',
+     GAP_TESTS, 'test_the_evidence_handed_to_the_retag_gate_is_the_window_slice'),
+    # 第 66 轮返修："只紧不松"那道门**只**属于补标那一路。命中库里映射行的预测
+    # 从来不许被它挡下（这一批我把归一后的标签当映射键去查，四条 `test_sector_remap`
+    # 一起红就是这一族的现场）。`via_gap` 因此必须是显式旗标，不是"标签在不在计划表里"
+    # 那种推断 —— 把旗标恒真，门就盖到了映射那一路。
+    ('M40_the_tightening_gate_also_applies_to_mapped_rows', MAINT,
+     '            pairs.append((prediction, mapping, gap_key or raw, gap_key is not None))\n',
+     '            pairs.append((prediction, mapping, gap_key or raw, True))\n',
+     GAP_TESTS, 'test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill'),
 ]
 
 
