@@ -294,7 +294,78 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-28 21:4x（北京），**任务 #153：第 64 轮复评 72/100 —— 三条 MAJOR 里最重的一条
+最近一次核对（2026-09-28 22:5x（北京），**任务 #154 / #155 / #156：第 65 轮独立复评 76/100 ⇒ 过 75
+这条线，`c408dcd` 已推已部署，上线后我替老板把生产那两步跑完了**（条目号取自第 65 轮报告结论表，
+正文不随仓库走）。**这一批没改一行代码** ⇒ 两个口径的基线与第 64 轮返修那一批同数（数写在下面那批里，
+不在这儿抄第二份）；这一批的账是"上线事实 + 我自己说错的三句话 + 评审量出但**本批没修**的七条"——
+
+① **部署凭据两条独立、都不是"命令没报错"**：推 `0e21673..c408dcd`（`-c http.postBuffer=16777216` 走
+`127.0.0.1:7890` + `HTTP/1.1`，sha 逐字符对过；推完立刻 `git fetch … main:refs/remotes/origin/main`
+把跟踪引用拨到真值，否则 `rev-list --count origin/main..HEAD` 会印 143 这种数而真值是 1）⇒
+`GET /api/health/detail`（**带口令**，不带回 401）自报 `git_commit=c408dcdfb22d`、
+`git_commit_source=RENDER_GIT_COMMIT`、`started_at=2026-09-28T22:18:47+08:00`、
+**`scheduler_running=False` ⇒ #132 那件事一个字都没变**；第二条是 `GET /index.html` 的
+**LF 归一后** md5 `dd92f035aba2bc0dd2c45d6d081f9c90` —— 这个数**推之前就从将被推的那个 commit 的
+blob 算出来**（`git show c408dcd:web/index.html`），不是事后凑的。另加 8 格页面形状（那四个名字在
+屏上 0 处、`waitFundUpdateToFinish` 与 `fundPollMinutes` 在）。
+② **上线后那两步（走既有 HTTP 接口，没碰任何库连接）**：跑之前
+`nav_as_of=2026-09-27 / lag=1 / due=17 / 已判 1191 / 判对 638＝53.57% / ⚠ 265（22.25%）/ 区间 41.39~63.64%`；
+`POST /api/funds/update-all` 回执「检测 1601 个预测、新增 0 个基金、关联 0 个预测、另有 131 条标的
+本来就是它、更新 164 个基金；1 只基金域查无此码⇒不算更新失败：`603758`(秦安股份)」；
+`POST /api/predictions/verify-all` 终态 `total 17 / processed_count 17 / success_count 16 /
+failed_count 1 / not_processed 0`；跑完之后
+`nav_as_of=2026-09-28 / lag=0 / due=1 / 已判 1207 / 判对 644＝53.36% / ⚠ 265（21.96%）/ 区间 41.34~63.3%`
+⇒ **到期队列 17 → 1**（#132 的页面上那道保险第一次在生产上真接住了一整天）。
+**剩的那 1 条不是坏的、也不是"没人管"**（只读现数，日期必须现算）：
+`python scripts/q.py --production "select p.id, p.fund_code, coalesce(i.fund_name,'(无档案)') nm, p.target_date, p.prediction_type, h.last_nav from predictions p left join (select fund_code, max(nav_date) last_nav from fund_history group by fund_code) h on h.fund_code=p.fund_code left join fund_info i on i.fund_code=p.fund_code where p.is_deleted=false and p.is_correct is null and p.prediction_type<>'flat' and p.target_date <= date '$(date -u -d '+8 hours' +%F)' and (p.next_verify_date is null or p.next_verify_date <= date '$(date -u -d '+8 hours' +%F)')"`
+⇒ 当场印 `3055 / 006105 宏利印度股票(QDII)A / target_date=2026-09-28（就是今天）/ up / 库内末条 2026-09-24`
+⇒ **QDII 目标日那一笔净值本来就还没签发**，走 `prediction_verify_service.py` 里 `waiting_target_nav`
+那支（等待期内不判，净值落了当场判），明天打开网站就由这一批新上线的补跑接住。
+③ **我自己这一批说错/做错三处，全部实测改过**：
+⑴ 部署核验脚本拿 `setInterval` 计数 0 当"旧那一份轮询没了"的形状判据 ⇒ **把一次两条凭据都已确认成功的
+部署判成失败**。那三个字属于**别的**轮询（`grep -n "setInterval" web/index.html` 今天印 3 行：
+`:2909` 是注释、`:3230` 清理状态、`:3416` 建议生成；`consecutiveErrors` 同理还剩 4 行、全在 `:2980~2989`
+那支清理轮询里）。收窄成"只数那四个按钮专有的名字"就对了 —— ⚠ **这与评审 MINOR-4 是同一个错，
+而错是我先犯在核验脚本里、下一轮又写在文档里**（见 ⑤）。
+⑵ 我一次跑批输出里印了 `processed=None`，读起来像"接口少给一列"。**是我的探针键名抄错**，
+真载荷是 `processed_count / success_count / failed_count / progress`（复核
+`GET /api/predictions/verify-all/status`）。这条与第 51 轮"模板读了接口没给的字段"方向相反、
+同一把尺子：**拿字段名说话之前先读那一份真回执**。
+⑶ 只读查生产我第一版写了 `coalesce(i.name,…)` ⇒ `column i.name does not exist`（`fund_info` 那一列叫
+**`fund_name`**，`src/models/database.py:488`）。同族第二次（上一批是 `oldest_open_target` 少带半个
+filter）：**列名从模型里读，不凭印象拼**。
+④ **删数据那条授权，现读到的答案仍然是"没有可删的"**（两库各量一遍、日期现算）：生产
+`active 1601 / archived 577 / half_year_overdue_unjudged 0 / oldest_open_target 2026-09-28`；镜像
+`half_year_overdue_unjudged 0 / oldest_open_target 2026-07-09（带 `is_deleted=0 and is_correct is null`
+那半个 filter）/ expired_unjudged 13 / fund_history 末条 2026-09-28`。
+三条"标的档案薄"的未判行都是**未来目标日**（`1238/012765`→2026-12-28、`2695/003033`→2027-02-03、
+`3151/515170`→2027-03-01）⇒ 不属于"很早期、验一次代价极大、收益极小"那一档；
+`sector_fund_mapping` 里指向缺失档案的行 **0** 条；`603758` 是生产唯一一只零净值档案、身上 **0 条**活预测。
+⑤ **评审量出、本批一个字没修的七条**（登记成 #155/#156/#154，**不许当已封**）：
+⑴ **#155 MAJOR-1 是产品行为、而且此刻在线上**：`catchUpOnce`（`web/index.html:2613~2620`）在
+`fin.done` 为真时无条件 `funds = {data: fin.result}` 并立刻 `POST /api/predictions/verify-all` ——
+**没有**按钮那条路上的 `if (fin.result.success === false) return`（`:2928` 有）。⇒ 净值那一轮自己报了
+失败（`success:false`）时，补跑仍然发起验证、仍然把当天的键写死 ⇒ 明天不会再补，而模块总览里那句
+「净值落库之前不发验证」对这一支是**说满了**。本批只在文档里把它改成"未成立、已立任务"，代码没动。
+⑵ **#155 MAJOR-2**：上面那一条腿**零判据、零变异**（按钮那条腿有 `the_progress_leg_blames_the_update`
+两处，补跑这条没有）⇒ 修法要连样品一起补。
+⑶ **#156 MAJOR-3 是我自己写在下面那一批里的假话**：原文
+「`tests/unit/test_frontend_fund_update.py` 里原来那些断言**全是 grep 文本**（把 `setInterval` 整份删掉、
+换成一把新轮询，它不会红）」。**实测驳回**：把 `46eee6f` 那份旧文件摆到 `c408dcd` 的页面上跑
+⇒ **3 failed / 1 passed**（`test_fund_update_polling_handles_lost_background_status` 等三条红）。
+旧断言会红，只是红在"文本变了"而不是"行为变了" ⇒ 我在下面那批已按实测改成绑命令的写法。
+⑷ **#156 MINOR-4**：同一段那句"旧的那**五个**名字…一个都不许回来"也不对 —— 判据钉的是**四个**
+（`test_frontend_fund_update.py:134` 那个元组），`consecutiveErrors` 属于别的轮询、今天还剩 4 行。
+⑸ **#156 MINOR-5**：`INTERVAL × TRIES` 那把上限现在**只是个下界** —— `withWakeRetry` 在轮询循环里，
+冷启动那一晚真实耗时会超过 30 分钟。
+⑹ **#156 MINOR-6**：死 `def` 那一支剪了函数体，**`args.defaults` 与返回标注没剪** ⇒ 默认值里的调用能穿。
+⑺ **#156 MINOR-7**：`_refuse_if_the_orm_is_already_built()` 从模块顶层挪进 `main()` 之后，
+**"它排在抢锁与改写第一个字节之前"这件事没有判据** ⇒ 挪回顶层就只剩运行时那句 assert 会响。
+⑥ **#154**：`web/index.html:2606` 那句「…约几分钟…」仍是写死的，没跟着 `fundPollMinutes()` 走 ——
+下面那一批我写的"页面上'约 N 分钟'与真实上限结构上不可能漂开"**只覆盖了超时那一句**，
+"进行中"这一句不在里面。已在原处收窄。
+
+（上一批：2026-09-28 21:4x（北京），**任务 #153：第 64 轮复评 72/100 —— 三条 MAJOR 里最重的一条
 是"跑完之后那份回执可能根本不是本轮的"，第二条是同一个问题在同一个页面里有两份实现，第三条是我上一批
 自己写下的那句"并发门"从来没被人看过；返修途中页面里那条"写后刷新"的闸又替我拦下一处我新造的假话**
 （条目号取自第 64 轮报告结论表，正文不随仓库走，下面按**修法**记）——
@@ -312,13 +383,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 `for`（5 秒 × 150），「更新所有基金」按钮是另一份 `setInterval`（另一套超时与 `consecutiveErrors`），
 两个"没等到"的判法各说各话 ⇒ 改一处必忘一处。现在两条路都走 `waitFundUpdateToFinish(since)`，
 超时那一句话由 `fundPollMinutes()` 从 `FUND_POLL_INTERVAL_MS × FUND_POLL_MAX_TRIES` 现算
-（页面上"约 N 分钟"与真实上限结构上不可能漂开），旧的那五个名字
-（`fundUpdatePollTimer` / `clearFundUpdatePoll` / `FUND_UPDATE_POLL_TIMEOUT_MS` / `consecutiveErrors` /
+（**只在"没等到结果"那一句上成立** —— "补跑进行中"那句仍写死"约几分钟"，见上面 #154），
+旧的那**四个**名字（`fundUpdatePollTimer` / `clearFundUpdatePoll` / `FUND_UPDATE_POLL_TIMEOUT_MS` /
 `lastFundUpdateFinishedAt`）连按钮那份实现一起删掉，判据反向钉"一个都不许回来"。
-`tests/unit/test_frontend_fund_update.py` 里原来那些断言**全是 grep 文本**（把 `setInterval` 整份删掉、
-换成一把新轮询，它一条都不会红）⇒ 改成一条文本 + 一条**跑真实调用链**的八格行为判据
+⚠ `consecutiveErrors` / `setInterval` **不在这一档** —— 它们属于清理状态与建议生成那两支轮询
+（`web/index.html:2980~2989 / 3230 / 3416`），而我上一批把它列进"五个名字"里、还在部署核验脚本里
+拿 `setInterval` 计数当形状判据，**把一次两条凭据都通过的部署判成失败**（第 65 轮 MAJOR-3 / MINOR-4，
+复核 `grep -n "setInterval\|consecutiveErrors" web/index.html`）。
+`tests/unit/test_frontend_fund_update.py` 里原来那些断言全是 grep 文本 ⇒ 改成一条文本 + 一条
+**跑真实调用链**的八格行为判据
 （跑完/慢/那是别人那一轮/状态丢了/一直不结束/锁在别人手里/轮询自己坏了/列表刷新坏了），
 外加结构账 `waitFundUpdateToFinish` 出现 3 次、`/api/funds/update-status` 全页出现 1 次。
+⚠ **上一批我给这一条写的理由是假话**：原文「原来那些断言**把 `setInterval` 整份删掉、换成一把新轮询，
+它不会红**」。第 65 轮实测驳回 —— 把 `46eee6f` 那份旧文件摆在 `c408dcd` 的页面上跑，
+**3 failed / 1 passed**（复核 `git show 46eee6f:tests/unit/test_frontend_fund_update.py > /tmp/old.py`
+再摆上去跑）。旧文本断言**会**红，只是红在"字变了"而不是"行为变了"；换成行为判据这个决定是对的，
+理由不是旧的那批是哑的。
 ⚠ **这一条改动自己造出来的那一格假话由已有的闸拦下**：按钮改走那把会 reject 的轮询之后，
 外层 `catch` 会把"更新其实成功了、只是进度没问到"说成「更新失败」⇒
 `test_a_write_that_succeeded_is_never_reported_as_a_failure` 当场点红（第 63 轮我在那条闸里写的
@@ -517,7 +597,10 @@ python scripts/q.py --production "select count(*) filter (where is_deleted=false
   与接口同数 ⇒ **但"两条路径互印证"仍然只覆盖这三行**（区间与覆盖面那一行本批又没跑到底：
   那条只读审计在"体检覆盖面"那一步会被 Supavisor 掐线，#150 一个字没动）。
   线上跑的哪一版：`/api/health/detail` 自报 `git_commit=0e216731ea76`、`scheduler_running=False`
-  ⇒ **#132 到现在仍然没有任何东西在跑**，本批第 ⑦ 条那个"打开网站就补"就是去顶它的，**还没上线**。
+  ⇒ **#132 到现在仍然没有任何东西在跑**，本批第 ⑦ 条那个"打开网站就补"就是去顶它的，**当时还没上线**
+  （⚠ 这句在写它的那一批是真的，**现在已过期**：`c408dcd` 于 2026-09-28 22:1x 部署后它就是线上的一版了，
+  `git_commit=c408dcdfb22d` + 页面 md5 双凭据见上面第 65 轮那批 ①。`scheduler_running` 仍为 `False`
+  ⇒ #132 本身没关，只是页面上那道保险第一次真的在生产上接住了一整天：到期队列 17 → 1）。
 
 （上一批：2026-09-28 15:0x（北京），**任务 #149：第 62 轮复评 76/100 —— 过 75 这条线，本批已推
 （线上现在是 `3fbff95`，`/api/health/detail` 自报 `git_commit=3fbff9507845`）；返修的四条里两条是
