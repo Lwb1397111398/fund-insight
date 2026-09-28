@@ -148,28 +148,45 @@ class PredictionMaintenanceService:
 
     @staticmethod
     def _gap_label(sector: Optional[str]) -> Optional[str]:
-        """板块标签在**进 gap-fill 这条计划表之前**先归一。
+        """板块标签在**进 gap-fill 这条计划表之前**先归一，但只认"把前后缀摘掉"那一种归一。
 
-        为什么必须先归一：`_lookup_mapping` 读的那一侧走的是"原样 → 归一 → 库内别名"三步
-        （`:575-588`），而这一侧原来拿原样标签当键 ⇒ `绿色电力` 与 `绿电` 各进一次计划、
-        各写一行映射、各绑各的预测（第 66 轮复评 MI-6）。同一个键的两种拼法不该有两种待遇，
-        而"怎么归一"这条尺子全仓只有 `normalize_sector_name` 一把 —— 这里只是把它的结果
-        也用作**写**侧的键。归一失败（原样更靠谱）就用原样。
+        为什么要归一：同一块板块的两种拼法（`黄金` / `黄金行情`、`白酒` / `RMAP白酒`）各进一次
+        计划、各写一行映射、各绑各的预测，是第 66 轮复评 MI-6 点出的形状。
+
+        为什么**只认这一种**：`normalize_sector_name` 里还有一条别名替换（`SECTOR_ALIASES`），
+        它会把标签改成**另一块板块**——镜像 2026-09-29 实测三个（`债券 → 券商`、`贵金属 → 黄金`、
+        `金融 → 黄金`，命令见 `docs/模块总览/板块与基金匹配.md` 末尾）。那种"归一"若当写侧的键，
+        后果不是省一行映射而是**硬凑**：内置表本来对 `债券` 答不出标的（`get_fund_for_sector('债券')`
+        实测 None ⇒ 该走"不猜，交给人工/agent"那一档），归成 `券商` 就答得出 512000 ⇒
+        给一块债券板块绑上一只券商 ETF，并且写出的行署名 `seed`、看起来像机器审过。
+        比第 27 轮立第三态要拦的`核聚变→红利低波`更坏：那一档至少有字面关系，这三个字面一个字都不共用。
+
+        顺带一句边界（第 67 轮复评 MAJOR-3 逼出来的实测）：**别名同义词不会被这条合并**——
+        `绿色电力` 与 `绿电` 各自归一后仍是自己（`normalize_sector_name` 只对词形动手），
+        所以这块表是"词形去重"，不是"同义词字典"；同义词要合并得靠 `sector_alias` 表里人登记的行。
+        归一失败或原样更靠谱（摘不出、或改成了别的词）都返回原样。
         """
         if not sector:
             return sector
         try:
             from src.constants.sector_fund_map import normalize_sector_name
-            return normalize_sector_name(sector) or sector
+            norm = normalize_sector_name(sector) or sector
         except Exception:
             return sector
+        return norm if norm in sector else sector
 
     def _gap_fill_candidate(self, sector: str, blocked_codes) -> Dict:
         """这个板块能不能从**内置表**拿到一只"本库给得出净值"的标的。
 
-        为什么要有这一步（2026-09-28 实测）：镜像上 33 个板块标签压着 200 条未判预测，
-        它们在库里**一行映射都没有**（`sector_alias` 0 行），旧写法只把它们数成
-        `predictions_no_mapping` 然后一个字不做 ⇒ 这些预测永远躺在「待验证到期」里。
+        为什么要有这一步（2026-09-29 现读，两个库各数一遍，日期现算）：压在"库里没有可用映射行"
+        的板块标签上的未判预测，镜像 **180 条**、生产 **287 条**；旧写法只把它们数成
+        `predictions_no_mapping` 然后一个字不做。
+        ⚠ **不许把这档说成"永远躺在「待验证到期」里"**（第 67 轮复评 MAJOR-1/2 驳回了我上一版的
+        立论）：这一批里**到期**的只有镜像 6 条 / 生产 5 条，其余（镜像 174、生产 282）目标日还在
+        未来，压根还没进到期队列。这一档真正说的是"到那天时它自己那只标的问不出证据、而库里
+        又没有任何映射行可依据"，所以补标是**给将来准备的处置**，不是当场清掉一片存量。
+        今天真落在这个形状上的：生产 1 条（id 2695，挂在停更的 `003033` 上）、镜像 0 条
+        （`predictions_via_gap_fill_planned = 0`）⇒ 这机制今天的暴露面就是 1 条，别写成几百条。
         老板要的正是这一档的处置："板块对应的基金抓取不到且确认没有办法 ⇒ 把该板块
         变成其他好的基金"，而板块→基金那条链早就有了（`get_fund_for_sector`：内置表
         + 硬编码/库内别名 + "不许硬凑"名单），这里只是把它接进同步器。
@@ -399,13 +416,14 @@ class PredictionMaintenanceService:
         # `retag_prediction` 里面，而 dry-run 那支根本不调它 ⇒ 2026-09-26 生产实测
         # 预览说「将更新 326 条」、真跑只会动 320 条，那 6 条（`158038`/`012765` 那几只
         # 首笔净值晚于窗口的新产品）当场会变成"到期永不判"。日历一次读全，别在循环里查。
-        from src.services.prediction_lifecycle import calendar_gap, nav_calendar
+        from src.services.prediction_lifecycle import (
+            calendar_answer, calendar_gap, nav_calendar)
 
         # 日历里连**预测自己那只标的**一起读：下面"它现在问得出证据吗"那一问要用它，
         # 而分开两次查就是同一把尺子两腿两种待遇（第 54 轮那一族）。
-        # ⚠ 只读**补标的那一路**要用的自有标的：其余预测"要不要动"只看新标的那一只，
-        # 把每条预测自己的代码都塞进这一次读，等于让全库预测各把自己的标的带上
-        # （第 66 轮复评 MI-6：生产那一路读取量翻倍，而这一档从来没被量过）。
+        # ⚠ 只读**补标的那一路**要用的自有标的：命中库里映射行的那一路"要不要动"只看新标的那一只
+        # （理由见下面那道门前的注释），把每条预测自己的代码都塞进这一次读，等于让全库预测
+        # 各把自己的标的带上（第 66 轮复评 MI-6：生产那一路读取量翻倍，而这一档从来没被量过）。
         wanted_codes = set()
         for prediction, mapping, sector, via_gap in pairs:
             wanted_codes.add(mapping.fund_code)
@@ -418,13 +436,24 @@ class PredictionMaintenanceService:
         archived = {row[0] for row in self.db.query(FundInfo.fund_code).filter(
             FundInfo.fund_code.in_(wanted)).all()} if wanted else set()
         kept_own_target = 0
+        kept_window_not_due = 0
         for prediction, mapping, sector, via_gap in pairs:
-            # 补标的这一档多一道**只紧不松**的门：板块本来没有可用映射时，只动"问不出
-            # 这段窗口净值"的那些 —— 老板那句话圈定的是「抓取不到且确认没有办法」。
+            # **只紧不松**的门，装在补标那一路，不装在有映射行那一路 —— 这一条是刻意的，
+            # 不是漏了（第 67 轮复评 MAJOR-5 指出"同一把尺子两腿两种待遇"，答复写在这儿，
+            # 免得下一轮把它当洞补成墙）：两腿问的不是同一个问题。
+            # · 库里**有**映射行 ⇒ "这个板块该由哪只标的定价"已经有人（老板审查过 / agent 匹配过）
+            #   答过一次；换标的要动的是那条**决定**，而旧结论会由 `retag_prediction` 清掉、
+            #   再按新标的重新判出来（新标的给不出证据的那种已经被 #100/#105 那道门拦下）。
+            #   反例是本仓自己的任务 #101：15 条挂在 `508031`（宽基指数挂错标的）上的预测
+            #   被改指到 `510300` —— 那只挂错的标的**给得出**这段窗口的净值，若把这道门也套在
+            #   这一路，这类"标的挂错了但净值好好的"的行就永远改不过来。
+            # · 库里**没有**映射行 ⇒ 没人替这个板块做过决定，是机器自己从内置表挑一只。
+            #   这时候把"自己那只标的问得出证据"的预测搬走，纯粹是拿一个新造的代理去替换
+            #   一份还能自证的结论 ⇒ 老板那句"抓取不到且确认没有办法 ⇒ 才换成别的基金"圈的正是这一档。
             # 少了这道门，一次按钮就把**自己那只标的好好的**预测换成板块代理标的、顺手清掉
             # 已有结论（第 18 轮"一键清空 515 条结论"的同一个形状）。
             # 镜像 2026-09-29 02:39 同一份代码、只把这道门换成 `if False`，两趟预览各印：
-            #   加门   would_update 28 / kept_own_target 636 / via_planned 0 / skipped 1
+            #   加门   would_update 28 / kept 636（拆两档后现读：481 给得出 + 155 还没到期）/ via_planned 0 / skipped 1
             #   不加门 would_update 655 / kept 0 / via_planned 627 / skipped 10
             #              而那 627 条里 **470 条带着已判结论**（改标就会被清掉）
             # 两个口径合得起来：655 = 28 + 627，636 = 627 + 9（那 9 条即使改标也会被
@@ -432,11 +461,20 @@ class PredictionMaintenanceService:
             # `docs/模块总览/板块与基金匹配.md` 末尾那一节（数会随镜像数据走，别抄文本）。
             # 有档案、库里却一行净值都没有 ⇒ **不动**：那是"还没同步过"（跑一次「更新基金」
             # 就补上），不是"确认没办法"；`calendar_gap` 对这种窗口本来就是放行不拦。
-            if via_gap and prediction.fund_code and \
-                    prediction.fund_code in archived and not calendar_gap(
-                    calendar, prediction.fund_code,
-                    prediction.prediction_date, prediction.target_date):
-                kept_own_target += 1
+            # 这条预测**自己那只标的**对这段窗口答的是什么（`calendar_answer` 与门共用一次切片、
+            # 一组阈值）：`cannot` ⇒ 该动；`evidenced` ⇒ 不动且话是"给得出"；
+            # `not_due` / `unknown` ⇒ 也不动，但话只能说"现在还没到问的时候/说不清"
+            # （第 67 轮复评 MAJOR-8：把这三档一起说成"自己就给得出净值"是 189/830 条的假话）。
+            own_answer = calendar_answer(
+                calendar, prediction.fund_code,
+                prediction.prediction_date, prediction.target_date)[0] \
+                if (via_gap and prediction.fund_code and prediction.fund_code in archived) \
+                else 'cannot'
+            if own_answer in ('evidenced', 'not_due', 'unknown'):
+                if own_answer == 'evidenced':
+                    kept_own_target += 1
+                else:
+                    kept_window_not_due += 1
                 continue
             # "这行还挂着结论吗"只有一个判据源（`has_verdict_trace`）：这里以前自己抄了一份，
             # 与 retag 用的 `is_correct is not None` 是同一件事的两套定义（第 18 轮 M-2）。
@@ -481,6 +519,14 @@ class PredictionMaintenanceService:
             # "板块新补的标的"没抢走任何一条自己就问得出证据的预测 —— 这个数要说出口，
             # 它是那道"只紧不松"的门真的在挡事的凭据。
             "predictions_kept_own_target": kept_own_target,
+            # 同一道门放行的**另一半**：这段窗口还没到期（或说不清）⇒ 也不动它，
+            # 但那不是"它自己给得出净值"。两档分开数、分开说（第 67 轮复评 MAJOR-8）。
+            "predictions_kept_window_not_due": kept_window_not_due,
+            # 这一轮**真会被清掉结论**的条数：`reset_verified` 逐行早就带着，可从没人把它数成
+            # 一句给老板看的话（第 67 轮复评 MAJOR-5）。预览里先说数、再让他点执行，
+            # 这一档才叫"事前知道"，而不是事后翻台账。
+            "predictions_with_verdict": sum(1 for candidate in candidates
+                                            if candidate["reset_verified"]),
             # 板块没有标的这一档：数出来就必须说出口"补几块、各补哪只、哪些补不了以及为什么"
             "sectors_without_target": len(gap_plan),
             "sectors_fillable": [

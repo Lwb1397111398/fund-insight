@@ -229,6 +229,8 @@ def sync_sector_mapping(
         filled = result.get('sectors_filled') or 0
         via_planned = result.get('predictions_via_gap_fill_planned') or 0
         via_done = result.get('predictions_via_gap_fill') or 0
+        kept = result.get('predictions_kept_own_target') or 0
+        waiting = result.get('predictions_kept_window_not_due') or 0
         sample = "、".join(f"{item['sector']}→{item['fund_code']} {item['fund_name']}"
                            for item in to_fill[:3])
         if dry_run and to_fill:
@@ -239,8 +241,12 @@ def sync_sector_mapping(
             parts.append(f"已给 {filled} 个原本没有可用标的的板块补上标的，"
                          f"并把 {via_done} 条问不出证据的预测改到它身上")
         if dry_run and fillable and not to_fill:
-            parts.append(f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测"
-                         f"现在那只标的就给得出净值 ⇒ 这一轮一块都不动")
+            # 这句也要分两档说（第 67 轮复评 MAJOR-8）：门放行的既有"自己就给得出净值"，
+            # 也有"这段窗口还没到期"—— 后者写成"给得出"是假话（镜像那一路 22.8% 属于后者）。
+            parts.append(f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测这一轮"
+                         f"一块都不动：{kept} 条自己那只标的就给得出净值"
+                         + (f"，{waiting} 条这段窗口还没到期" if waiting else "")
+                         + ("" if kept or waiting else "（按上面两档各自的原因）"))
         refused = result.get('sectors_refused_to_fill') or []
         if refused:
             # "内置表也说不出对口品种"原来是一句**写死的**诊断，而服务侧实测有六种拒收：
@@ -269,6 +275,21 @@ def sync_sector_mapping(
         if kept:
             parts.append(f"{kept} 条预测没动：它们自己那只标的就给得出这段窗口的净值，"
                          f"没必要换成板块标的（换了反而白清一次已有结论）")
+        # 同一道门放行的另一半**不许并进上面那句**（第 67 轮复评 MAJOR-8）：
+        # `not_due` / `unknown` 也是"放行"，可它们是"现在还没到问的时候"，不是"给得出"。
+        # 镜像补标那一路 830 条候选里有 189 条（22.8%）属于这一档 ⇒ 并进上面那句就是假话。
+        waiting = result.get('predictions_kept_window_not_due') or 0
+        if waiting:
+            parts.append(f"{waiting} 条预测也没动：这段窗口**还没到期**（或窗口起点说不清）"
+                         f"⇒ 现在问不出结果，等到期那天再说")
+        # 带结论的那几条要说在**点执行之前**：`reset_verified` 一直在逐行明细里，
+        # 可预览回执从来没把它数成一句人话 ⇒ 老板只能事后翻台账才知道清了多少
+        # （第 67 轮复评 MAJOR-5：这一档的暴露面必须事前看得见）。
+        wiped = result.get('predictions_with_verdict') or 0
+        if wiped:
+            parts.append(f"其中 {wiped} 条带着已判结论 ⇒ "
+                         + ("这一轮还没动库；执行会把它们的旧结论清掉、之后按新标的重新判"
+                            if dry_run else "这些行的旧结论已清掉，等一次验证按新标的重新判"))
 
         if parts:
             message = f"{'预览' if dry_run else '同步'}完成：" + "，".join(parts)

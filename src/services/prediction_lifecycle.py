@@ -420,6 +420,61 @@ def calendar_gap(calendar: Dict[str, List[date]], code: Optional[str],
                                          window_start, window_end, today=today)
 
 
+def calendar_answer(calendar: Dict[str, List[date]], code: Optional[str],
+                    window_start: Optional[date], window_end: Optional[date],
+                    today: Optional[date] = None) -> tuple:
+    """`calendar_gap` 的同一把尺子，但把"为什么放行"那一种也交出来（见 `evidence_answer`）。
+
+    与 `calendar_gap` 共用**同一次切片**（`window_from_calendar`），这里不比任何新数字。
+    """
+    in_window, latest = window_from_calendar(calendar, code, window_start, window_end)
+    return evidence_answer(in_window, latest, window_start, window_end, today=today)
+
+
+def evidence_answer(in_window: Sequence[date],
+                    latest_nav: Optional[date],
+                    window_start: Optional[date],
+                    window_end: Optional[date],
+                    today: Optional[date] = None) -> tuple:
+    """`target_cannot_evidence_window` 的**同一把尺子**，但把"为什么放行"也交出来。
+
+    返回 `(种类, 原因)`：
+      · `'cannot'`   判得出来吗的答案是"判不出来" ⇒ 原因就是那句人话；
+      · `'evidenced'` 这段窗口**已经过了**、而这只标的当时就给得出验证器要的那两样；
+      · `'not_due'`  窗口还没到期 ⇒ 现在问不出结果，**这不等于"给得出"**；
+      · `'unknown'`  窗口起点说不清、或这只标的在库里一笔净值都没有（刚建档还没同步过）。
+
+    为什么要拆这一层（第 67 轮复评 MAJOR-8，镜像现数）：调用方以前只问 `calendar_gap()` 是不是空，
+    于是三种"还不知道"和一种"真给得出"被数进同一个键，页面上那句话就成了
+    "它们自己那只标的就给得出这段窗口的净值" —— 镜像补标那一路 830 条候选里 **189 条（22.8%）**
+    只是因为**还没到期**。放行这件事不用改（没到期当然不动它），**说出口的话必须分开**。
+    阈值仍然只有 `config` 那两个，这里一个新数字都不立。
+    """
+    start, end = _as_date(window_start), _as_date(window_end)
+    end = end or start
+    days = [d for d in (_as_date(x) for x in (in_window or [])) if d is not None]
+    latest = _as_date(latest_nav)
+    if start is None or latest is None:
+        return 'unknown', None
+    if nav_cannot_cover_window(latest, start):
+        return 'cannot', ('它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
+                          ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测' % (latest, start))
+    if end > (_as_date(today) or current_as_of()):
+        return 'not_due', None            # 还没到期：等到净值来就知道了
+    min_points = config.VERIFY_MIN_DATA_POINTS
+    if len(days) < min_points:
+        return 'cannot', ('这段窗口（%s~%s）里它只发过 %d 笔净值，验证器至少要 %d 个比较点'
+                          ' ⇒ 绑过去会一直判不出来（挂在「到期未判」那一档）'
+                          % (start, end, len(days), min_points))
+    gap = (end - max(days)).days
+    max_age = config.VERIFY_MAX_END_NAV_AGE_DAYS
+    if gap > max_age:
+        return 'cannot', ('目标日 %s 已经过了 %d 天，可它在这段窗口里最后一笔净值是 %s'
+                          '（相差 %d 天 > %d 天上限）⇒ 终点取不到，绑过去会一直判不出来'
+                          % (end, (current_as_of() - end).days, max(days), gap, max_age))
+    return 'evidenced', None
+
+
 def target_cannot_evidence_window(in_window: Sequence[date],
                                   latest_nav: Optional[date],
                                   window_start: Optional[date],
@@ -443,30 +498,11 @@ def target_cannot_evidence_window(in_window: Sequence[date],
     ② 窗口起点说不清 ⇒ 连要问哪段都不知道；
     ③ 窗口**还没到期** ⇒ 净值本来就该在后面几天才到，此时点数不足不是毛病
        （唯一例外是"末笔停在窗口开始之前"，那句才敢说它不会再来）。
+    ⚠ 这三档与"真的给得出"在**放行**这一件事上同等待遇，在**说出口**上不是同一件事 ——
+    要区分就按 `evidence_answer(...)` 的种类问，别在这里比大小（第 67 轮复评 MAJOR-8）。
     """
-    start, end = _as_date(window_start), _as_date(window_end)
-    end = end or start
-    days = [d for d in (_as_date(x) for x in (in_window or [])) if d is not None]
-    latest = _as_date(latest_nav)
-    if start is None or latest is None:
-        return None
-    if nav_cannot_cover_window(latest, start):
-        return ('它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
-                ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测' % (latest, start))
-    if end > (_as_date(today) or current_as_of()):
-        return None                      # 还没到期：等到净值来就知道了
-    min_points = config.VERIFY_MIN_DATA_POINTS
-    if len(days) < min_points:
-        return ('这段窗口（%s~%s）里它只发过 %d 笔净值，验证器至少要 %d 个比较点'
-                ' ⇒ 绑过去会一直判不出来（挂在「到期未判」那一档）'
-                % (start, end, len(days), min_points))
-    gap = (end - max(days)).days
-    max_age = config.VERIFY_MAX_END_NAV_AGE_DAYS
-    if gap > max_age:
-        return ('目标日 %s 已经过了 %d 天，可它在这段窗口里最后一笔净值是 %s'
-                '（相差 %d 天 > %d 天上限）⇒ 终点取不到，绑过去会一直判不出来'
-                % (end, (current_as_of() - end).days, max(days), gap, max_age))
-    return None
+    return evidence_answer(in_window, latest_nav, window_start, window_end,
+                           today=today)[1]
 
 
 def close_as_stale_target_note(prediction: Prediction, latest_nav: Optional[date],

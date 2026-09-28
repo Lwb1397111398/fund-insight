@@ -523,7 +523,18 @@ def test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill(test_d
     这一格是第 66 轮返修的回归现场（变异 M40 的凭据）。我把 `via_gap` 推成"标签在不在
     补标计划表里"，又把归一后的标签当映射键去查 —— 于是映射那一路也被这道门管上了，
     `tests/unit/test_sector_remap.py` 四条一起红（`predictions_updated` 全成 0）。
-    老板那句话圈定的是「板块对应的基金抓取不到且确认没有办法」，不是"板块换了代表"。
+
+    ⚠ **这一格判的是"门的范围"，不是"清结论这件事本身对"**（第 67 轮复评 MAJOR-5 提醒的
+    正是这个读法）。两条路问的不是同一个问题：
+      · 有映射行 ⇒ "这个板块由哪只标的定价"已经有人答过（老板审查 / agent 匹配），
+        换标的之后旧结论会由 `retag_prediction` 清掉并按新标的**重判**（新标的给不出证据
+        的那些已经被 #100/#105 那道门拦下）。反例是本仓任务 #101：15 条挂在挂错标的
+        `508031` 上的预测改指到 `510300` —— 挂错那只**给得出**这段窗口的净值，
+        若把这道门也套在映射那一路，这类行就永远改不过来。
+      · 没有映射行 ⇒ 没人替这块板块做过决定，是机器自己从内置表挑 ⇒ 把还能自证的搬走
+        纯粹是拿新造的代理替换一份好结论，所以才有这道门。
+    代价写在回执里（`predictions_with_verdict` + 路由那句话）：**清了几条结论必须让老板
+    在点执行之前看见**，这一格因此同时钉那一句。
     """
     builtin, builtin_name = _builtin_target()
     _archive(test_db, builtin, builtin_name)          # 内置表给黄金的答案（补标那一路）
@@ -532,7 +543,7 @@ def test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill(test_d
     test_db.add(SectorFundMapping(sector_name=GOLD, fund_code='MAP01',
                                   fund_name='映射行指定的标的', is_active=True,
                                   reviewed=True, confidence=0.95))
-    pred = _prediction(test_db, fund_code='OWN01')
+    pred = _prediction(test_db, fund_code='OWN01', verified=True)
     test_db.commit()
 
     result = PredictionMaintenanceService(test_db).sync_sector_mappings(
@@ -545,6 +556,102 @@ def test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill(test_d
         '"它自己问得出证据所以不动"这一档只属于补标那一路，映射那一路不许被它数进去'
     assert result['predictions_via_gap_fill'] == 0
     assert result['sectors_filled'] == 0, '这块有行，补标那一路根本不该为它动笔'
+    # 范围之外的那一半：清了几条结论，回执必须自己数得出来（这一行被门放过去、结论真被清了）
+    assert result['predictions_with_verdict'] == 1, result
+
+
+def test_a_normalization_that_renames_the_sector_buys_no_target(test_db):
+    """归一只许摘前后缀；把标签改成**另一块板块**时，补标那一路必须回答"不知道"。
+
+    第 67 轮复评 MAJOR-3：`normalize_sector_name('债券')` 实测回 `'券商'`（`SECTOR_ALIASES`
+    里那条别名走的是"字"而不是"词"），于是这块债券板块在内置表本来答不出标的
+    （`get_fund_for_sector('债券')` 实测 None ⇒ 本该走"不猜、交人工/agent"那一档），
+    归成 `券商` 就答得出 ⇒ 机器给一块债券板块绑上一只券商 ETF，写的行还署 `seed` 的名，
+    看起来像机器审过。这比第 27 轮立第三态要拦的 `核聚变→红利低波` 更坏：那一档至少有字面关系。
+
+    镜像 2026-09-29 现数：未判预测身上的 101 个板块标签里，被归一"改成别的词"的共 **3** 个
+    （`债券→券商`、`贵金属→黄金`、`金融→黄金`），后两个在库里**没有映射行** ⇒ 今天真会走到这一格。
+    复现命令（自包含内联，干净克隆可跑）逐字写在 `docs/模块总览/板块与基金匹配.md` 末尾那一节。
+    """
+    wrong_code, wrong_name = _builtin_target('券商')
+    # 把"错的那只"喂足档案与净值：这样一挡，唯一能拦住它的就只剩标签这条规则
+    _archive(test_db, wrong_code, wrong_name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db, code='DEAD11', name='停更的债券标的')
+    pred = _prediction(test_db, sector='债券', fund_code='DEAD11')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-rename-1')
+    test_db.refresh(pred)
+    assert pred.fund_code == 'DEAD11', \
+        '债券板块被归成"券商"、于是绑上了 %s %s ⇒ 归一把"答不出"买通成了"硬凑"' % (
+            wrong_code, wrong_name)
+    assert result['predictions_via_gap_fill'] == 0 and result['sectors_filled'] == 0, result
+    kinds = {item['sector']: item['kind'] for item in result['sectors_refused_to_fill']}
+    assert kinds.get('债券') == 'no_static_hit', \
+        '这块板块该按"内置表也说不出对口标的"收口，回执却是 %r' % result['sectors_refused_to_fill']
+    assert test_db.query(SectorFundMapping).filter_by(sector_name='券商').count() == 0, \
+        '为别人的板块写了一行映射：下一次跑批它还会被再认领一次'
+
+
+def test_two_affix_spellings_of_one_sector_share_one_plan_row(test_db):
+    """同义词不合并（`绿色电力`/`绿电` 各自归一仍是自己），**词形**必须合并。
+
+    这是 `_gap_label` 今天唯一真的在做的事：`黄金行情` 与 `黄金` 归一到同一个键 ⇒
+    一块板块一行映射、两条预测各归各处。分成两行的后果不止是脏：生产库里有一条模型
+    没声明的 `sector_fund_mapping_sector_name_key UNIQUE(sector_name)`（2026-09-22 直连
+    `pg_constraint` 实测，镜像没有）⇒ 同一板块的第二行在生产直接撞约束（第 49 轮
+    "镜像演练通过不等于生产能过"那一族）。
+    ⚠ 别把这一格读成"归一挡住别名同义"：那种说法在 2026-09-29 被实测驳回（任务 #159）。
+    """
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db, code='DEAD20', name='停更的标的甲')
+    _stale_archive(test_db, code='DEAD21', name='停更的标的乙')
+    first = _prediction(test_db, sector=GOLD, fund_code='DEAD20')
+    second = _prediction(test_db, sector='黄金行情', fund_code='DEAD21')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-affix-1')
+    assert [item['sector'] for item in result['sectors_to_fill']] == [GOLD], \
+        result['sectors_to_fill']
+    assert result['sectors_filled'] == 1 and test_db.query(SectorFundMapping).count() == 1, \
+        '两种词形各写一行映射（生产那条 sector_name UNIQUE 会撞）'
+    test_db.refresh(first)
+    test_db.refresh(second)
+    assert (first.fund_code, second.fund_code) == (code, code), \
+        '计划表里只有归一后的那个键，另一种拼法的预测就永远沾不上补来的标的'
+
+
+def test_the_preview_says_out_loud_how_many_conclusions_it_will_clear(test_db):
+    """预览回执里必须有一句"这几条带着已判结论，执行会被清掉"（第 67 轮复评 MAJOR-5）。
+
+    `reset_verified` 一直在逐行明细里，可从没人把它数成一句给老板看的话 ⇒ 页面上那句
+    "预计更新 N 条"读起来像"挪一挪没事"，而镜像当天真会动的 28 条里 21 条带着结论
+    （2026-09-29 现数，命令见 `docs/模块总览/板块与基金匹配.md` 末尾）。
+    两条腿（预览 / 执行）各说一句、时态分开：预览说"还没动库"，执行说"已清掉、等重判"。
+    """
+    _nav_in_window(test_db, 'MAP02', '映射行指定的标的')
+    _nav_in_window(test_db, 'OWN02', '自己有好标的')
+    test_db.add(SectorFundMapping(sector_name=GOLD, fund_code='MAP02',
+                                  fund_name='映射行指定的标的', is_active=True,
+                                  reviewed=True, confidence=0.95))
+    _prediction(test_db, sector=GOLD, fund_code='OWN02', verified=True)
+    _prediction(test_db, sector=GOLD, fund_code='OWN02')      # 一条带结论、一条不带
+    test_db.commit()
+
+    plan = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
+    assert plan['data']['predictions_with_verdict'] == 1, plan['data']
+    assert '其中 1 条带着已判结论' in plan['message'], plan['message']
+    assert '这一轮还没动库' in plan['message'], plan['message']
+    assert '已清掉' not in plan['message'], '预览不许用完成时'
+
+    done = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
+                                                 dry_run=False, db=test_db)
+    assert done['data']['predictions_with_verdict'] == 1, done['data']
+    assert '这些行的旧结论已清掉' in done['message'], done['message']
+    assert '还没动库' not in done['message'], '执行完了还说"没动库"是反话'
 
 
 def test_the_mapping_lookup_still_asks_with_the_raw_sector_label(test_db):
@@ -571,3 +678,147 @@ def test_the_mapping_lookup_still_asks_with_the_raw_sector_label(test_db):
         '库里那一行是按预测自己那个标签登记的，却被归一后的键查走 ⇒ 换到了内置表那一只（%s）' \
         % pred.fund_code
     assert result['predictions_updated'] == 1 and result['sectors_filled'] == 0, result
+
+
+def test_a_window_that_has_not_arrived_is_not_reported_as_evidenced(test_db):
+    """"还没到问的时候"与"自己那只标的给得出净值"是两个数，各说各话（第 67 轮复评 MAJOR-8）。
+
+    那道门问 `calendar_gap` "判得出来吗"，而它返回 None 有**四种**来路：真给得出、
+    窗口还没到期、刚建档一笔净值都没有、窗口起点说不清。上一版把四格并成一个
+    `predictions_kept_own_target`，页面上那句话就成了"它们自己那只标的就给得出这段窗口的净值"
+    —— 镜像补标那一路 830 条候选里 **189 条（22.8%）只是因为还没到期**
+    （2026-09-29 现数，见 `docs/模块总览/板块与基金匹配.md` 末尾）。
+    放行这件事一个字没改（没到期当然不动它），**说出口的话分开**。
+    """
+    from datetime import timedelta
+
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    today = date.today()
+    # 一条 90 天期的预测：窗口起点已过、终点还在未来 ⇒ 末笔净值不早于起点，但点数本来就该在后面
+    _nav_in_window(test_db, 'FUT01', '还在等的标的', start=today - timedelta(days=10),
+                   end=today - timedelta(days=1))
+    _prediction(test_db, sector=GOLD, fund_code='FUT01',
+                window=(today - timedelta(days=10), today + timedelta(days=80)))
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=True)
+    assert result['predictions_kept_window_not_due'] == 1, result
+    assert result['predictions_kept_own_target'] == 0, \
+        '这段窗口还没到期，却被数成"自己那只标的给得出净值"'
+
+    body = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
+    assert '1 条这段窗口还没到期' in body['message'], body['message']
+    assert '0 条自己那只标的就给得出净值' in body['message'], body['message']
+    assert '没必要换成板块标的' not in body['message'], \
+        '那句"给得出净值所以没必要换"对这一格是假话：\n%s' % body['message']
+
+
+def test_a_target_with_no_archive_is_not_the_same_as_being_evidenced(test_db):
+    """门认的是**档案表**里的那只标的：预测挂在一只库里没有档案的代码上 ⇒ 该动就动。
+
+    第 67 轮复评 MAJOR-9②：`prediction.fund_code in archived` 这一腿当时**没有任何一格用例问过**
+    （把 `in archived` 换成恒真，全套件 40 条一声不响）。档案与净值是两件事：
+    `fund_history` 里有行而 `fund_info` 没档案是第 50 轮那族悬空行，
+    "日历给得出点"不等于"这只标的真是库里登记的那只基金"。
+    """
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _prediction(test_db, sector=GOLD, fund_code='GHOST01')     # 档案表里没有这个代码
+    # 悬空代码也要**点数够**：只给一笔的话，`calendar_gap` 因为点数不足本来就答"判不出来"，
+    # 这一格就分不清是被档案那一腿拦下的、还是被阈值拦下的（第 67 轮复评 MAJOR-9② 的现场：
+    # 我第一版就给了 1 笔，变异 `in archived` → 恒真时它仍动 ⇒ M44 报 GREEN）
+    for offset in range(max(2, config.VERIFY_MIN_DATA_POINTS)):
+        test_db.add(FundHistory(fund_code='GHOST01', fund_name='悬空代码',
+                                 nav_date=date(2026, 7, 1) + timedelta(days=offset),
+                                 nav=1.0 + offset * 0.01, day_growth=0.1))
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(
+        dry_run=False, run_id='t-noarch-1')
+    pred = test_db.query(Prediction).one()
+    assert pred.fund_code == code, \
+        '它自己那只代码在库里压根没有档案，却被当成"给得出证据的自有标的"留下 ⇒ %s' % pred.fund_code
+    assert result['predictions_kept_own_target'] == 0, result
+    assert result['predictions_kept_window_not_due'] == 0, result
+
+
+def test_the_execute_sentence_uses_the_recount_not_the_plan(test_db, monkeypatch):
+    """完成时那句里的条数必须是**改完之后回查**的那一份（第 67 轮复评 MAJOR-9③）。
+
+    `predictions_via_gap_fill_planned`（建候选时的计划）与 `predictions_via_gap_fill`
+    （动完之后看行上代码数出来的）是两个键，而上一版那条用例里两者恰好都是 1 ⇒
+    把路由改成念计划那一份，全套件 40 条全绿。这里把唯一入口换成"什么都不做"的桩，
+    让两个数真的分叉（计划 1 / 做到 0），那句话必须念 0。
+    """
+    from src.fund import fund_sync_manager
+
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db)
+    pred = _prediction(test_db)
+    test_db.commit()
+
+    monkeypatch.setattr(fund_sync_manager.FundSyncManager, 'retag_prediction',
+                        staticmethod(lambda *a, **k: False))
+    body = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
+                                                 dry_run=False, db=test_db)
+    data = body['data']
+    test_db.refresh(pred)
+    assert data['predictions_via_gap_fill_planned'] == 1, data
+    assert data['predictions_via_gap_fill'] == 0, data
+    assert pred.fund_code == 'DEAD01', '桩什么都没做，行上代码却被改了'
+    assert '把 0 条问不出证据的预测改到它身上' in body['message'], body['message']
+    assert '把 1 条' not in body['message'], '一行都没动却拿计划数说"已经改了 1 条"'
+
+
+def test_the_three_refusal_kinds_nobody_had_ever_asked_about(test_db):
+    """六种拒收里有三种从没被断言过（第 67 轮复评 MINOR-10）：长名、同码、零净值。
+
+    路由那句话是**按 `kind` 数出来**的（MA-3 那一次改的），而今天镜像现读的拒收分布只有
+    `{no_static_hit: 10}` ⇒ 那三种分支的文案与计数从来没有一次真的被走到过。
+    这里一次造齐三种，各数各的、各说各的：
+      · `label_unusable` 板块名长过列宽（`String(50)`，长过它在生产 PostgreSQL 直接报错）；
+      · `same_as_current` 内置表给的正是库里那只（换了等于没换，不能新建一行同码映射）；
+      · `no_nav` 有档案、库里却一行净值都没有。
+    """
+    from src.constants.sector_fund_map import get_fund_for_sector
+
+    liquor = '白酒'
+    hit = get_fund_for_sector(liquor) or {}
+    assert hit.get('code'), '内置表里 白酒 这一行没了 ⇒ 换一个板块标签'
+    # ① 同一板块的既有行用的正是内置表那只（is_active=0 ⇒ 对同步器不可见 ⇒ 走补标那一路）
+    _archive(test_db, hit['code'], hit.get('name') or hit['code'],
+             with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db, code='DEAD30', name='停更的标的甲')
+    test_db.add(SectorFundMapping(sector_name=liquor, fund_code=hit['code'],
+                                  fund_name=hit.get('name') or hit['code'],
+                                  is_active=False, reviewed=True))
+    _prediction(test_db, sector=liquor, fund_code='DEAD30')
+    # ② 内置表给得出、但那只在库里一行净值都没有
+    steel = '钢铁'
+    steel_hit = get_fund_for_sector(steel) or {}
+    if not steel_hit.get('code'):      # 内置表没有这一行就换一个答得出的（判据不抄常量）
+        steel, steel_hit = next((k, v) for k, v in
+                                __import__('src.constants.sector_fund_map',
+                                           fromlist=['SECTOR_FUND_MAP']).SECTOR_FUND_MAP.items()
+                                if v.get('code')), steel_hit
+        steel_hit = get_fund_for_sector(steel)
+    _archive(test_db, steel_hit['code'], steel_hit.get('name') or steel_hit['code'])
+    _stale_archive(test_db, code='DEAD31', name='停更的标的乙')
+    _prediction(test_db, sector=steel, fund_code='DEAD31')
+    # ③ 板块名长过列宽
+    _prediction(test_db, sector='黄' * 51, fund_code='DEAD32')
+    _stale_archive(test_db, code='DEAD32', name='停更的标的丙')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=True)
+    kinds = {item['sector']: item['kind'] for item in result['sectors_refused_to_fill']}
+    assert kinds.get(liquor) == 'same_as_current', result['sectors_refused_to_fill']
+    assert kinds.get(steel) == 'no_nav', result['sectors_refused_to_fill']
+    assert 'label_unusable' in set(kinds.values()), kinds
+
+    body = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
+    message = body['message']
+    for phrase in ('内置表给的就是库里那只标的', '在库里一行净值都没有', '长过列宽'):
+        assert phrase in message, '%s 那句话没被说出来：\n%s' % (phrase, message)

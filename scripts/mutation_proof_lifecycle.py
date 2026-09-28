@@ -272,10 +272,10 @@ MUTATIONS = [
      '                days = calendar.get(candidate["new_fund_code"]) or []\n'
      '                latest = max(days) if days else None\n',
      GAP_TESTS, 'test_the_evidence_handed_to_the_retag_gate_is_the_window_slice'),
-    ('M39_sector_synonyms_each_get_their_own_row', MAINT,
+    ('M39_affix_spellings_of_one_sector_stop_sharing_a_row', MAINT,
      '                for key in (self._gap_label(raw), raw):\n',
      '                for key in (raw,):\n',
-     GAP_TESTS, 'test_the_evidence_handed_to_the_retag_gate_is_the_window_slice'),
+     GAP_TESTS, 'test_two_affix_spellings_of_one_sector_share_one_plan_row'),
     # 第 66 轮返修："只紧不松"那道门**只**属于补标那一路。命中库里映射行的预测
     # 从来不许被它挡下（这一批我把归一后的标签当映射键去查，四条 `test_sector_remap`
     # 一起红就是这一族的现场）。`via_gap` 因此必须是显式旗标，不是"标签在不在计划表里"
@@ -284,6 +284,48 @@ MUTATIONS = [
      '            pairs.append((prediction, mapping, gap_key or raw, gap_key is not None))\n',
      '            pairs.append((prediction, mapping, gap_key or raw, True))\n',
      GAP_TESTS, 'test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill'),
+    # 第 67 轮复评 MAJOR-3：归一里除了摘前后缀，还有一条**别名替换**会把标签改成另一块板块
+    # （实测 `normalize_sector_name('债券')` = `'券商'`）。上一版 `_gap_label` 照单全收 ⇒
+    # "内置表答不出就不猜"被改成"归到别的板块、于是答得出"，机器给债券板块绑了一只券商 ETF。
+    # 这一处变异把"只认词形归一"那道判据摘掉：把 `norm if norm in sector else sector`
+    # 换成 `norm`，补标那一路就会为 `债券` 写一行 `券商` 的映射。
+    ('M41_a_normalization_that_renames_the_sector_buys_a_target', MAINT,
+     '        return norm if norm in sector else sector\n',
+     '        return norm\n',
+     GAP_TESTS, 'test_a_normalization_that_renames_the_sector_buys_no_target'),
+    # 第 67 轮复评 MAJOR-5：清了几条结论必须在**点执行之前**就看得见。逐行 `reset_verified`
+    # 一直都在，可从没人把它数成回执里那句话 ⇒ 这个聚合数被摘成常数 0 时，页面那句
+    # "预计更新 N 条"读起来就像"挪一挪没事"。
+    ('M42_the_receipt_hides_how_many_conclusions_get_cleared', MAINT,
+     '            "predictions_with_verdict": sum(1 for candidate in candidates\n'
+     '                                            if candidate["reset_verified"]),\n',
+     '            "predictions_with_verdict": 0,\n',
+     GAP_TESTS, 'test_the_preview_says_out_loud_how_many_conclusions_it_will_clear'),
+    # 第 67 轮复评 MAJOR-8：那道门放行的四格（真给得出 / 还没到期 / 没档案 / 起点说不清）
+    # 被并成一个键，于是页面上那句"它们自己那只标的就给得出这段窗口的净值"对 22.8% 的行是假话。
+    # 这一处把分档的那一句抹平 ⇒ 两档数合回一个数。
+    ('M43_a_window_that_has_not_arrived_is_counted_as_evidenced', MAINT,
+     "                if own_answer == 'evidenced':\n",
+     '                if True:\n',
+     GAP_TESTS, 'test_a_window_that_has_not_arrived_is_not_reported_as_evidenced'),
+    # 同轮 MAJOR-9②：`in archived` 那一腿以前**没有任何一格用例问过**（换成恒真 40 条全绿）。
+    # 悬空代码（净值有行、档案表里没有）不该被当成"给得出证据的自有标的"。
+    ('M44_the_archive_check_is_skipped', MAINT,
+     '                if (via_gap and prediction.fund_code and prediction.fund_code in archived) \\\n',
+     '                if (via_gap and prediction.fund_code) \\\n',
+     GAP_TESTS, 'test_a_target_with_no_archive_is_not_the_same_as_being_evidenced'),
+    # 同轮 MAJOR-9③：完成时那句必须念**改完之后回查**的那份数，不是建候选时的计划（第 51 轮 B-2 一族）。
+    # 上一版那条用例里两个数恰好相等 ⇒ 换成计划那一份它一声不响。
+    ('M45_the_execute_sentence_reads_the_plan_not_the_recount', ROUTES,
+     "        via_done = result.get('predictions_via_gap_fill') or 0\n",
+     "        via_done = result.get('predictions_via_gap_fill_planned') or 0\n",
+     GAP_TESTS, 'test_the_execute_sentence_uses_the_recount_not_the_plan'),
+    # 同轮 MINOR-10：六种拒收里三种（长名 / 同码 / 零净值）从没被走到过 —— 那句话的计数分支
+    # 是空跑出来的。把 `same_as_current` 那一档的判定摘掉 ⇒ 三条新断言必须当场红。
+    ('M46_the_same_code_as_current_is_not_a_refusal', MAINT,
+     "                    'kind': 'same_as_current'}\n",
+     "                    'kind': 'no_static_hit'}\n",
+     GAP_TESTS, 'test_the_three_refusal_kinds_nobody_had_ever_asked_about'),
 ]
 
 
@@ -305,6 +347,26 @@ def _git_head():
         out = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'],
                              capture_output=True, text=True, timeout=20)
         return (out.stdout or '').strip() or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def _worktree_state():
+    """跑当时的**工作树**状态：`clean` 或 `dirty(N)`（第 67 轮复评 MINOR-11）。
+
+    为什么这一格必须有：上一版日志只有 `git=<HEAD>`，而体检读的是**磁盘上的文件** ——
+    M40 那一处的锚点在它声称的那个 commit 里根本不存在（`git show 48c95e7:… | grep -c` 回 0），
+    那 42 处跑的其实是当时还没提交的工作树。只看 `git=` 会把"跑在哪一版"读成"跑在 HEAD 上"，
+    于是这份凭据指向一版从没存在过的代码。`dirty(N)` 就是那句实话：**这份日志不是 HEAD 的凭据**。
+    """
+    import subprocess
+    try:
+        out = subprocess.run(['git', '-C', ROOT, 'status', '--porcelain', '--',
+                              'src', 'web', 'tests'],
+                             capture_output=True, text=True, timeout=30)
+        n = len([line for line in (out.stdout or '').splitlines() if line.strip()])
+        return 'clean' if out.returncode == 0 and n == 0 else (
+            'dirty(%d)' % n if out.returncode == 0 else 'unknown')
     except Exception:
         return 'unknown'
 
@@ -382,8 +444,8 @@ def main(argv=None):
     # 运行头（第 59 轮 MINOR-4）：这份日志以前**逐字节可复制** —— 同样 30 处全 RED 时，
     # round58 归档的那份与 round57 的 md5 相同（`19acd5b8…`），"我真的重跑过"这句话没有凭据。
     # 现在每次跑都落一行时刻 + 当时的 commit + 解释器 ⇒ 两次的日志不可能相同，也拦得住拿旧日志冒充。
-    print('# run @ %s  git=%s  python=%s  共 %d 处变异 / %d 个判据文件'
-          % (_run_stamp(), _git_head(), sys.version.split()[0],
+    print('# run @ %s  git=%s  worktree=%s  python=%s  共 %d 处变异 / %d 个判据文件'
+          % (_run_stamp(), _git_head(), _worktree_state(), sys.version.split()[0],
              len(todo), len({m[4] for m in todo})))
     try:
         bad = _control({m[4] for m in todo})

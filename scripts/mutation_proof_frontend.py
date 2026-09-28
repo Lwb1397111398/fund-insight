@@ -695,6 +695,25 @@ def _git_head():
         return 'unknown'
 
 
+def _worktree_state():
+    """跑当时的工作树状态（`clean` / `dirty(N)` / `unknown`）—— 与逻辑侧那支**各留一份**，
+    互不 import 是既有边界（第 66 轮 ⑥(3) 那条注释），不是判据。
+
+    为什么两支都要（第 67 轮复评 MINOR-11）：`git=` 只说"最近一次提交是哪个"，
+    而体检读的是磁盘上的文件 —— 只报 `git=` 会让人以为这份日志是那一次提交的凭据，
+    其实跑的是从没存在过的中间态。
+    """
+    try:
+        out = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--',
+                              'src', 'web', 'tests'],
+                             capture_output=True, text=True, timeout=30)
+        n = len([line for line in (out.stdout or '').splitlines() if line.strip()])
+        return 'clean' if out.returncode == 0 and n == 0 else (
+            'dirty(%d)' % n if out.returncode == 0 else 'unknown')
+    except Exception:
+        return 'unknown'
+
+
 def main(list_only=False, only=None):
     todo = [m for m in MUTATIONS if not only or only in m[1]]
     if only and not todo:
@@ -710,8 +729,8 @@ def main(list_only=False, only=None):
     # 名单自己算：docstring 里不抄文件名（第 36 轮 A-MINOR-2 就是抄漏了 viewpoint-manager.js）
     # 运行头排在它前面（第 59 轮 MINOR-4 给隔壁那支补过，本批对齐）：归档的日志要能自证是哪一次、
     # 哪一版跑的 ⇒ 拿上一批那份冒充这一批，时刻与 git 都对不上。
-    print('# run @ %s  git=%s  python=%s  共 %d 处变异 / %d 个判据文件'
-          % (_run_stamp(), _git_head(), sys.version.split()[0],
+    print('# run @ %s  git=%s  worktree=%s  python=%s  共 %d 处变异 / %d 个判据文件'
+          % (_run_stamp(), _git_head(), _worktree_state(), sys.version.split()[0],
              len(todo), len({_judge_file(m[0]) for m in todo})))
     print('本批改写到的文件：%s' % '、'.join(sorted({m[2] for m in todo})))
     if list_only:
