@@ -719,6 +719,60 @@ def test_a_window_that_has_not_arrived_is_not_reported_as_evidenced(test_db):
         '那句"给得出净值所以没必要换"对这一格是假话：\n%s' % body['message']
 
 
+def test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due(test_db):
+    """门放行的**第三档**：这把尺子答不出 ⇒ 既不是"给得出"，也不是"等到期就行"。
+
+    `calendar_answer` 返回 `'unknown'` 有两种来路（`prediction_lifecycle.py:445` 逐字写着）：
+    窗口起点说不清、**或这只标的在库里一笔净值都没有**。上一版把它并进
+    "这段窗口还没到期（或窗口起点说不清）⇒ 等到期那天再说"那一句
+    （第 68 轮复评 MINOR-1）⇒ 对"有档案、库里一行净值都没有"那一格是假话：
+    等到期那天照样问不出来，缺的是净值行不是日历，该说的是"先跑一次「更新基金」"。
+
+    镜像今天这一档是 **0 条**（现读：481 给得出 / 155 还没到期 / 0 答不出）⇒ 这句话是潜伏的，
+    但形状与 MAJOR-8 同一个：并档 = 假话。这一格同时钉"两处不许把同一批数说两遍"
+    （2026-09-29 镜像真预览回执里 481/155 各出现两次、措辞还不同）。
+    """
+    code, name = _builtin_target()
+    _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    # 有档案、库里一行净值都没有，而窗口**已经到期** ⇒ 尺子答不出，不是"还没到期"
+    _archive(test_db, 'EMPTY01', '刚建档还没同步的标的')
+    _prediction(test_db, sector=GOLD, fund_code='EMPTY01')
+    # 再来一条**自己就给得出**的：没有它，kept 恒为 0 ⇒ 下面那句"同一批数只说一遍"
+    # 结构上不可能红（重复的那一句在 `if kept:` 那一支，kept=0 时两处都不印）。
+    # 用另一只代码，不用内置表那只 —— 挂在板块同一只标的上的行会被先数成 `unchanged`，
+    # 根本走不到这道门（第 68 轮写这一格时踩到的）。
+    _archive(test_db, 'OWN01', '自己有好标的')
+    for offset in range(max(2, config.VERIFY_MIN_DATA_POINTS)):
+        test_db.add(FundHistory(fund_code='OWN01', fund_name='自己有好标的',
+                                nav_date=date(2026, 7, 1) + timedelta(days=offset),
+                                nav=1.0, day_growth=0.1))
+    _prediction(test_db, sector=GOLD, fund_code='OWN01')
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=True)
+    assert result['predictions_kept_answer_unknown'] == 1, result
+    assert result['predictions_kept_window_not_due'] == 0, \
+        '库里一笔净值都没有被数成"还没到期" ⇒ %s' % result
+    assert result['predictions_kept_own_target'] == 1, result
+
+    body = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
+    assert '这把尺子答不出' in body['message'], body['message']
+    assert '还没到期' not in body['message'], \
+        '它对"还没到期"那一档是假话：\n%s' % body['message']
+    assert '更新基金' in body['message'], '该给的动作没给：\n%s' % body['message']
+    # 同一批放行行只许说一句：预览那句已经把三档数报完了，后面那三句就不再重复
+    assert body['message'].count('自己那只标的就给得出') == 1, \
+        '同一批数被说了两遍（两处措辞还不同）：\n%s' % body['message']
+
+    # 执行那一路（预览那句不触发）必须由**另一句**说同一档，不许沉默
+    done = prediction_routes.sync_sector_mapping(
+        request=_request(CONFIRM), dry_run=False, db=test_db)
+    assert '这把尺子答不出' in done['message'], done['message']
+    assert '还没到期' not in done['message'], done['message']
+    assert test_db.query(Prediction).filter_by(fund_code='EMPTY01').one().fund_code == 'EMPTY01', \
+        '尺子答不出的那一档照样不该被改标'
+
+
 def test_a_target_with_no_archive_is_not_the_same_as_being_evidenced(test_db):
     """门认的是**档案表**里的那只标的：预测挂在一只库里没有档案的代码上 ⇒ 该动就动。
 

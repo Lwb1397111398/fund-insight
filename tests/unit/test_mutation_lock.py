@@ -8,6 +8,7 @@
 """
 import ast
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -336,3 +337,76 @@ def test_the_orm_refusal_runs_before_the_harness_touches_anything():
     # 顶层不许留那句 assert：否则这份工具连"被用例问一句"都做不到（第 64 实测过的形状）
     top = src[:src.index('def main(')]
     assert "assert 'src.models.database' not in sys.modules" not in top.split('def _refuse')[0],         '那句 assert 又回到模块顶层 ⇒ 任何用例 import 这份工具都会被当场打死'
+
+
+def _drop_bytecode_fn():
+    """只取体检工具里那**一个函数**来跑，不 import 整份工具。
+
+    直接 `exec_module` 会顺着它的 import 链把锁（以及锁里那句 ORM 守卫）拉起来，
+    于是"这份工具不该连库"那条既有判据会在别人身上响 —— 问的是缓存，不是启动。
+    """
+    path = os.path.join(os.path.dirname(__file__), '..', '..',
+                        'scripts', 'mutation_proof_lifecycle.py')
+    tree = ast.parse(io.open(path, encoding='utf-8').read())
+    defs = [n for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == '_drop_bytecode']
+    assert len(defs) == 1, '那个函数在工具里应当只有一个定义'
+    ns = {'os': os}
+    exec(compile(ast.Module(body=defs, type_ignores=[]), path, 'exec'), ns)
+    return ns['_drop_bytecode'], path
+
+
+def test_rewriting_a_source_file_also_drops_its_stale_bytecode(tmp_path):
+    """同字节数的载荷会骗过 mtime+size ⇒ 改完 `.py` 必须连 `.pyc` 一起放下。
+
+    2026-09-29 实测：M48 把 `kept_answer_unknown` 换成 `kept_window_not_due` —— 两边都是
+    19 个字符，**字节数一模一样**。还原后的源文件若落进同一个 mtime 刻度，CPython 就接着吃
+    上一轮编译出来的 `.pyc` ⇒ 下一轮 CONTROL 在"干净代码"上量到的其实是**上一处变异**
+    （那一次整轮退 4 作废）。这一条问的是**结果**：那份缓存文件真的没了。
+    """
+    drop, _ = _drop_bytecode_fn()
+    src = tmp_path / 'mod_x.py'
+    src.write_text('A = 1' + chr(10), encoding='utf-8')
+    cache = tmp_path / '__pycache__'
+    cache.mkdir()
+    mine = cache / 'mod_x.cpython-312.pyc'
+    other = cache / 'mod_y.cpython-312.pyc'
+    mine.write_text('stale', encoding='utf-8')
+    other.write_text('keep', encoding='utf-8')
+    drop(str(src))
+    assert not mine.exists(), '陈旧的那份 .pyc 还留着 ⇒ 下一次导入吃的可能就是它'
+    assert other.exists(), '它把别人的缓存一起删了 ⇒ 这不是这一条要做的动作（不许顺手扩大）'
+    # 没有缓存目录的那一站也不许抛（体检不该因为"没人生成过 .pyc"而中断）
+    drop(str(tmp_path / 'never_imported.py'))
+
+
+def test_no_write_site_forgets_to_drop_the_bytecode():
+    """每个改写源码的站点后面必须紧跟一次 `_drop_bytecode` —— 少一个方向就有一半假账。
+
+    陈旧缓存两个方向都坏：**落载荷时不清** ⇒ 变异失效（假 GREEN，体检反而满分通过）；
+    **还原时不清** ⇒ 变异残留（假 RED，像 2026-09-29 那次整轮作废）。
+    所以判的是"每一处都接了"，不是"有没有这个函数"。
+    """
+    path = os.path.join(os.path.dirname(__file__), '..', '..',
+                        'scripts', 'mutation_proof_lifecycle.py')
+    tree = ast.parse(io.open(path, encoding='utf-8').read())
+    missing = []
+
+    def walk(suite):
+        for i, node in enumerate(suite):
+            call = getattr(node, 'value', None)
+            if (isinstance(node, ast.Expr) and isinstance(call, ast.Call)
+                    and getattr(call.func, 'attr', None) == 'replace'):
+                nxt = suite[i + 1] if i + 1 < len(suite) else None
+                ok = (isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Call)
+                      and getattr(nxt.value.func, 'id', None) == '_drop_bytecode')
+                if not ok:
+                    missing.append(node.lineno)
+            for field in ('body', 'orelse', 'finalbody'):
+                sub = getattr(node, field, None)
+                if isinstance(sub, list) and sub and isinstance(sub[0], ast.stmt):
+                    walk(sub)
+
+    walk(tree.body)
+    assert not missing, ('这些改写源码的站点后面没接 `_drop_bytecode`（第 %s 行）⇒ '
+                         '字节数相同的载荷会让下一次跑吃到陈旧缓存' % missing)

@@ -328,11 +328,49 @@ MUTATIONS = [
      '        if dry_run and wiped:\n',
      '        if wiped:\n',
      GAP_TESTS, 'test_the_verdict_count_is_promised_in_the_preview_not_claimed_in_the_receipt'),
+    # 第 68 轮复评 MINOR-1：`unknown` 被并进“还没到期”那一档 ⇒ 页面上那句“等到期那天再说”
+    # 对“有档案、库里一行净值都没有”那些行是假话（缺的是净值行，不是日历）。
+    # 把第三档的计数并回第二档 ⇒ 新判据必须红。
+    ('M48_the_unknown_answer_is_folded_back_into_not_due', MAINT,
+     '                    kept_answer_unknown += 1\n',
+     '                    kept_window_not_due += 1\n',
+     GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
+    # 同一批放行行在同一条消息里被说了两遍（2026-09-29 镜像真预览回执实测：
+    # 481/155 各出现两次、两处措辞还不同 ⇒ 读的人只能猜是不是两批行）。
+    # 摘掉“上面说过就不再说”那半个条件 ⇒ 新判据那条 count==1 必须红。
+    ('M49_the_kept_buckets_are_described_twice', ROUTES,
+     '        if kept and not buckets_spoken:\n',
+     '        if kept:\n',
+     GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
     ('M46_the_same_code_as_current_is_not_a_refusal', MAINT,
      "                    'kind': 'same_as_current'}\n",
      "                    'kind': 'no_static_hit'}\n",
      GAP_TESTS, 'test_the_three_refusal_kinds_nobody_had_ever_asked_about'),
 ]
+
+
+def _drop_bytecode(full):
+    """改完磁盘上的 `.py` 就把它的 `.pyc` 一起放下 —— **落载荷与还原两处都要**，缺一处就假。
+
+    2026-09-29 实测撞到的：M48 那条变异的载荷与原行**字节数完全相同**
+    （`kept_answer_unknown` 与 `kept_window_not_due` 都是 19 个字符），而 CPython 判
+    "源码变没变"看的是 mtime + size 这一对。还原后的源文件如果落进同一个 mtime 刻度，
+    解释器就接着吃上一轮编译出来的陈旧 `.pyc` ⇒ 下一轮 CONTROL 在"干净代码"上量到的
+    其实是**上一处的变异**（那次表现为 CONTROL-RED 整轮作废，退 4）。
+    方向有两个，所以两处都得清：陈旧缓存既能让变异**失效**（假 GREEN），
+    也能让它**残留**（假 RED）。删不掉就当看不见，不抛 —— 缓存不是判据的一部分。
+    """
+    d = os.path.join(os.path.dirname(full), '__pycache__')
+    try:
+        stem = os.path.splitext(os.path.basename(full))[0]
+        for name in os.listdir(d):
+            if name.startswith(stem + '.'):
+                try:
+                    os.remove(os.path.join(d, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def _run_stamp():
@@ -492,6 +530,7 @@ def main(argv=None):
             with io.open(tmp, 'w', encoding='utf-8', newline='') as fh:
                 fh.write(cache[path].replace(anchor, mutant))
             os.replace(tmp, full)
+            _drop_bytecode(full)        # 载荷必须真的被重新编译，否则量的是上一版
 
             r = _run_one(test_file, test)
             out = (r.stdout or '') + (r.stderr or '')
@@ -509,10 +548,12 @@ def main(argv=None):
                     print('      | %s' % line)
                 rc = 1
             os.replace(backup, full)
+            _drop_bytecode(full)
     finally:
         for full, backup in backups:
             if os.path.exists(backup):
                 os.replace(backup, full)
+                _drop_bytecode(full)
         for path, original in cache.items():
             disk = io.open(os.path.join(ROOT, path), encoding='utf-8', newline='').read()
             if disk != original:

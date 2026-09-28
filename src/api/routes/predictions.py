@@ -231,6 +231,11 @@ def sync_sector_mapping(
         via_done = result.get('predictions_via_gap_fill') or 0
         kept = result.get('predictions_kept_own_target') or 0
         waiting = result.get('predictions_kept_window_not_due') or 0
+        unclear = result.get('predictions_kept_answer_unknown') or 0
+        # "这一轮一块都不动"那句会把三档数一次性说完 ⇒ 下面那三句就不许再说一遍
+        # （2026-09-29 镜像真预览回执里 481/155 各被说了两遍，两处措辞还不同 ——
+        #  同一件事两句不同说法，读的人只能猜"是不是两批行"。第 68 轮复评 MAJOR-1 同族。）
+        buckets_spoken = False
         sample = "、".join(f"{item['sector']}→{item['fund_code']} {item['fund_name']}"
                            for item in to_fill[:3])
         if dry_run and to_fill:
@@ -241,12 +246,17 @@ def sync_sector_mapping(
             parts.append(f"已给 {filled} 个原本没有可用标的的板块补上标的，"
                          f"并把 {via_done} 条问不出证据的预测改到它身上")
         if dry_run and fillable and not to_fill:
-            # 这句也要分两档说（第 67 轮复评 MAJOR-8）：门放行的既有"自己就给得出净值"，
-            # 也有"这段窗口还没到期"—— 后者写成"给得出"是假话（镜像那一路 22.8% 属于后者）。
+            # 这句要分**三档**说（第 67 轮复评 MAJOR-8 + 第 68 轮 MINOR-1）：门放行的既有
+            # "自己就给得出净值"，也有"这段窗口还没到期"，还有"这把尺子答不出"
+            # —— 后两档写成"给得出"都是假话（镜像那一路 22.8% 属于还没到期那一档）。
             parts.append(f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测这一轮"
                          f"一块都不动：{kept} 条自己那只标的就给得出净值"
                          + (f"，{waiting} 条这段窗口还没到期" if waiting else "")
-                         + ("" if kept or waiting else "（按上面两档各自的原因）"))
+                         + (f"，{unclear} 条这把尺子答不出（窗口起点说不清，"
+                            f"或那只标的在库里还没有一笔净值 ⇒ 先跑一次「更新基金」）"
+                            if unclear else "")
+                         + ("" if kept or waiting or unclear else "（按上面三档各自的原因）"))
+            buckets_spoken = bool(kept or waiting or unclear)
         refused = result.get('sectors_refused_to_fill') or []
         if refused:
             # "内置表也说不出对口品种"原来是一句**写死的**诊断，而服务侧实测有六种拒收：
@@ -271,17 +281,26 @@ def sync_sector_mapping(
             parts.append(f"{len(refused)} 个板块仍然没有可用标的：{detail}"
                          + ("（要换署名那只请你去板块匹配页改，机器不动它）"
                             if counts.get('owner_locked') else ""))
-        kept = result.get('predictions_kept_own_target') or 0
-        if kept:
+        # 这三句读的是**同一批放行行**的三个档，与上面那句"一块都不动"是同一件事：
+        # 上面说过就不再说（`kept`/`waiting`/`unclear` 在这里只读一次，不再抄第二份变量）。
+        if kept and not buckets_spoken:
             parts.append(f"{kept} 条预测没动：它们自己那只标的就给得出这段窗口的净值，"
                          f"没必要换成板块标的（换了反而白清一次已有结论）")
         # 同一道门放行的另一半**不许并进上面那句**（第 67 轮复评 MAJOR-8）：
-        # `not_due` / `unknown` 也是"放行"，可它们是"现在还没到问的时候"，不是"给得出"。
+        # `not_due` 也是"放行"，可它是"现在还没到问的时候"，不是"给得出"。
         # 镜像补标那一路 830 条候选里有 189 条（22.8%）属于这一档 ⇒ 并进上面那句就是假话。
-        waiting = result.get('predictions_kept_window_not_due') or 0
-        if waiting:
-            parts.append(f"{waiting} 条预测也没动：这段窗口**还没到期**（或窗口起点说不清）"
+        if waiting and not buckets_spoken:
+            parts.append(f"{waiting} 条预测也没动：这段窗口**还没到期**"
                          f"⇒ 现在问不出结果，等到期那天再说")
+        # 第三档（第 68 轮复评 MINOR-1）：`unknown` 既不是"给得出"也不是"等到期就行"。
+        # 上一版把它并进"还没到期（或窗口起点说不清）"那句 ⇒ 对"有档案、库里一行净值都没有"
+        # 那些行是假话：等到期那天照样问不出来，缺的是净值行而不是日历，
+        # 该说的是"先跑一次「更新基金」"。镜像今天这一档是 0 条，所以这句话今天是潜伏的，
+        # 但形状与 MAJOR-8 同一个 —— 由 `test_the_unknown_answer_gets_its_own_sentence` 钉住。
+        if unclear and not buckets_spoken:
+            parts.append(f"{unclear} 条预测也没动：**这把尺子答不出**"
+                         f"（窗口起点说不清，或那只标的在库里还没有一笔净值）"
+                         f"⇒ 现在判不了，跑一次「更新基金」把净值补齐再看")
         # 带结论的那几条要说在**点执行之前**：`reset_verified` 一直在逐行明细里，
         # 可预览回执从来没把它数成一句人话 ⇒ 老板只能事后翻台账才知道清了多少
         # （第 67 轮复评 MAJOR-5：这一档的暴露面必须事前看得见）。

@@ -437,6 +437,7 @@ class PredictionMaintenanceService:
             FundInfo.fund_code.in_(wanted)).all()} if wanted else set()
         kept_own_target = 0
         kept_window_not_due = 0
+        kept_answer_unknown = 0
         for prediction, mapping, sector, via_gap in pairs:
             # **只紧不松**的门，装在补标那一路，不装在有映射行那一路 —— 这一条是刻意的，
             # 不是漏了（第 67 轮复评 MAJOR-5 指出"同一把尺子两腿两种待遇"，答复写在这儿，
@@ -453,7 +454,7 @@ class PredictionMaintenanceService:
             # 少了这道门，一次按钮就把**自己那只标的好好的**预测换成板块代理标的、顺手清掉
             # 已有结论（第 18 轮"一键清空 515 条结论"的同一个形状）。
             # 镜像 2026-09-29 02:39 同一份代码、只把这道门换成 `if False`，两趟预览各印：
-            #   加门   would_update 28 / kept 636（拆两档后现读：481 给得出 + 155 还没到期）/ via_planned 0 / skipped 1
+            #   加门   would_update 28 / kept 481 给得出 + 155 还没到期 + 0 答不出 / via_planned 0 / skipped 1
             #   不加门 would_update 655 / kept 0 / via_planned 627 / skipped 10
             #              而那 627 条里 **470 条带着已判结论**（改标就会被清掉）
             # 两个口径合得起来：655 = 28 + 627，636 = 627 + 9（那 9 条即使改标也会被
@@ -473,8 +474,14 @@ class PredictionMaintenanceService:
             if own_answer in ('evidenced', 'not_due', 'unknown'):
                 if own_answer == 'evidenced':
                     kept_own_target += 1
-                else:
+                elif own_answer == 'not_due':
                     kept_window_not_due += 1
+                else:
+                    # `unknown` 不是"还没到期"：它是**这把尺子答不出**（窗口起点说不清，
+                    # 或那只标的在库里一笔净值都还没有）。第 68 轮复评 MINOR-1：把它并进
+                    # "还没到期"那一档，页面上那句"等到期那天再说"对这种行就是假话
+                    # —— 它等到期也问不出来，缺的是净值行，不是日历。
+                    kept_answer_unknown += 1
                 continue
             # "这行还挂着结论吗"只有一个判据源（`has_verdict_trace`）：这里以前自己抄了一份，
             # 与 retag 用的 `is_correct is not None` 是同一件事的两套定义（第 18 轮 M-2）。
@@ -519,9 +526,13 @@ class PredictionMaintenanceService:
             # "板块新补的标的"没抢走任何一条自己就问得出证据的预测 —— 这个数要说出口，
             # 它是那道"只紧不松"的门真的在挡事的凭据。
             "predictions_kept_own_target": kept_own_target,
-            # 同一道门放行的**另一半**：这段窗口还没到期（或说不清）⇒ 也不动它，
-            # 但那不是"它自己给得出净值"。两档分开数、分开说（第 67 轮复评 MAJOR-8）。
+            # 同一道门放行的**另一半**：这段窗口还没到期 ⇒ 也不动它，
+            # 但那不是"它自己给得出净值"。分开数、分开说（第 67 轮复评 MAJOR-8）。
             "predictions_kept_window_not_due": kept_window_not_due,
+            # 第三档：这把尺子**答不出**（窗口起点说不清，或那只标的在库里一笔净值都没有）。
+            # 它既不是"给得出"也不是"等到期就行"，所以必须有自己的一句
+            # （第 68 轮复评 MINOR-1：前两档的措辞套在它头上都是假话）。
+            "predictions_kept_answer_unknown": kept_answer_unknown,
             # 这一轮**真会被清掉结论**的条数：`reset_verified` 逐行早就带着，可从没人把它数成
             # 一句给老板看的话（第 67 轮复评 MAJOR-5）。预览里先说数、再让他点执行，
             # 这一档才叫"事前知道"，而不是事后翻台账。
