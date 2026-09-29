@@ -1795,10 +1795,13 @@ python scripts/q.py --production "select nav_date, count(distinct fund_code) fun
 ⚠ **上面那句"那 18 行"是**缺口的一子集**，不是缺口的全部**（任务 #142 第二半，2026-09-29 镜像现读）：
 回收站里缺那一对时间戳的是 **418 行**，其中 **18 行连 `deleted_at` 都没有**（清理那把只看这一列 ⇒ 永远进不了删除候选）、
 **400 行有 `deleted_at`、只缺 `restore_before`**（**今天就在**三桶硬删候选里，缺的只是页面上"保留到哪天"那句话 ⇒ 补这列**不会**让它们更晚被删）。
-复核就一条命令（镜像；生产加 `--production`，**今天还没量过生产，别照抄这一句**）：
+复核就一条命令（镜像；生产加 `--production`，走同一把只读门）：
+
 `python scripts/q.py "select count(*) filter (where is_deleted) soft, count(*) filter (where is_deleted and deleted_at is null) no_stamp, count(*) filter (where is_deleted and deleted_at is not null) has_stamp, count(*) filter (where is_deleted and restore_before is null) no_deadline from viewpoints"`
-⇒ 今天印 `soft 418 / no_stamp 18 / has_stamp 400 / no_deadline 418`（四个数一一对应上面那句；`400 = has_stamp`，
+⇒ 两个库**同一形状**：镜像与生产（2026-09-30 04:35 只读，走同一把门）都印
+`soft 418 / no_stamp 18 / has_stamp 400 / no_deadline 418`（四个数一一对应上面那句；`400 = has_stamp`，
 而 `no_deadline` 是 418 ⇒ "缺 `restore_before`"这一列**两组都缺**，差别只在有没有 `deleted_at`）。
+⚠ 数一样不代表是同一批行 —— 生产那一面**还没补过戳**，两库各要一次独立的写（各出清单、各自点名）。
 ⇒ 补戳的工具是 `scripts/backfill_viewpoint_archive_stamps.py`（默认 dry-run 只出清单；真写要 `--apply --confirm BACKFILL-VP-STAMPS`
 **并且必须点名 `--stamp-from today|created`** —— 那是决定不是默认值，两种各补几行、几行窗口已过都会先列出来，逐行计划只对点名的那一种印）。
 **代码那一半只修未来的行**（`archive_stamp(retention_days, base=…)` 是那对值的唯一出处，`base` 让存量补戳不用第二把钟），
