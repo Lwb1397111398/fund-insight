@@ -294,7 +294,99 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-29 07:36（北京），**任务 #163：第 68 轮复评 71/100 返修收口 —— 两条是文本账、
+最近一次核对（2026-09-29 **09:3x（北京）**，**任务 #163 收口 + #157 四档分流**：第 69 轮独立复评
+**74/100**（0 BLOCKER / 3 MAJOR / 6 MINOR）的返修 —— 最重的一条不是产品行为，是我上一批写进 git message
+的**一句假话**；而返修途中我自己又造出一个能让整条链当场崩的 arity 缺陷。分数 **74 < 75 ⇒ 本批不推**
+（`origin/main` 仍是 `c408dcd`，本地领先 13 笔）。
+
+① **MAJOR-6（产品半，真拆了一格）**：`evidence_answer` 现在交出**三个槽位** —— 第三格 `cause` 只在
+`'unknown'` 那一档非空，取 `'no_start'` / `'no_nav'`。为什么还要拆（第 68 轮 MINOR-1 只拆到"答不出"）：
+两种病因**动作相反** —— `no_nav`（有档案、库里一笔净值都没有）跑一次「更新基金」就有答案；
+`no_start`（这条预测连窗口起点都说不清）补多少净值都不会变，要动的是那条预测自己的起点日期。
+并成一句给一副药 ⇒ 对后一半是假话。服务层按 `cause` 分两档计数（`predictions_kept_no_nav` /
+`predictions_kept_no_start`），总键 `predictions_kept_answer_unknown` **保留 = 两格之和**
+（老口径的下界，不是第三把尺子）；路由四句各说各的，`buckets_spoken` 仍保证"同一批数只说一遍"。
+⚠ **这一条我自己先写坏了一版**（本批最该记的）：`return 'cannot', ('…' % (a, b), None)` 被 Python
+读成**两个元素**（第二个是一格二元组）⇒ 调用方三格解包当场 `ValueError`，而
+`target_cannot_evidence_window` 那条 `[1]` 的路会把"原因"变成**元组**递到页面上。三条 `cannot` 出口全中、
+一批用例一起红 —— 红得有价值，但这是我造的，不是评审给的。
+⇒ 新增 `test_the_answer_ruler_always_hands_back_three_slots`：七格形状表，每档都问
+"交回来是不是三格 / `cause` 对不对 / `cannot` 的原因是不是**一句人话** / 放行那几档原因必须为 `None`"；
+变异 **M53**（两种病因并回一格）与 **M54**（少交一格）各咬一次。
+`no_start` 那一格**库面上造不出夹具**（`predictions.prediction_date` 是 NOT NULL）⇒ 服务层不许假称验过，
+它只由那张表 + M53 负责，这条边界写在用例 docstring 里（同批我为此**撤掉了一条配不出夹具的变异 M52**）。
+
+② **MAJOR-1（不实陈述，按 MAJOR 计）**：`8cd9a18` 的提交说明把 `test_sector_gap_fill.py` 的用例数
+写成 **25**（虚报 1 个），而 `--collect-only -q` 与 `grep -c '^def test_'` 当场都是 **24** 那个数
+（`test_mutation_lock.py` 那半是真的）。⇒ 这类"事后追述条数"从此一律绑命令，
+本段下面每个数都给得出跑它的命令 —— 连转述那句假话都得按对账的写法来（第一批我就被自己的引用判红）。
+⇒ 这类"事后追述条数"从此一律绑命令，本段下面每个数都给得出跑它的命令。
+③ **MAJOR-2（会随时间失效的相对基准）**：AGENTS 那条分布复核命令原来写 `git diff --name-only HEAD~2 -- tests/`，
+而**写下这段文字的正是那一批最后一笔** ⇒ 它在自己落地之后印 `23 → 24`（+2），与正文那句 +4 不符。
+⇒ 基准改成**绝对提交**。推论写给下一轮的我：**同一段文字里的相对基准，会被写下它的那一笔顶掉**。
+④ **MAJOR-3（"逐字写在"是假的）**：AGENTS 说 sqlite / PG 两种方言"逐字写在"模块总览，而文档只有 sqlite
+那一支可粘贴，PG 那一支是一行**提示**（还举了与 sqlite 那支不同形的写法）。⇒ 把我 08:4x 真跑通的
+PG 整条命令写进 `docs/模块总览/板块与基金匹配.md`；生产现数 `73 / 43 / 394 / 287 / 0 / 5 / 282`
+（与评审席自己拼的那版逐字同数）。
+
+⑤ **MINOR-4（一条判据只有第一腿有牙）**：评审席把 `buckets_spoken` 从 `waiting` / `no_nav` 两条腿上摘掉，
+那份判据文件当场全绿（条数以 `--collect-only -q` 为准，不在这里抄）。⇒ 每档各补一条 `count(...) == 1`（预览与执行两路都数），注册表补 **M50 / M51**。
+⑥ **MINOR-5（判据自己不合格）**：`test_no_write_site_forgets_to_drop_the_bytecode` 原来要求
+"这一整句正好是一次 `.replace(...)` 调用"且不钻 `except` ⇒ 赋值右侧 / `return` 值 / `except` 支 /
+嵌套 `def` 四种写法全隐身，而不相干的 `buf.replace(a, b)` 反而是潜在误报。⇒ 改成认
+"`os` 这个名字上的 `replace`" + 判**同一语句块的下一句**，四格必点名、两格不许误伤；
+并把**它看不见的四类改写写法**（`shutil.copyfile` / `Path.write_text` / `open(p,'w')`）
+连同一条 grep 复核命令写进 docstring，而不是留一句"每个改写源码的站点"。
+⑦ **MINOR-7（页面那句自指不存在的栏）**：四档全 0 时那句"（按上面三档各自的原因）"指向三句一句都没渲染的话
+（第 53 轮 A-1 同形）。⇒ 删掉，改成把话说完的一句；新用例
+`test_a_round_that_moves_nothing_never_points_at_a_line_that_never_printed` 钉"见上方 / 按上面 / 如上 /
+见明细"一个都不许出现。**这一格是真可达的**：预测的标的正好等于内置表给这个板块的那只 ⇒ 先被数成
+`unchanged`，压根走不到证据门（评审说的"今天走不到"指两库的数据，不是指这个形状）。
+⑧ **MINOR-8 / 9**：AGENTS 里那句"执行那一腿说'已清掉，等一次验证重判'"已被同批 `3ee5477` 收窄，
+原处现在标了作废；`_drop_bytecode` 的归因从"如果落进同一个 mtime 刻度"（读起来像偶发、可忍）改成真原因
+—— **`os.replace` 保留被移进来那个文件的 mtime**，而备份写在落载荷前几毫秒 ⇒ 同秒是**构造结果**。
+
+⚠ **一条关于"我自己怎么改测试"的操作事故**（本批第二次差点交出假账）：用 `text.partition(END)`
+整段替换用例时，我把 `def test_a_target_with_no_archive_is_not_the_same_as_being_evidenced(test_db):`
+**那一行吞掉了** —— 它的 docstring 变成模块级裸字符串，`py_compile` 照样过、`grep -c '^def test_'`
+条数照样对得上，只有拿**用例名单**与 HEAD 对表才看得见。已补回，替换脚本改成断言
+"END 那行必须整行拿回来"。推论：**改完测试文件要 diff 名单，不能只看条数相等**
+（与第 62 轮"一减一增正好抵消"同族，只是更隐蔽）。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务；七步串成一条链 `data/_review_tmp/r69-chain.sh`，逐步记时刻与退码，**七步全退 0**）：
+
+- `pytest tests/unit -q` → **1261 passed / 16 skipped / 0 failed**（501.58，08:56:41，退 0）。
+- `pytest tests/ -q` → **1270 passed / 16 skipped / 0 failed**（514.45，09:05:25，退 0）。
+  （上一基线 1259/1268 → 本批 **+2 条 / 两个口径同增**，分布用**绝对基准**：
+  `for f in $(git diff --name-only a3260fb..HEAD -- tests/); do echo "$f $(git show a3260fb:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_sector_gap_fill.py 24 → 26`（尺子形状表 + 四档全 0 那一格），`test_mutation_lock.py 13 → 13`
+  （⑥ 是**改契约**，不增条数）。名单对表（防 ⑧ 那种吞行）：
+  `diff <(git show a3260fb:tests/unit/test_sector_gap_fill.py | grep "^def test_" | sed "s/(.*//") <(grep "^def test_" tests/unit/test_sector_gap_fill.py | sed "s/(.*//")`
+  ⇒ 只应出现两行 `>`。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` → **55 处全 RED、退 0**
+  （CONTROL-GREEN = 8 个判据文件在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL /
+  无 `[还原失败]`；跑完 `git status --porcelain -- src/ web/ tests/ scripts/` 为空）。
+  首行逐字 `# run @ 2026-09-29T09:05:25+08:00  git=6bc76530ad8e  worktree=clean  python=3.12.10  共 55 处变异 / 8 个判据文件`。本批新落的两处（M53 / M54）与换锚点的两处（M29 / M43，`own_answer` → `kind`）
+  都**单独**跑过（`--only` 各一次）⇒ 先 CONTROL-GREEN 再 RED；M50 / M51 也各自单独跑过。
+  ⚠ **原始日志此刻只在 `data/_review_tmp/`（整目录不入库）** ⇒ 这句不写成"随仓库走"；
+  下一批要引用必须先 `git add` 进 `docs/迭代计划/run-20260927-mutation/` 并用 `git ls-files` 核。
+  变异（前端）：`python scripts/mutation_proof_frontend.py` → **141 处全 RED、退 0**，
+  首行逐字 `# run @ 2026-09-29T09:15:17+08:00  git=6bc76530ad8e  worktree=clean  python=3.12.10  共 141 处变异 / 3 个判据文件`（本批没改 `web/` ⇒ 这一轮是**回归跑**，用来确认那 141 处仍然逐条有牙）。
+  `audit_doc_claims.py` → 退 **0**（`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`）。
+  **镜像此刻**（只出计划不写库：`python scripts/close_unknowable_predictions.py`，退 0）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`。
+  **现数账**（08:4x，只读；镜像 dry-run 预览 + 生产同一把尺子）：补标那一路
+  `would_update 28 / kept 481 给得出 + 155 还没到期 + 0 库里没净值 + 0 说不清起点 / via_planned 0 /
+  带结论 21 / 被拦 1`、`fillable 49`、`to_fill 0`；无映射那一面生产 `73 / 43 / 394 / 287 / 0 / 5 / 282`
+  （两条命令都在 `docs/模块总览/板块与基金匹配.md` 末尾，日期现算）。
+  线上跑的哪一版：**没变** —— 本批未推（74 < 75），`origin/main` 仍是 `c408dcd`。
+
+**门禁一句**：第 69 轮 **74 < 75** ⇒ 本批（`6bc7653` + 这一笔文档）都不推；
+先拿一份**新的**独立复评，≥75 才推，推之后再走 #160 那五步
+（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）。
+
+（上一批：2026-09-29 07:36（北京），**任务 #163：第 68 轮复评 71/100 返修收口 —— 两条是文本账、
 一条是"三档放行行被并成两句话"；返修途中我自己造出一句"同一批数说两遍"（由现读的真预览回执抓到），
 另撞到体检工具自己身上的一处洞（陈旧 `.pyc`），那一条是它自己的 CONTROL 拦下的**——条目号取自第 68 轮报告，
 正文不随仓库走，下面按**修法**记）：
