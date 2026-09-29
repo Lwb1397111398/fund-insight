@@ -318,9 +318,11 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 `python scripts/mutation_proof_frontend.py --list` 末行，今天印「共 147 处变异，覆盖 55 条判据」）
 ⇒ "前端体检全绿"这句话本批**没有凭据**，上一批那次才是它的数据源。
 
-② ⚠⚠ **「改完就自愈」是假话：代码只修未来的行。** 存量那批一行都没被动过 —— 2026-09-30 现读
-**两库逐字同数**（`total 489 / soft 418 / no_deadline 418 / no_stamp 18 / rejected 18 /
-rejected_no_stamp 18`）：复核
+② ⚠⚠ **「改完就自愈」是假话：代码只修未来的行。** 存量那批一行都没被动过 —— 2026-09-30 03:3x（北京）
+**两半各现跑一次、逐字同数**（镜像那半不带旗子、生产那半带 `--production` 走只读门；
+上一批这里只有镜像那半有凭据，生产那一半是"复评席不许跑、也没标谁跑过"，本批补齐）：
+`total 489 / soft 418 / no_deadline 418 / no_stamp 18 / rejected 18 /
+rejected_no_stamp 18`：复核
 `python scripts/q.py [--production] "select count(*) total, count(*) filter (where is_deleted) soft,
 count(*) filter (where is_deleted and restore_before is null) no_deadline,
 count(*) filter (where is_deleted and deleted_at is null) no_stamp,
@@ -330,15 +332,24 @@ rejected_no_stamp from viewpoints"`。
 ⇒ 存量那一次单独的写**还没做**（#142 的第二半：默认 dry-run、先出逐行清单给老板过目、
 `--apply --confirm` + 备份 + 逐行回执 + `--restore-from`，仿 `scripts/close_unknowable_predictions.py`，
 并且要它自己的守卫用例/行为判据/变异/再一轮基线 —— 本批决定不加，见 ⑥）。
-⚠ **本批未推 ⇒ 生产上连"未来的行"也还不写**（`origin/main` 现读仍是 `3fd79c6`；
-本地领先几笔**别在这里抄** —— 写下这一句时本批那一笔刚落地，数会跟着提交动，
-复核 `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`）。
+⚠ **这一批的两句"还没推"都已作废（2026-09-30 03:3x 现读部署回执）**：`0dcad15`（= `93d9fd9` 代码半 +
+这一笔文档收口）已推已部署 —— `GET /api/health/detail`（带口令）自报 `git_commit=0dcad1523b0c`、
+`started_at=2026-09-30T03:35:05+08:00`、`scheduler_running=false`（老板预期值）。
+**页面 md5 这一格本批不区分部署**：没改 `web/` ⇒ 线上 / `git show HEAD:web/index.html`（LF 归一）
+两边都是 `fd901a776a7c513e3bb1547672d4aa0d`，判"上线了没"只看 `git_commit`。
+⇒ 生产上"未来的拒绝行"从此会带上那一对戳；**存量的 18 行仍然一行没动**（两半现数都是
+`rejected_no_stamp 18`）。本地领先笔数**别在这里抄**，复核
+`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`。
 
-③ **诚实的增量账，并且先记我自己那处基准错**：上一基线 **1278/1287**（第 74 轮，绝对基准提交
-`3fd79c6`）→ 本批 **1280/1289** ⇒ **+2 条 / 两个口径同增**，分布用
-`for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+③ **诚实的增量账，并且先记我自己那处基准错（第 75 轮 MAJOR-1，同族第二次复发）**：上一基线
+**1278/1287**（第 74 轮，绝对基准提交 `3fd79c6`）→ 本批 **1280/1289** ⇒ **+2 条 / 两个口径同增**，分布用
+`for f in $(git diff --name-only 3fd79c6 HEAD -- tests/); do echo "$f $(git show 3fd79c6:$f | grep -c '^def test_') -> $(git show HEAD:$f | grep -c '^def test_')"; done`
 ⇒ `test_viewpoint_refactor.py 37 → 39`（两条新行为判据）、`test_one_ruler_per_question.py 5 → 5`
-（**改契约**：登记表 + 来路逐个核，不增条数）。`^def test_` 数的是函数条数，基线数的是 pytest 收集数
+（**改契约**：登记表 + 来路逐个核，不增条数）。
+⚠ **这一段原来写的是 `git diff --name-only HEAD -- tests/`**：在 HEAD 干净的树上它**一个字都不印**，
+而它声称印 `37 → 39 / 5 → 5` ⇒ 它自己就是本批第二笔提交要收口的那族基准（相对 HEAD 的 diff 会被
+写下它的那一笔顶掉，第 69 轮 MAJOR-2 已记过一次）。基准必须钉**绝对提交**。
+`^def test_` 数的是函数条数，基线数的是 pytest 收集数
 （参数化会展开）⇒ 两个口径不许互相验证。
 ⚠ **本批我先做错了一次**：拿 `2e57db0`（压缩上下文里那个旧 HEAD）当绝对基准量出 `+18`，
 对不上 1261→1280 的 +19 —— 根因是 HEAD 已被第 71~74 轮推到 `3fd79c6`，我引用了上下文里的过期值。
@@ -364,6 +375,41 @@ rejected_no_stamp from viewpoints"`。
 不写库）退 **2**（那是设计值）⇒ `[计划] 到期未判里可以判定"永远问不出来"的：6 条；仍在等的：15 条`
 （上一批同一条命令印 `0 / 18`）。那 6 条是 `2304/2243/2303/2629/2915`（压在 `515440`）+ `3076`（`158038`），
 真执行走 `--apply --confirm CLOSE-UNVERIFIABLE`（有备份与 `--restore-from`）；生产侧同类关闭仍是老板决定项。
+
+⑦ **第 75 轮独立复评 87/100（0 BLOCKER / 1 MAJOR / 3 MINOR）⇒ 过 75 这条线，本批已推已部署**。
+推送凭据只有一条（`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`
+现读为 **0**）：`GET /api/health/detail`（带 `X-Access-Password`）自报
+`git_commit=0dcad1523b0c`、`started_at=2026-09-30T03:35:05.520547+08:00`、`scheduler_running=false`
+（老板 09-27 起就按这个预期值在看，不是回归）。⚠ **页面 md5 不是这一笔的凭据**：本批 `web/` 一个字没动 ⇒
+线上 / `git show HEAD:web/index.html` / 上一版三方**逐字节相同**（LF 归一后
+`fd901a776a7c513e3bb1547672d4aa0d`），md5 相同只能证明"没换页面"，证明不了"新代码到了"。
+上线后只读复看（同一把尺子，数每天在动，别抄文本）：`GET /api/stats/evidence` 回
+`as_of=2026-09-30 / nav_as_of=2026-09-28 / nav_lag_days=2 / 已判 1207 / 判对 644`，
+`GET /api/predictions?lifecycle=due|unverifiable|all` 的 `meta.total` = **15 / 0 / 1601**。
+
+**四条的处置，按修法记（报告正文不随仓库走）**：
+⑴ **MAJOR-1**：上面 ③ 那笔基准错 —— 我把自己刚写下的那条"分布"命令的相对基准收掉了。已改**绝对提交**
+并当场跑过（今天逐字印 `test_viewpoint_refactor.py 37 -> 39`、`test_one_ruler_per_question.py 5 -> 5`）。
+⑵ **MINOR-3**：那句"两库逐字同数"原来只有镜像那一半有凭据。已把两半**各现跑一次**
+（镜像不带旗子、生产带 `--production` 走只读门，回执第一行自报
+`[guard] 探针写临时表被数据库拒绝 ⇒ 这条连接确实只读`），两边都印
+`total 489 / soft 418 / no_deadline 418 / no_stamp 18 / rejected 18 / rejected_no_stamp 18`
+⇒ 那 18 行存量在**两个库**都还一行没动（这句话与 ② 段"代码只修未来的行"是同一件事的两半）。
+⑶ **MINOR-1**（观点侧那条"保留窗口"的两面钟）不单独动，**并进 #145** 那一批北京钟执行（改哪一把都会同时
+动"哪些行还算在窗口内"与"三桶清哪些行"，一处一处漂正是本仓反复扣分的形状）。
+⑷ **MINOR-2**（本批**没修**，理由要写清）：`tests/unit/test_viewpoint_refactor.py:658` 那句
+`restore_before == deleted_at.date() + timedelta(days=策略天数)` 在默认策略下两边都是 **30** ⇒
+它分不清"写死 30"与"跟着策略"，真正有牙的是 `:711` 那一格（把策略 monkeypatch 成 47）。
+本批不为一处判据重开基线（改判据文件也要重跑两个口径 + 全套体检，而 9 个转的预算要留给 #142 那条产品尾巴）
+⇒ 修法与 #142 那一批一起做，并走复评席给的那条便宜路：搬 `:683` 的夹具形状、把 M71 的载荷挪进收口脚本，
+一个脚本 + 一条行为判据 + 一处变异，不新立判据文件。
+⑸ **我自己抓到、不在评审清单里的一条（#169）**：四处写着"生产容器在 UTC 时恢复窗口今天就在**提前一天**关"，
+**方向是反的** —— UTC 容器里 `date.today()` 在北京 00:00~08:00 比北京日**小一天**，而
+`retention_cleanup_service.py:447` 比的是 `restore_before >= self.today`，右边变小 ⇒ 条件**更容易成立**
+⇒ 窗口**晚一天关＝保护多留一天**。AGENTS 三处 + `docs/模块总览/预测验证与准确率统计.md:218` 已按实测改，
+并留一条不连库就能复现的证明：
+`python -c "from datetime import date; rb=date(2026,9,29); print('北京口径 保护:',rb>=date(2026,9,30),' 墙钟(UTC)口径 保护:',rb>=date(2026,9,29))"`
+⇒ 逐字 `北京口径 保护: False  墙钟(UTC)口径 保护: True`。
 
 最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
 不起任何长任务；五步串成一条链 `data/_review_tmp/r70b-chain.sh`，逐步记时刻与退码，
@@ -1739,7 +1785,10 @@ python scripts/q.py --production "select nav_date, count(distinct fund_code) fun
 而这把 `build_plan` 背后的执行器已永久下线（`HARD_DELETE_DISABLED = True` :46、`execute()` 起手 raise、路由回 403）
 ⇒ 补列能改**页面上那个数**，改不了**会不会被删**。两处文字已按这一分裂重写，#142 的立论跟着换。
 ⚠ 由这一分裂又量出两件新账写进 §2d：`:447` 那个窗口用的是**墙钟**（`:157 self.today = today or date.today()`）
-⇒ 生产容器在 UTC 时恢复窗口今天就在**提前一天**关（#145 落在这一列上）；以及"那 18 行永远进不了清理桶"
+⇒ 生产容器在 UTC 时恢复窗口今天就在**晚一天关（多保护一天，不是少保护）**（#145 落在这一列上；
+⚠ 上一版这里写的"提前一天"方向是**反的** —— 任务 #169：`date.today()` 在 UTC 容器里比北京日**小**一天，
+而 `:447` 比的是 `restore_before >= self.today` ⇒ 减的那一侧变小、条件**更容易成立**、保护多留一天）；
+以及"那 18 行永远进不了清理桶"
 说的是**今天**，它靠的是那把旗 = True —— `scheduler.py:183` 的 import 排在 `:172` 的 return **之后**，而
 `cleanup_tasks.py:122` 那把旧尺子按 `viewpoint_date` 删、`is_deleted` 与 `deleted_at` 一个字都不看
 ⇒ 旗一放就是另一件事（条目 18，这层前提现已写进 §2d）。
@@ -1842,7 +1891,9 @@ python scripts/q.py --production "select nav_date, count(distinct fund_code) fun
 那一把（`retention_three_buckets.py:584/592`）只比 `deleted_at < cutoff`、一个字都不看那一列，
 加上旧执行器永久下线 ⇒ 补列能改**页面上那个数**，改不了**会不会被删**。
 ⚠ 而 :447 那个窗口用的是**墙钟**（`:157 self.today = today or date.today()`）⇒ 生产容器在 UTC
-时它今天就在**提前一天**关（这正是 #145 那件事落在这一列上，第 60 轮 BLOCKER 的另一半）。
+时它今天就在**晚一天关（保护多留一天）**（这正是 #145 那件事落在这一列上，第 60 轮 BLOCKER 的另一半。
+⚠ **这里原来写的是"提前一天"，方向反了** —— 见上面 #169 那条：UTC 容器的 `date.today()` 比北京日小一天，
+而 `restore_before >= self.today` 的减侧变小 ⇒ 条件更容易成立）。
 ② **归档那把尺子对"整包摊进构造函数"失明，而且有活的对应物**（M-2）：
 `Model(**{'deleted_at': …})` / `Model(**payload)` 实测都回 `[]`（第 56 轮 m-3 为 **NAV** 那把
 补过同一族，归档这把没接）。现在 `_splat_dicts` 认两档来路（字面量 / 一跳变量），**并且不要求**
@@ -1972,8 +2023,9 @@ count(*) filter (where is_deleted and analysis_summary like 'rejected:%') reject
 `retention_cleanup_service.py:443/447` **就在读它**，并且那条链是活的（`build_plan()` →
 `config.py:333 GET /api/config/cleanup/preview` → `web/index.html:2549`）⇒ 补那一列**会**把行
 从"候选"挪进 `protected_counts`、那个数在页面上看得见。正确的分裂是"**预览保护得到、真删保护不到**"，
-不是"这一列没人读"。详见上面 #143 那一段 ① 的 ⚠⚠ 块（同一处还写着墙钟那把今天就在提前一天关这个窗，
-⇒ #145）。
+不是"这一列没人读"。详见上面 #143 那一段 ① 的 ⚠⚠ 块（同一处还写着墙钟那把今天就在**提前一天**关这个窗，
+⇒ #145。⚠ **那句方向是反的，第 75 轮按实测更正为"晚一天关＝保护多留一天"**，
+理由与命令见上面 #169 那一条），
 **教训写给下一轮的我**：驳回别人的话之前，先按同一把尺子自己现读一遍代码 —— 这一批两句"更正"
 全是没核就写，与第 47 轮那次"凭印象重列评审条目"同族；**而"我更正一下"本身也是一句要被现读的断言**
 （第 59 轮 M-1 就是这句更正里又犯的同一个错，连着两版）。
