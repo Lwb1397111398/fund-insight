@@ -388,26 +388,13 @@ def _three_bucket_preview_payload(db: Session) -> dict:
     }
 
 
-_RECLAIM_SKIP_SENTENCES = {
-    "ENABLE_SPACE_RECLAIM=false": "空间回收没跑：回收开关（ENABLE_SPACE_RECLAIM）是关着的",
-    "no_tables": "空间回收没跑：这次没有要回收的表",
-    "in_memory_database": "空间回收没跑：内存数据库没有磁盘文件可回收",
-}
-
-
-def _reclaim_skip_sentence(reason: str) -> str:
-    if reason.startswith("unsupported_dialect:"):
-        return f"空间回收没跑：{reason.split(':', 1)[1]} 这种数据库暂不支持回收"
-    return _RECLAIM_SKIP_SENTENCES.get(reason, f"空间回收没跑：{reason}")
-
-
 @router.post("/cleanup/reclaim-space")
 def reclaim_database_space(request: Request, db: Session = Depends(get_db)):
     """单独对大表回收磁盘空间（Postgres VACUUM FULL / SQLite VACUUM）。
 
     用于「之前已经删过但空间没还」的情况；本身不删任何数据。
     """
-    from src.services.db_space import failure_detail, format_bytes, reclaim_space
+    from src.services.db_space import failure_detail, format_bytes, reclaim_space, skip_detail
     from src.services.retention_three_buckets import ThreeBucketRetentionService
 
     _require_destructive_cleanup(request)
@@ -425,7 +412,7 @@ def reclaim_database_space(request: Request, db: Session = Depends(get_db)):
         return {
             "success": False,
             "skipped": True,
-            "message": _reclaim_skip_sentence(str(result.get("reason") or "")),
+            "message": skip_detail(result),
             "data": result,
         }
     if not result.get("success", False):

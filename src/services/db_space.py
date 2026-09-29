@@ -56,6 +56,35 @@ def failure_detail(result: Dict) -> str:
     return "; ".join(failing) or "数据库没给出原因"
 
 
+# 「这次没跑」那句人话也只有一个家，和上面那把尺子并排放。以前它写在路由里
+# （`_RECLAIM_SKIP_SENTENCES`），于是同一个 `no_tables` 在独立按钮那一路是人话、
+# 在清理任务那一路被原样搬上屏幕 —— 同一件事两个口径。
+_SKIP_SENTENCES = {
+    "ENABLE_SPACE_RECLAIM=false": "空间回收没跑：回收开关（ENABLE_SPACE_RECLAIM）是关着的",
+    "no_tables": "空间回收没跑：这次没有要回收的表",
+    "in_memory_database": "空间回收没跑：内存数据库没有磁盘文件可回收",
+}
+
+
+def skip_detail(result: Dict) -> str:
+    """「没跑」时页面上要出现的那句话，全仓只在这里拼一次。"""
+    reason = str(result.get("reason") or "")
+    if reason.startswith("unsupported_dialect:"):
+        return f"空间回收没跑：{reason.split(':', 1)[1]} 这种数据库暂不支持回收"
+    return _SKIP_SENTENCES.get(reason, f"空间回收没跑：{reason}")
+
+
+def _skipped(reason: str, tables: Optional[Dict] = None, **extra) -> Dict:
+    """所有「没跑」的出口都从这一处出 —— 那句人话因此不可能漏。
+
+    `reason` 是给机器看的键，`reason_text` 是给页面看的话：两格都在，
+    消费方（路由回执 / 页面上那一栏）读同一格，谁也不许自己翻译一遍。
+    """
+    result: Dict = {"skipped": True, "reason": reason, "tables": tables or {}, **extra}
+    result["reason_text"] = skip_detail(result)
+    return result
+
+
 def reclaim_space(
     db: Session,
     tables: Sequence[str],
@@ -70,14 +99,14 @@ def reclaim_space(
         force_full: None=按行数自动决定；True/False=强制
     """
     if not space_reclaim_enabled():
-        return {"skipped": True, "reason": "ENABLE_SPACE_RECLAIM=false", "tables": {}}
+        return _skipped("ENABLE_SPACE_RECLAIM=false")
 
     unique_tables = [t for t in dict.fromkeys(tables) if t]
     unsafe = [t for t in unique_tables if not _SAFE_TABLE.match(t)]
     if unsafe:
         raise ValueError(f"unsafe table names for vacuum: {unsafe}")
     if not unique_tables:
-        return {"skipped": True, "reason": "no_tables", "tables": {}}
+        return _skipped("no_tables")
 
     bind = db.get_bind()
     dialect = bind.dialect.name
@@ -90,7 +119,7 @@ def reclaim_space(
         return _vacuum_sqlite(bind, unique_tables)
     if dialect in ("postgresql", "postgres"):
         return _vacuum_postgres(bind, unique_tables, force_full=force_full)
-    return {"skipped": True, "reason": f"unsupported_dialect:{dialect}", "tables": {}}
+    return _skipped(f"unsupported_dialect:{dialect}")
 
 
 def _vacuum_sqlite(bind, tables: List[str]) -> Dict:
@@ -106,13 +135,12 @@ def _vacuum_sqlite(bind, tables: List[str]) -> Dict:
     database = getattr(url, "database", None)
     if not database or database == ":memory:":
         # 一个"没跑"的结果不许同时带 success —— 那是两句互相打脸的话。
-        return {
-            "dialect": "sqlite",
-            "mode": "database",
-            "skipped": True,
-            "reason": "in_memory_database",
-            "tables": {t: "database-wide" for t in tables},
-        }
+        return _skipped(
+            "in_memory_database",
+            {t: "database-wide" for t in tables},
+            dialect="sqlite",
+            mode="database",
+        )
     engine = None
     before = after = None
     try:

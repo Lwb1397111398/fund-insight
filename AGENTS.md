@@ -311,25 +311,34 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 `tests/unit/test_retention_cleanup_api.py` 当场点红，并且断
 `"fund_history：" not in first["message"]`（**路由那句里不许再出现逐表那一串** ⇒ 两处措辞结构上不可能漂开）；
 配套 **M65** `the_route_stops_asking_the_shared_ruler`、**M67** `the_shared_ruler_ignores_what_the_database_gave`。
-③ **页面那一路以前只看 `message`**：`reclaimResult(reclaim)`（`web/index.html:2831+`）现在交**五种结局各说各话**——
+③ **页面那一路以前只看 `message`**：`reclaimResult(reclaim)`（`web/index.html:2836`）现在交
+**四种可达结局各说各话 + 一支今天走不到的兜底**（第 72 轮 M-1）——
 没执行（清理压根没删行 / 回收没开）/ 没跑（`skipped`，带逐原因话术）/ 没跑成（`success:false`，带原因）/
-**回执里没写成没成 ⇒ 不敢算已完成** / 跑完了（再分"释放 N"与"本次没测得可释放的空间"）。
-`skipped` 与 `success:true` 永不并见。逐原因话术在 `src/api/routes/config.py` 的
-`_RECLAIM_SKIP_SENTENCES` + `_reclaim_skip_sentence(reason)`（含 `unsupported_dialect:<x>` 那一档：
-不同方言各说一句，不许并成"这次没回收"）。
+跑完了（再分"释放 N"与"本次没测得可释放的空间"），另有一支**回执既不配 `skipped` 也不配 `success`** ⇒
+「不敢算已完成」：服务层每一路都留了旗标，所以这一支今天走不到，它管的是"以后加了一路忘了留旗标"。
+`skipped` 与 `success:true` 永不并见。**"没跑"那句话在全仓只有一个家**：`src/services/db_space.skip_detail(result)`
+（含 `unsupported_dialect:<x>` 那一档：不同方言各说一句、并说出是**哪个方言**，不许并成"这次没回收"）。
+⚠ 上一版在这里写的是「逐原因话术在 `src/api/routes/config.py` 的 `_RECLAIM_SKIP_SENTENCES` +
+`_reclaim_skip_sentence(reason)`」—— **那正是第 72 轮 M-2 拆掉的第二个家**：同一个 `no_tables` 在独立按钮
+那一路是人话、在清理任务那一路被原样搬上屏幕（一把尺子两处结局）。现在那份字典与函数已删，
+路由与页面读的都是服务交回的同一格 `reason_text`（判据 + 变异 M68/M69/M70，见下面 ⑤）。
 ④ **"崩在半路"从哑巴变成一句话**：`retention_three_buckets.CleanupInterrupted`（`:58`）带
 「清理中断：已经删掉 N 行（各桶数），剩下的没有动。原因：…」；级联计数器在放弃时清空 ⇒
 页面上不会出现"删了 0 行"与"中断"同时成立。变异 **M59/M60/M61** 钉这一族的台账
 （中断台账不许写、数的是计划而不是已提交、异常不许丢掉已提交数）。
 ⑤ **判据与变异**：`test_db_space.py` 8→**10**、`test_retention_cleanup_api.py` 17→**21**、
 `test_retention_three_buckets.py` 18→**22**、`test_frontend_cold_start.py` 52→**55**
-（最后那份在 node 里跑页面**真源码**、喂六种回执形状，不是 grep 文本）。分布复核用**绝对提交**：
+（最后那份在 node 里跑页面**真源码**、喂七种回执形状，不是 grep 文本）。分布复核用**绝对提交**：
 `for f in $(git diff --name-only 2e57db0..HEAD -- tests/); do echo "$f $(git show 2e57db0:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
 ⇒ 四个文件、净 **+13**，与两个口径的收集数增量同数。**这不等于它们是一个口径**——
 本批无参数化才恰好一致，别拿一个去验另一个（第 67 轮那一族）。
 本批新落九处（M59~M67）在**全套**里逐条跑到 RED，归档日志每条各出现一次且只一次（复核
-`grep -c "^M66.*RED" docs/迭代计划/run-20260927-mutation/round71-lifecycle-mutations.txt` ⇒ 1）；
-⚠ 这一批**没有**再各自单独 `--only` 复跑（第 69/70 轮那种单跑），全套的 CONTROL-GREEN 已覆盖它们。
+`grep -c "^M66.*RED" docs/迭代计划/run-20260927-mutation/round71-lifecycle-mutations.txt` ⇒ 1）。
+⚠ **上一版在这里还写「这一批没有再各自单独 `--only` 复跑」，而 `3c5cac0` 的提交说明第 24 行写的是
+「已单独 `--only` 逐条跑过」——同一批两处互相矛盾（第 72 轮 C15），而两边都不是现在能复核的话**。
+所以这一格从现在起只留**能被命令驳回的那半句**（每条在归档日志里各出现一次且只一次），
+另一半按本轮的做法执行：**本批新落的五处（M68/M69/M70 + 前端两处）逐条 `--only` 单跑，
+先 CONTROL-GREEN 再 RED**，那九处不追溯宣称"单跑过"。
 
 ⚠ **本批改了 `web/` ⇒ 前端那把体检是真重跑，不是回归蹭数**：**144 处全 RED / 3 个判据文件**
 （上一批 141 处）。
@@ -362,8 +371,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   那一把重问锁（2304/2243/2303/2629/2915 挂在 `515440`、3076 挂在 `158038`）、**6** 条"源端这段给了
   1~63 条 ⇒ 是本地没补到"（1669/1709/3099/3126/3178/1301）。数一律现跑，别抄）。
   **线上跑的哪一版**（现读，两个口径互不替代）：
-  `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD` ⇒ 本地领先 **1 笔**
-  （`origin/main = adae245f655b`，`HEAD = 3c5cac0e69b2`）；`GET /api/health/detail`（带口令）现读自报
+  `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD` ⇒ **数现跑，别在这里抄**
+  （写下这一句的那一批当时是 `origin/main = adae245f655b`、`HEAD = 3c5cac0e69b2`；第 72 轮返修又落了几笔，
+  这个"领先几笔"会被写它的那一笔顶掉 —— 与同段 T-3 记的是同一条规矩，这次轮到我自己在同一批里再犯一次）；`GET /api/health/detail`（带口令）现读自报
   `git_commit=adae245f655b`、`started_at=2026-09-29T20:31:39+08:00`、**`scheduler_running: false`**
   ⇒ **#132 那件事一个字没变**（"每天必须打开一次网站"仍是产品前提）。
   ⇒ **`3c5cac0`（#158 这一路）还没上线**；`adae245` **含** #157 板块补标那一路
@@ -384,9 +394,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 （`web/index.html:62` → `loadView('cleanup')` ⇒ **不是配置 tab**，我第一版点错了一次），
 点「回收磁盘空间」、确认对话框 accept，屏上逐字读到
 `空间回收完成，释放 280.0 KB`、无 `text-danger` ⇒ **独立回收那一路的成功分支真在浏览器里看过**。
-⚠ **没演出来的三格按能到的范围说，不替它们作保**：① 清理任务里那五种结局（`reclaimResult` 是
-`setup()` 之外的模块级函数、**没导出** ⇒ 真浏览器里结构上叫不到它，那一格由
-`test_frontend_cold_start.py` 那份 node 判据（跑页面真源码、喂六种回执）+ M59~M67 负责）；
+⚠ **没演出来的三格按能到的范围说，不替它们作保**：① 清理任务里那几种结局（第 72 轮 C 项更正了原因：
+`reclaimResult` **确实在 `setup()` 里**（定义 `:2836`、被 `:3117` 那处轮询调用，而 `setup()` 是 2123~3572），
+上一版说它是"`setup()` 之外的模块级函数"是**错的** —— 真浏览器里叫不到它的理由是**它没进 `setup()` 的
+return 名单**（`:3538` 那一段导出的是 `reclaimSpace` / `spaceReclaimResult`，没有 `reclaimResult`），
+所以页面模板拿不到它、只有 setup 内部用它算出的结果 ⇒ 那一格由
+`test_frontend_cold_start.py` 那份 node 判据（跑页面真源码、喂七种回执）+ M59~M70 负责）；
 ② "崩在半路"那一格（要真造一次中断）；③ 我没点「执行清理」——镜像那份预览要硬删 **7056 行**
 （回收站预测 425 / 回收站观点 75 / 过期净值 6556，已触达单次上限），那是不可逆写，不在"看一眼页面"的授权范围里。
 
@@ -668,6 +681,10 @@ PG 整条命令写进 `docs/模块总览/板块与基金匹配.md`；生产现�
 一个字不做。补标那一路**今天**真会动的：镜像 dry-run `predictions_via_gap_fill_planned = 0`
 （`sectors_to_fill = []`），生产 1 条（id 2695）⇒ 今天的暴露面是个位数，不许写成 180/287（MAJOR-2：
 上一版说"这一档在生产更大"却没给生产侧的数，而镜像同形反向指向"大概率也是 0"）。
+⚠ **这三个键不是一个口径，别混用**（第 72 轮 MINOR）：`sectors_to_fill` / `sectors_fillable`
+是**计划与答得出的板块列表**（`prediction_maintenance_service.py:550/554`），`sectors_filled`
+才是**真建/改了几块的计数**（`:595` 的 `len(gap_used)`）⇒ 要报"补了几块"只看 `sectors_filled`，
+`sectors_to_fill` 为空只说明这一趟没放行进计划，两者形状不同、数也不同。
 现在 `sync_sector_mappings` 按**板块**（不按预测）走既有的
 `get_fund_for_sector`，过三道本库现读的门（内置表答得出 / 有 `fund_info` 档案 / 至少一笔净值）后
 **建或改那一行映射**，再由整条链上原有的 `calendar_gap` 逐条判证据、`retag_prediction` 落台账 ——
@@ -862,7 +879,8 @@ early return 之后 ⇒ 全套件没有任何一条用例走到"板块可补、�
   没有改变镜像上这一档的覆盖面（636 条放行行里 481 条自己那只标的就给得出这段窗口的净值，
   另外 155 条**只是还没到期** —— 第 67 轮 MAJOR-8 拆的那两档；第三档 `unknown`（起点说不清 /
   库里一笔净值都没有）今天 0 条，第 68 轮 MINOR-1 已给它单独一句话与一条判据）。
-  ⚠ **同一趟现读还量出一件本批最该说出口的事**：加门之后镜像上 `sectors_to_fill` 是**空列表**、
+  ⚠ **同一趟现读还量出一件本批最该说出口的事**：加门之后镜像上 `sectors_to_fill` 是**空列表**（这里说的
+  是计划列表，不是计数 —— 计数那个键叫 `sectors_filled`，见上面 ① 那段），
   `predictions_via_gap_fill_planned = 0` ⇒ **这一档在镜像今天一条都不动**（59 个板块没有可用映射行、
   其中 49 个内置表答得出标的，可它们身上的预测**没有一条是"用自己那只标的问不出这段窗口"的**
   ⇒ 那道门一条都不放。放行那 636 条分三档：**481 条自己就给得出、155 条只是还没到期、

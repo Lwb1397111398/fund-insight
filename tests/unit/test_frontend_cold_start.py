@@ -2403,7 +2403,7 @@ const axios = { post: async () => {
 
 
 def test_the_delete_receipt_says_what_happened_to_the_disk_space():
-    """删完数据那一句回执里，「空间回收」这一步有五种结局，各说各话（#158 §B）。
+    """删完数据那一句回执里，「空间回收」这一步有四种可达结局（另有一支今天走不到的兜底），各说各话（#158 §B / 第 72 轮 M-1）。
 
     上一版只有一句 `空间回收已执行` —— 而 `retention_three_buckets.py:488` 写的是
     `if reclaim_space and total_deleted:` ⇒ **一条都没删掉时那个键根本不存在**，
@@ -2415,7 +2415,9 @@ def test_the_delete_receipt_says_what_happened_to_the_disk_space():
     现在服务在交回结果前把那句话**也算到顶层** ⇒ 页面只读 `reclaim.error` 一个槽位，
     两种方言同一条腿同一种待遇（上一版它对 PG 是结构性失明的：数据库答了、页面上问不出来）。
     判据跑**真的 `cleanupData`**（连同真的 `pollCleanupTask`、`reclaimResult`、`formatBytes`），
-    桩里那六个形状逐键来自 `src/services/db_space.py` 的真返回。
+    桩里那七个形状逐键来自 `src/services/db_space.py` 的真返回。第 72 轮 M-1 补的是 `noflag`：
+    回执既不配 `skipped` 也不配 `success` ⇒ 今天走不到（服务层每一路都留了旗标），
+    它管的是"以后加了一路忘了留旗标"那种回执——既不配"没跑"也不配"已完成"。
     """
     html = _html()
     out = _run_chain_js(
@@ -2436,7 +2438,7 @@ const probe = async (shape) => {
 };
 (async () => {
     const r = {};
-    for (const s of ['nokey', 'skipped', 'failed', 'pgfailed', 'freed', 'zerofreed']) r[s] = await probe(s);
+    for (const s of ['nokey', 'skipped', 'noflag', 'failed', 'pgfailed', 'freed', 'zerofreed']) r[s] = await probe(s);
     console.log(JSON.stringify(r));
 })();
 """,
@@ -2453,7 +2455,10 @@ const fetchCleanupPreview = async () => {};
 const RET = {
   nokey: {total_rows_removed: 12, deleted_counts: {old_posts: 12}},
   skipped: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
-            space_reclaim: {skipped: true, reason: 'no_tables', tables: {}}},
+            space_reclaim: {skipped: true, reason: 'no_tables',
+                            reason_text: '空间回收没跑：这次没有要回收的表', tables: {}}},
+  noflag: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
+           space_reclaim: {mode: 'per-table', tables: {}}},
   failed: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
            space_reclaim: {success: false, error: 'database is locked', tables: {}}},
   pgfailed: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
@@ -2478,9 +2483,11 @@ const axios = {
     assert '没执行' in out['nokey']['text'], '一条都没删掉 ⇒ 那一栏不存在，回执必须说"这次没执行"'
     assert out['nokey']['failed'] is True
     assert '没跑' in out['skipped']['text'], out['skipped']
-    # 边界要说清：删除这一路页面把回执的 `reason` **原样**带出来（屏幕上会出现 `no_tables` 这种键名），
-    # 把它翻成人话的那份 `_reclaim_skip_sentence` 在 config.py 的路由里 —— 页面不许抄第二份
-    # （一把尺子两处结局），所以这里只判"没跑"两个字，不判它有没有被翻译。
+    # 第 72 轮 M-2 把这段翻了个面：给机器看的键**不许**上屏幕。服务层在每一个「没跑」出口
+    # 都盖了 `reason_text`（那句话说什么只有一个家：src/services/db_space.skip_detail），
+    # 页面与路由读的是同一格 —— 谁也不许自己翻译一遍，否则同一个 `no_tables` 会有两种口径。
+    assert '空间回收没跑：这次没有要回收的表' in out['skipped']['text'], out['skipped']
+    assert 'no_tables' not in out['skipped']['text'], '给机器看的键不许上屏幕'
     assert out['skipped']['failed'] is True, out['skipped']
     assert '已释放' not in out['skipped']['text'], out['skipped']
     assert out['failed']['failed'] is True, out['failed']
@@ -2501,6 +2508,15 @@ const axios = {
     assert '已释放 0 B' not in out['zerofreed']['text'], out['zerofreed']
     assert '没测得' in out['zerofreed']['text'], out['zerofreed']
     assert out['zerofreed']['failed'] is False, '跑完了、只是没测出可释放的空间 ⇒ 不是失败'
+
+    # M-1：那支"既不配没跑、也不配完成"的兜底以前零判据零变异 —— 摘掉它页面不会红。
+    # 它今天走不到（每一路都留了旗标），管的是以后加一路忘了留：那种回执不许被算成空间已还。
+    assert out['noflag']['failed'] is True, out['noflag']
+    assert '不敢算已完成' in out['noflag']['text'], out['noflag']
+    assert '已释放' not in out['noflag']['text'], out['noflag']
+    # 三种"空间没还"各说各话：这次没执行 / 没跑（带原因）/ 不敢算已完成
+    assert len({out['nokey']['text'], out['skipped']['text'], out['noflag']['text']}) == 3, \
+        (out['nokey'], out['skipped'], out['noflag'])
 
 
 def test_the_delete_confirmation_promises_only_what_the_backend_will_try():

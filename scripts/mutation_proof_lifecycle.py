@@ -462,6 +462,20 @@ MUTATIONS = [
      '    error = result.get("error")\n    if error:\n',
      '    error = result.get("error")\n    if False:\n',
      DB_SPACE_TESTS, 'test_the_failure_reason_has_one_home_and_prefers_what_the_database_gave'),
+    # M-2 那把尺子自己的三档（第 72 轮）：摘掉字典 ⇒ 键名搬上屏幕；不盖 reason_text ⇒
+    # 「没跑」的出口只剩键；路由自己再翻译一遍 ⇒ 同一个原因两处两种口径。
+    ('M68_the_skip_ruler_only_repeats_the_machine_key', DB_SPACE,
+     '    return _SKIP_SENTENCES.get(reason, f"空间回收没跑：{reason}")\n',
+     '    return f"空间回收没跑：{reason}"\n',
+     DB_SPACE_TESTS, 'test_every_skip_exit_says_its_reason_in_human_words'),
+    ('M69_the_skip_exit_stops_stamping_the_sentence', DB_SPACE,
+     '    result["reason_text"] = skip_detail(result)\n',
+     '    pass\n',
+     DB_SPACE_TESTS, 'test_every_skip_exit_says_its_reason_in_human_words'),
+    ('M70_the_route_translates_the_skip_key_a_second_time', CONFIG_ROUTES,
+     '            "message": skip_detail(result),\n',
+     '            "message": "空间回收没跑：" + str(result.get("reason")),\n',
+     CLEANUP_API_TESTS, 'test_a_reclaim_that_never_ran_is_never_reported_as_done'),
 ]
 
 

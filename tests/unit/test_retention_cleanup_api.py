@@ -610,10 +610,18 @@ def test_a_reclaim_that_never_ran_is_never_reported_as_done(monkeypatch, tmp_pat
 
     # ④ 方言不支持：两个库（sqlite / PostgreSQL）都是支持的，路由级走不到这一档，
     #    所以这一臂只钉那句话本身——它必须带出是哪个方言，不许退化成一句"没跑"。
-    sentence = config_routes._reclaim_skip_sentence("unsupported_dialect:mysql")
+    #    那句话的家在服务层（src/services.db_space.skip_detail），不在路由：两个消费方
+    #    （这句回执、页面上那一栏）读的是同一格，谁也不许自己翻译一遍。
+    from src.services.db_space import skip_detail
+
+    sentence = skip_detail({"reason": "unsupported_dialect:mysql"})
     assert "mysql" in sentence and "不支持" in sentence
     # 认不出的原因也不许静默变成空话
-    assert "没跑" in config_routes._reclaim_skip_sentence("因为某种别的原因")
+    assert "没跑" in skip_detail({"reason": "因为某种别的原因"})
+    # 搬家的另一半：路由里不许留第二份句子表，否则同一个 `no_tables` 又会有两种说法
+    assert not hasattr(config_routes, "_reclaim_skip_sentence")
+    with open(config_routes.__file__, encoding="utf-8") as fh:
+        assert "空间回收没跑" not in fh.read()
 
 
 def test_a_reclaim_the_database_refused_says_why(tmp_path, monkeypatch):

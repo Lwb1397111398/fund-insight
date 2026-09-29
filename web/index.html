@@ -2829,11 +2829,15 @@ const fetchWeChatBatch = async () => {
                     while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
                     return size.toFixed(1) + ' ' + units[i];
                 };
-                // 「空间回收」这一步有四种结局，各说各话：删数据成功了不等于空间还了。
+                // 「空间回收」这一步有四种可达结局，各说各话：删数据成功了不等于空间还了。
                 // 只认回执自己说的那一项（skipped / success），页面不许替它补一句好话。
+                // 最后那一支兜底今天走不到（服务层每一路都留了旗标），它管的是"以后加了新的一路
+                // 忘了留旗标"——那种回执既不配"没跑"也不配"完成"。
                 const reclaimResult = (reclaim) => {
                     if (!reclaim) return { ok: false, text: '空间回收：这次没执行（清理时没真删掉行，或回收没开）' };
-                    if (reclaim.skipped) return { ok: false, text: '空间回收：没跑 —— ' + (reclaim.reason || '数据库没给出原因') };
+                    // reason 是给机器看的键，reason_text 才是给人看的那句话（出处只有一处：
+                    // src/services/db_space.skip_detail）。这里读键就等于把 `no_tables` 搬上屏幕。
+                    if (reclaim.skipped) return { ok: false, text: '空间回收：没跑 —— ' + (reclaim.reason_text || '数据库没给出原因') };
                     if (reclaim.success === false) return { ok: false, text: '空间回收：没跑成 —— ' + (reclaim.error || '数据库没给出原因') };
                     if (!reclaim.success) return { ok: false, text: '空间回收：回执里没写成没成，不敢算已完成' };
                     const freed = reclaim.bytes_freed;
