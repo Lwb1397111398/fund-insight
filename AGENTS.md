@@ -294,7 +294,108 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-29 **10:4x（北京）**，**任务 #164：第 70 轮复评的三条（J-1 / J-2 / T-1+T-3）返修**
+最近一次核对（2026-09-29 **20:1x（北京）**，**任务 #158：「清理」那一步——删数据成功了 ≠ 空间还了 ≠ 全删完了**
+—— 老板那句"清理的信息只要点击相关按钮就行了，绝对不会造成其他问题"落到代码上是三件事：
+① 回执里的"成没成"不许靠 `message` 猜；② 回收失败要说出是**哪一种**失败；
+③ 那句失败的话在前后端**只许有一个家**。本批最重的两条都是产品行为（不是文字账），
+而且都属本仓反复扣分那一族：**同一件事两种待遇**。
+
+① **两处硬编码的"成功了"**（真缺陷）：`src/services/db_space.py` 的 sqlite 支与
+`_vacuum_postgres` 尾部都把结果直接标成成功 ⇒ "一条表都没碰""PG 只成了一半"这两种结局在页面上
+长成"已释放"。现在 sqlite 支按真值报；PG 支没成时回填 `payload["error"] = failure_detail(payload)`
+⇒ 路由只读那一份 error（变异 **M64** `the_pg_reason_stays_where_the_database_put_it`、
+**M62** `the_reclaim_success_flag_is_folded_with_skipped`、**M63** `the_reclaim_wrapper_swallows_and_still_says_done`）。
+② **失败那句话从此只有一个家**：新增 `db_space.failure_detail(result)`（优先顶层 `error`；
+否则把逐表失败并成人话；都没有 ⇒ "数据库没给出原因"）。路由以前自己拼一遍 ⇒ 变异 **M66**
+`the_route_derives_the_reason_a_second_time` 把路由改回自拼，判据
+`tests/unit/test_retention_cleanup_api.py` 当场点红，并且断
+`"fund_history：" not in first["message"]`（**路由那句里不许再出现逐表那一串** ⇒ 两处措辞结构上不可能漂开）；
+配套 **M65** `the_route_stops_asking_the_shared_ruler`、**M67** `the_shared_ruler_ignores_what_the_database_gave`。
+③ **页面那一路以前只看 `message`**：`reclaimResult(reclaim)`（`web/index.html:2831+`）现在交**五种结局各说各话**——
+没执行（清理压根没删行 / 回收没开）/ 没跑（`skipped`，带逐原因话术）/ 没跑成（`success:false`，带原因）/
+**回执里没写成没成 ⇒ 不敢算已完成** / 跑完了（再分"释放 N"与"本次没测得可释放的空间"）。
+`skipped` 与 `success:true` 永不并见。逐原因话术在 `src/api/routes/config.py` 的
+`_RECLAIM_SKIP_SENTENCES` + `_reclaim_skip_sentence(reason)`（含 `unsupported_dialect:<x>` 那一档：
+不同方言各说一句，不许并成"这次没回收"）。
+④ **"崩在半路"从哑巴变成一句话**：`retention_three_buckets.CleanupInterrupted`（`:58`）带
+「清理中断：已经删掉 N 行（各桶数），剩下的没有动。原因：…」；级联计数器在放弃时清空 ⇒
+页面上不会出现"删了 0 行"与"中断"同时成立。变异 **M59/M60/M61** 钉这一族的台账
+（中断台账不许写、数的是计划而不是已提交、异常不许丢掉已提交数）。
+⑤ **判据与变异**：`test_db_space.py` 8→**10**、`test_retention_cleanup_api.py` 17→**21**、
+`test_retention_three_buckets.py` 18→**22**、`test_frontend_cold_start.py` 52→**55**
+（最后那份在 node 里跑页面**真源码**、喂六种回执形状，不是 grep 文本）。分布复核用**绝对提交**：
+`for f in $(git diff --name-only 2e57db0..HEAD -- tests/); do echo "$f $(git show 2e57db0:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+⇒ 四个文件、净 **+13**，与两个口径的收集数增量同数。**这不等于它们是一个口径**——
+本批无参数化才恰好一致，别拿一个去验另一个（第 67 轮那一族）。
+本批新落九处（M59~M67）在**全套**里逐条跑到 RED，归档日志每条各出现一次且只一次（复核
+`grep -c "^M66.*RED" docs/迭代计划/run-20260927-mutation/round71-lifecycle-mutations.txt` ⇒ 1）；
+⚠ 这一批**没有**再各自单独 `--only` 复跑（第 69/70 轮那种单跑），全套的 CONTROL-GREEN 已覆盖它们。
+
+⚠ **本批改了 `web/` ⇒ 前端那把体检是真重跑，不是回归蹭数**：**144 处全 RED / 3 个判据文件**
+（上一批 141 处）。
+⚠ **两份原始日志这次真的随仓库走**（第 71 轮 MINOR-1 扣的就是上一批这句）：
+`docs/迭代计划/run-20260927-mutation/round71-lifecycle-mutations.txt` 与
+`…round71-frontend-mutations.txt` 已 `git add`，核对只认
+`git ls-files docs/迭代计划/run-20260927-mutation | grep round71`（不是看文件在不在磁盘上）。
+⚠ **两份日志格式不同，数错就以为"一条都没跑"**：逻辑侧每行是 `NAME ⇒ RED（判据有效）`，
+前端侧是 `NAME  <文件> RED（判据有效）`、**没有 `⇒`** ⇒ 拿 `grep -c '⇒ RED'` 数前端那份回 0（本批实测撞过一次）。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务；七步串成一条链 `data/_review_tmp/r71-chain.sh`，逐步记时刻与退码，**七步全退 0**
+（UTC 11:41:42 起、12:19:22 收＝北京 19:41→20:19。⚠ 这台 git-bash 不解析 `TZ=Asia/Shanghai` ⇒
+链日志里的时刻是 UTC，北京要 +8，别把它抄成北京时间）：
+
+- `pytest tests/unit -q` → **1275 passed / 16 skipped / 0 failed**（471.63 秒，19:49（北京），退 0）。
+- `pytest tests/ -q` → **1284 passed / 16 skipped / 0 failed**（420.55 秒，19:56（北京），退 0）。
+  （上一基线 1262/1271 → 本批 **+13 条 / 两个口径同增**，分布见上面 ⑤ 那条命令。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` → **68 处全 RED、退 0**
+  （CONTROL-GREEN = **11 个判据文件**在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL /
+  无 `[还原失败]`；跑完链的第 [7] 步 `git status --porcelain -- src/ web/ tests/ scripts/` 为**空**）。
+  首行逐字 `# run @ 2026-09-29T19:56:50+08:00  git=3c5cac0e69b2  worktree=clean  python=3.12.10  共 68 处变异 / 11 个判据文件`
+  —— `git=` 就是被审的那一版（本批代码在跑链之前已提交）。
+  变异（前端）：`python scripts/mutation_proof_frontend.py` → **144 处全 RED、退 0**，首行逐字
+  `# run @ 2026-09-29T20:06:03+08:00  git=3c5cac0e69b2  worktree=clean  python=3.12.10  共 144 处变异 / 3 个判据文件`。
+  `audit_doc_claims.py` → 退 **0**（`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
+  另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`）。
+  **镜像此刻**（只出计划不写库：`python scripts/close_unknowable_predictions.py`，退 0）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：12 条`（12 条里 **6** 条等 `2026-09-30`
+  那一把重问锁（2304/2243/2303/2629/2915 挂在 `515440`、3076 挂在 `158038`）、**6** 条"源端这段给了
+  1~63 条 ⇒ 是本地没补到"（1669/1709/3099/3126/3178/1301）。数一律现跑，别抄）。
+  **线上跑的哪一版**（现读，两个口径互不替代）：
+  `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD` ⇒ 本地领先 **1 笔**
+  （`origin/main = adae245f655b`，`HEAD = 3c5cac0e69b2`）；`GET /api/health/detail`（带口令）现读自报
+  `git_commit=adae245f655b`、`started_at=2026-09-29T20:31:39+08:00`、**`scheduler_running: false`**
+  ⇒ **#132 那件事一个字没变**（"每天必须打开一次网站"仍是产品前提）。
+  ⇒ **`3c5cac0`（#158 这一路）还没上线**；`adae245` **含** #157 板块补标那一路
+  （`git merge-base --is-ancestor 64a0e6f origin/main` ⇒ yes），而且**已经在生产上跑过一次**（17:5x 北京那一档，
+  回执逐字在 `data/_review_tmp/r70-prod-apply.json`，那个目录不入库 ⇒ 这一段是当时的现读，不是可复跑命令）：
+  `run_id=ui-sync-20260929-095657`、`dry_run=False`、`sectors_filled=1`（`黄金` → `518880`）、
+  `predictions_via_gap_fill=3`（2695/3016/3194，都从停更的 `003033` 换到 `518880`）、`verified_reset=2`、
+  另有 `predictions_kept_own_target 611` / `predictions_kept_window_not_due 208` / `predictions_skipped_unservable 7`。
+  ⚠ **那个 run_id 里的 `095657` 是 UTC 不是北京**：`src/api/routes/predictions.py:196` 用的是
+  `_dt.now()`，而 Render 容器在 UTC ⇒ 它是 **17:56:57（北京）**，正好排在部署后第一次健康快照
+  `started_at=2026-09-29T17:51:07+08:00`（`data/_review_tmp/r70-prod-health.json`，同一份现读里
+  `git_commit=adae245f655b`）之后 5 分钟 ⇒ "这一趟跑在 `adae245` 上"这句话有时刻顺序作凭，
+  不是拿 run_id 的字面数硬凑的。上面那句 `started_at=20:31:39` 是**更晚一次重启**的现读，与这一次真跑无关。
+
+**真浏览器这一格要说清范围**（第 29 轮那条规矩，本批改了 `web/`）：起了
+`python scripts/serve_mirror.py --port 8151`（自造一次性口令，只在 `data/_review_tmp/serve8151.log` 里，
+那整目录不入库），真 Chrome 登录后从「待清理（行）」那张卡进 cleanup 视图
+（`web/index.html:62` → `loadView('cleanup')` ⇒ **不是配置 tab**，我第一版点错了一次），
+点「回收磁盘空间」、确认对话框 accept，屏上逐字读到
+`空间回收完成，释放 280.0 KB`、无 `text-danger` ⇒ **独立回收那一路的成功分支真在浏览器里看过**。
+⚠ **没演出来的三格按能到的范围说，不替它们作保**：① 清理任务里那五种结局（`reclaimResult` 是
+`setup()` 之外的模块级函数、**没导出** ⇒ 真浏览器里结构上叫不到它，那一格由
+`test_frontend_cold_start.py` 那份 node 判据（跑页面真源码、喂六种回执）+ M59~M67 负责）；
+② "崩在半路"那一格（要真造一次中断）；③ 我没点「执行清理」——镜像那份预览要硬删 **7056 行**
+（回收站预测 425 / 回收站观点 75 / 过期净值 6556，已触达单次上限），那是不可逆写，不在"看一眼页面"的授权范围里。
+
+**门禁一句**：第 71 轮独立复评 **88/100**（0 BLOCKER / 0 MAJOR / 1 MINOR）≥75 ⇒ 那一版 `adae245` 已推已部署；
+那批唯一的一条 MINOR（"随仓库走"那句没有 `git ls-files` 凭据）本批已按它补上。
+本批（`3c5cac0` + 本段文档 + 模块总览那一节）**需一份新的独立复评（第 72 轮）≥75 才推**，
+推之后再走 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）。
+
+（上一批：2026-09-29 **10:4x（北京）**，**任务 #164：第 70 轮复评的三条（J-1 / J-2 / T-1+T-3）返修**
 —— 评审席这次抓到的最重一条，是我**把撤掉一条变异的责任归错了对象**：第 69 轮我以
 「`predictions.prediction_date` 是 NOT NULL ⇒ 库面上造不出 `no_start` 那一行，夹具对它没有牙」为据撤掉 M52，
 前半句是事实、结论却管不到路由 —— **路由读的是服务交回的那个计数**，把 `PredictionMaintenanceService`
@@ -354,12 +455,24 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`）。
   **镜像此刻**（只出计划不写库：`python scripts/close_unknowable_predictions.py`，退 0）：
   `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`。
+  ⚠ **这句到第 71 轮那一批已经过期**（写在原处不标作废就是下一轮的假账）：同一条命令现读印的是
+  **0 可关 / 12 仍在等**（12 = 6 条等 `2026-09-30` 那把重问锁 + 6 条"源端这段给了 1~63 条"）。
+  ⚠ **这 6 条去哪了我没有量过原因**，所以不在这儿写"因为某一次跑批"——那正是本仓反复扣分的"给结论配一副
+  没开的药"。可核对的只有一件事：命令相同、库相同（镜像）、数从 18 变成 12。要追责就按预测 id 对表两次
+  回执的差集（第 70 轮那份 18 条的 id 清单我没留存 ⇒ 这一格今天只能承认看不见）。
   线上跑的哪一版：**没变** —— 本批未推（第 70 轮没有分数），`origin/main` 仍是 `c408dcd`
   （= 第 64 轮那一版 ⇒ #157 板块补标与 #158 那一路**都还没上生产**）。
+  ⚠ **这一句的"还没上生产"只对 #158 成立**（第 71 轮 88 分之后现读纠正）：`origin/main` 现在是
+  `adae245f655b` ⇒ **#157 那一路已经在生产上跑过一次真写入**（17:56:57 北京，回执逐字见上面 #158
+  那一段的"线上跑的哪一版"），而 **#158（`3c5cac0`）仍然没上线**。
 
 **门禁一句**：第 70 轮复评**未交分数**（子代理 maxTurns 用尽）⇒ 按"评审没跑"处理，本批不推；
 先派第 71 轮（评审对象 `a3260fb..2e57db0`，清单收紧、**分数那一节排在最前面**），≥75 才推，
 推之后再走 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）。
+⚠ **这一句已经执行完了，结果记在这儿防下一轮再派一次第 71 轮**：第 71 轮交回 **88/100**
+（0 BLOCKER / 0 MAJOR / 1 MINOR）⇒ `adae245` 已推已部署，#160 那五步也在生产上走完了
+（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）；本批（#158）要的是**新的第 72 轮**，
+评审对象 `adae245..3c5cac0` + 本批文档。
 
 （上一批：2026-09-29 **09:3x（北京）**，**任务 #163 收口 + #157 四档分流**：第 69 轮独立复评
 **74/100**（0 BLOCKER / 3 MAJOR / 6 MINOR）的返修 —— 最重的一条不是产品行为，是我上一批写进 git message
