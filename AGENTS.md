@@ -310,10 +310,14 @@ M-1＝不可达的防御分支被算成一种结局（第 44 轮那一族）反�
 机器键（`no_tables` / `ENABLE_SPACE_RECLAIM=false`）永远到不了屏幕。
 判据两条（本批新增，`test_db_space.py` 10→**12**）：
 `test_every_skip_exit_says_its_reason_in_human_words`（八格样品：逐档问"那句是不是人话、机器键在不在里面"）与
-`test_the_skip_sentence_has_exactly_one_home_in_the_source`（AST 扫 `src/`：那把函数与那份字典
-**只许出现在 `db_space.py`**，多一个家当场点名）。
+`test_the_skip_sentence_has_exactly_one_home_in_the_source`（第 73 轮 MINOR-2 将扫描面从只有 `src/`
+扩到 **`src/` 与 `web/` 两棵树**：那句话**只许出现在 `db_space.py`**，多一个家当场点名。
+今天 `web/` 命中 **0** 处（现读 `grep -rn 空间回收没跑 web/` 为空 —— 页面那一栏拼的是自己的前缀
+「空间回收：没跑 —— 」再接服务层交回的 `reason_text`，它并不重拼这句话），所以这一条钉的是
+"以后页面自己拼一遍也要当场被点名"。**这一腿有没有牙由该用例自己的控制样品负责**：临时树里
+`src/a.py` 与 `web/c.html` 各造一处家、两处都必须被点名（把 `web/` 那一腿摘掉注入 ⇒ 控制断言当场红，已实测）。
 变异三处：**M68** `the_skip_ruler_only_repeats_the_machine_key`（尺子退化成复读键名）、
-**M69** `the_skip_exit_stops_stamping_the_sentence`（某条出口不再经 `_skipped`）、
+**M69** `the_skip_exit_stops_stamping_the_sentence`（出口仍经 `_skipped`，但不再盖那句人话 ⇒ `reason_text` 没了），
 **M70** `the_route_translates_the_skip_key_a_second_time`（路由再翻译一遍＝把删掉那个家盖回去）。
 ② **M-1：那句"四种结局各说各话"里，兜底那一格从来没被任何样品走到**。页面 `reclaimResult`
 （`web/index.html:2836`）最后一支（回执既不配 `skipped` 也不配 `success`）没有判据也没有变异，
@@ -409,7 +413,8 @@ M-1＝不可达的防御分支被算成一种结局（第 44 轮那一族）反�
 ⚠ 上一版在这里写的是「逐原因话术在 `src/api/routes/config.py` 的 `_RECLAIM_SKIP_SENTENCES` +
 `_reclaim_skip_sentence(reason)`」—— **那正是第 72 轮 M-2 拆掉的第二个家**：同一个 `no_tables` 在独立按钮
 那一路是人话、在清理任务那一路被原样搬上屏幕（一把尺子两处结局）。现在那份字典与函数已删，
-路由与页面读的都是服务交回的同一格 `reason_text`（判据 + 变异 M68/M69/M70，见下面 ⑤）。
+路由与页面拿的都是同一个函数（`skip_detail`）吐出的那句话 —— 但**不是同一格字**：
+路由 `:415` 现调 `skip_detail(result)`，页面读服务层预先盖好的 `reason_text`（判据 + 变异 M68/M69/M70，见下面 ⑤）。
 ④ **"崩在半路"从哑巴变成一句话**：`retention_three_buckets.CleanupInterrupted`（`:58`）带
 「清理中断：已经删掉 N 行（各桶数），剩下的没有动。原因：…」；级联计数器在放弃时清空 ⇒
 页面上不会出现"删了 0 行"与"中断"同时成立。变异 **M59/M60/M61** 钉这一族的台账

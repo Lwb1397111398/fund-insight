@@ -3099,6 +3099,10 @@ const fetchWeChatBatch = async () => {
                                 task = await pollCleanupTask(taskId);
                             } catch (pollError) {
                                 // 清理请求服务端已经接了：这里说"清理失败"老板就会再点一次 = 二次删除
+                                // 与上面净值那条腿同规矩：先放开那把全局锁再说话（第 32 轮 A-M1；
+                                // 第 73 轮 MAJOR-1：这一支以前带着 analyzing=true 直接 return，
+                                // 13 个按钮静默灰死到刷新为止，而注释里写着这条规矩却没给这条腿配判据）
+                                analyzing.value = false;
                                 alert('清理任务已发起（任务号 ' + taskId + '），只是进度没取到 ——'
                                       + ' 刷新页面就能看到结果，请不要重复点击');
                                 return;

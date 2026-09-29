@@ -611,7 +611,8 @@ def test_a_reclaim_that_never_ran_is_never_reported_as_done(monkeypatch, tmp_pat
     # ④ 方言不支持：两个库（sqlite / PostgreSQL）都是支持的，路由级走不到这一档，
     #    所以这一臂只钉那句话本身——它必须带出是哪个方言，不许退化成一句"没跑"。
     #    那句话的家在服务层（src/services.db_space.skip_detail），不在路由：两个消费方
-    #    （这句回执、页面上那一栏）读的是同一格，谁也不许自己翻译一遍。
+    #    问的是同一个函数（路由现调 skip_detail(result)，页面读服务层预先盖好的
+    #    reason_text），所以"翻译"这个动作全仓只有一处实现 —— 谁也不许自己再拼一遍。
     from src.services.db_space import skip_detail
 
     sentence = skip_detail({"reason": "unsupported_dialect:mysql"})

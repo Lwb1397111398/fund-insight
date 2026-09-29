@@ -77,8 +77,10 @@ def skip_detail(result: Dict) -> str:
 def _skipped(reason: str, tables: Optional[Dict] = None, **extra) -> Dict:
     """所有「没跑」的出口都从这一处出 —— 那句人话因此不可能漏。
 
-    `reason` 是给机器看的键，`reason_text` 是给页面看的话：两格都在，
-    消费方（路由回执 / 页面上那一栏）读同一格，谁也不许自己翻译一遍。
+    `reason` 是给机器看的键，`reason_text` 是给页面看的话：两格都在。
+    但两个消费方拿的不是同一格 —— 清理任务那一路把 `reason_text` 整份带给页面，
+    独立按钮那一路（路由）现问 `skip_detail(result)`。所以"翻译"只有一处实现，
+    而不是"只有一格字"：谁也不许自己再拼一遍那句话。
     """
     result: Dict = {"skipped": True, "reason": reason, "tables": tables or {}, **extra}
     result["reason_text"] = skip_detail(result)

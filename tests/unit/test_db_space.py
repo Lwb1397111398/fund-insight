@@ -178,8 +178,8 @@ def test_every_skip_exit_says_its_reason_in_human_words(monkeypatch):
     `skip_detail` 是全仓唯一那句「空间回收没跑：……」的家（第 72 轮 M-2：以前 `config.py`
     路由里还有第二份 `_RECLAIM_SKIP_SENTENCES` ⇒ 同一个 `no_tables` 在独立按钮那一路是人话、
     在清理任务那一路被原样搬上屏幕）。这一条问三件事：
-    ① `_skipped()` 交回的 `reason_text` 必须**等于** `skip_detail(result)`（出处只有一处，
-       两个消费方读同一格）；
+    ① `_skipped()` 交回的 `reason_text` 必须**等于** `skip_detail(result)`（拼这句话的函数只有一处；
+       两个消费方走的是同一个函数 —— 路由现调 `skip_detail(result)`，页面读预先盖好的 `reason_text`）；
     ② 已知三种原因各说各话；认不出的原因也不许变成空话、也不许把原因本身丢掉；
     ③ 方言不支持那一格两个库（sqlite / PG）今天都走不到 ⇒ 拿桩把 `get_bind` 换成 mysql
        方言喂进去，它必须说出是**哪个方言**，不许退化成一句"没跑"。
@@ -218,22 +218,51 @@ def test_every_skip_exit_says_its_reason_in_human_words(monkeypatch):
     assert "不支持" in result["reason_text"], result
 
 
-def test_the_skip_sentence_has_exactly_one_home_in_the_source():
-    """「空间回收没跑」这句话在 `src/` 里只许有一个家（第 72 轮 M-2 的结构账）。
-
-    行为判据只能证明"这一路说对了"；"两个消费方读同一格"这件事由这一条盯着——
-    再多一处拼这句话，就意味着有人把键名自己翻译了一遍，于是同一个原因会有两种口径。
-    """
-    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src")
-    root = os.path.abspath(root)
+def _skip_sentence_homes(pairs):
+    """逐棵目录树找出「空间回收没跑」出现在哪些文件里（`pairs` = [(根, 后缀), ...]）。"""
     homes = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
-        for name in filenames:
-            if not name.endswith(".py"):
-                continue
-            full = os.path.join(dirpath, name)
-            with io.open(full, encoding="utf-8") as fh:
-                if "空间回收没跑" in fh.read():
-                    homes.append(os.path.relpath(full, root))
-    assert homes == [os.path.join("services", "db_space.py")], homes
+    for label, root, suffixes in pairs:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+            for name in filenames:
+                if not name.endswith(suffixes):
+                    continue
+                full = os.path.join(dirpath, name)
+                with io.open(full, encoding="utf-8") as fh:
+                    if "空间回收没跑" in fh.read():
+                        homes.append(os.path.join(label, os.path.relpath(full, root)))
+    return homes
+
+
+def test_the_skip_sentence_has_exactly_one_home_in_the_source(tmp_path):
+    """「空间回收没跑」这句话在整个仓库里只许有一个家（第 72 轮 M-2 的结构账）。
+
+    行为判据只能证明"这一路说对了"；"两个消费方有没有各拼一遍"由这一条盯着——
+    再多一处拼这句话，就意味着有人把键名自己翻译了一遍，于是同一个原因会有两种口径。
+    ⚠ 第 73 轮 MINOR-2：扫描面原本只有 `src/`，页面那一路压根不在闸里。现在把 `web/`
+    也扫进来（今天 `web/` 命中 **0** 处 —— 现读 `grep -rn 空间回收没跑 web/` 为空：
+    页面上那一栏拼的是自己的前缀「空间回收：没跑 —— 」再接服务层交回的 `reason_text`，
+    它并不重拼这句话）。所以这一条今天钉的是"以后页面自己拼一遍也要当场被点名"。
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    homes = _skip_sentence_homes([
+        ("src", os.path.join(root, "src"), (".py",)),
+        ("web", os.path.join(root, "web"), (".html", ".js")),
+    ])
+    assert homes == [os.path.join("src", "services", "db_space.py")], homes
+
+    # 空判对照：扫描面真的扩到 `web/` 了吗 —— 临时树里两棵各造一处家，两处都必须被点名，
+    # 干净的那个文件不许被误伤。摘掉 `web/` 那一腿，这里就少报一处。
+    fake = tmp_path
+    (fake / "src").mkdir()
+    (fake / "web").mkdir()
+    (fake / "src" / "a.py").write_text("空间回收没跑：假的\n", encoding="utf-8")
+    (fake / "src" / "b.py").write_text("没有那句话\n", encoding="utf-8")
+    (fake / "web" / "c.html").write_text("空间回收没跑：页面自己拼的\n", encoding="utf-8")
+    found = _skip_sentence_homes([
+        ("src", str(fake / "src"), (".py",)),
+        ("web", str(fake / "web"), (".html", ".js")),
+    ])
+    assert sorted(found) == sorted([
+        os.path.join("src", "a.py"), os.path.join("web", "c.html"),
+    ]), found

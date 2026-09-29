@@ -2485,7 +2485,9 @@ const axios = {
     assert '没跑' in out['skipped']['text'], out['skipped']
     # 第 72 轮 M-2 把这段翻了个面：给机器看的键**不许**上屏幕。服务层在每一个「没跑」出口
     # 都盖了 `reason_text`（那句话说什么只有一个家：src/services/db_space.skip_detail），
-    # 页面与路由读的是同一格 —— 谁也不许自己翻译一遍，否则同一个 `no_tables` 会有两种口径。
+    # 页面与路由问的是同一个函数 —— 但拿的不是同一格（第 73 轮 MINOR-1）：这一路读服务层
+    # 预先盖好的 `reason_text`，独立按钮那一路由路由现调 `skip_detail(result)`。
+    # 谁也不许自己再拼一遍，否则同一个 `no_tables` 会有两种口径。
     assert '空间回收没跑：这次没有要回收的表' in out['skipped']['text'], out['skipped']
     assert 'no_tables' not in out['skipped']['text'], '给机器看的键不许上屏幕'
     assert out['skipped']['failed'] is True, out['skipped']
@@ -2517,6 +2519,84 @@ const axios = {
     # 三种"空间没还"各说各话：这次没执行 / 没跑（带原因）/ 不敢算已完成
     assert len({out['nokey']['text'], out['skipped']['text'], out['noflag']['text']}) == 3, \
         (out['nokey'], out['skipped'], out['noflag'])
+
+
+def test_the_cleanup_progress_leg_releases_the_global_lock_before_it_speaks():
+    """清理腿"进度没取到"那一支必须先把那把全局锁放开再 return（第 73 轮 MAJOR-1）。
+
+    `analyzing` 压着 13 个按钮（第 32 轮 A-M1）。上一版 `cleanupData` 里
+    `catch (pollError)` 带着 `analyzing === true` 直接 return ⇒ 13 个按钮静默灰死到刷新为止，
+    而**姊妹腿** `pollFundUpdateStatus`（净值那一条）同一件事先 `analyzing.value = false` 再说话，
+    注释里还逐字写着那条规矩 —— 规矩写了、这条腿没有判据（第 45 轮起反复扣分的"同一把尺子两腿两种待遇"）。
+
+    这一条跑**真的 `cleanupData` + 真的 `pollCleanupTask`**：让 `axios.get` 每次都抛 ⇒
+    连续三次之后 `pollCleanupTask` 自己 reject ⇒ 走到那一支。问两件事：
+    ① 那把锁放开没有；② 那句话是不是仍在说"已发起、别重复点"（不许被改写成"清理失败"）。
+
+    ⚠ **控制格在同一个函数里**：把页面源码里那一处放开锁的语句摘掉再跑一遍，
+    它必须留下 `analyzing === true`。没有这一格，"断言 false"就只是描述自己
+    （两个格子都断 false ⇒ 需要证明摘掉之后它会变成 true，而不是恒过）。
+    """
+    html = _html()
+    cleanup_src = _decl(html, 'cleanupData = async () =>')
+    # 控制：先证明"摘掉那一处"这件事真做得到，并且只摘到一处
+    patched_src, n = re.subn(
+        r"analyzing\.value = false;\n(\s*)alert\('清理任务已发起",
+        r"\1alert('清理任务已发起", cleanup_src)
+    assert n == 1, '进度那一支里"放开全局锁"的语句没被摘到 ⇒ 下面的对照格是假的（锚点已漂）'
+
+    def run(cleanup_body):
+        return _run_chain_js(
+            _decl(html, 'formatBytes = (value) =>') + '\n'
+            + _decl(html, 'reclaimResult = (reclaim) =>') + '\n'
+            + _expr(html, 'const CLEANUP_POLL_TIMEOUT_MS')
+            + _decl(html, 'pollCleanupTask = async (taskId) =>') + '\n'
+            + _expr(html, 'const retentionBucketLabel = ') + '\n'
+            + _expr(html, 'const retentionTableLabels = ') + '\n'
+            + _expr(html, 'const retentionTableLabel = ') + '\n'
+            + cleanup_body + """
+async function go() {
+    await cleanupData();
+    return {locked: analyzing.value, posts, gets,
+            msg: alerts.length ? alerts[alerts.length - 1] : null,
+            alerts: alerts.length};
+}
+(async () => { console.log(JSON.stringify(await go())); })();
+""",
+            prelude_js="""
+const ref = (v) => ({ value: v });
+const alerts = [];
+const alert = (m) => alerts.push(m);
+const confirm = () => true;
+const analyzing = ref(false); const cleanupEnabled = ref(true); const cleanupTask = ref(null);
+const spaceReclaimResult = ref(''); const spaceReclaimFailed = ref(false);
+const fetchStats = async () => {}; const fetchRetentionPreview = async () => {};
+const fetchCleanupPreview = async () => {};
+let posts = 0; let gets = 0;
+const retentionPreview = ref({total: 12, preview_fingerprint: 'fp',
+    counts: {old_posts: 12}, protected_counts: {verified_ledger_excluded: 3},
+    cascade_counts: {posts: 12}, policy: {fund_history_keep_recent: 20}});
+const axios = {
+  post: async () => { posts++; return { data: { success: true, data: { task_id: 't1' } } }; },
+  // 每次问进度都抛：真 `pollCleanupTask` 连错三次就自己 reject ⇒ 走到被审的那一支
+  get: async () => { gets++; throw new Error('ECONNREFUSED'); },
+};
+""")
+
+    out = run(cleanup_src)
+    # 先证明这条链真跑到了那一步：清理请求发出去了、进度被问过（至少三次）
+    assert out['posts'] == 1, out
+    assert out['gets'] >= 3, out
+    assert out['locked'] is False, '进度没取到那一支把全局锁带回来了 ⇒ 13 个按钮灰死到刷新'
+    assert out['alerts'] == 1, out
+    assert '进度没取到' in out['msg'], out
+    assert '不要重复点击' in out['msg'], '已经发起过清理：这句不许省，否则老板会再点一次 = 二次删除'
+    assert '清理失败' not in out['msg'], out
+
+    back = run(patched_src)
+    assert back['posts'] == 1 and back['locked'] is True, \
+        '摘掉那句之后锁仍然放开 ⇒ 上面那条断言恒过，不是判据'
+    assert '进度没取到' in (back['msg'] or ''), '对照格只许摘掉放锁那一句，那句话仍要说得出口'
 
 
 def test_the_delete_confirmation_promises_only_what_the_backend_will_try():

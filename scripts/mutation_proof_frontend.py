@@ -128,6 +128,25 @@ def _js(*lines):
     """跨行 JS 片段的拼装器：变异锚点必须能写出真实的缩进与换行。"""
     return chr(10).join(lines)
 
+# 「清理任务已发起、只是进度没取到」那一条腿（`cleanupData` 里 `catch (pollError)` 整支）。
+# 两处变异共用这一段：一处把整支换成裸 `await`（写成功的操作被说成没做），
+# 一处只摘掉那句 `analyzing.value = false;`（第 73 轮 MAJOR-1：带着全局锁早退）。
+# 它是模块级常量而不是列表里的一行 —— 同一形状抄两遍，下一轮改页面时只会改掉一处。
+_CLEANUP_POLL_LEG = _js(
+    '                            let task;',
+    '                            try {',
+    '                                task = await pollCleanupTask(taskId);',
+    '                            } catch (pollError) {',
+    '                                // 清理请求服务端已经接了：这里说"清理失败"老板就会再点一次 = 二次删除',
+    '                                // 与上面净值那条腿同规矩：先放开那把全局锁再说话（第 32 轮 A-M1；',
+    '                                // 第 73 轮 MAJOR-1：这一支以前带着 analyzing=true 直接 return，',
+    '                                // 13 个按钮静默灰死到刷新为止，而注释里写着这条规矩却没给这条腿配判据）',
+    '                                analyzing.value = false;',
+    "                                alert('清理任务已发起（任务号 ' + taskId + '），只是进度没取到 ——'",
+    "                                      + ' 刷新页面就能看到结果，请不要重复点击');",
+    '                                return;',
+    '                            }')
+
 MUTATIONS = [
     ('test_first_load_fetches_all_go_through_the_wake_retry', 'unwrap_bloggers_fetch',
      HTML, "withWakeRetry(() => axios.get('/api/bloggers'))", "axios.get('/api/bloggers')", False),
@@ -385,17 +404,17 @@ MUTATIONS = [
      VP, "                } catch (refreshError) { alert('观点已删除，只是列表没刷新出来 —— 刷新页面即可'); }",
      "                } catch (refreshError) { alert('删除失败：' + errorMessage(refreshError)); }", False),
     # A-MAJOR-3 + #53：`pollCleanupTask` 不在旧的刷新腿白名单里 ⇒ 旧闸对它瞎；现在它是条腿。
+    # ⚠ 第 74 轮 MAJOR-1 给这一支补了"先放开那把全局锁"那一句 ⇒ 这一段锚点必须跟着换形状
+    # （本仓那族老账：改了被扫的那一行却没改锚点 ⇒ ANCHOR-MISS，M11/M29/M39 三次同签名）。
     ('test_a_write_that_succeeded_is_never_reported_as_a_failure', 'cleanup_leg_blames_the_write',
-     HTML, _js('                            let task;',
-               '                            try {',
-               '                                task = await pollCleanupTask(taskId);',
-               '                            } catch (pollError) {',
-               '                                // 清理请求服务端已经接了：这里说"清理失败"老板就会再点一次 = 二次删除',
-               "                                alert('清理任务已发起（任务号 ' + taskId + '），只是进度没取到 ——'",
-               "                                      + ' 刷新页面就能看到结果，请不要重复点击');",
-               '                                return;',
-               '                            }'),
+     HTML, _CLEANUP_POLL_LEG,
      '                            const task = await pollCleanupTask(taskId);', False),
+    # 第 73 轮 MAJOR-1 那一格：这一支自己新配的判据要有一处"摘掉它就红"的变异 —— 摘掉的正是那句放锁。
+    ('test_the_cleanup_progress_leg_releases_the_global_lock_before_it_speaks',
+     'the_progress_leg_keeps_the_lock',
+     HTML, _CLEANUP_POLL_LEG,
+     _CLEANUP_POLL_LEG.replace('                                analyzing.value = false;\n', '', 1),
+     False),
     # A-MAJOR-1：把"没敢断定"退回光秃秃一句结论；以及"success 但没 data"又算取到了。
     ('test_the_summary_button_does_not_claim_there_is_nothing_to_summarize',
      'summary_stats_blames_nothing',
