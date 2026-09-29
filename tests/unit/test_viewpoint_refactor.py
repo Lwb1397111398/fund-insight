@@ -6,6 +6,10 @@ from pydantic import ValidationError
 
 from src.api.routes import viewpoints as viewpoint_routes
 from src.models.database import CrawlerArticleRecord, Viewpoint
+from src.services.retention_three_buckets import (
+    ThreeBucketPolicy,
+    ThreeBucketRetentionService,
+)
 from src.services.viewpoint_workflow_service import ViewpointWorkflowService, beijing_today
 
 
@@ -645,6 +649,68 @@ def test_deep_analysis_rejects_emotional_content_via_soft_delete(test_db):
     # 拒绝是正常处理而非错误：任务仍 succeeded
     assert task.status == "succeeded"
     assert task.success_count == 1
+    # 任务 #142：进回收站就必须带上那一对时间戳。
+    # 少 `deleted_at` ⇒ 线上唯一会删观点行的那把尺子永远选不中它（镜像实测 18 行卡着）；
+    # 少 `restore_before` ⇒ 恢复窗口无从谈起。
+    assert raw.deleted_at is not None, "软删的观点没写归档时刻 ⇒ 它永远进不了清理候选"
+    assert raw.restore_before is not None, "软删的观点没写恢复下界 ⇒ 页面无从说'保留到哪天'"
+    # 保留天数不在这个文件里立第二个数：那一档必须正好是三桶策略自己的天数
+    assert raw.restore_before == raw.deleted_at.date() + timedelta(
+        days=ThreeBucketPolicy().deleted_viewpoint_days), (
+        '`restore_before` 与 `deleted_at` 相差 %s 天，而三桶策略说 %s 天 ⇒ 观点这一支自己立了个数'
+        % ((raw.restore_before - raw.deleted_at.date()).days,
+           ThreeBucketPolicy().deleted_viewpoint_days))
+
+
+def _reject_one(test_db, content="又跌了真恶心，垃圾市场，全部清仓跑路！"):
+    raw = _add_viewpoint(
+        test_db, reasoning=None, summary=None, market_direction=None,
+        analysis_summary="pending", content=content,
+    )
+
+    def deep(item, source):
+        return {
+            "viewpoint_type": "情绪表达",
+            "market_direction": "bearish", "confidence": 30,
+            "summary": "x", "reasoning": "纯情绪", "analysis": "无依据",
+        }
+
+    _run_batch_with_deep(test_db, raw, deep)
+    test_db.refresh(raw)
+    return raw
+
+
+def test_a_rejected_viewpoint_only_becomes_a_cleanup_candidate_after_retention(test_db):
+    """#142 的另一半：补上那一对时间戳**到底有没有被用上**，由线上唯一会删观点行的那把尺子回答。
+    两腿都要问 —— 只问"满期能选中"，一个把 cutoff 算歪的实现也能过；只问"今天不选中"，
+    一个永远选不中的实现也能过（镜像那 18 行今天就是这个形状，而它看着像"保护得好"）。"""
+    raw = _reject_one(test_db)
+    archived_on = raw.deleted_at.date()
+    retention = ThreeBucketPolicy().deleted_viewpoint_days
+
+    def candidates(on_day):
+        plan = ThreeBucketRetentionService(test_db, today=on_day).build_plan()
+        return plan.candidate_ids[ThreeBucketRetentionService.BUCKET_DELETED_VP]
+
+    assert raw.id not in candidates(archived_on), (
+        "刚进回收站就被列成删除候选 ⇒ 恢复窗口等于零，`restore_before` 那句话是装饰")
+    assert raw.id in candidates(archived_on + timedelta(days=retention + 1)), (
+        "满期之后那把尺子仍然选不中它 ⇒ 要么 `deleted_at` 压根没写，要么写的形状"
+        "过不了 `deleted_at.isnot(None)` 与 `deleted_at < cutoff` 这两道条件"
+        "（`retention_three_buckets._deleted_viewpoint_ids`）")
+
+
+def test_the_retention_days_for_a_rejected_viewpoint_comes_from_the_policy(test_db, monkeypatch):
+    """把策略里的天数换成 47，那一行的恢复下界必须跟着走 ⇒ 观点这一支没有自己立第二个数。
+    （与第 56 轮 `NAV_HISTORY_LOOKBACK_DAYS` 那把同一尺子：默认值下"跟着这个数走"量不出来。）"""
+    import src.services.viewpoint_workflow_service as wfs
+
+    monkeypatch.setattr(wfs, "ThreeBucketPolicy",
+                        lambda: ThreeBucketPolicy(deleted_viewpoint_days=47))
+    raw = _reject_one(test_db, content="主力跑了，这破基金谁买谁倒霉！")
+    assert raw.restore_before == raw.deleted_at.date() + timedelta(days=47), (
+        "策略说 47 天，这一行却写着 %s 天 ⇒ 保留天数在观点这一支被写死了第二个数"
+        % (raw.restore_before - raw.deleted_at.date()).days)
 
 
 @pytest.mark.parametrize("kept_type", ["明确预测", "深度分析", "行情复盘"])
@@ -668,6 +734,11 @@ def test_deep_analysis_keeps_rational_analysis_types(test_db, kept_type):
     assert raw.is_deleted is False
     assert raw.analysis_summary == "succeeded"
     assert raw.viewpoint_type == kept_type
+    # 反面对照：那一对时间戳只属于**进回收站**的行。给保留的行也盖上戳，
+    # 清理那把尺子下一步就会把一条活跃观点当成"软删满 30 天"的旧行。
+    assert raw.deleted_at is None and raw.restore_before is None, (
+        "保留的观点也被盖了归档戳 ⇒ 它会被列进删除候选（%s / %s）"
+        % (raw.deleted_at, raw.restore_before))
 
 
 def test_analysis_status_reports_rejected_rows():

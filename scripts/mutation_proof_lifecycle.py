@@ -67,6 +67,8 @@ CONFIG_ROUTES = 'src/api/routes/config.py'
 CLEANUP_API_TESTS = 'tests/unit/test_retention_cleanup_api.py'
 DB_SPACE = 'src/services/db_space.py'
 DB_SPACE_TESTS = 'tests/unit/test_db_space.py'
+VP_WORKFLOW = 'src/services/viewpoint_workflow_service.py'
+VP_TESTS = 'tests/unit/test_viewpoint_refactor.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -476,6 +478,28 @@ MUTATIONS = [
      '            "message": skip_detail(result),\n',
      '            "message": "空间回收没跑：" + str(result.get("reason")),\n',
      CLEANUP_API_TESTS, 'test_a_reclaim_that_never_ran_is_never_reported_as_done'),
+    # 任务 #142：AI 判拒绝 ⇒ 进回收站那一站，今天第一次有了牙。三处各问一件不同的事：
+    # ⑴ 那一对时间戳到底写不写（不写 ⇒ 那行永远进不了清理候选，正是 #142 的本体）；
+    # ⑵ 保留天数是从**三桶策略**拿的还是这里自己抄了一个数（抄了 ⇒ 策略一改两边漂开）；
+    # ⑶ 写进去的值是不是出自**那只共用的钟**（别处拿墙钟自己算 ⇒ 同座回收站两种"保留到 X 日"，
+    #     这一格由归档那把棘轮的"来路"腿负责，不是由行为用例负责）。
+    ('M71_the_rejected_viewpoint_gets_no_archive_stamp', VP_WORKFLOW,
+     '            viewpoint.deleted_at, viewpoint.restore_before = archive_stamp(\n'
+     '                retention_days=ThreeBucketPolicy().deleted_viewpoint_days)\n',
+     '            pass\n',
+     VP_TESTS, 'test_deep_analysis_rejects_emotional_content_via_soft_delete'),
+    ('M72_the_rejected_viewpoint_hard_codes_its_retention', VP_WORKFLOW,
+     '            viewpoint.deleted_at, viewpoint.restore_before = archive_stamp(\n'
+     '                retention_days=ThreeBucketPolicy().deleted_viewpoint_days)\n',
+     '            viewpoint.deleted_at, viewpoint.restore_before = archive_stamp(\n'
+     '                retention_days=30)\n',
+     VP_TESTS, 'test_the_retention_days_for_a_rejected_viewpoint_comes_from_the_policy'),
+    ('M73_the_rejected_viewpoint_stamps_with_a_different_clock', VP_WORKFLOW,
+     '            viewpoint.deleted_at, viewpoint.restore_before = archive_stamp(\n'
+     '                retention_days=ThreeBucketPolicy().deleted_viewpoint_days)\n',
+     '            viewpoint.deleted_at = datetime.now()\n'
+     '            viewpoint.restore_before = datetime.now() + timedelta(days=30)\n',
+     RULER_TESTS, 'test_archiving_a_prediction_always_stamps_with_the_shared_clock'),
 ]
 
 

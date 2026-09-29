@@ -702,11 +702,15 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         #    ⇒ 页面那条是**带确认头的硬删**（`db.delete(viewpoint)`，回执"观点已永久删除"）。
         #    我当时当药方引用的 `cleanup_enhanced.SoftDeleteManager` 同样**全仓零 import**。
         #    ⇒ 这两条登记项今天都是死路，登记理由只剩"它会写那一列"（与有没有人调无关）。
-        # ③ 现在按代码写清**活的**那一站在哪、以及这把尺子为什么看不见它：
-        #    活的观点软删只有 AI 拒绝那一处 `viewpoint_workflow_service.py:328`（`viewpoint.is_deleted = True`），
-        #    而它**这两个时间戳一个都不写** ⇒ 这把按"写归档列"收站点的尺子对它**结构性失明**，
-        #    另一面是 `retention_three_buckets._deleted_viewpoint_ids`（:582 起，条件在 :590-592）
-        #    要求 `deleted_at.isnot(None)` ⇒ 那些行永远进不了清理桶（镜像实测 18 行 = 418 软删 − 400 带戳）。
+        # ③ **这一站现在在这把尺子看得见的位置了**（任务 #142，2026-09-30 落地）：
+        #    活的观点软删只有 AI 拒绝那一处 `viewpoint_workflow_service._apply_deep_analysis`
+        #    （`viewpoint.is_deleted = True` 那一段）。上一版它**两个时间戳都不写** ⇒ 这把按"写归档列"
+        #    收站点的尺子对它**结构性失明**，而 `retention_three_buckets._deleted_viewpoint_ids`
+        #    （:640 起，条件在 :649-650）要求 `deleted_at.isnot(None)` ⇒ 那些行永远进不了清理桶。
+        #    现在那一支一起写 `archive_stamp(retention_days=ThreeBucketPolicy().deleted_viewpoint_days)`
+        #    ⇒ 它是**新的第四处活路**，登记在下面，且进"来路逐个核"那一圈。
+        #    ⚠ **代码只修未来的行**：镜像那 **18 行** `rejected:`（418 软删 − 400 带戳）与生产同形状的
+        #    存量还卡着，那是一次单独的写（默认 dry-run、要逐行清单给老板过目）—— 不是"改完就自愈"。
         #    ⚠ **任务 #142 的立论到第 60 轮要改口径**：上一版在这里写"补 `restore_before` 也没人读、是空转"
         #    —— 前半句是假的（见上面 ① 的更正，`_viewpoint_candidates:447` 读它、数就在清理预览上）。
         #    站得住的那半是"**预览保护得到、真删保护不到**"：认那一列的只有 `build_plan` 这一把，
@@ -732,6 +736,10 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         # 按本仓规矩（第 49 轮 `_save_fund_mapping`、第 54 轮 `sync_predictions_by_sector_mapping`），
         # 死路**不配绿灯判据**，只配登记 + 写明它是死路。
         ('src/services/viewpoint_service.py', 'delete_viewpoints_by_ids'): 1,
+        # **活的**那一站（任务 #142）：AI 判拒绝 ⇒ 进回收站，同一支现在把那一对时间戳一起写上。
+        # 与上面两条的区别要说白：那两条是死路（只登记、不配绿灯），这一条今天真会被走到
+        # （爬虫/批量分析判出「情绪表达」等四类时）。
+        ('src/services/viewpoint_workflow_service.py', '_apply_deep_analysis'): 2,
     }
     found = {}
     for base in ('src', 'scripts'):
@@ -748,15 +756,19 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
             '这些函数里"写归档那一对列"的**处数**与登记不符（实测, 登记）：%s ⇒ '
             '在一条已登记的活路里再加一处写，以前这条闸一个字都不报（第 56 轮 M-4）' % wrong)
 
-    # 逐处核"来路"：这三处都登记在名单里、都往那一对列写，但**只有前两处今天活着**。
+    # 逐处核"来路"：这几处都登记在名单里、都往那一对列写，但** cleanup_enhanced 那一格是死的**。
     # ⚠ `src/tasks/cleanup_enhanced.py` 整模块**零 import**（`grep -rn cleanup_enhanced
     # --include=*.py src/ scripts/ tests/ | grep -i import` ⇒ 只剩我这行注释），
-    # 所以第三格不是"页面在走的一条活路"，而是"谁把它接回去时不许换成墙钟"（第 59 轮 m-3：
+    # 所以那一格不是"页面在走的一条活路"，而是"谁把它接回去时不许换成墙钟"（第 59 轮 m-3：
     # 上一版把这三处一起叫"回收站那三条活路"，与刚被驳回的 M-1 同一族）。
+    # 第四格是**任务 #142 新加的活路**（AI 判拒绝 ⇒ 进回收站）：它以前一个时间戳都不写，
+    # 所以这一圈以前压根问不到它 —— 加进来之后，"把那一支摘掉"当场让这条红。
     for rel, name in (('src/services/prediction_service.py', '_soft_archive'),
                       ('src/services/prediction_maintenance_service.py',
                        'deduplicate_predictions'),
-                      ('src/tasks/cleanup_enhanced.py', 'soft_delete')):
+                      ('src/tasks/cleanup_enhanced.py', 'soft_delete'),
+                      ('src/services/viewpoint_workflow_service.py',
+                       '_apply_deep_analysis')):
         src = io.open(os.path.join(ROOT, rel.replace('/', os.sep)), encoding='utf-8').read()
         tree = ast.parse(src)
         fn = [n for n in ast.walk(tree)

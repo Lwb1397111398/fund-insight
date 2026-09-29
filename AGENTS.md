@@ -294,7 +294,98 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **01:1x（北京）**，**任务 #166：第 73 轮复评（79/100 ⇒ ≥75 已放行，
+最近一次核对（2026-09-30 **02:5x（北京）**，**任务 #142 的代码半：AI 判拒绝的观点从此写那一对归档
+时间戳** —— 老板那句「某预测对应板块对应的基金被发现抓取不到且确认没有办法的情况，可以把该板块对应的
+基金变成其他好的基金」是产品账，而这条是它隔壁那一族：**清理按钮管不到的行，永远留在回收站里，
+页面上还不说话**（观点的软删不写 `deleted_at` ⇒ 线上唯一真在删观点行的那把尺子对它结构性失明）——
+本批只动 `src/services/viewpoint_workflow_service.py` 一处分支 + 三条判据 + 三处变异 + 两份文档，
+`web/` 一个字没动）：
+
+① **产品半（`_apply_deep_analysis`，现读 `:330` 置 `is_deleted`、`:336-338` 写时间戳与
+`analysis_summary`）**：拒绝那一支现在除了 `is_deleted = True` + `analysis_summary='rejected:…'`，
+还写 `viewpoint.deleted_at, viewpoint.restore_before = archive_stamp(retention_days=ThreeBucketPolicy().deleted_viewpoint_days)`
+⇒ **三件事一起变了**：⑴ 那把按"写归档列"收站点的棘轮对它不再失明 —— 它进了
+`test_one_ruler_per_question.py` 的归档写侧登记表（实测**两处**写、来路必须 `kind == 'stamp'`，即那只北京钟）；
+⑵ 活的硬删要求 `deleted_at.isnot(None)`（`retention_three_buckets._deleted_viewpoint_ids:640`）从此对它成立
+⇒ **未来的**拒绝行会正常进清理桶；⑶ 行为判据从零条变三条
+（`test_viewpoint_refactor.py:683/:703` 两条新的 + 老那条软删用例加了断言）。
+保留天数不在这里立第二个数 —— 它问的就是三桶策略自己那个 `deleted_viewpoint_days`（默认 30），
+牙齿靠把 `wfs.ThreeBucketPolicy` 换成 47 才量得出"间隔跟着配置走"。
+变异三处各问一件不同的事：**M71**（那一行整个 `pass` ⇒ 不写戳）、**M72**（`retention_days=30` 写死 ⇒
+第二个数立起来了）、**M73**（改拿两次 `datetime.now()` ⇒ 换了别的钟）。逻辑侧注册表现读 **74 处**
+（`python scripts/mutation_proof_lifecycle.py --list` 末行）。
+⚠ **前端那 147 处本批没有重跑**（`web/` 未动；处数与判据数一律
+`python scripts/mutation_proof_frontend.py --list` 末行，今天印「共 147 处变异，覆盖 55 条判据」）
+⇒ "前端体检全绿"这句话本批**没有凭据**，上一批那次才是它的数据源。
+
+② ⚠⚠ **「改完就自愈」是假话：代码只修未来的行。** 存量那批一行都没被动过 —— 2026-09-30 现读
+**两库逐字同数**（`total 489 / soft 418 / no_deadline 418 / no_stamp 18 / rejected 18 /
+rejected_no_stamp 18`）：复核
+`python scripts/q.py [--production] "select count(*) total, count(*) filter (where is_deleted) soft,
+count(*) filter (where is_deleted and restore_before is null) no_deadline,
+count(*) filter (where is_deleted and deleted_at is null) no_stamp,
+count(*) filter (where is_deleted and analysis_summary like 'rejected:%') rejected,
+count(*) filter (where is_deleted and analysis_summary like 'rejected:%' and deleted_at is null)
+rejected_no_stamp from viewpoints"`。
+⇒ 存量那一次单独的写**还没做**（#142 的第二半：默认 dry-run、先出逐行清单给老板过目、
+`--apply --confirm` + 备份 + 逐行回执 + `--restore-from`，仿 `scripts/close_unknowable_predictions.py`，
+并且要它自己的守卫用例/行为判据/变异/再一轮基线 —— 本批决定不加，见 ⑥）。
+⚠ **本批未推 ⇒ 生产上连"未来的行"也还不写**（`origin/main` 现读仍是 `3fd79c6`、
+`git rev-list --count origin/main..HEAD` = **0**，复核
+`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`）。
+
+③ **诚实的增量账，并且先记我自己那处基准错**：上一基线 **1278/1287**（第 74 轮，绝对基准提交
+`3fd79c6`）→ 本批 **1280/1289** ⇒ **+2 条 / 两个口径同增**，分布用
+`for f in $(git diff --name-only HEAD -- tests/); do echo "$f $(git show HEAD:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+⇒ `test_viewpoint_refactor.py 37 → 39`（两条新行为判据）、`test_one_ruler_per_question.py 5 → 5`
+（**改契约**：登记表 + 来路逐个核，不增条数）。`^def test_` 数的是函数条数，基线数的是 pytest 收集数
+（参数化会展开）⇒ 两个口径不许互相验证。
+⚠ **本批我先做错了一次**：拿 `2e57db0`（压缩上下文里那个旧 HEAD）当绝对基准量出 `+18`，
+对不上 1261→1280 的 +19 —— 根因是 HEAD 已被第 71~74 轮推到 `3fd79c6`，我引用了上下文里的过期值。
+⇒ 与 MAJOR-2 那条「相对基准会被写下它的那一笔顶掉」同族，只是这次是**绝对基准也会过期**：
+正确问法是「哪一笔提交记着上一批的数」——
+`git show <c>:AGENTS.md | grep -o '[0-9]\{4\} passed'`（今天对 `3a0a920`/`2e57db0` 印 1261/1270，
+对 `92f442d`/`3fd79c6` 印 1278/1287）。
+
+④ **体检日志的归属边界**：本批那一份运行头逐字是
+`# run @ 2026-09-30T02:39:28+08:00  git=3fd79c62f58a  worktree=dirty(3)  python=3.12.10  共 74 处变异 / 12 个判据文件`。
+`worktree=dirty(3)` ⇒ 它跑在**本批未提交的工作树**上，只自证"哪一批改动跑过"，**不是**"被审的那一版
+已提交"的凭据（第 67 轮那一份是 `clean`，两者含义不同，别混着引）。
+⚠ 原始日志此刻只在 `data/_review_tmp/r70b-chain.log`（**整目录不入库**）⇒ 这句不写成"随仓库走"；
+下一批要引用必须先 `git add` 进 `docs/迭代计划/run-20260927-mutation/` 并用 `git ls-files` 核。
+
+⑤ **顺手关掉 #168**：`docs/模块总览/前端与接口层.md` 里那句"两处都必须被点名"是一个**没有命令印得出来**
+的中文数 ⇒ 换成绑命令的写法（同一段末尾直接给
+`python -m pytest tests/unit/test_db_space.py::test_the_skip_sentence_has_exactly_one_home_in_the_source -q`）
+⇒ `python scripts/audit_doc_claims.py` 退 **0**，"看得见但不判"那桶从 17 回到 **16**
+（回执逐字：`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；另有 16 条"看得见但不判"（编号列表账、基线流水）`）。
+
+⑥ **镜像现读（数随净值日历动，别抄文本）**：`python scripts/close_unknowable_predictions.py`（只出计划、
+不写库）退 **2**（那是设计值）⇒ `[计划] 到期未判里可以判定"永远问不出来"的：6 条；仍在等的：15 条`
+（上一批同一条命令印 `0 / 18`）。那 6 条是 `2304/2243/2303/2629/2915`（压在 `515440`）+ `3076`（`158038`），
+真执行走 `--apply --confirm CLOSE-UNVERIFIABLE`（有备份与 `--restore-from`）；生产侧同类关闭仍是老板决定项。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务；五步串成一条链 `data/_review_tmp/r70b-chain.sh`，逐步记时刻与退码，
+**前四步退 0、第五步退 2（那是设计值，见上面 ⑥）**，02:22 起、02:52 收（北京）：
+
+- `pytest tests/unit -q` → **1280 passed / 16 skipped / 0 failed**（500.20 秒，02:30:57，退 0）。
+- `pytest tests/ -q` → **1289 passed / 16 skipped / 0 failed**（500.24 秒，02:39:27，退 0）。
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` → **74 处全 RED、退 0**（02:52:30）：
+  CONTROL-GREEN = 12 个判据文件在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL /
+  无 `[还原失败]`；15 行"已还原"里含 `viewpoint_workflow_service.py`；运行头见上面 ④。
+  ⚠ M71/M72/M73 三处**没有各自单独跑过**（`--only` 各一次）—— 它们随全套跑过且各自 RED，
+  但按本仓尺度（第 68/69 轮那条）"新条目单独跑一次"这句话本批没兑现，写在这是为了不让下一轮把它当已做。
+  `audit_doc_claims.py` → 退 **0**（上面 ⑤ 那一行逐字）。
+  镜像 dry-run → **6 可关 / 15 仍在等**，退 **2**（上面 ⑥）。
+  链后 `git status --porcelain` 只剩本批那六个文件（`src/` 1、`tests/` 2、`scripts/` 1、`docs/` 2）。
+
+**门禁一句**：本批**未推**（推之前先拿一份**新的**独立复评，≥75 才推）；`origin/main` 与本地 HEAD
+现在同指 `3fd79c6`（第 74 轮，95/100 已推已部署）。线上此刻本批没有新东西在跑，
+部署后以 `/api/health/detail` 的 `git_commit` 与 `index.html` 的 LF 归一后 md5 为准（这两个出口
+本批没量过本批那一版，别把上面任何一句"线上此刻"当成部署后的事实）。
+
+（上一批：2026-09-30 **01:1x（北京）**，**任务 #166：第 73 轮复评（79/100 ⇒ ≥75 已放行，
 `d5d5fed` 已推已部署）返修——MAJOR-1 是"清理那一条腿带着全局锁早退，13 个按钮静默灰死到刷新"，
 另三条 MINOR 全是我上一批自己写下的话**
 （本批只有一条是产品行为，而且它正是老板那句"清理的信息只要点击相关按钮就行了，绝对不会造成其他问题"

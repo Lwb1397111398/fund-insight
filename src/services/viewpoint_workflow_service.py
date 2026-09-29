@@ -10,6 +10,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from src.models.database import BatchAnalysisTask, CrawlerArticleRecord, SessionLocal, Viewpoint
+from src.services.prediction_lifecycle import archive_stamp
+from src.services.retention_three_buckets import ThreeBucketPolicy
 from src.services.viewpoint_service import get_source_authority
 
 
@@ -326,6 +328,13 @@ class ViewpointWorkflowService:
         if viewpoint_type in cls._REJECT_VIEWPOINT_TYPES:
             # 方向/板块等字段仍照常写入，回收站里可查看 AI 的完整判断
             viewpoint.is_deleted = True
+            # 任务 #142：既然这一行进的是回收站，就必须带上那一对时间戳。
+            # 少了 `deleted_at`，线上唯一会删观点行的那把尺子
+            # （`retention_three_buckets._deleted_viewpoint_ids` 要求 `deleted_at.isnot(None)`）
+            # 就永远把它挡在清理候选之外 —— 镜像实测 18 行 `rejected:` 全这样卡着。
+            # 保留天数取自三桶策略本身，不在这里立第二个数。
+            viewpoint.deleted_at, viewpoint.restore_before = archive_stamp(
+                retention_days=ThreeBucketPolicy().deleted_viewpoint_days)
             viewpoint.analysis_summary = f"rejected:{viewpoint_type}"
             viewpoint.reassessment_reason = (
                 f"AI 判定为「{viewpoint_type}」，不属于理性市场分析，已自动排除出市场观点汇总"
