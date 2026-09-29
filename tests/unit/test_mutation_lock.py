@@ -380,33 +380,113 @@ def test_rewriting_a_source_file_also_drops_its_stale_bytecode(tmp_path):
     drop(str(tmp_path / 'never_imported.py'))
 
 
+def _os_replace_sites_without_a_cache_drop(text):
+    r"""数出"`os.replace(...)` 落在源码里、同一语句块的下一句不是 `_drop_bytecode(...)`"的行号。
+
+    三条刻意收窄，都写进返回语义：
+    ① **只看 `os.replace`**（`Name('os')` + `attr == 'replace'`）—— 不相干的 `buf.replace(a, b)`
+       不许被点名（第一版只比 `attr`，那一格是潜在误报）；
+    ② **不限语句位置**：赋值右侧、`return` 的值、`except` 支里、嵌套 `def` 里都要看见
+       （第一版要求"整句正好是一次调用"且不钻 handlers ⇒ 换个写法就隐身，第 69 轮 MINOR-5）；
+    ③ 判的是**同一语句块的下一句**，不是"文件里出现过这个函数"。
+
+    边界（要说白，别当已封）：这把尺子管不到**别的改写写法** —— `shutil.copyfile`、
+    `Path.write_text`、`open(p, 'w')` 直接覆盖源文件都不在它眼里。今天这份工具里没有那种形状
+    （复核：`grep -n "copyfile\|write_text\|open(" scripts/mutation_proof_lifecycle.py` 只命中
+    `io.open(backup…)` / `io.open(tmp…)` 两处，写的都不是 `.py` 本体，紧随其后那次 `os.replace`
+    才把内容放进源文件，而那两处后面都接了 `_drop_bytecode`）。
+    谁把还原改成别的写法，这条就退回"看不见" —— 由这一段注释负责被下一轮想起来。
+    """
+    tree = ast.parse(text)
+    missing = []
+
+    def is_drop(node):
+        return (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, 'id', None) == '_drop_bytecode')
+
+    def calls_os_replace(node):
+        """本语句**自己**那些表达式里的 `os.replace`；子语句（if / for / try / def 的体）不算。
+
+        子语句由它们自己的语句块去判 —— 那里"下一句"才是它真正的下一句。
+        第一版让外层扫描一路钻进 `Try` / `For` 的体，结果把三处**明明接了**的站点
+        报成没接（过宽的闸，下一轮就会被整条关掉）。
+        """
+        found = []
+
+        def scan(cur):
+            if isinstance(cur, (ast.stmt, ast.ExceptHandler)) and cur is not node:
+                return        # 子语句：交给它自己的语句块
+            if (isinstance(cur, ast.Call) and isinstance(cur.func, ast.Attribute)
+                    and cur.func.attr == 'replace'
+                    and isinstance(cur.func.value, ast.Name) and cur.func.value.id == 'os'):
+                found.append(cur.lineno)
+            for _, value in ast.iter_fields(cur):
+                if isinstance(value, ast.AST):
+                    scan(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, ast.AST):
+                            scan(item)
+
+        scan(node)
+        return found
+
+    def sub_suites(node):
+        out = []
+        for _, value in ast.iter_fields(node):
+            if not isinstance(value, list):
+                continue
+            if value and all(isinstance(v, ast.stmt) for v in value):
+                out.append(value)
+            for item in value:
+                if isinstance(item, ast.ExceptHandler):
+                    out.append(item.body)
+        return out
+
+    def walk(suite):
+        for i, node in enumerate(suite):
+            for line in calls_os_replace(node):
+                nxt = suite[i + 1] if i + 1 < len(suite) else None
+                if not is_drop(nxt):
+                    missing.append(line)
+            for block in sub_suites(node):
+                walk(block)
+
+    walk(tree.body)
+    return sorted(set(missing))
+
+
 def test_no_write_site_forgets_to_drop_the_bytecode():
-    """每个改写源码的站点后面必须紧跟一次 `_drop_bytecode` —— 少一个方向就有一半假账。
+    """每一处 `os.replace` 后面必须紧跟一次 `_drop_bytecode` —— 少一个方向就有一半假账。
 
     陈旧缓存两个方向都坏：**落载荷时不清** ⇒ 变异失效（假 GREEN，体检反而满分通过）；
-    **还原时不清** ⇒ 变异残留（假 RED，像 2026-09-29 那次整轮作废）。
+    **还原时不清** ⇒ 变异残留（假 RED，像 2026-09-29 那次整轮作废，退 4）。
     所以判的是"每一处都接了"，不是"有没有这个函数"。
     """
     path = os.path.join(os.path.dirname(__file__), '..', '..',
                         'scripts', 'mutation_proof_lifecycle.py')
-    tree = ast.parse(io.open(path, encoding='utf-8').read())
-    missing = []
+    assert not _os_replace_sites_without_a_cache_drop(
+        io.open(path, encoding='utf-8').read()), \
+        '有改写源码的站点后面没接 `_drop_bytecode`'
 
-    def walk(suite):
-        for i, node in enumerate(suite):
-            call = getattr(node, 'value', None)
-            if (isinstance(node, ast.Expr) and isinstance(call, ast.Call)
-                    and getattr(call.func, 'attr', None) == 'replace'):
-                nxt = suite[i + 1] if i + 1 < len(suite) else None
-                ok = (isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Call)
-                      and getattr(nxt.value.func, 'id', None) == '_drop_bytecode')
-                if not ok:
-                    missing.append(node.lineno)
-            for field in ('body', 'orelse', 'finalbody'):
-                sub = getattr(node, field, None)
-                if isinstance(sub, list) and sub and isinstance(sub[0], ast.stmt):
-                    walk(sub)
-
-    walk(tree.body)
-    assert not missing, ('这些改写源码的站点后面没接 `_drop_bytecode`（第 %s 行）⇒ '
-                         '字节数相同的载荷会让下一次跑吃到陈旧缓存' % missing)
+    # 控制断言（第 69 轮 MINOR-5：上一版这把尺子对四种改写位置全部隐身、对一种正常写法误伤）
+    shapes = {
+        '裸语句接了': "os.replace('a', 'b')\n_drop_bytecode('b')\n",
+        '赋值右侧': "def f():\n    d = os.replace('a', 'b')\n    return d\n",
+        'return 里': "def f():\n    return os.replace('a', 'b')\n",
+        'except 支里': "def f():\n    try:\n        g()\n    except OSError:\n"
+                      "        os.replace('a', 'b')\n    h()\n",
+        '嵌套 def 里': "def f():\n    def inner():\n        os.replace('a', 'b')\n"
+                       "    return inner\n",
+        'except 支里接了': "def f():\n    try:\n        g()\n    except OSError:\n"
+                          "        os.replace('a', 'b')\n        _drop_bytecode('b')\n",
+        '别人的 replace': "def f(buf):\n    buf.replace('a', 'b')\n    return buf\n",
+    }
+    must_name = ('赋值右侧', 'return 里', 'except 支里', '嵌套 def 里')
+    must_keep = ('裸语句接了', 'except 支里接了', '别人的 replace')
+    for name, src in shapes.items():
+        hits = _os_replace_sites_without_a_cache_drop(src)
+        if name in must_name:
+            assert hits, '%s 那一格的 os.replace 没被点名 ⇒ 这把尺子对它失明' % name
+        else:
+            assert not hits, '%s 被误伤 ⇒ 过宽的闸下一轮就会被整条关掉' % name

@@ -444,6 +444,12 @@ def evidence_answer(in_window: Sequence[date],
       · `'not_due'`  窗口还没到期 ⇒ 现在问不出结果，**这不等于"给得出"**；
       · `'unknown'`  窗口起点说不清、或这只标的在库里一笔净值都没有（刚建档还没同步过）。
 
+    第三个槽位 `cause` **只在 `'unknown'` 那一档非空**，取 `'no_start'` / `'no_nav'`
+    （第 69 轮复评 MINOR-6）：这两格病因不同、动作也不同 —— `no_nav` 是"库里还没有这段净值"，
+    跑一次「更新基金」就有答案；`no_start` 是这条预测连窗口起点都说不清，补多少净值都不会变。
+    并成一句给一副药就是假话，所以由**这把尺子自己**把来路交出来 —— 调用方不许再自己比
+    `start is None`（那会变成第二把尺子）。
+
     为什么要拆这一层（第 67 轮复评 MAJOR-8，镜像现数）：调用方以前只问 `calendar_gap()` 是不是空，
     于是三种"还不知道"和一种"真给得出"被数进同一个键，页面上那句话就成了
     "它们自己那只标的就给得出这段窗口的净值" —— 镜像补标那一路 830 条候选里 **189 条（22.8%）**
@@ -455,24 +461,26 @@ def evidence_answer(in_window: Sequence[date],
     days = [d for d in (_as_date(x) for x in (in_window or [])) if d is not None]
     latest = _as_date(latest_nav)
     if start is None or latest is None:
-        return 'unknown', None
+        return 'unknown', None, ('no_start' if start is None else 'no_nav')
     if nav_cannot_cover_window(latest, start):
-        return 'cannot', ('它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
-                          ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测' % (latest, start))
+        return ('cannot', '它最后一笔净值停在 %s，早于这条预测的窗口起点 %s'
+                         ' ⇒ 那段净值不会再来，绑上去等于制造一条验不了的预测'
+                         % (latest, start), None)
     if end > (_as_date(today) or current_as_of()):
-        return 'not_due', None            # 还没到期：等到净值来就知道了
+        return 'not_due', None, None      # 还没到期：等到净值来就知道了
     min_points = config.VERIFY_MIN_DATA_POINTS
     if len(days) < min_points:
-        return 'cannot', ('这段窗口（%s~%s）里它只发过 %d 笔净值，验证器至少要 %d 个比较点'
-                          ' ⇒ 绑过去会一直判不出来（挂在「到期未判」那一档）'
-                          % (start, end, len(days), min_points))
+        return ('cannot', '这段窗口（%s~%s）里它只发过 %d 笔净值，验证器至少要 %d 个比较点'
+                         ' ⇒ 绑过去会一直判不出来（挂在「到期未判」那一档）'
+                         % (start, end, len(days), min_points), None)
     gap = (end - max(days)).days
     max_age = config.VERIFY_MAX_END_NAV_AGE_DAYS
     if gap > max_age:
-        return 'cannot', ('目标日 %s 已经过了 %d 天，可它在这段窗口里最后一笔净值是 %s'
-                          '（相差 %d 天 > %d 天上限）⇒ 终点取不到，绑过去会一直判不出来'
-                          % (end, (current_as_of() - end).days, max(days), gap, max_age))
-    return 'evidenced', None
+        return ('cannot', '目标日 %s 已经过了 %d 天，可它在这段窗口里最后一笔净值是 %s'
+                         '（相差 %d 天 > %d 天上限）⇒ 终点取不到，绑过去会一直判不出来'
+                         % (end, (current_as_of() - end).days, max(days), gap, max_age),
+                         None)
+    return 'evidenced', None, None
 
 
 def target_cannot_evidence_window(in_window: Sequence[date],

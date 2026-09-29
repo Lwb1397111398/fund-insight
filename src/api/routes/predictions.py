@@ -231,7 +231,8 @@ def sync_sector_mapping(
         via_done = result.get('predictions_via_gap_fill') or 0
         kept = result.get('predictions_kept_own_target') or 0
         waiting = result.get('predictions_kept_window_not_due') or 0
-        unclear = result.get('predictions_kept_answer_unknown') or 0
+        no_nav = result.get('predictions_kept_no_nav') or 0
+        no_start = result.get('predictions_kept_no_start') or 0
         # "这一轮一块都不动"那句会把三档数一次性说完 ⇒ 下面那三句就不许再说一遍
         # （2026-09-29 镜像真预览回执里 481/155 各被说了两遍，两处措辞还不同 ——
         #  同一件事两句不同说法，读的人只能猜"是不是两批行"。第 68 轮复评 MAJOR-1 同族。）
@@ -249,14 +250,30 @@ def sync_sector_mapping(
             # 这句要分**三档**说（第 67 轮复评 MAJOR-8 + 第 68 轮 MINOR-1）：门放行的既有
             # "自己就给得出净值"，也有"这段窗口还没到期"，还有"这把尺子答不出"
             # —— 后两档写成"给得出"都是假话（镜像那一路 22.8% 属于还没到期那一档）。
-            parts.append(f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测这一轮"
-                         f"一块都不动：{kept} 条自己那只标的就给得出净值"
-                         + (f"，{waiting} 条这段窗口还没到期" if waiting else "")
-                         + (f"，{unclear} 条这把尺子答不出（窗口起点说不清，"
-                            f"或那只标的在库里还没有一笔净值 ⇒ 先跑一次「更新基金」）"
-                            if unclear else "")
-                         + ("" if kept or waiting or unclear else "（按上面三档各自的原因）"))
-            buckets_spoken = bool(kept or waiting or unclear)
+            # 四档各自一句短话，**只把非零的档拼进去**；下面那四句长话在这一句说过之后不再重复
+            # （第 69 轮 MINOR-4：同一批数两处说两遍、措辞还不同）。
+            bits = [f"{kept} 条自己那只标的就给得出净值"] if kept else []
+            if waiting:
+                bits.append(f"{waiting} 条这段窗口还没到期")
+            unknown_bits = []
+            if no_nav:
+                unknown_bits.append(f"{no_nav} 条那只标的库里还没有一笔净值"
+                                     f"⇒ 跑一次「更新基金」")
+            if no_start:
+                unknown_bits.append(f"{no_start} 条连窗口起点都说不清"
+                                     f"⇒ 补净值不会变，要动的是那条预测自己的起点日期")
+            if unknown_bits:
+                bits.append('这把尺子答不出 ' + '、'.join(unknown_bits))
+            parts.append(
+                f"{len(fillable)} 个板块内置表说得出对口标的，但它们身上的预测这一轮"
+                + ("一块都不动：" + "，".join(bits)
+                   if bits else
+                   # 四档全 0 ⇒ 没有一条预测走到这道门。这句**不指向任何屏幕上的栏**
+                   # （第 69 轮 MINOR-7：上一版那句"按上面三档各自的原因"自指三句一句都没渲染，
+                   #  与第 53 轮 A-1「哪两种原因见上方…」同一形状），也不替这些行编一个原因。
+                   "一块都不动：这一轮没有一条挂在这 "
+                   f"{len(fillable)} 个板块上的未判预测走到「板块没有可用标的」那一步"))
+            buckets_spoken = bool(bits)
         refused = result.get('sectors_refused_to_fill') or []
         if refused:
             # "内置表也说不出对口品种"原来是一句**写死的**诊断，而服务侧实测有六种拒收：
@@ -292,15 +309,19 @@ def sync_sector_mapping(
         if waiting and not buckets_spoken:
             parts.append(f"{waiting} 条预测也没动：这段窗口**还没到期**"
                          f"⇒ 现在问不出结果，等到期那天再说")
-        # 第三档（第 68 轮复评 MINOR-1）：`unknown` 既不是"给得出"也不是"等到期就行"。
-        # 上一版把它并进"还没到期（或窗口起点说不清）"那句 ⇒ 对"有档案、库里一行净值都没有"
-        # 那些行是假话：等到期那天照样问不出来，缺的是净值行而不是日历，
-        # 该说的是"先跑一次「更新基金」"。镜像今天这一档是 0 条，所以这句话今天是潜伏的，
-        # 但形状与 MAJOR-8 同一个 —— 由 `test_the_unknown_answer_gets_its_own_sentence` 钉住。
-        if unclear and not buckets_spoken:
-            parts.append(f"{unclear} 条预测也没动：**这把尺子答不出**"
-                         f"（窗口起点说不清，或那只标的在库里还没有一笔净值）"
-                         f"⇒ 现在判不了，跑一次「更新基金」把净值补齐再看")
+        # 第三、四档：这把尺子"答不出"有两种病因，各有各的动作
+        # （第 68 轮 MINOR-1 把它从"还没到期"里拆出来；第 69 轮 MINOR-6 再拆一刀 ——
+        #  上一版两种病因共用一句"先跑一次「更新基金」"，对"窗口起点说不清"那半是配错药：
+        #  那种行缺的是那条预测自己的起点日期，净值补多少都不会变）。
+        # 两库今天这两档都是 0 条 ⇒ 潜伏，但形状与 MAJOR-8 同一个，各钉一句。
+        if no_nav and not buckets_spoken:
+            parts.append(f"{no_nav} 条预测也没动：**这把尺子答不出**"
+                         f"（那只标的在库里还没有一笔净值）⇒ 现在判不了，"
+                         f"跑一次「更新基金」把净值补齐再看")
+        if no_start and not buckets_spoken:
+            parts.append(f"{no_start} 条预测也没动：**这把尺子答不出**"
+                         f"（那条预测连窗口起点都说不清）⇒ 跑多少次「更新基金」都不会变，"
+                         f"要动的是那条预测自己的起点日期（重新分析那条帖子）")
         # 带结论的那几条要说在**点执行之前**：`reset_verified` 一直在逐行明细里，
         # 可预览回执从来没把它数成一句人话 ⇒ 老板只能事后翻台账才知道清了多少
         # （第 67 轮复评 MAJOR-5：这一档的暴露面必须事前看得见）。

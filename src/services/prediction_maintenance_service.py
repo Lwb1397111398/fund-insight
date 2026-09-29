@@ -437,7 +437,8 @@ class PredictionMaintenanceService:
             FundInfo.fund_code.in_(wanted)).all()} if wanted else set()
         kept_own_target = 0
         kept_window_not_due = 0
-        kept_answer_unknown = 0
+        kept_no_nav = 0
+        kept_no_start = 0
         for prediction, mapping, sector, via_gap in pairs:
             # **只紧不松**的门，装在补标那一路，不装在有映射行那一路 —— 这一条是刻意的，
             # 不是漏了（第 67 轮复评 MAJOR-5 指出"同一把尺子两腿两种待遇"，答复写在这儿，
@@ -455,6 +456,7 @@ class PredictionMaintenanceService:
             # 已有结论（第 18 轮"一键清空 515 条结论"的同一个形状）。
             # 镜像 2026-09-29 02:39 同一份代码、只把这道门换成 `if False`，两趟预览各印：
             #   加门   would_update 28 / kept 481 给得出 + 155 还没到期 + 0 答不出 / via_planned 0 / skipped 1
+            #          （"答不出"这一档第 69 轮再拆两格：0 条没净值 + 0 条说不清起点，两库今天都是 0）
             #   不加门 would_update 655 / kept 0 / via_planned 627 / skipped 10
             #              而那 627 条里 **470 条带着已判结论**（改标就会被清掉）
             # 两个口径合得起来：655 = 28 + 627，636 = 627 + 9（那 9 条即使改标也会被
@@ -466,22 +468,24 @@ class PredictionMaintenanceService:
             # 一组阈值）：`cannot` ⇒ 该动；`evidenced` ⇒ 不动且话是"给得出"；
             # `not_due` / `unknown` ⇒ 也不动，但话只能说"现在还没到问的时候/说不清"
             # （第 67 轮复评 MAJOR-8：把这三档一起说成"自己就给得出净值"是 189/830 条的假话）。
-            own_answer = calendar_answer(
+            kind, _reason, cause = calendar_answer(
                 calendar, prediction.fund_code,
-                prediction.prediction_date, prediction.target_date)[0] \
+                prediction.prediction_date, prediction.target_date) \
                 if (via_gap and prediction.fund_code and prediction.fund_code in archived) \
-                else 'cannot'
-            if own_answer in ('evidenced', 'not_due', 'unknown'):
-                if own_answer == 'evidenced':
+                else ('cannot', None, None)
+            if kind in ('evidenced', 'not_due', 'unknown'):
+                if kind == 'evidenced':
                     kept_own_target += 1
-                elif own_answer == 'not_due':
+                elif kind == 'not_due':
                     kept_window_not_due += 1
+                elif cause == 'no_nav':
+                    # 有档案、库里一笔净值都没有 ⇒ 缺的是**净值行**，不是日历：
+                    # 「更新基金」能答，等到期答不出（第 68 轮 MINOR-1）。
+                    kept_no_nav += 1
                 else:
-                    # `unknown` 不是"还没到期"：它是**这把尺子答不出**（窗口起点说不清，
-                    # 或那只标的在库里一笔净值都还没有）。第 68 轮复评 MINOR-1：把它并进
-                    # "还没到期"那一档，页面上那句"等到期那天再说"对这种行就是假话
-                    # —— 它等到期也问不出来，缺的是净值行，不是日历。
-                    kept_answer_unknown += 1
+                    # 窗口起点说不清 ⇒ 补净值也不会变，这一格缺的是那条预测自己的起点日期
+                    # （第 69 轮 MINOR-6：上一版把它与上面那格共用一句"先跑一次「更新基金」"）。
+                    kept_no_start += 1
                 continue
             # "这行还挂着结论吗"只有一个判据源（`has_verdict_trace`）：这里以前自己抄了一份，
             # 与 retag 用的 `is_correct is not None` 是同一件事的两套定义（第 18 轮 M-2）。
@@ -529,10 +533,13 @@ class PredictionMaintenanceService:
             # 同一道门放行的**另一半**：这段窗口还没到期 ⇒ 也不动它，
             # 但那不是"它自己给得出净值"。分开数、分开说（第 67 轮复评 MAJOR-8）。
             "predictions_kept_window_not_due": kept_window_not_due,
-            # 第三档：这把尺子**答不出**（窗口起点说不清，或那只标的在库里一笔净值都没有）。
-            # 它既不是"给得出"也不是"等到期就行"，所以必须有自己的一句
-            # （第 68 轮复评 MINOR-1：前两档的措辞套在它头上都是假话）。
-            "predictions_kept_answer_unknown": kept_answer_unknown,
+            # 第三、四档：这把尺子**答不出**，两种病因各有各的动作
+            # （第 68 轮 MINOR-1 拆出这一档，第 69 轮 MINOR-6 再按病因拆成两格）。
+            # 总键 `predictions_kept_answer_unknown` 保留 = 两格之和，是老口径的下界，
+            # 不是第三把尺子 —— 两格都由 `evidence_answer` 的 `cause` 决定。
+            "predictions_kept_no_nav": kept_no_nav,
+            "predictions_kept_no_start": kept_no_start,
+            "predictions_kept_answer_unknown": kept_no_nav + kept_no_start,
             # 这一轮**真会被清掉结论**的条数：`reset_verified` 逐行早就带着，可从没人把它数成
             # 一句给老板看的话（第 67 轮复评 MAJOR-5）。预览里先说数、再让他点执行，
             # 这一档才叫"事前知道"，而不是事后翻台账。

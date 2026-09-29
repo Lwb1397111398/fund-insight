@@ -226,9 +226,12 @@ MUTATIONS = [
      "where='每日基金同步')\n",
      HOLD_TESTS, 'test_the_nav_unlock_path_is_wired_into_every_nav_writer'),
     # ── 第 66 轮 任务 #157：板块没有可用标的 ⇒ 从内置表补一只。五道门各一处变异 ──
+    # 第 69 轮：服务层把 `own_answer` 那一个值换成 `kind, _reason, cause` 三格解包
+    # ⇒ M29/M43 只**换锚点**，载荷与判据语义一字未动（`if False and …` / `if True:`
+    # 还是原来那个注入）。换锚点不动判据这件事，写在提交说明里也要写。
     ('M29_the_guard_that_keeps_servable_rows_is_blind', MAINT,
-     "            if own_answer in ('evidenced', 'not_due', 'unknown'):\n",
-     "            if False and own_answer in ('evidenced', 'not_due', 'unknown'):\n",
+     "            if kind in ('evidenced', 'not_due', 'unknown'):\n",
+     "            if False and kind in ('evidenced', 'not_due', 'unknown'):\n",
      GAP_TESTS, 'test_a_row_that_can_already_be_evidenced_is_left_alone'),
     ('M30_mapping_rows_are_created_even_when_nothing_moves', MAINT,
      '        gap_used = sorted({candidate["sector"] for candidate in candidates\n'
@@ -305,7 +308,7 @@ MUTATIONS = [
     # 被并成一个键，于是页面上那句"它们自己那只标的就给得出这段窗口的净值"对 22.8% 的行是假话。
     # 这一处把分档的那一句抹平 ⇒ 两档数合回一个数。
     ('M43_a_window_that_has_not_arrived_is_counted_as_evidenced', MAINT,
-     "                if own_answer == 'evidenced':\n",
+     "                if kind == 'evidenced':\n",
      '                if True:\n',
      GAP_TESTS, 'test_a_window_that_has_not_arrived_is_not_reported_as_evidenced'),
     # 同轮 MAJOR-9②：`in archived` 那一腿以前**没有任何一格用例问过**（换成恒真 40 条全绿）。
@@ -332,7 +335,7 @@ MUTATIONS = [
     # 对“有档案、库里一行净值都没有”那些行是假话（缺的是净值行，不是日历）。
     # 把第三档的计数并回第二档 ⇒ 新判据必须红。
     ('M48_the_unknown_answer_is_folded_back_into_not_due', MAINT,
-     '                    kept_answer_unknown += 1\n',
+     '                    kept_no_nav += 1\n',
      '                    kept_window_not_due += 1\n',
      GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
     # 同一批放行行在同一条消息里被说了两遍（2026-09-29 镜像真预览回执实测：
@@ -342,6 +345,31 @@ MUTATIONS = [
      '        if kept and not buckets_spoken:\n',
      '        if kept:\n',
      GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
+    # 第 69 轮复评 MINOR-4：`buckets_spoken` 只在 `kept` 一腿有牙 —— 摘掉 `waiting` /
+    # `no_nav` / `no_start` 这三条腿上的同半个条件，同一批数就说两遍，
+    # 而那份判据文件 24 条一声不响（评审席三次注入实测全绿）⇒ 每一腿各一处变异。
+    ('M50_the_waiting_bucket_is_described_twice', ROUTES,
+     '        if waiting and not buckets_spoken:\n',
+     '        if waiting:\n',
+     GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
+    ('M51_the_no_nav_bucket_is_described_twice', ROUTES,
+     '        if no_nav and not buckets_spoken:\n',
+     '        if no_nav:\n',
+     GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
+    # 两种病因并回同一格 ⇒ 页面那句就给「窗口起点说不清」那半配错药（第 69 轮 MINOR-6）。
+    # 两种病因并回同一格 ⇒ 页面那句就给「窗口起点说不清」那半配错药（第 69 轮 MINOR-6）。
+    # ⚠ 变异钉在**尺子**那一格而不是服务层的计数：`predictions.prediction_date` 是 NOT NULL，
+    # 库面上造不出 no_start 那一行，服务层的夹具对它没有牙（第 69 轮 MINOR-7 同族的自我收窄）；
+    # 能钉住它的只有上面那张形状表 —— 摘掉这里，`no_start` 就永远报成 `no_nav`。
+    ('M53_the_two_answer_causes_are_folded_into_one', LIFECYCLE,
+     "        return 'unknown', None, ('no_start' if start is None else 'no_nav')\n",
+     "        return 'unknown', None, 'no_nav'\n",
+     GAP_TESTS, 'test_the_answer_ruler_always_hands_back_three_slots'),
+    # 少交一格（把 `cause` 摘掉）⇒ 调用方按三格解当场崩，那张形状表必须红。
+    ('M54_the_answer_ruler_gives_back_only_two_slots', LIFECYCLE,
+     "    return 'evidenced', None, None\n",
+     "    return 'evidenced', None\n",
+     GAP_TESTS, 'test_the_answer_ruler_always_hands_back_three_slots'),
     ('M46_the_same_code_as_current_is_not_a_refusal', MAINT,
      "                    'kind': 'same_as_current'}\n",
      "                    'kind': 'no_static_hit'}\n",
@@ -352,11 +380,15 @@ MUTATIONS = [
 def _drop_bytecode(full):
     """改完磁盘上的 `.py` 就把它的 `.pyc` 一起放下 —— **落载荷与还原两处都要**，缺一处就假。
 
-    2026-09-29 实测撞到的：M48 那条变异的载荷与原行**字节数完全相同**
-    （`kept_answer_unknown` 与 `kept_window_not_due` 都是 19 个字符），而 CPython 判
-    "源码变没变"看的是 mtime + size 这一对。还原后的源文件如果落进同一个 mtime 刻度，
-    解释器就接着吃上一轮编译出来的陈旧 `.pyc` ⇒ 下一轮 CONTROL 在"干净代码"上量到的
-    其实是**上一处的变异**（那次表现为 CONTROL-RED 整轮作废，退 4）。
+    2026-09-29 实测撞到的：M48 那条变异的载荷与原行**字节数完全相同**（当时那两个计数名
+    `kept_answer_unknown` / `kept_window_not_due` 都是 19 个字符），而 CPython 判
+    "源码变没变"看的是 mtime + size 这一对（PEP 552 的时间戳 pyc 头只记**整秒**）。
+    ⚠ 归因必须说准，否则下一轮会把它当"偶发、可忍"：**这不是撞运气** —— 备份
+    `.mutbackup` 写在落载荷前几毫秒，而 `os.replace` 在 Windows 上保留**被移进来那个文件**
+    的 mtime ⇒ 还原后源文件的 `(int(mtime), size)` 与载荷那一轮编出的 `.pyc` 头**逐字相等**，
+    陈旧缓存**几乎必然**被吃（评审席的时序探针实测：还原后 import 仍回 MUTAT，清了才回 CLEAN）。
+    后果：下一轮 CONTROL 在"干净代码"上量到的其实是**上一处的变异**
+    （那次表现为 CONTROL-RED 整轮作废，退 4）。
     方向有两个，所以两处都得清：陈旧缓存既能让变异**失效**（假 GREEN），
     也能让它**残留**（假 RED）。删不掉就当看不见，不抛 —— 缓存不是判据的一部分。
     """

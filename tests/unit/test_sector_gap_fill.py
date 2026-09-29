@@ -40,6 +40,10 @@ from src.models.database import (
 )
 from src.services.prediction_maintenance_service import PredictionMaintenanceService
 
+from src.services import prediction_lifecycle as _lc
+
+lc_current_as_of = _lc.current_as_of
+
 GOLD = '黄金'
 
 
@@ -93,6 +97,15 @@ def _stale_archive(db, code='DEAD01', name='停更的标的', last=date(2020, 12
     db.add(FundInfo(fund_code=code, fund_name=name, sector_type=GOLD))
     db.add(FundHistory(fund_code=code, fund_name=name, nav_date=last, nav=1.0,
                        day_growth=0.0))
+    db.flush()
+
+
+def _nav(db, code, name, start=date(2026, 7, 1)):
+    """给这只标的铺 `VERIFY_MIN_DATA_POINTS` 笔净值 —— 三个档位都要它"给得出"过。"""
+    for offset in range(max(2, config.VERIFY_MIN_DATA_POINTS)):
+        db.add(FundHistory(fund_code=code, fund_name=name,
+                             nav_date=start + timedelta(days=offset),
+                             nav=1.0, day_growth=0.1))
     db.flush()
 
 
@@ -714,63 +727,154 @@ def test_a_window_that_has_not_arrived_is_not_reported_as_evidenced(test_db):
 
     body = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
     assert '1 条这段窗口还没到期' in body['message'], body['message']
-    assert '0 条自己那只标的就给得出净值' in body['message'], body['message']
+    assert '自己那只标的就给得出' not in body['message'], \
+        'kept 为 0 却还说了一遍「给得出」那一档 ⇒ 0 不该占一句：\n%s' % body['message']
     assert '没必要换成板块标的' not in body['message'], \
         '那句"给得出净值所以没必要换"对这一格是假话：\n%s' % body['message']
 
 
+def test_the_answer_ruler_always_hands_back_three_slots():
+    """这把尺子的**每一条出口**都得交出三格 —— 少一格就是把 `cause` 这件事悄悄抹掉。
+
+    这一格是本批我自己造出来的那个缺陷的形状：把 `return 'cannot', (… % (a, b), None)` 写成
+    这样时，Python 读出的是"两个元素，第二个是一格二元组"，于是调用方
+    `kind, reason, cause = …` 当场 `ValueError`，而"原因那一格"在另一条路上（`[1]`）
+    会悄悄变成 `(句子, None)` 递到页面上。⇒ 判的是**每一档的形状**，不是"有没有这个函数"。
+
+    `no_start` 这一格在库面上今天造不出来（`predictions.prediction_date` 是 NOT NULL，
+    起点说不清只剩"`_as_date` 解不出那个值"一条路），所以它由**这把尺子**钉住，
+    不靠服务层的夹具 —— 与仓库规矩"看不见就明说看不见"一致。
+    """
+    from src.services.prediction_lifecycle import evidence_answer
+
+    today = lc_current_as_of()
+    shapes = {
+        'no_start': (([], None, None, date(2026, 7, 8)), ('unknown', 'no_start')),
+        'no_nav': (([], None, date(2026, 7, 1), date(2026, 7, 8)), ('unknown', 'no_nav')),
+        '停更在窗口之前': (([], date(2025, 1, 1), date(2026, 7, 1), date(2026, 7, 8)),
+                          ('cannot', None)),
+        '还没到期': (([], date(2026, 7, 8), date(2026, 7, 1), today + timedelta(days=60)),
+                     ('not_due', None)),
+        '点数不够': (([today - timedelta(days=1)], date(2026, 7, 8), today - timedelta(days=30), today),
+                     ('cannot', None)),
+        '终点太旧': (([today - timedelta(days=39)], today - timedelta(days=39),
+                     today - timedelta(days=30), today), ('cannot', None)),
+        '给得出': (([today - timedelta(days=n) for n in range(0, 25)], today,
+                   today - timedelta(days=20), today), ('evidenced', None)),
+    }
+    for name, (args, want) in shapes.items():
+        got = evidence_answer(*args)
+        assert isinstance(got, tuple) and len(got) == 3, \
+            '%s 那一档交回来的不是三格（%r）⇒ 调用方按三格解就崩' % (name, got)
+        kind, reason, cause = got
+        assert kind == want[0], '%s 那一档判成 %s' % (name, kind)
+        assert cause == want[1], '%s 那一档的来路应是 %r，实为 %r' % (name, want[1], cause)
+        if kind == 'cannot':
+            assert isinstance(reason, str) and reason, \
+                '%s：判不出来就必须给出**一句人话**，不能是 %r' % (name, reason)
+        else:
+            assert reason is None, '%s：放行那一档不该带原因，实为 %r' % (name, reason)
+
+
 def test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due(test_db):
-    """门放行的**第三档**：这把尺子答不出 ⇒ 既不是"给得出"，也不是"等到期就行"。
+    """门放行的每一档各有各的一句，而**同一批数在同一条消息里只许出现一次**。
 
-    `calendar_answer` 返回 `'unknown'` 有两种来路（`prediction_lifecycle.py:445` 逐字写着）：
-    窗口起点说不清、**或这只标的在库里一笔净值都没有**。上一版把它并进
-    "这段窗口还没到期（或窗口起点说不清）⇒ 等到期那天再说"那一句
-    （第 68 轮复评 MINOR-1）⇒ 对"有档案、库里一行净值都没有"那一格是假话：
-    等到期那天照样问不出来，缺的是净值行不是日历，该说的是"先跑一次「更新基金」"。
+    第 67 轮 MAJOR-8 拆出"给得出 / 还没到期"，第 68 轮 MINOR-1 拆出"这把尺子答不出"，
+    第 69 轮 MINOR-6 再把"答不出"按**病因**拆成两格 —— 因为两者的动作相反：
+      · `no_nav`   有档案、库里一笔净值都没有 ⇒ 跑一次「更新基金」就有答案；
+      · `no_start` 这条预测连窗口起点都说不清 ⇒ 补多少净值都不会变，要动的是那条预测自己。
+    上一版两种病因共用一句"先跑一次「更新基金」"，对后一半是配错药。
 
-    镜像今天这一档是 **0 条**（现读：481 给得出 / 155 还没到期 / 0 答不出）⇒ 这句话是潜伏的，
-    但形状与 MAJOR-8 同一个：并档 = 假话。这一格同时钉"两处不许把同一批数说两遍"
-    （2026-09-29 镜像真预览回执里 481/155 各出现两次、措辞还不同）。
+    ⚠ 这一格同时钉 MINOR-4：`buckets_spoken` 那半个条件原本只在 `kept` 一腿有牙
+    （摘掉 `waiting` / `no_nav` 腿上的它，那份判据文件一声不响 —— 评审席实测）
+    ⇒ 每档各数一次 `count(...) == 1`，预览与执行两路都数。
+    ⚠ `no_start` 在这一格是 0：`predictions.prediction_date` NOT NULL ⇒ 库面上造不出那种行，
+    它由上面那张尺子表与 M53 负责（不许因为"页面那句今天走不到"就把它当成已验过）。
     """
     code, name = _builtin_target()
     _archive(test_db, code, name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
-    # 有档案、库里一行净值都没有，而窗口**已经到期** ⇒ 尺子答不出，不是"还没到期"
+    # ① no_nav：有档案、库里一行净值都没有，而窗口**已经到期**
     _archive(test_db, 'EMPTY01', '刚建档还没同步的标的')
     _prediction(test_db, sector=GOLD, fund_code='EMPTY01')
-    # 再来一条**自己就给得出**的：没有它，kept 恒为 0 ⇒ 下面那句"同一批数只说一遍"
-    # 结构上不可能红（重复的那一句在 `if kept:` 那一支，kept=0 时两处都不印）。
-    # 用另一只代码，不用内置表那只 —— 挂在板块同一只标的上的行会被先数成 `unchanged`，
-    # 根本走不到这道门（第 68 轮写这一格时踩到的）。
+    # ② evidenced：自己那只标的就给得出这段窗口（没有它 kept 恒为 0 ⇒ "只说一遍"那条
+    # 结构上不可能红；且必须用另一只代码 —— 挂在板块同一只标的上的行会被先数成 `unchanged`）
     _archive(test_db, 'OWN01', '自己有好标的')
-    for offset in range(max(2, config.VERIFY_MIN_DATA_POINTS)):
-        test_db.add(FundHistory(fund_code='OWN01', fund_name='自己有好标的',
-                                nav_date=date(2026, 7, 1) + timedelta(days=offset),
-                                nav=1.0, day_growth=0.1))
+    _nav(test_db, 'OWN01', '自己有好标的')
     _prediction(test_db, sector=GOLD, fund_code='OWN01')
+    # ③ not_due：窗口还没到期 ⇒ 也不是"给得出"
+    _archive(test_db, 'OWN02', '窗口还没到的那只')
+    _nav(test_db, 'OWN02', '窗口还没到的那只')
+    _prediction(test_db, sector=GOLD, fund_code='OWN02',
+                window=(date(2026, 7, 1), date(2099, 7, 8)))
     test_db.commit()
 
     result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=True)
-    assert result['predictions_kept_answer_unknown'] == 1, result
-    assert result['predictions_kept_window_not_due'] == 0, \
-        '库里一笔净值都没有被数成"还没到期" ⇒ %s' % result
     assert result['predictions_kept_own_target'] == 1, result
+    assert result['predictions_kept_window_not_due'] == 1, result
+    assert result['predictions_kept_no_nav'] == 1, result
+    assert result['predictions_kept_no_start'] == 0, result
+    assert result['predictions_kept_answer_unknown'] == 1, \
+        '总键必须等于两格之和（1 + 0）：%s' % result
+    assert result['predictions_via_gap_fill_planned'] == 0, \
+        '三档都放行 ⇒ 一条都不该被补标：%s' % result
 
-    body = prediction_routes.sync_sector_mapping(request=_request(), dry_run=True, db=test_db)
-    assert '这把尺子答不出' in body['message'], body['message']
-    assert '还没到期' not in body['message'], \
-        '它对"还没到期"那一档是假话：\n%s' % body['message']
-    assert '更新基金' in body['message'], '该给的动作没给：\n%s' % body['message']
-    # 同一批放行行只许说一句：预览那句已经把三档数报完了，后面那三句就不再重复
-    assert body['message'].count('自己那只标的就给得出') == 1, \
-        '同一批数被说了两遍（两处措辞还不同）：\n%s' % body['message']
+    preview = prediction_routes.sync_sector_mapping(
+        request=_request(), dry_run=True, db=test_db)['message']
+    for phrase in ('自己那只标的就给得出', '还没到期', '还没有一笔净值'):
+        assert preview.count(phrase) == 1, '"%s" 在这条回执里出现了 %d 次：\n%s' % (
+            phrase, preview.count(phrase), preview)
+    assert preview.count('这把尺子答不出') == 1, '两格病因被分成两句各说一遍：\n%s' % preview
+    assert '跑一次「更新基金」' in preview, preview
+    assert '补净值不会变' not in preview, 'no_start 那一格今天为 0，这句不许出现：\n%s' % preview
 
-    # 执行那一路（预览那句不触发）必须由**另一句**说同一档，不许沉默
-    done = prediction_routes.sync_sector_mapping(
-        request=_request(CONFIRM), dry_run=False, db=test_db)
-    assert '这把尺子答不出' in done['message'], done['message']
-    assert '还没到期' not in done['message'], done['message']
-    assert test_db.query(Prediction).filter_by(fund_code='EMPTY01').one().fund_code == 'EMPTY01', \
-        '尺子答不出的那一档照样不该被改标'
+    # 执行那一路（摘要那句不触发）必须由**分句**接手，各一次、不许沉默
+    receipt = prediction_routes.sync_sector_mapping(
+        request=_request(CONFIRM), dry_run=False, db=test_db)['message']
+    for phrase in ('自己那只标的就给得出', '还没到期', '还没有一笔净值'):
+        assert receipt.count(phrase) == 1, '"%s" 在执行回执里出现了 %d 次：\n%s' % (
+            phrase, receipt.count(phrase), receipt)
+    assert '跑一次「更新基金」' in receipt, receipt
+    assert '连窗口起点都说不清' not in receipt, receipt
+
+    for held in ('EMPTY01', 'OWN01', 'OWN02'):
+        assert test_db.query(Prediction).filter_by(fund_code=held).one().fund_code == held, \
+            '%s 那一档本不该动它' % held
+
+
+def test_a_round_that_moves_nothing_never_points_at_a_line_that_never_printed(test_db):
+    """四档全为 0 时那句不许自指屏幕上不存在的栏（第 69 轮 MINOR-7，第 53 轮 A-1 同形）。
+
+    这一格**可达**，而且就在本文件最早踩到的那个形状上：预测的标的**正好等于**内置表给这个
+    板块的那只 ⇒ 先被数成 `unchanged`，压根走不到证据门 ⇒ 板块仍然 `fillable`、四档计数全 0。
+    上一版那句"（按上面三档各自的原因）"在这种回执里指向三句一句都没渲染的话。
+
+    ⚠ 夹具换一块板块标签、净值也换一个日期区间：本文件的 `test_db` 会把前面几格的行留在库里，
+    与 `(fund_code, nav_date)` 的唯一约束撞车（第一次就是这么红的）。
+    """
+    label = '券商'
+    code, name = _builtin_target(label)
+    _archive(test_db, code, name, with_nav_for=(date(2026, 8, 3), date(2026, 8, 12)))
+    _prediction(test_db, sector=label, fund_code=code,
+                window=(date(2026, 8, 3), date(2026, 8, 10)))
+    test_db.commit()
+
+    result = PredictionMaintenanceService(test_db).sync_sector_mappings(dry_run=True)
+    assert result['predictions_unchanged'] >= 1, result
+    assert result['predictions_kept_own_target'] == 0, result
+    assert result['predictions_kept_window_not_due'] == 0, result
+    assert result['predictions_kept_no_nav'] == 0, result
+    assert result['predictions_kept_no_start'] == 0, result
+    if result['sectors_to_fill']:
+        pytest.skip('这块板块这一轮真进了补标名单 ⇒ 走不到"四档全 0"那一句，'
+                    '这一格要换一块没人要补的板块（现在的数：%s）' % result['sectors_to_fill'])
+
+    message = prediction_routes.sync_sector_mapping(
+        request=_request(), dry_run=True, db=test_db)['message']
+    assert '一块都不动' in message, message
+    assert '这一轮没有一条挂在' in message, \
+        '四档全 0 时这一句必须自己把话说完，不许留下空冒号：\n%s' % message
+    for pointing in ('见上方', '按上面', '如上', '见明细'):
+        assert pointing not in message, '这句指向一个不存在的栏：%s' % message
 
 
 def test_a_target_with_no_archive_is_not_the_same_as_being_evidenced(test_db):
