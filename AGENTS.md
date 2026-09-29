@@ -294,7 +294,74 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-29 **09:3x（北京）**，**任务 #163 收口 + #157 四档分流**：第 69 轮独立复评
+最近一次核对（2026-09-29 **10:4x（北京）**，**任务 #164：第 70 轮复评的三条（J-1 / J-2 / T-1+T-3）返修**
+—— 评审席这次抓到的最重一条，是我**把撤掉一条变异的责任归错了对象**：第 69 轮我以
+「`predictions.prediction_date` 是 NOT NULL ⇒ 库面上造不出 `no_start` 那一行，夹具对它没有牙」为据撤掉 M52，
+前半句是事实、结论却管不到路由 —— **路由读的是服务交回的那个计数**，把 `PredictionMaintenanceService`
+换成桩就造得出（评审席自己演了一遍，并在同一份判据文件里指出 `monkeypatch` 早有先例）。
+⚠ **另有一件关于门禁本身**：第 70 轮那份复评**跑完了但没交分数** —— 子代理用尽自己的 maxTurns
+（150）被掐停，报告 8655 字节、条目齐、结论表齐，**「分数与放行」那一节是空的**。
+⇒ 按本仓尺度「**报告非空 ≠ 门禁跑过了**」处理：**没有分数就当评审没跑，本批不推**，
+不许拿"报告很长很专业"当 ≥75 的凭据。半份报告照样有用（J-1/J-2/T-1/T-3 全部照修）。
+下一轮派单收得更紧：清单 ≤5 项、**先写分数再补细节**、禁全量 pytest 会话。
+
+① **J-1（MAJOR，产品半 + 判据半）**：`no_start` 那两句（预览摘要那一格 + 执行那一路的分句）
+**从今天起有四处置换**：`M55`（预览那一格整个哑掉）/ `M56`（给它配错药：把"补净值不会变"换成
+"跑一次「更新基金」"，与 `no_nav` 那半的反话同形）/ `M57`（执行那一路哑掉）/ `M58`（摘掉
+`not buckets_spoken` ⇒ 同一批数说两遍）。判据一条：
+`test_the_no_start_sentences_are_pinnable_without_a_library_row` —— **纯桩、不碰库**，
+夹具给 `predictions_kept_no_start: 3` + `predictions_kept_no_nav: 1`，两路各问一次：
+预览里那句必须**只出现一次**、`⇒` 后面必须接"补净值不会变"且**一个"更新基金"都不许出现**，
+而 `no_nav` 那半句必须带"更新基金"且不许出现"补净值不会变"（两格互为反面对照，防止又并回一句）；
+执行那一路必须逐字说出"跑多少次「更新基金」都不会变，要动的是那条预测自己的起点日期（重新分析那条帖子）"。
+注册表里那段撤除理由已按实测改写（"库行配不出"≠"回执配不出"），AGENTS §316 那两句同步收窄。
+② **J-2（MINOR，判据自己不合格）**：`test_a_round_that_moves_nothing_never_points_at_a_line_that_never_printed`
+原来在样品进了补标名单时 `pytest.skip` ⇒ 一放过就**永远没人能答"这一格今天到底跑没跑"**，
+而 skip 在两个口径里都算绿。现在改成**当场断言 + 说清怎么重排夹具**（本批实测：16 条 skip 一条没增，
+`tests/unit` 从 1261 推到 1262 就是这一条从"可能 skip"变成"必须跑"）。
+③ **T-1（文字账）**：`evidence_answer` 的 docstring 逐字还写着"返回 `(种类, 原因)`"，而函数交三格 ⇒ 已改。
+**T-3**：AGENTS 里那句"本地领先 13 笔"是相对基准，会被写下它的下一笔顶掉 ⇒ 改成绑命令
+（`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`）。
+④ **一批关于"我的补丁脚本自己"的账（本批最该记的，因为它不是评审给的）**：我第一版 patch
+在注册表末尾**多吐了一个 `]`** ⇒ `scripts/mutation_proof_lifecycle.py` 成语法错误，
+症状长得像"判据坏了"（`test_mutation_lock.py` 5 failed / 35 passed，`SyntaxError: unmatched ']'`）。
+我的 `--check` 只核了锚点存在，**没核结果文件能不能解析** ⇒ 从此规矩：
+**任何改写源码的一次性脚本，落盘后立刻 `ast.parse` 一遍**（`py_compile` 同效），
+不看锚点绿就交差。同批还抓到两处：我写的注册表审计脚本自己误报 5 处（它假设注册表第 2 元永远是
+`Name`，实际也可能是字面路径 —— 是**尺子**的洞不是名单的洞）；`mutation_lock` 那一份**不能 import**
+（它的导入链会按 `.env` 把全局 engine 建到生产上），所以注册表一律用纯 `ast` 读。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务；六步串成一条链 `data/_review_tmp/r70-chain.sh`，逐步记时刻与退码，**六步全退 0**
+（10:16:11 起、10:44:30 收）。⚠ **本批没改 `web/` ⇒ 前端那把体检这一轮没有重跑**，
+"141 处"那句话的凭据仍停在第 68/69 轮那一份，本段不引用它为新事实）：
+
+- `pytest tests/unit -q` → **1262 passed / 16 skipped / 0 failed**（639.15 秒，10:27:11，退 0）。
+- `pytest tests/ -q` → **1271 passed / 16 skipped / 0 failed**（501.63 秒，10:35:49，退 0）。
+  （上一基线 1261/1270 → 本批 **+1 条 / 两个口径同增**。分布用**绝对提交**：
+  `for f in $(git diff --name-only 6bc7653..HEAD -- tests/ scripts/ src/); do echo "$f $(git show 6bc7653:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ 只有 `test_sector_gap_fill.py 26 → 27`（① 那条桩判据），`test_mutation_lock.py 13 → 13`（本批没动契约）。
+  跨两批对表（`a3260fb..HEAD`）今天印 `test_mutation_lock.py 13 → 13`、`test_sector_gap_fill.py 24 → 27`。）
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` → **59 处全 RED、退 0**
+  （CONTROL-GREEN = 8 个判据文件在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL /
+  无 `[还原失败]`；跑完 `git status --porcelain -- src/ web/ tests/ scripts/` 为**空**）。
+  首行逐字 `# run @ 2026-09-29T10:35:49+08:00  git=2e57db0a5611  worktree=clean  python=3.12.10  共 59 处变异 / 8 个判据文件`
+  —— 这一份的 `git=` 就是被审的那一版（本批代码在跑链之前已提交）。
+  本批新落的 M55~M58 各**单独**跑过（`--only no_start`）⇒ 先 CONTROL-GREEN 再 RED，不是跟着全套蹭的。
+  ⚠ 原始日志仍在 `data/_review_tmp/`（整目录不入库）⇒ 这句不写成"随仓库走"；
+  下批要引用必须先 `git add` 进 `docs/迭代计划/run-20260927-mutation/` 并用 `git ls-files` 核。
+  `audit_doc_claims.py` → 退 **0**（`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
+  另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`）。
+  **镜像此刻**（只出计划不写库：`python scripts/close_unknowable_predictions.py`，退 0）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：0 条；仍在等的：18 条`。
+  线上跑的哪一版：**没变** —— 本批未推（第 70 轮没有分数），`origin/main` 仍是 `c408dcd`
+  （= 第 64 轮那一版 ⇒ #157 板块补标与 #158 那一路**都还没上生产**）。
+
+**门禁一句**：第 70 轮复评**未交分数**（子代理 maxTurns 用尽）⇒ 按"评审没跑"处理，本批不推；
+先派第 71 轮（评审对象 `a3260fb..2e57db0`，清单收紧、**分数那一节排在最前面**），≥75 才推，
+推之后再走 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）。
+
+（上一批：2026-09-29 **09:3x（北京）**，**任务 #163 收口 + #157 四档分流**：第 69 轮独立复评
 **74/100**（0 BLOCKER / 3 MAJOR / 6 MINOR）的返修 —— 最重的一条不是产品行为，是我上一批写进 git message
 的**一句假话**；而返修途中我自己又造出一个能让整条链当场崩的 arity 缺陷。分数 **74 < 75 ⇒ 本批不推**
 （`origin/main` 仍是 `c408dcd`，本地领先几笔**别在这里抄**：
