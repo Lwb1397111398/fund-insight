@@ -1,0 +1,6 @@
+# run @ 2026-09-30T04:28:39+08:00  git=21953566752a  worktree=dirty(3)  python=3.12.10  共 3 处变异 / 2 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（2 个判据文件在干净代码上全绿）
+M71_the_rejected_viewpoint_gets_no_archive_stamp           ⇒ RED（判据有效）
+M72_the_rejected_viewpoint_hard_codes_its_retention        ⇒ RED（判据有效）
+M73_the_rejected_viewpoint_stamps_with_a_different_clock   ⇒ RED（判据有效）
+已还原 src/services/viewpoint_workflow_service.py

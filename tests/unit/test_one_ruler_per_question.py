@@ -740,6 +740,20 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
         # 与上面两条的区别要说白：那两条是死路（只登记、不配绿灯），这一条今天真会被走到
         # （爬虫/批量分析判出「情绪表达」等四类时）。
         ('src/services/viewpoint_workflow_service.py', '_apply_deep_analysis'): 2,
+        # —— 任务 #142 的**第二半**：给存量那 18 行补上那一对的一次性写。
+        # 它排在 `scripts/` 而不是 `src/`，所以这把尺子从"只扫 src"扩到"src + scripts"那天起
+        # 就要求它登记（不登记 ⇒ 新造一条归档路、那只钟之外自己算日期，一个字都不报）。
+        # **它进下面"来路逐个核"那一圈**：那一对的值在这里是**现算**的（不从计划里抄），
+        # 与 `_apply_deep_analysis` 同一把钟、同一个形状。
+        ('scripts/backfill_viewpoint_archive_stamps.py', 'apply_backfill'): 2,
+        # ⚠ 同一份脚本里的**反向**那一支：`--restore-from` 把 `had_deleted_at` /
+        # `had_restore_before` 盖回那两列（撤销我这一次的补，不是新的归档入口）。
+        # 它的来路按尺子量出来是 `other` —— 值出自备份 JSON，那只钟压根不在场，
+        # 而**这正是对的**：还原要还原成"这一行原来的样子"，不是"再算一次今天"。
+        # 所以它登记、但**不进**下面那一圈（那一圈问的是"归档那一支必须出自那只钟"）。
+        # 与 `restore_prediction` / `cleanup_enhanced.restore` 的区别：那两支写的是 `None`
+        # （清空 ⇒ `none`），这一支写的是备份里的旧值。
+        ('scripts/backfill_viewpoint_archive_stamps.py', 'restore'): 2,
     }
     found = {}
     for base in ('src', 'scripts'):
@@ -763,12 +777,19 @@ def test_archiving_a_prediction_always_stamps_with_the_shared_clock():
     # 上一版把这三处一起叫"回收站那三条活路"，与刚被驳回的 M-1 同一族）。
     # 第四格是**任务 #142 新加的活路**（AI 判拒绝 ⇒ 进回收站）：它以前一个时间戳都不写，
     # 所以这一圈以前压根问不到它 —— 加进来之后，"把那一支摘掉"当场让这条红。
+    # 第五格是同一任务的**第二半**：给存量那 18 行补戳的一次性脚本 `apply_backfill`。
+    # 它为什么在这一圈里而 `restore` 不在：那一支写的是**备份里那一行原来的值**（撤销我这一次的
+    # 补，不是新的归档入口），来路按尺子量出来就是 `other` 并且**这正确**；这一支那一对值是
+    # **现算**的（不从 `--restore-from` 那份计划里抄），与 `_apply_deep_analysis` 同一把钟、
+    # 同一个形状 ⇒ 它要是哪天改成自己 `date.today() + 30`，这一圈当场点红。
     for rel, name in (('src/services/prediction_service.py', '_soft_archive'),
                       ('src/services/prediction_maintenance_service.py',
                        'deduplicate_predictions'),
                       ('src/tasks/cleanup_enhanced.py', 'soft_delete'),
                       ('src/services/viewpoint_workflow_service.py',
-                       '_apply_deep_analysis')):
+                       '_apply_deep_analysis'),
+                      ('scripts/backfill_viewpoint_archive_stamps.py',
+                       'apply_backfill')):
         src = io.open(os.path.join(ROOT, rel.replace('/', os.sep)), encoding='utf-8').read()
         tree = ast.parse(src)
         fn = [n for n in ast.walk(tree)

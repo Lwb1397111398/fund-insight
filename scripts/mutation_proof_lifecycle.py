@@ -69,6 +69,8 @@ DB_SPACE = 'src/services/db_space.py'
 DB_SPACE_TESTS = 'tests/unit/test_db_space.py'
 VP_WORKFLOW = 'src/services/viewpoint_workflow_service.py'
 VP_TESTS = 'tests/unit/test_viewpoint_refactor.py'
+VP_BACKFILL = 'scripts/backfill_viewpoint_archive_stamps.py'
+VP_BACKFILL_TESTS = 'tests/unit/test_backfill_viewpoint_archive_stamps.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -500,6 +502,39 @@ MUTATIONS = [
      '            viewpoint.deleted_at = datetime.now()\n'
      '            viewpoint.restore_before = datetime.now() + timedelta(days=30)\n',
      RULER_TESTS, 'test_archiving_a_prediction_always_stamps_with_the_shared_clock'),
+    # 任务 #142 **第二半**（给存量那 18 行补戳的一次性脚本）。三条各问一件不同的事，
+    # 全部落在 `scripts/` 而不是 `src/`：这个体检工具本来就按仓库相对路径读文件，
+    # 而"一次性脚本"恰恰是最容易没人盯的那一族（第 55 轮那次镜像 CONTROL-RED 的备份残渣就在 scripts/）。
+    # M74：保留天数有没有第二处出处；M75：那一对的值是不是出自那只钟（归档棘轮的"来路"腿）；
+    # M76：说不清来路的行有没有被拿今天冒充。
+    # ⚠ M75 的**边界**（2026-09-29 实测，写给下一轮的我）：只把 `stamp_from == 'today'`
+    #   **那一臂**换成墙钟，归档棘轮**不红** —— `_stamp_names` 收的是**整个函数**的名字集合，
+    #   另一臂那次诚实的 `archive_stamp(...)` 就把 `stamped` 这个名字买了过去。
+    #   两臂一起换才红 ⇒ 载荷必须两臂都换，别只改一臂然后说"这条有牙"。
+    ('M74_the_backfill_hard_codes_its_retention', VP_BACKFILL,
+     '    return ThreeBucketPolicy().deleted_viewpoint_days\n',
+     '    return 30\n',
+     VP_BACKFILL_TESTS, 'test_the_retention_window_is_the_policys_number_not_a_hard_coded_thirty'),
+    ('M75_the_backfill_stamps_with_a_different_clock', VP_BACKFILL,
+     '        if stamp_from == \'today\':\n'
+     '            stamped = archive_stamp(retention_days=retention_days)\n'
+     '        else:\n'
+     '            stamped = archive_stamp(retention_days=retention_days, base=v.created_at)\n',
+     '        if stamp_from == \'today\':\n'
+     '            stamped = (datetime.now(), date.today())\n'
+     '        else:\n'
+     '            stamped = (v.created_at, date.today())\n',
+     RULER_TESTS, 'test_archiving_a_prediction_always_stamps_with_the_shared_clock'),
+    ('M76_the_backfill_invents_a_stamp_for_a_row_that_cannot_say', VP_BACKFILL,
+     '            if not isinstance(v.created_at, datetime):\n',
+     '            if False:\n',
+     VP_BACKFILL_TESTS, 'test_a_row_that_cannot_say_when_it_arrived_is_refused_not_invented'),
+    # 两种缺口并成一组 ⇒ 脚本那句"现状"就退化成一句"缺那一对时间戳"，
+    # 对 400 行（已在清理候选里）是反话、对 18 行（永远进不了桶）是说轻了。
+    ('M77_the_backfill_folds_the_two_gaps_into_one', VP_BACKFILL,
+     '    no_stamp = [v for v in rows if v.deleted_at is None]\n',
+     '    no_stamp = list(rows)\n',
+     VP_BACKFILL_TESTS, 'test_the_two_gaps_are_not_one_gap_and_the_cleaner_only_ever_sees_one_of_them'),
 ]
 
 

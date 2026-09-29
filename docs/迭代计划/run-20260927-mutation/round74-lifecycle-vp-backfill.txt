@@ -1,0 +1,9 @@
+# run @ 2026-09-30T04:33:36+08:00  git=21953566752a  worktree=dirty(3)  python=3.12.10  共 5 处变异 / 3 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（3 个判据文件在干净代码上全绿）
+M17_the_backfill_window_becomes_a_constant                 ⇒ RED（判据有效）
+M74_the_backfill_hard_codes_its_retention                  ⇒ RED（判据有效）
+M75_the_backfill_stamps_with_a_different_clock             ⇒ RED（判据有效）
+M76_the_backfill_invents_a_stamp_for_a_row_that_cannot_say ⇒ RED（判据有效）
+M77_the_backfill_folds_the_two_gaps_into_one               ⇒ RED（判据有效）
+已还原 src/services/prediction_lifecycle.py
+已还原 scripts/backfill_viewpoint_archive_stamps.py

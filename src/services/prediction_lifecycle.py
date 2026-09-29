@@ -76,7 +76,7 @@ def beijing_now() -> datetime:
     return datetime.combine(current_as_of(), clock.time())
 
 
-def archive_stamp(retention_days: int = 30):
+def archive_stamp(retention_days: int = 30, base: Optional[datetime] = None):
     """归档一行的那一对时间戳：`(归档时刻, 可恢复到哪天)`。
 
     为什么要有这个函数（第 54 轮 A-1 / B-2）：会把一行放进回收站的有手动归档、系统关闭、
@@ -85,8 +85,19 @@ def archive_stamp(retention_days: int = 30):
     里那把棘轮：它按 (文件, 函数) 收站点，并且**数每个函数里有几处写**（第 56 轮 M-4）。
     认哪些拼法**别在这里抄** —— 清单就是那份判据里的控制样品表，加一种拼法就在那加一格样品
     （第 57~59 轮三轮往里补，写死"五种"的那句话当场过期过一次）。
+
+    `base` 只为一件事存在：给**存量**补那一列时，归档时刻该写哪一天是一个决定（补今天 ⇒
+    恢复窗口重新开始算；补这一行自己的 `created_at` ⇒ 早就过了保留期的那些行当场成为候选），
+    但**无论选哪一天都不该新开第二只钟**（任务 #142 第二半；`--stamp-from` 那条旗子把决定
+    留给老板，把算法留在这里）。递进来的必须是一个 `datetime`：写 `None` 走老语义，
+    写别的东西（日期串、`date`）直接拒 —— 静默按今天处理就是拿一个决定冒充一个默认值。
     """
-    return beijing_now(), current_as_of() + timedelta(days=retention_days)
+    if base is None:
+        return beijing_now(), current_as_of() + timedelta(days=retention_days)
+    if not isinstance(base, datetime):
+        raise TypeError('archive_stamp(base=) 要的是一个 datetime，收到 %r ⇒ '
+                        '存量补时刻请按行取那一行的时间戳，不要传字符串或日期' % (base,))
+    return base, base.date() + timedelta(days=retention_days)
 
 
 def conclusion_conditions(status: str):
