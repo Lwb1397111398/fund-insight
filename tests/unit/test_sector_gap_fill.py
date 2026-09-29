@@ -864,9 +864,12 @@ def test_a_round_that_moves_nothing_never_points_at_a_line_that_never_printed(te
     assert result['predictions_kept_window_not_due'] == 0, result
     assert result['predictions_kept_no_nav'] == 0, result
     assert result['predictions_kept_no_start'] == 0, result
-    if result['sectors_to_fill']:
-        pytest.skip('这块板块这一轮真进了补标名单 ⇒ 走不到"四档全 0"那一句，'
-                    '这一格要换一块没人要补的板块（现在的数：%s）' % result['sectors_to_fill'])
+    assert not result['sectors_to_fill'], (
+        '这一格要的是「四档全 0 且没进补标名单」那一句，而本轮 %s 真进了补标 ⇒ '
+        '把上面那块板块标签换成内置表里另一块没人要补的。⚠ 第 70 轮复评 J-2：这里原来写的是 '
+        '`pytest.skip` —— 一放过就没人能答"这一格今天到底跑没跑"（屏幕上数得出 16 条 skipped，'
+        '多一条少一条都看不见），而仓库的规矩是不可达/没走到的分支不许用跳过装成验过'
+        % result['sectors_to_fill'])
 
     message = prediction_routes.sync_sector_mapping(
         request=_request(), dry_run=True, db=test_db)['message']
@@ -1017,3 +1020,73 @@ def test_the_verdict_count_is_promised_in_the_preview_not_claimed_in_the_receipt
     data = body['data']
     assert data['predictions_with_verdict'] == 1 and data['verified_reset'] == 0, data
     assert '带着已判结论' not in body['message'] and '已清掉' not in body['message'],         '一条结论都没清（桩什么都没做），却拿计划数说"已清掉"：%s' % body['message']
+
+
+def test_the_no_start_sentences_are_pinnable_without_a_library_row(monkeypatch):
+    """`no_start` 那两句必须各有一格判据，而**造出那两句不需要库里那一行**（第 70 轮 J-1）。
+
+    第 69 轮撤 M52 时写的理由是"`prediction_date` 是 NOT NULL ⇒ 夹具对它没有牙"。前半句是
+    事实（`database.py:221`，且 `_as_date()` 只认 date/datetime），后半句**把两件事混成一句**：
+    路由那句回执读的是服务交回的**那个计数**，而计数是一份字典 —— 把
+    `PredictionMaintenanceService` 换成桩就能造（本文件
+    `test_the_execute_sentence_uses_the_recount_not_the_plan` 早就是这个手段）。
+    后果：路由里 `no_start` 那两句（预览摘要那一格 + 执行那一路的分句）零判据零变异。
+
+    这一格两路各问各的：
+      ① 预览那一格**说了**这一档，并且给的是**它自己的药**（补净值不会变，要动的是起点日期）；
+      ② 同一句里 `no_nav` 那半给的是「更新基金」—— 两种药不许并成一句（第 69 轮 MINOR-6）；
+      ③ 执行那一路（上面那句不渲染）由分句接手：两句都在、各说一次、不许缺席。
+    """
+    counts = {'predictions_updated': 0, 'verified_reset': 0, 'funds_added': 0,
+              'funds_sector_updated': 0, 'predictions_unchanged': 0,
+              'predictions_no_mapping': 0, 'predictions_skipped_unservable': 0,
+              'would_update': 0,
+              'predictions_via_gap_fill_planned': 0, 'predictions_via_gap_fill': 0,
+              'predictions_with_verdict': 0,
+              'sectors_to_fill': [], 'sectors_filled': 0,
+              'sectors_fillable': ['A', 'B', 'C', 'D', 'E'],
+              'sectors_refused_to_fill': [],
+              # 四档都非零 ⇒ 预览那句"一块都不动"把四档一次说完（buckets_spoken 为真），
+              # 而执行那一路这一句根本不渲染 ⇒ 同一份数两条腿两种说法，各判各的。
+              'predictions_kept_own_target': 481,
+              'predictions_kept_window_not_due': 155,
+              'predictions_kept_no_nav': 1,
+              'predictions_kept_no_start': 3,
+              'predictions_kept_answer_unknown': 4}
+
+    class _Stub:
+        def __init__(self, db):
+            pass
+
+        def sync_sector_mappings(self, dry_run=True, run_id=None):
+            return dict(counts)
+
+    def say(dry):
+        monkeypatch.setattr(prediction_routes, 'PredictionMaintenanceService', _Stub)
+        body = prediction_routes.sync_sector_mapping(request=_request(CONFIRM),
+                                                     dry_run=dry, db=None)
+        assert body['success'] is True, body
+        return body['message']
+
+    # ---- 预览：这一档要在"一块都不动"那一格里说出**它自己的**药
+    preview = say(True)
+    assert '3 条连窗口起点都说不清' in preview, preview
+    assert preview.count('连窗口起点都说不清') == 1, (
+        '这一档在预览那句里被说了两遍（摘要格 + 分句）：' + preview)
+    tail = preview.split('3 条连窗口起点都说不清', 1)[1].split('，')[0].split('、')[0]
+    assert tail.startswith('⇒ 补净值不会变'), (
+        '给「窗口起点说不清」配的药必须是"补净值不会变"，实得 %r' % tail)
+    assert '更新基金' not in tail, '「起点说不清」那半行补多少净值都不会变 ⇒ 配错药' + tail
+    nav_tail = preview.split('1 条那只标的库里还没有一笔净值', 1)[1].split('、')[0]
+    assert '更新基金' in nav_tail and '补净值不会变' not in nav_tail, nav_tail
+    assert '那条预测连窗口起点都说不清' not in preview, (
+        '执行那一路那句分句不该在预览里出现（同一批数说两遍）')
+
+    # ---- 执行：上面那句不渲染 ⇒ 四档分句各说一句，`no_start` 这一腿不许缺席
+    done = say(False)
+    assert done.count('那条预测连窗口起点都说不清') == 1, done
+    assert '3 条预测也没动' in done, done
+    assert '跑多少次「更新基金」都不会变' in done, done
+    assert '要动的是那条预测自己的起点日期（重新分析那条帖子）' in done, done
+    assert '那只标的在库里还没有一笔净值' in done, done
+    assert '1 条预测也没动' in done, done

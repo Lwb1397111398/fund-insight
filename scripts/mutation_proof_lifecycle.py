@@ -357,10 +357,12 @@ MUTATIONS = [
      '        if no_nav:\n',
      GAP_TESTS, 'test_the_unknown_answer_gets_its_own_sentence_and_is_never_called_not_due'),
     # 两种病因并回同一格 ⇒ 页面那句就给「窗口起点说不清」那半配错药（第 69 轮 MINOR-6）。
-    # 两种病因并回同一格 ⇒ 页面那句就给「窗口起点说不清」那半配错药（第 69 轮 MINOR-6）。
-    # ⚠ 变异钉在**尺子**那一格而不是服务层的计数：`predictions.prediction_date` 是 NOT NULL，
-    # 库面上造不出 no_start 那一行，服务层的夹具对它没有牙（第 69 轮 MINOR-7 同族的自我收窄）；
-    # 能钉住它的只有上面那张形状表 —— 摘掉这里，`no_start` 就永远报成 `no_nav`。
+    # ⚠ 这一格第 69 轮只钉了**尺子**那一半，而当时给的理由写错了对象（第 70 轮复评 J-1）：
+    # "`prediction_date` 是 NOT NULL ⇒ 夹具对它没有牙"只驳回**库行**夹具，我却据此把 M52 整条
+    # 撤掉，等于顺手宣布"回执也配不出"。路由读的是服务交回的**那个计数**，换成桩就造得出
+    # （同判据文件 `test_the_execute_sentence_uses_the_recount_not_the_plan`）。
+    # 实际后果：路由里 `no_start` 那两句零判据零变异 ⇒ 摘掉 / 配错药 / 执行那一路缺席 /
+    # 说两遍四种坏法由下面的 M55~M58 各自钉住（载荷落在**路由**那把，不是尺子那一格）。
     ('M53_the_two_answer_causes_are_folded_into_one', LIFECYCLE,
      "        return 'unknown', None, ('no_start' if start is None else 'no_nav')\n",
      "        return 'unknown', None, 'no_nav'\n",
@@ -374,6 +376,24 @@ MUTATIONS = [
      "                    'kind': 'same_as_current'}\n",
      "                    'kind': 'no_static_hit'}\n",
      GAP_TESTS, 'test_the_three_refusal_kinds_nobody_had_ever_asked_about'),
+    # 第 70 轮复评 J-1（MAJOR）：路由里 `no_start` 那两句从此有牙，四种坏法各一处。
+    # 载荷与还原都逐字对着 `data/_review_tmp/r70_probe_no_start.py` 的真实回执排过。
+    ('M55_the_no_start_bucket_never_speaks', ROUTES,
+     '            if no_start:\n',
+     '            if False:\n',
+     GAP_TESTS, 'test_the_no_start_sentences_are_pinnable_without_a_library_row'),
+    ('M56_the_no_start_bucket_gets_the_wrong_medicine', ROUTES,
+     'f"⇒ 补净值不会变，要动的是那条预测自己的起点日期")\n',
+     'f"⇒ 现在判不了，跑一次「更新基金」把净值补齐再看")\n',
+     GAP_TESTS, 'test_the_no_start_sentences_are_pinnable_without_a_library_row'),
+    ('M57_the_no_start_leg_never_speaks_when_executing', ROUTES,
+     '        if no_start and not buckets_spoken:\n',
+     '        if False and not buckets_spoken:\n',
+     GAP_TESTS, 'test_the_no_start_sentences_are_pinnable_without_a_library_row'),
+    ('M58_the_no_start_bucket_is_described_twice', ROUTES,
+     '        if no_start and not buckets_spoken:\n',
+     '        if no_start:\n',
+     GAP_TESTS, 'test_the_no_start_sentences_are_pinnable_without_a_library_row'),
 ]
 
 

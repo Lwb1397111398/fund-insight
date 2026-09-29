@@ -297,7 +297,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 最近一次核对（2026-09-29 **09:3x（北京）**，**任务 #163 收口 + #157 四档分流**：第 69 轮独立复评
 **74/100**（0 BLOCKER / 3 MAJOR / 6 MINOR）的返修 —— 最重的一条不是产品行为，是我上一批写进 git message
 的**一句假话**；而返修途中我自己又造出一个能让整条链当场崩的 arity 缺陷。分数 **74 < 75 ⇒ 本批不推**
-（`origin/main` 仍是 `c408dcd`，本地领先 13 笔）。
+（`origin/main` 仍是 `c408dcd`，本地领先几笔**别在这里抄**：
+推之前跑 `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD` —— 本批一路在加提交，第 70 轮复评 T-3 就是
+拿这里写死的 13 当现读结论，实得 14）。
 
 ① **MAJOR-6（产品半，真拆了一格）**：`evidence_answer` 现在交出**三个槽位** —— 第三格 `cause` 只在
 `'unknown'` 那一档非空，取 `'no_start'` / `'no_nav'`。为什么还要拆（第 68 轮 MINOR-1 只拆到"答不出"）：
@@ -313,8 +315,12 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 ⇒ 新增 `test_the_answer_ruler_always_hands_back_three_slots`：七格形状表，每档都问
 "交回来是不是三格 / `cause` 对不对 / `cannot` 的原因是不是**一句人话** / 放行那几档原因必须为 `None`"；
 变异 **M53**（两种病因并回一格）与 **M54**（少交一格）各咬一次。
-`no_start` 那一格**库面上造不出夹具**（`predictions.prediction_date` 是 NOT NULL）⇒ 服务层不许假称验过，
-它只由那张表 + M53 负责，这条边界写在用例 docstring 里（同批我为此**撤掉了一条配不出夹具的变异 M52**）。
+`no_start` 那一格**库行**夹具确实造不出（`predictions.prediction_date` 是 NOT NULL）⇒ 服务层不许假称验过，
+那一半由尺子的形状表 + M53 负责。⚠ **第 70 轮 J-1：同批我把这句扩写成"夹具对它没有牙"并据此撤掉 M52
+—— 撤的对象对、写的理由错**：「库行配不出」不等于「回执配不出」，路由读的是服务交回的那个**计数**，
+把 `PredictionMaintenanceService` 换成桩就造得出（新用例
+`test_the_no_start_sentences_are_pinnable_without_a_library_row`）⇒ 路由那两句现在有四处置换
+（M55~M58：摘掉 / 配错药 / 执行那一路缺席 / 同一批数说两遍）。
 
 ② **MAJOR-1（不实陈述，按 MAJOR 计）**：`8cd9a18` 的提交说明把 `test_sector_gap_fill.py` 的用例数
 写成 **25**（虚报 1 个），而 `--collect-only -q` 与 `grep -c '^def test_'` 当场都是 **24** 那个数

@@ -438,7 +438,7 @@ def evidence_answer(in_window: Sequence[date],
                     today: Optional[date] = None) -> tuple:
     """`target_cannot_evidence_window` 的**同一把尺子**，但把"为什么放行"也交出来。
 
-    返回 `(种类, 原因)`：
+    返回 `(种类, 原因, 病因)`：
       · `'cannot'`   判得出来吗的答案是"判不出来" ⇒ 原因就是那句人话；
       · `'evidenced'` 这段窗口**已经过了**、而这只标的当时就给得出验证器要的那两样；
       · `'not_due'`  窗口还没到期 ⇒ 现在问不出结果，**这不等于"给得出"**；
