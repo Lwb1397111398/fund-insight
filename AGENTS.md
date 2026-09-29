@@ -392,9 +392,21 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
   是**现在的事实**，不许写成"已修好"。（`started_at≈当下` 不算部署凭据：免费实例唤醒就会改写它。）
 
 **门禁一句**：第 73 轮独立复评 **79/100**（0 BLOCKER / 1 MAJOR / 3 MINOR）**≥ 75 ⇒ `d5d5fed` 已推已部署**
-（双凭据见上面那一段）。**本批（`dd78306` + 本段文档）需一份新的第 74 轮独立复评，≥75 才推**；
-推之后再走 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证），
-生产上那次 `VACUUM` 与上面那 **6 条可关**的执行各是**单独一次显式确认**的动作。
+（双凭据见上面那一段）。**本批（`dd78306` + 本段文档）的第 74 轮独立复评已回：95/100**
+（0 BLOCKER / 0 MAJOR / 1 MINOR）⇒ **已推已部署**，唯一扣分项 W1（判据 docstring 那句"整个仓库只许
+有一个家"说过头，真扫描面是 `src/` 与 `web/` 两棵树）按评审要求当场改掉口径后与收口文档一起落
+（`f262d5a`；只改那一句，行为与断言一个字未动，复跑 `pytest tests/unit/test_db_space.py -q` ⇒ **12 passed**）。
+**部署凭据两条都成立**（09-30 01:5x 现读）：`GET /api/health/detail` 自报 `git_commit=f262d5aa492e`
+（= 本地 HEAD）、`started_at=2026-09-30T01:57:25+08:00`、`scheduler_running=False`（老板 09-29 定的
+"不加定时任务、靠打开网站补"⇒ 这一项**预期为 False**，不是回归）；`GET /index.html`（LF 归一后）md5
+`fd901a776a7c513e3bb1547672d4aa0d` —— **推之前就从 `92f442d:web/index.html` 的 blob 算出同一个数**。
+⇒ 第 74 轮 MAJOR-1（`cleanupData` 进度腿带着全局锁早退）**现在在线上成立**；推之前它是 `d5d5fed`
+（页面 md5 `4aa1ef86be6c47a13445f6c15f6da794`）。复核：`git rev-list --count origin/main..HEAD` 现读
+（推完记得 `git fetch … main:refs/remotes/origin/main` 把跟踪引用拨到真值，否则这个数印假）。
+~~推之后再走 #160 那五步~~（⚠ 第 74 轮已推 ⇒ 这句作废：**#160 那五步在上一批已在生产跑过**，
+见任务 #160 与 `docs/模块总览/板块与基金匹配.md` 末尾那一节）。**仍然挂着、各需一次单独显式确认的**
+是两件写生产的动作：`VACUUM`，和上面那 **6 条可关**的执行（`close_unknowable_predictions.py`
+默认 dry-run，真写要 `--apply --confirm CLOSE-UNVERIFIABLE`）。
 
 （上一批：2026-09-29 **23:0x（北京）**，**任务 #158：第 72 轮复评（74/100）返修——「空间回收没跑」
 那句话从两个家收成一个家，另一条是"被算成第五种结局的那一支其实零判据"**
