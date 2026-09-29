@@ -294,7 +294,109 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-29 **23:0x（北京）**，**任务 #158：第 72 轮复评（74/100）返修——「空间回收没跑」
+最近一次核对（2026-09-30 **01:1x（北京）**，**任务 #166：第 73 轮复评（79/100 ⇒ ≥75 已放行，
+`d5d5fed` 已推已部署）返修——MAJOR-1 是"清理那一条腿带着全局锁早退，13 个按钮静默灰死到刷新"，
+另三条 MINOR 全是我上一批自己写下的话**
+（本批只有一条是产品行为，而且它正是老板那句"清理的信息只要点击相关按钮就行了，绝对不会造成其他问题"
+的反面：按钮灰掉不报错，老板只会再点一次 ⇒ 而"再点一次"在清理这一路等于**二次删除**。
+其余三条是本仓两族老账：同一件事两种待遇（MINOR-1/2）、评审席读到我写错的变异说明（MINOR-3））——
+
+① **MAJOR-1（真缺陷，且在 `web/index.html` 里）**：`cleanupData` 的进度轮询那一条腿
+（`catch (pollError)`，约 `:3099`）以前直接 `alert('清理失败…')` 并 `return`，
+**`analyzing.value` 仍留在 `true`** ⇒ 清理请求服务端已经接了、正在删，页面上那 13 个受
+`analyzing` 守卫的按钮从此静默灰死，直到刷新。而那句话本身是反话：说"清理失败"，老板按提示
+再点一次 ⇒ 同一批删除候选被二次执行。⇒ 现在这一支先放开那把全局锁、再说人话
+（「清理任务已发起（任务号 N），只是进度没取到 —— 刷新页面就能看到结果，请不要重复点击」）。
+**同一件事隔壁那条腿（净值轮询 `:2976~2986`）早就按这条规矩做了**，注释里也逐字写着这条规矩
+—— 又少配判据的正是新写的那一条腿（第 45 轮那一族的第 N 次）。
+判据：`tests/unit/test_frontend_cold_start.py::test_the_cleanup_progress_leg_releases_the_global_lock_before_it_speaks`
+—— 在 node 里跑页面**真源码**走完整调用链，断四件：`posts` 只有那一次 `POST`（一次都不许多）、
+轮询问到 ≥3 次、**跑完之后 `locked is False`**、alert 恰好一句且带「进度没取到」「不要重复点击」
+而**不带「清理失败」**；并且自己验牙：用 `re.subn` 把放开锁那一行删掉（`assert n == 1`）再跑一次，
+必须 `locked is True`。变异：`the_progress_leg_keeps_the_lock`（前端注册表 **146 → 147**，
+一处新臂）。
+② **第 4 次栽在"改了被扫的那一行却没改锚点"**（M11 / M29 / M39 同签名）：`analyzing.value = false;`
+落进 `cleanupData` 之后，既有臂 `cleanup_leg_blames_the_write` 的锚点命中 0 次 ⇒ ANCHOR-MISS。
+修的是**锚点不是判据**：把那一条腿抽成模块级常量 `_CLEANUP_POLL_LEG`（`_js(...)` 拼），
+两条臂共用同一份原文 ⇒ "同一形状抄两份、改一处另一处悄悄过期"这一族在体检脚本里也收成一个家。
+③ **MINOR-1：我上一批那句"`reason` 与 `reason_text` 一起交出，两个消费方拿的是同一格"是过头话**。
+现读：两个消费方拿的**不是同一格** —— 清理任务那一路把 `reason_text` 带给页面，独立按钮那一路
+（路由 `config.py:415`）现问 `skip_detail(result)`。真相是**同一函数、不同槽位**。
+⇒ 五处文字按实测收窄（逐条列得出：`git show dd78306 --stat`，本批动到的文件全在那一份里）：
+`src/services/db_space.py` 的 `_skipped` docstring、本文件那一版对应段、
+`tests/unit/test_db_space.py:181`、`tests/unit/test_retention_cleanup_api.py:613`、
+`tests/unit/test_frontend_cold_start.py:2486`。改的是**契约说明**，`test_db_space.py` 12→12、
+`test_retention_cleanup_api.py` 21→21 一条不增。
+④ **MINOR-2：那条"那句话只许有一个家"的结构判据以前只扫 `src/`** ⇒ 页面自己重拼一遍它看不见。
+`_skip_sentence_homes(pairs)` 现在扫 **`src/`（.py）与 `web/`（.html/.js）两棵树**。
+今天 `web/` 命中 **0** 处（`grep -rn 空间回收没跑 web/` 为空 —— 页面拼的是自己的前缀
+「空间回收：没跑 —— 」再接服务层交回的 `reason_text`），所以这一条钉的是"以后页面自己拼也要当场被点名"。
+**这一腿有没有牙由该用例自己的控制样品负责**：临时树里 `src/a.py` 与 `web/c.html` 各造一处家、
+两处都必须被点名（实测把 `web/` 那一腿摘掉注入 ⇒ 控制断言当场红）。
+⑤ **MINOR-3：评审席读到我写在文档里的 M69 说明是错的**（原文说它"把出口整个绕过"，
+实际载荷是"出口仍经 `_skipped`、但不再盖那句人话 ⇒ `reason_text` 没了"）⇒ 已按注册表原文改正
+（上面 ① 段那一条就是改正后的写法）。**这类"变异说明"和载荷一起抄，别凭记忆写。**
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务；**六步**串成一条链 `data/_review_tmp/r74-chain.sh`，逐步记时刻与退码，
+**前五步退 0、第六步退 2（那是设计值，见下面镜像那一条）**。时刻字段
+`date -u -d '+8 hours' +%FT%T` ⇒ 日志里的就是北京时间（00:27:56 起、01:15:45 收）：
+
+- `pytest tests/unit -q` → **1278 passed / 16 skipped / 0 failed**（502.94 秒，00:36:29（北京），退 0）。
+- `pytest tests/ -q` → **1287 passed / 16 skipped / 0 failed**（499.84 秒，00:44:57（北京），退 0）。
+  （上一基线 1277/1286 → 本批 **+1 条 / 两个口径同增**，分布用**绝对提交**：
+  `for f in $(git diff --name-only d5d5fed..HEAD -- tests/); do echo "$f $(git show d5d5fed:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_frontend_cold_start.py 55 → 56`（① 那条新判据）、`test_db_space.py 12 → 12`、
+  `test_retention_cleanup_api.py 21 → 21`（③④ 是**改契约/改扫描面**，不增条数）。名单对表
+  （防第 69 轮那族吞行）：
+  `diff <(git show d5d5fed:tests/unit/test_frontend_cold_start.py | grep '^def test_' | sed 's/(.*//') <(grep '^def test_' tests/unit/test_frontend_cold_start.py | sed 's/(.*//')`
+  ⇒ 只应出现一行 `>`（① 那条）；同一句对另两个文件必须**退 0**。
+  变异（逻辑侧）：`python scripts/mutation_proof_lifecycle.py` → **71 处全 RED、退 0**
+  （CONTROL-GREEN = **11 个判据文件**在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL /
+  无 `[还原失败]`；链末 `git status --porcelain -- src/ web/ tests/ scripts/` 为**空**）。
+  首行逐字 `# run @ 2026-09-30T00:44:57+08:00  git=dd783063a09d  worktree=clean  python=3.12.10  共 71 处变异 / 11 个判据文件`
+  —— **处数没动但仍重跑**：`git show dd78306 --stat` 里 `src/services/db_space.py` 改了 6 行
+  （只有 docstring）＋ 两个判据文件改了 ⇒ "一个字未动所以不必跑"这一格今天不成立。
+  复核 `grep -c '⇒ RED' docs/迭代计划/run-20260927-mutation/round74-lifecycle-mutations.txt` ⇒ 71。
+  变异（前端）：`python scripts/mutation_proof_frontend.py` → **147 处全 RED、退 0**，首行逐字
+  `# run @ 2026-09-30T00:55:19+08:00  git=dd783063a09d  worktree=clean  python=3.12.10  共 147 处变异 / 3 个判据文件`
+  （本批改了 `web/index.html` ⇒ 真重跑。上一批 146 ⇒ **+1 与 ① 那条新臂逐字对上**；
+  ② 那一处只换锚点不增臂，所以 146→147 这一格差必须恰好是 1）。
+  ⚠ 数它别用 `grep -c '⇒ RED'`（前端日志每行没有 `⇒`，会回 0）⇒ 用
+  `grep -c 'RED（判据有效）' docs/迭代计划/run-20260927-mutation/round74-frontend-mutations.txt` ⇒ 147。
+  两份日志已 `git add`（核对只认 `git ls-files docs/迭代计划/run-20260927-mutation | grep round74`）。
+  `audit_doc_claims.py` 退 **0**：`[对账] 当场承诺 3 条（另有 31 条增量账：其中 8 条只因所在那一段是
+  基线流水、23 条写成 +N 条/新增 N 条；还有 17 条"看得见但不判"）；pytest 当场收集到 118 个测试文件`
+  + `[数据源账] 认出 4 行 数据源：…，其中 0 行认不出是哪个库`。
+  ⚠ **"看得见但不判"从 16 → 17 是我自己加出来的**：多那一条是 `docs/模块总览/前端与接口层.md:349`
+  那句新写的"（退 0）。…"被尺子当成条数账。这不是回归也不是要删那句话 —— 报告如实报，
+  真该做的是下一批把那一句改写成绑命令的写法（登记在这里，不当已封）。
+  **镜像此刻**（链第 [6] 步，只出计划不写库：`python scripts/close_unknowable_predictions.py`，**退 2**）：
+  `[计划] 到期未判里可以判定"永远问不出来"的：6 条；仍在等的：15 条`。
+  ⚠ **退 2 不是回归，是脚本自己的设计**（`scripts/close_unknowable_predictions.py:411-418`：
+  可关为空 ⇒ 退 0；有活干但只是 dry-run ⇒ 打印 `[dry-run] 一行都没动…` 并退 2；被拒 ⇒ 退 4）
+  ⇒ 上一批那句"退 0"只对"可关 0 条"成立，别再拿它当通用结论。
+  为什么今天有 6 条可关：北京日跨到 **2026-09-30** ⇒ 上一批列的那 6 条重问锁（2304/2243/2303/2629/2915
+  挂 `515440`、3076 挂 `158038`）**到点**，"问过两次"这一格当场成立 ⇒ 从"仍在等"移进"可关"。
+  仍在等的 15 条逐行回执在链日志里，其中 9 行（1331/1337/1338/1343/3107/3109/3114/3119/3121）
+  上一批那份 12 条里没有 ⇒ 到期集合按北京日现算，跨零点它就会变；**为什么这 9 行今天才进这一档，
+  要执行之前先拿只读读到行，别照这一段猜**。真执行属生产写入，走 #160 那五步，且是**单独一次显式确认**。
+  **线上跑的哪一版**（本窗口现读，两条凭据）：
+  `git -c http.proxy=http://127.0.0.1:7890 fetch origin main:refs/remotes/origin/main
+  && git rev-list --count origin/main..HEAD` ⇒ `origin/main = d5d5fede1d2e`、HEAD `dd783063a09d` 领先 **1** 笔；
+  `GET /api/health/detail` 自报 `git_commit=d5d5fede1d2e`，且线上 `index.html`（LF 归一后）
+  md5 `4aa1ef86be6c47a13445f6c15f6da794` 与 `git show d5d5fed:web/index.html` 归一后**逐字节相同**
+  ⇒ 第 73 轮那一版**确实在生产上**。⚠ **本批 MAJOR-1 那一修还没上线**：待推那一版页面
+  md5 推之前就从 blob 预算好 = `fd901a776a7c513e3bb1547672d4aa0d`（比线上多 4 行）
+  ⇒ 所以"线上今天的清理进度取不到时仍会把 13 个按钮灰到刷新、并把那一句说成清理失败"
+  是**现在的事实**，不许写成"已修好"。（`started_at≈当下` 不算部署凭据：免费实例唤醒就会改写它。）
+
+**门禁一句**：第 73 轮独立复评 **79/100**（0 BLOCKER / 1 MAJOR / 3 MINOR）**≥ 75 ⇒ `d5d5fed` 已推已部署**
+（双凭据见上面那一段）。**本批（`dd78306` + 本段文档）需一份新的第 74 轮独立复评，≥75 才推**；
+推之后再走 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证），
+生产上那次 `VACUUM` 与上面那 **6 条可关**的执行各是**单独一次显式确认**的动作。
+
+（上一批：2026-09-29 **23:0x（北京）**，**任务 #158：第 72 轮复评（74/100）返修——「空间回收没跑」
 那句话从两个家收成一个家，另一条是"被算成第五种结局的那一支其实零判据"**
 （两条 MAJOR 是本仓两族老账各占一半：M-2＝同一件事两种待遇（第 45 轮起反复扣分），
 M-1＝不可达的防御分支被算成一种结局（第 44 轮那一族）反过来扣在判据层。
@@ -381,7 +483,8 @@ M-1＝不可达的防御分支被算成一种结局（第 44 轮那一族）反�
   且**已在生产真跑过一次**（run_id `ui-sync-20260929-095657`，逐行回执与"那个 095657 是 UTC 不是北京"
   的按法写在上面那一批那一段）。
 
-**门禁一句**：第 72 轮独立复评 **74/100**（0 BLOCKER / 2 MAJOR / 5 MINOR）**< 75 ⇒ 本批（`3c5cac0` +
+**门禁一句**（⚠ **本句已被第 73 轮结掉：79/100 ≥75 ⇒ 那一批已推已部署，别照这一段再等一次复评**）：
+第 72 轮独立复评 **74/100**（0 BLOCKER / 2 MAJOR / 5 MINOR）**< 75 ⇒ 本批（`3c5cac0` +
 `b308631` + `342fa5c` + 本段文档）都不推**；两条 MAJOR 本批已按上面 ①② 修完并各有牙，
 先拿一份**新的**独立复评（第 73 轮），≥75 才推；推之后再走 #160 那五步
 （只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证），生产上那次 `VACUUM` 仍是**单独一次显式确认**的动作。
