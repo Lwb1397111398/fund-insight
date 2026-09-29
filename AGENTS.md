@@ -330,9 +330,9 @@ rejected_no_stamp from viewpoints"`。
 ⇒ 存量那一次单独的写**还没做**（#142 的第二半：默认 dry-run、先出逐行清单给老板过目、
 `--apply --confirm` + 备份 + 逐行回执 + `--restore-from`，仿 `scripts/close_unknowable_predictions.py`，
 并且要它自己的守卫用例/行为判据/变异/再一轮基线 —— 本批决定不加，见 ⑥）。
-⚠ **本批未推 ⇒ 生产上连"未来的行"也还不写**（`origin/main` 现读仍是 `3fd79c6`、
-`git rev-list --count origin/main..HEAD` = **0**，复核
-`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`）。
+⚠ **本批未推 ⇒ 生产上连"未来的行"也还不写**（`origin/main` 现读仍是 `3fd79c6`；
+本地领先几笔**别在这里抄** —— 写下这一句时本批那一笔刚落地，数会跟着提交动，
+复核 `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`）。
 
 ③ **诚实的增量账，并且先记我自己那处基准错**：上一基线 **1278/1287**（第 74 轮，绝对基准提交
 `3fd79c6`）→ 本批 **1280/1289** ⇒ **+2 条 / 两个口径同增**，分布用
@@ -378,10 +378,13 @@ rejected_no_stamp from viewpoints"`。
   但按本仓尺度（第 68/69 轮那条）"新条目单独跑一次"这句话本批没兑现，写在这是为了不让下一轮把它当已做。
   `audit_doc_claims.py` → 退 **0**（上面 ⑤ 那一行逐字）。
   镜像 dry-run → **6 可关 / 15 仍在等**，退 **2**（上面 ⑥）。
-  链后 `git status --porcelain` 只剩本批那六个文件（`src/` 1、`tests/` 2、`scripts/` 1、`docs/` 2）。
+  链后 `git status --porcelain` 只剩本批那六个文件（`src/` 1、`tests/` 2、`scripts/` 1、`docs/` 2）；
+  `AGENTS.md`（就是这一段）是链跑完之后才写的 ⇒ 那是第七个。另要知道 `worktree=dirty(N)` 只数
+  **`src` `web` `tests` 三棵树**（`_worktree_state()` 里那条 `git status --porcelain -- src web tests`），
+  所以 `scripts/` 与 `docs/` 的改动**永远不会**出现在 N 里 —— 看见 `dirty(3)` 别读成"只有三处改动"。
 
-**门禁一句**：本批**未推**（推之前先拿一份**新的**独立复评，≥75 才推）；`origin/main` 与本地 HEAD
-现在同指 `3fd79c6`（第 74 轮，95/100 已推已部署）。线上此刻本批没有新东西在跑，
+**门禁一句**：本批**未推**（推之前先拿一份**新的**独立复评，≥75 才推）；`origin/main` 是
+`3fd79c6`（第 74 轮，95/100 已推已部署），本批那一笔在它之上。线上此刻本批没有新东西在跑，
 部署后以 `/api/health/detail` 的 `git_commit` 与 `index.html` 的 LF 归一后 md5 为准（这两个出口
 本批没量过本批那一版，别把上面任何一句"线上此刻"当成部署后的事实）。
 
