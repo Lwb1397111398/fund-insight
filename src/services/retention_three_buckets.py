@@ -55,6 +55,28 @@ class BucketPlanChanged(Exception):
         super().__init__("three-bucket plan is stale")
 
 
+class CleanupInterrupted(Exception):
+    """真删跑到一半崩了：已经 commit 的那几批回不来。
+
+    错误文本必须带出"已经删掉多少行"——只说"失败"会让老板以为一个字都没动，
+    而那批行已经不可再生地没了。
+    """
+
+    def __init__(self, committed_counts: Dict[str, int], cleanup_log_id: Optional[int], cause: Exception):
+        self.committed_counts = dict(committed_counts)
+        self.cleanup_log_id = cleanup_log_id
+        self.cause = cause
+        total = sum(self.committed_counts.values())
+        buckets = "、".join(
+            f"{name} {count} 行" for name, count in sorted(self.committed_counts.items()) if count
+        )
+        super().__init__(
+            f"清理中断：已经删掉 {total} 行"
+            + (f"（{buckets}）" if buckets else "")
+            + f"，剩下的没有动。原因：{cause}"
+        )
+
+
 @dataclass(frozen=True)
 class ThreeBucketPolicy:
     deleted_hard_delete_days: int = 30
@@ -361,61 +383,97 @@ class ThreeBucketRetentionService:
 
         started_at = datetime.now()
         deleted_counts: Dict[str, int] = {}
-        for bucket in self.BUCKETS:
-            ids = ids_for(bucket)
-            if bucket == self.BUCKET_LOGS:
-                deleted = self._hard_delete_cleanup_logs(
-                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
-                )
-            elif bucket in (self.BUCKET_DELETED_VP, self.BUCKET_SUMMARY_VP):
-                deleted = self._hard_delete_viewpoints(
-                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
-                )
-            elif bucket == self.BUCKET_ORPHAN_FUNDS:
-                deleted = self._hard_delete_orphan_funds(
-                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
-                )
-            elif bucket == self.BUCKET_STALE_HISTORY:
-                deleted = self._hard_delete_fund_history(
-                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
-                )
-            else:
-                deleted = self._hard_delete_predictions(
-                    ids, on_progress=lambda n, b=bucket: report_progress(b, n)
-                )
-            deleted_counts[bucket] = deleted
-            processed += len(ids)
-            report_progress(bucket, 0)
+        # 已提交进度：每个 _hard_delete_* 只在一批 commit 之后回调一次，
+        # 所以这份数就是"此刻真已经从库里消失的行数"，崩在半路时它也还在。
+        committed: Dict[str, int] = {}
+
+        def note_progress(bucket: str, done_in_bucket: int) -> None:
+            committed[bucket] = done_in_bucket
+            report_progress(bucket, done_in_bucket)
+
+        def build_log(
+            status: str,
+            counts: Dict[str, int],
+            cascade: Dict[str, int],
+            ended_at: datetime,
+            reason: Optional[str],
+        ) -> CleanupLog:
+            # 摘要归档：一条 CleanupLog，便于周 cron 审计（不写逐条 item，避免再堆 2600 行）
+            return CleanupLog(
+                trigger_type="three_buckets",
+                start_time=started_at,
+                end_time=ended_at,
+                duration_ms=int((ended_at - started_at).total_seconds() * 1000),
+                status=status,
+                total_items=plan.total,
+                success_count=sum(counts.values()),
+                failed_count=0 if reason is None else 1,
+                rules_snapshot={
+                    "policy_name": POLICY_NAME,
+                    "policy": self.policy.to_dict(),
+                    "as_of": self.today.isoformat(),
+                    "protected_counts": plan.protected_counts,
+                    "selected_buckets": sorted(selected),
+                },
+                details={
+                    "deleted_counts": dict(counts),
+                    "cascade_counts": dict(cascade),
+                    "candidate_counts": {k: len(v) for k, v in plan.candidate_ids.items()},
+                    "truncated_by_global_cap": plan.truncated,
+                    "invariants": plan.to_report_dict().get("invariants"),
+                },
+                errors=[] if reason is None else [reason],
+            )
+
+        try:
+            for bucket in self.BUCKETS:
+                ids = ids_for(bucket)
+                if bucket == self.BUCKET_LOGS:
+                    deleted = self._hard_delete_cleanup_logs(
+                        ids, on_progress=lambda n, b=bucket: note_progress(b, n)
+                    )
+                elif bucket in (self.BUCKET_DELETED_VP, self.BUCKET_SUMMARY_VP):
+                    deleted = self._hard_delete_viewpoints(
+                        ids, on_progress=lambda n, b=bucket: note_progress(b, n)
+                    )
+                elif bucket == self.BUCKET_ORPHAN_FUNDS:
+                    deleted = self._hard_delete_orphan_funds(
+                        ids, on_progress=lambda n, b=bucket: note_progress(b, n)
+                    )
+                elif bucket == self.BUCKET_STALE_HISTORY:
+                    deleted = self._hard_delete_fund_history(
+                        ids, on_progress=lambda n, b=bucket: note_progress(b, n)
+                    )
+                else:
+                    deleted = self._hard_delete_predictions(
+                        ids, on_progress=lambda n, b=bucket: note_progress(b, n)
+                    )
+                deleted_counts[bucket] = deleted
+                processed += len(ids)
+                report_progress(bucket, 0)
+        except Exception as exc:
+            # 先 rollback：崩在半路的那一批（未 commit）必须真的回滚，
+            # 否则下一步写台账会把"回滚不掉的半个事务"和台账一起提交。
+            self.db.rollback()
+            aborted = build_log(
+                "failed", committed, dict(self._cascade_counts), datetime.now(), str(exc)
+            )
+            try:
+                self.db.add(aborted)
+                self.db.commit()
+                log_id = aborted.id
+            except Exception:
+                # 台账写不进去也不能把"删了多少行"丢掉：那批行已经不可再生。
+                self.db.rollback()
+                log_id = None
+            self._cascade_counts.clear()
+            raise CleanupInterrupted(committed, log_id, exc) from exc
+
         total_deleted = sum(deleted_counts.values())
         cascade_counts = dict(self._cascade_counts)
         self._cascade_counts.clear()
         finished_at = datetime.now()
-        # 摘要归档：一条 CleanupLog，便于周 cron 审计（不写逐条 item，避免再堆 2600 行）
-        log = CleanupLog(
-            trigger_type="three_buckets",
-            start_time=started_at,
-            end_time=finished_at,
-            duration_ms=int((finished_at - started_at).total_seconds() * 1000),
-            status="completed",
-            total_items=plan.total,
-            success_count=total_deleted,
-            failed_count=0,
-            rules_snapshot={
-                "policy_name": POLICY_NAME,
-                "policy": self.policy.to_dict(),
-                "as_of": self.today.isoformat(),
-                "protected_counts": plan.protected_counts,
-                "selected_buckets": sorted(selected),
-            },
-            details={
-                "deleted_counts": deleted_counts,
-                "cascade_counts": cascade_counts,
-                "candidate_counts": {k: len(v) for k, v in plan.candidate_ids.items()},
-                "truncated_by_global_cap": plan.truncated,
-                "invariants": plan.to_report_dict().get("invariants"),
-            },
-            errors=[],
-        )
+        log = build_log("completed", deleted_counts, cascade_counts, finished_at, None)
         self.db.add(log)
         self.db.commit()
         report["mode"] = "execute"
@@ -988,17 +1046,19 @@ class ThreeBucketRetentionService:
                 .filter(FundSyncRetry.fund_code.in_(codes))
                 .delete(synchronize_session=False)
             )
+            for row in rows:
+                self.db.delete(row)
+                deleted += 1
+            self.db.flush()
+            self.db.commit()
+            # 连带删的数只在 commit 之后记账：崩在这一批中间时那两笔 bulk delete
+            # 会随事务一起回滚，提前记就是替"没消失的行"作保。
             self._cascade_counts["fund_history"] = (
                 self._cascade_counts.get("fund_history", 0) + int(history_removed or 0)
             )
             self._cascade_counts["fund_sync_retry"] = (
                 self._cascade_counts.get("fund_sync_retry", 0) + int(retry_removed or 0)
             )
-            for row in rows:
-                self.db.delete(row)
-                deleted += 1
-            self.db.flush()
-            self.db.commit()
             if on_progress:
                 on_progress(deleted)
         return deleted

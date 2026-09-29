@@ -652,6 +652,21 @@ MUTATIONS = [
      'the_refresh_leg_blames_the_update', HTML,
      "alert('更新完成了，但基金列表没刷出来 ⇒ 手动刷新一次就能看到');",
      "alert('更新失败: 列表没取到');", False),
+    # 任务 #158 §A/§B/§F：清理页「空间回收」那一步的三种结局，各配一处能把自己打红的变异。
+    # 三条判据跑的是页面里 reclaimSpace / reclaimResult / cleanupData 的真实函数体（node 执行），
+    # 不是 grep 文本 ⇒ 下面每一处载荷只翻一个字面判法，不引入新形状。
+    ('test_the_reclaim_button_reads_its_own_receipt_and_shows_which_ending_happened',
+     'the_reclaim_failure_is_reported_as_done', HTML,
+     "const ok = res.data?.success === true;",
+     "const ok = true;", False),
+    ('test_the_delete_receipt_says_what_happened_to_the_disk_space',
+     'the_reclaim_failed_ending_is_folded_into_the_finished_one', HTML,
+     "if (reclaim.success === false) return { ok: false, text: '空间回收：没跑成 —— ' + (reclaim.error || '数据库没给出原因') };",
+     "if (reclaim.success === false) return { ok: true, text: '空间回收：跑完了，本次没测得可释放的空间' };", False),
+    ('test_the_delete_confirmation_promises_only_what_the_backend_will_try',
+     'the_confirm_dialog_blames_disk_on_delete', HTML,
+     "这次会顺带尝试回收磁盘空间：一条都没删掉时不回收，回收没跑成也不影响已经删掉的数据（结果会在下方「空间回收结果」里说明）。确定执行吗？",
+     "删除后会自动回收磁盘空间。确定执行吗？", False),
 ]
 
 

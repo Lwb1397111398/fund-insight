@@ -2327,3 +2327,234 @@ def test_the_catch_up_only_borrows_the_two_endpoints_that_already_exist():
         '页面又开始自己比大小 ⇒ "落后几天算旧"这个阈值就有了第二个出处'
     for promise in ('补好了', '全部完成', '都已验证'):
         assert promise not in block, '那句话替接口作了保：%s' % promise
+
+
+def test_the_reclaim_button_reads_its_own_receipt_and_shows_which_ending_happened():
+    """「空间回收」按钮必须读回执里的 `success`，并把那一种结局原样说出来（第 71 轮 #158 §A）。
+
+    上一版它写的是 `spaceReclaimResult.value = res.data?.message || '完成'` ——
+    两件事同时坏：① **压根没读 `success`**，而这个后端很多"被按住"走的就是
+    200 + `success:false`（开关没开、内存库、方言不支持、数据库自己说没成），
+    于是老板看到一句绿字"完成"，实际一个字节都没还；② 那句 `|| '完成'` 是页面替回执
+    编的台词：接口哪天不返回 message，页面上就出现一句它从没说过的"完成"。
+    ③ 结果那一栏在模板里没有失败态的颜色（`spaceReclaimFailed` 只在 JS 里置位、没人读），
+    "没跑成"与"跑完了"在屏幕上同形。
+
+    这一条跑**真的 `reclaimSpace`**，五种来路各问一句：说的话、置的位、要不要 ⚠、
+    刷新没刷新预览。
+    """
+    html = _html()
+    body = _decl(html, 'reclaimSpace = async () =>')
+    assert 'res.data?.success' in body, '按钮没读 success ⇒ 200 + success:false 会被当成完成'
+    assert "|| '完成'" not in body, '页面又在替回执编一句"完成"'
+    out = _run_chain_js(
+        body + """
+const probe = async (shape) => {
+    mode_ = shape; alerts.length = 0; refreshes = 0;
+    spaceReclaimResult.value = '上一轮那句（必须先盖掉）'; spaceReclaimFailed.value = true;
+    await reclaimSpace();
+    return {text: spaceReclaimResult.value, failed: spaceReclaimFailed.value,
+            alert: alerts[0] || null, refreshed: refreshes};
+};
+(async () => {
+    const r = {};
+    for (const s of ['ok', 'skipped', 'dbrefused', 'nosuccess', 'throw']) r[s] = await probe(s);
+    console.log(JSON.stringify(r));
+})();
+""",
+        prelude_js="""
+const ref = (v) => ({ value: v });
+let mode_ = 'ok';
+const alerts = []; let refreshes = 0;
+const alert = (m) => alerts.push(m);
+const confirm = () => true;
+const reclaiming = ref(false);
+const spaceReclaimResult = ref(''); const spaceReclaimFailed = ref(false);
+const fetchRetentionPreview = async () => { refreshes++; };
+const axios = { post: async () => {
+    if (mode_ === 'throw') { const e = new Error('Network Error');
+        e.response = { data: { detail: { message: '清理开关没开' } } }; throw e; }
+    if (mode_ === 'nosuccess') return { data: { message: '这份回执压根没带 success 字段' } };
+    return { data: mode_ === 'ok'
+        ? { success: true, message: '空间回收完成，释放 1.0 MB' }
+        : { success: false, skipped: mode_ === 'skipped',
+            message: mode_ === 'skipped'
+                ? '空间回收没跑：回收开关（ENABLE_SPACE_RECLAIM）是关着的'
+                : '空间回收没有完成：数据库没给出原因' } };
+} };
+""")
+    assert out['ok'] == {'text': '空间回收完成，释放 1.0 MB', 'failed': False,
+                         'alert': '空间回收完成，释放 1.0 MB', 'refreshed': 1}, out['ok']
+    assert out['skipped']['failed'] is True, out['skipped']
+    assert '没跑' in out['skipped']['text'] and '开关' in out['skipped']['text'], out['skipped']
+    assert out['skipped']['alert'].startswith('⚠'), '开关关着那句不许长得像成功'
+    assert out['dbrefused']['failed'] is True and '没有完成' in out['dbrefused']['text'], out['dbrefused']
+    # 第 36 轮 A-MINOR-3 同族：回执**没有 success 这个键**也不等于成功
+    assert out['nosuccess']['failed'] is True, out['nosuccess']
+    assert '完成' not in out['nosuccess']['text'], out['nosuccess']
+    assert out['throw']['failed'] is True and out['throw']['text'].startswith('失败：'), out['throw']
+    assert '清理开关没开' in out['throw']['text'], out['throw']
+
+    # ③ 那一栏在模板里真的区分得开失败与成功（置了位没人读 = 屏幕上同形）
+    seg = html[html.index('空间回收结果'):html.index('空间回收结果') + 700]
+    assert 'spaceReclaimFailed' in seg, \
+        '「空间回收结果」那一栏没有失败态的绑定 ⇒ "没跑成"与"跑完了"看着一模一样'
+    assert 'text-danger' in seg, '失败态要有那个真的定义过的样式类，不是一句空 class'
+
+
+def test_the_delete_receipt_says_what_happened_to_the_disk_space():
+    """删完数据那一句回执里，「空间回收」这一步有五种结局，各说各话（#158 §B）。
+
+    上一版只有一句 `空间回收已执行` —— 而 `retention_three_buckets.py:488` 写的是
+    `if reclaim_space and total_deleted:` ⇒ **一条都没删掉时那个键根本不存在**，
+    页面上那句"已执行"当场是假话。真跑起来另外三种也各有各的话：
+    `skipped`（开关没开 / 没有要回收的表 / 内存库 / 方言不支持）、
+    `success:false`（数据库自己说没成）、跑完了但 `bytes_freed` 为 null。
+    原因出自哪里只有一把尺子（`src/services/db_space.py:failure_detail`）：sqlite 整库 VACUUM
+    把原因写在顶层 `error`，PG 是按表 VACUUM 的、原因本来只在 `tables[表].error`，
+    现在服务在交回结果前把那句话**也算到顶层** ⇒ 页面只读 `reclaim.error` 一个槽位，
+    两种方言同一条腿同一种待遇（上一版它对 PG 是结构性失明的：数据库答了、页面上问不出来）。
+    判据跑**真的 `cleanupData`**（连同真的 `pollCleanupTask`、`reclaimResult`、`formatBytes`），
+    桩里那六个形状逐键来自 `src/services/db_space.py` 的真返回。
+    """
+    html = _html()
+    out = _run_chain_js(
+        _decl(html, 'formatBytes = (value) =>') + '\n'
+        + _decl(html, 'reclaimResult = (reclaim) =>') + '\n'
+        + _expr(html, 'const CLEANUP_POLL_TIMEOUT_MS')
+        + _decl(html, 'pollCleanupTask = async (taskId) =>') + '\n'
+        + _expr(html, 'const retentionBucketLabel = ') + '\n'
+        + _expr(html, 'const retentionTableLabels = ') + '\n'
+        + _expr(html, 'const retentionTableLabel = ') + '\n'
+        + _decl(html, 'cleanupData = async () =>') + """
+const probe = async (shape) => {
+    shape_ = shape; alerts.length = 0;
+    spaceReclaimResult.value = '上一轮那句（必须被本轮盖掉）'; spaceReclaimFailed.value = false;
+    await cleanupData();
+    return {text: alerts[alerts.length - 1], result: spaceReclaimResult.value,
+            failed: spaceReclaimFailed.value};
+};
+(async () => {
+    const r = {};
+    for (const s of ['nokey', 'skipped', 'failed', 'pgfailed', 'freed', 'zerofreed']) r[s] = await probe(s);
+    console.log(JSON.stringify(r));
+})();
+""",
+        prelude_js="""
+const ref = (v) => ({ value: v });
+let shape_ = 'nokey';
+const alerts = []; const confirms = [];
+const alert = (m) => alerts.push(m);
+const confirm = (m) => { confirms.push(m); return true; };
+const analyzing = ref(false); const cleanupEnabled = ref(true); const cleanupTask = ref(null);
+const spaceReclaimResult = ref(''); const spaceReclaimFailed = ref(false);
+const fetchStats = async () => {}; const fetchRetentionPreview = async () => {};
+const fetchCleanupPreview = async () => {};
+const RET = {
+  nokey: {total_rows_removed: 12, deleted_counts: {old_posts: 12}},
+  skipped: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
+            space_reclaim: {skipped: true, reason: 'no_tables', tables: {}}},
+  failed: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
+           space_reclaim: {success: false, error: 'database is locked', tables: {}}},
+  pgfailed: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
+             space_reclaim: {success: false, dialect: 'postgresql', mode: 'per-table',
+                             error: 'fund_history：VACUUM FULL 被别的会话占着',
+                             tables: {fund_history: {mode: 'failed', success: false,
+                                                     error: 'VACUUM FULL 被别的会话占着'}}}},
+  freed: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
+          space_reclaim: {success: true, bytes_freed: 1048576, tables: {}}},
+  zerofreed: {total_rows_removed: 12, deleted_counts: {old_posts: 12},
+              space_reclaim: {success: true, bytes_freed: null, tables: {}}},
+};
+const retentionPreview = ref({total: 12, preview_fingerprint: 'fp',
+    counts: {old_posts: 12}, protected_counts: {verified_ledger_excluded: 3},
+    cascade_counts: {posts: 12}, policy: {fund_history_keep_recent: 20}});
+const axios = {
+  post: async () => ({ data: { success: true, data: { task_id: 't1' } } }),
+  get: async () => ({ data: { success: true, data: { status: 'completed', result: RET[shape_] } } }),
+};
+""")
+    assert '已执行' not in out['nokey']['text'], out['nokey']
+    assert '没执行' in out['nokey']['text'], '一条都没删掉 ⇒ 那一栏不存在，回执必须说"这次没执行"'
+    assert out['nokey']['failed'] is True
+    assert '没跑' in out['skipped']['text'], out['skipped']
+    # 边界要说清：删除这一路页面把回执的 `reason` **原样**带出来（屏幕上会出现 `no_tables` 这种键名），
+    # 把它翻成人话的那份 `_reclaim_skip_sentence` 在 config.py 的路由里 —— 页面不许抄第二份
+    # （一把尺子两处结局），所以这里只判"没跑"两个字，不判它有没有被翻译。
+    assert out['skipped']['failed'] is True, out['skipped']
+    assert '已释放' not in out['skipped']['text'], out['skipped']
+    assert out['failed']['failed'] is True, out['failed']
+    assert 'database is locked' in out['failed']['text'], out['failed']
+    assert '清理完成' in out['failed']['text'], '数据确实删掉了：那一整句不许变成"清理失败"'
+    # PG 那一格：原因出自按表的那条腿，服务把它算到顶层 ⇒ 页面读同一个槽位就能说出来。
+    # 上一版它对 PG 是失明的（只读顶层 error，而 PG 当时只填 tables），屏幕上会是
+    # 「数据库没给出原因」——数据库明明答了。
+    assert out['pgfailed']['failed'] is True, out['pgfailed']
+    assert 'VACUUM FULL 被别的会话占着' in out['pgfailed']['text'], out['pgfailed']
+    assert '数据库没给出原因' not in out['pgfailed']['text'], out['pgfailed']
+    assert '已释放' not in out['pgfailed']['text'], out['pgfailed']
+    assert '清理完成' in out['pgfailed']['text'], '回收失败不许把已经删掉的数据说成清理失败'
+    assert out['freed']['text'].splitlines()[-1] == '空间回收：已释放 1.0 MB', out['freed']
+    assert out['freed']['result'] == '空间回收：已释放 1.0 MB', \
+        '弹窗最后一行与「空间回收结果」那一栏必须是同一句话，不许两处各说一版'
+    assert out['freed']['failed'] is False, out['freed']
+    assert '已释放 0 B' not in out['zerofreed']['text'], out['zerofreed']
+    assert '没测得' in out['zerofreed']['text'], out['zerofreed']
+    assert out['zerofreed']['failed'] is False, '跑完了、只是没测出可释放的空间 ⇒ 不是失败'
+
+
+def test_the_delete_confirmation_promises_only_what_the_backend_will_try():
+    """执行前那句确认不许替后端作保（第 71 轮 #158 §F）。
+
+    上一版写的是「删除后会自动回收磁盘空间。」—— 而
+    `src/services/retention_three_buckets.py` 那一支写的是 `if reclaim_space and total_deleted:`
+    ⇒ **一条都没删掉时压根不回收**；`ENABLE_SPACE_RECLAIM=false` 时不回收；
+    方言不支持 / 内存库时也不回收。"会自动"说的是**必然**，页面能承诺的只有"会尝试"，
+    并且要说清两件老板真正想知道的事：尝试失败**不会**倒扣已经删掉的数据、结果在哪儿看。
+
+    这一条跑**真的 `cleanupData`**，读的是它递给 `confirm` 的那一句原文（不是页面里的字面量），
+    并且 `confirm` 回 false ⇒ 顺带钉住"老板答取消就一个字都不发出去"。
+    """
+    html = _html()
+    out = _run_chain_js(
+        _expr(html, 'const retentionBucketLabel = ') + '\n'
+        + _expr(html, 'const retentionTableLabels = ') + '\n'
+        + _expr(html, 'const retentionTableLabel = ') + '\n'
+        + _decl(html, 'cleanupData = async () =>') + """
+(async () => {
+    await cleanupData();
+    console.log(JSON.stringify({msg: confirms[0] || null, posted: posts,
+                                alerted: alerts.length}));
+})();
+""",
+        prelude_js="""
+const ref = (v) => ({ value: v });
+const confirms = []; const alerts = []; let posts = 0;
+const alert = (m) => alerts.push(m);
+const confirm = (m) => { confirms.push(m); return false; };
+const analyzing = ref(false); const cleanupEnabled = ref(true); const cleanupTask = ref(null);
+const spaceReclaimResult = ref(''); const spaceReclaimFailed = ref(false);
+const fetchStats = async () => {}; const fetchRetentionPreview = async () => {};
+const fetchCleanupPreview = async () => {};
+const retentionPreview = ref({total: 12, preview_fingerprint: 'fp',
+    labels: {old_posts: '旧帖'},
+    counts: {old_posts: 12}, protected_counts: {verified_ledger_excluded: 3},
+    cascade_counts: {fund_history: 40}, policy: {fund_history_keep_recent: 20}});
+const axios = { post: async () => { posts++; return { data: { success: true, data: {} } }; },
+                get: async () => { posts++; return { data: { success: true, data: {} } }; } };
+""")
+    msg = out['msg']
+    assert msg and '确定执行吗' in msg, out
+    assert out['posted'] == 0, '老板答"取消"之后一个字都不该发出去（这句话不只是给看的）'
+    assert out['alerted'] == 0, out
+    assert '会自动回收' not in msg, '那句"会自动"替后端作了保：一条都没删掉时它压根不跑'
+    assert '删除后会自动回收磁盘空间' not in msg
+    assert '尝试回收磁盘空间' in msg, '能承诺的只有"会尝试"'
+    assert '一条都没删掉时不回收' in msg, '那个 if 的两种结局之一，必须在点之前就说清'
+    assert '不影响已经删掉的数据' in msg, '回收失败会不会倒扣已删的数据 —— 老板真正想知道的那半句'
+    assert '空间回收结果' in msg, '没说结果去哪儿看，老板只能猜或者反复点'
+    assert '最近 20 条净值' in msg, '保底条数从预览的 policy 现取，页面不许自己写一个数'
+    assert '40' in msg and 'fund_history' not in msg, \
+        '连带删除那一行必须用表名中文标签，不把 `fund_history` 这种内部名摆在老板面前'
+    assert '旧帖' in msg and 'old_posts' not in msg, \
+        '桶名同理：取预览自己给的 `labels`，取不到才退回键名（那条回退由判据外面那条 `|| bucket` 管）'

@@ -1,9 +1,12 @@
 """三桶 v2：verified 护栏、观点锚点、全局上限、dry-run 默认、净值两桶。"""
 from datetime import date, datetime, timedelta
 
+import pytest
+
 from src.models.database import (
     Blogger,
     CleanupItemLog,
+    CleanupLog,
     FundHistory,
     FundInfo,
     FundSyncRetry,
@@ -14,6 +17,7 @@ from src.models.database import (
 )
 from src.services.retention_three_buckets import (
     CONFIRM_TOKEN,
+    CleanupInterrupted,
     ThreeBucketPolicy,
     ThreeBucketRetentionService,
 )
@@ -526,10 +530,154 @@ def test_plan_is_idempotent_after_execute(test_db):
     assert svc.build_plan().total == 0
 
 
-def test_sqlite_reclaim_space_reports_freed_bytes(test_db):
-    """内存库无法 VACUUM，但接口必须给出结构化结果而不是抛错。"""
+def test_a_reclaim_on_an_in_memory_database_never_claims_success(test_db):
+    """内存库 VACUUM 不了：接口要给出结构化结果，且不许同时说"跑成功了"。"""
     svc = ThreeBucketRetentionService(test_db, today=TODAY)
     result = svc.reclaim_space(["fund_history"])
-    assert result["success"] is True
     assert result.get("skipped") is True
     assert result["reason"] == "in_memory_database"
+    # 一句"没跑"不许买到 success —— 页面据此说"已回收空间"就是假话
+    assert not result.get("success")
+
+
+def test_a_reclaim_that_raised_is_reported_as_not_done(test_db, monkeypatch):
+    """回收这一步自己炸了：删除已经成功，但那一步不许被说成做完了。"""
+    import src.services.db_space as db_space
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("磁盘满了")
+
+    monkeypatch.setattr(db_space, "reclaim_space", boom)
+    svc = ThreeBucketRetentionService(test_db, today=TODAY)
+    result = svc.reclaim_space(["fund_history"])
+    assert result["success"] is False
+    assert "磁盘满了" in result["error"]
+
+
+def _seed_two_rows_for_abort(test_db):
+    """两行回收站预测（第一桶，会先 commit）+ 一行观点（第二桶之后，删不到）。"""
+    blogger, post = _seed_blogger_post(test_db)
+    ids = []
+    for code in ("ABORT1", "ABORT2"):
+        pred = Prediction(
+            post_id=post.id,
+            blogger_id=blogger.id,
+            fund_code=code,
+            prediction_type="bullish",
+            prediction_content="will be gone before the crash",
+            prediction_date=date(2026, 1, 1),
+            target_date=date(2026, 2, 1),
+            status="pending",
+            is_deleted=True,
+            deleted_at=datetime(2026, 1, 10),
+            is_correct=None,
+        )
+        test_db.add(pred)
+        test_db.flush()
+        ids.append(pred.id)
+    vp = Viewpoint(
+        blogger_id=blogger.id,
+        post_id=post.id,
+        content="still here after the crash",
+        author="t",
+        source="test",
+        viewpoint_date=date(2026, 7, 1),
+        valid_until=date(2026, 12, 31),
+        is_deleted=True,
+        deleted_at=datetime(2026, 6, 1),
+        is_summary=False,
+    )
+    test_db.add(vp)
+    test_db.commit()
+    return ids, vp.id
+
+
+def test_an_abort_midway_reports_the_rows_already_gone(test_db, monkeypatch):
+    """崩在半路时，"已经删掉几行"必须同时出现在异常、台账与那句话里。
+
+    每个 _hard_delete_* 都是"一批 commit 之后才回调"，所以第一桶的两行
+    在崩溃点之前就已经不可再生地消失了；而台账与页面此前只会说"失败"，
+    读起来像一个字都没动。
+    """
+    gone_ids, vp_id = _seed_two_rows_for_abort(test_db)
+    svc = ThreeBucketRetentionService(test_db, today=date(2026, 7, 29))
+
+    def boom(ids, *, on_progress=None):
+        raise RuntimeError("模拟：删清理日志这一批撞上外键")
+
+    monkeypatch.setattr(svc, "_hard_delete_cleanup_logs", boom)
+
+    with pytest.raises(CleanupInterrupted) as caught:
+        svc.execute(dry_run=False, confirm_token=CONFIRM_TOKEN, reclaim_space=False)
+
+    # ① 已提交的那一批真从库里消失（per-batch commit 的语义，不是"整笔回滚"）
+    assert test_db.query(Prediction).filter(Prediction.id.in_(gone_ids)).count() == 0
+    # ② 崩溃点之后的那一桶一个字没动
+    assert test_db.query(Viewpoint).filter(Viewpoint.id == vp_id).first() is not None
+
+    # ③ 台账：一条 failed，数的是"已提交"的行数，不是计划的行数
+    ledgers = test_db.query(CleanupLog).all()
+    assert len(ledgers) == 1
+    ledger = ledgers[0]
+    assert ledger.status == "failed"
+    assert ledger.success_count == 2
+    assert ledger.success_count < ledger.total_items
+    assert ledger.details["deleted_counts"] == {"deleted_predictions": 2}
+    assert "外键" in " ".join(ledger.errors or [])
+    # 清理日志那一桶崩在半路，连带行数不许提前入账
+    assert ledger.details["cascade_counts"] == {}
+
+    # ④ 异常自己带出行数与台账 id：config.py 的 task.error = str(exc) 全靠这句话
+    assert "2 行" in str(caught.value)
+    assert "外键" in str(caught.value)
+    assert caught.value.committed_counts == {"deleted_predictions": 2}
+    assert caught.value.cleanup_log_id == ledger.id
+
+
+def test_a_run_that_finishes_writes_no_failed_ledger(test_db):
+    """反面对照：正常跑完只留一条 completed，不许把"失败台账"变成常驻。"""
+    _seed_two_rows_for_abort(test_db)
+    svc = ThreeBucketRetentionService(test_db, today=date(2026, 7, 29))
+    result = svc.execute(
+        dry_run=False, confirm_token=CONFIRM_TOKEN, reclaim_space=False
+    )
+    assert result["total_deleted"] == 3  # 两行预测 + 一行观点
+    assert [row.status for row in test_db.query(CleanupLog).all()] == ["completed"]
+
+
+def test_a_failed_ledger_that_cannot_be_written_still_reports_the_counts(test_db, monkeypatch):
+    """台账写不进去（比如库本身坏了）时，"删了几行"这件事仍然要说出口。
+
+    这一格的结构是：CleanupLog 这个对象一旦建不出来，except 里那次
+    add/commit 就会再抛一次；旧写法让它顺着冒出去，行数一个字都不剩。
+    """
+    gone_ids, _ = _seed_two_rows_for_abort(test_db)
+    svc = ThreeBucketRetentionService(test_db, today=date(2026, 7, 29))
+
+    def boom(ids, *, on_progress=None):
+        raise RuntimeError("模拟：删到一半数据库连接断了")
+
+    monkeypatch.setattr(svc, "_hard_delete_cleanup_logs", boom)
+    real_commit = svc.db.commit
+    crashed = {"yes": False}
+
+    def commit_router():
+        # 崩溃之前的 commit 照常（那批行必须真消失）；崩了之后补写台账那一次才坏
+        if not crashed["yes"]:
+            return real_commit()
+        raise RuntimeError("模拟：台账写不进去")
+
+    def boom_and_mark(ids, *, on_progress=None):
+        crashed["yes"] = True
+        return boom(ids, on_progress=on_progress)
+
+    monkeypatch.setattr(svc, "_hard_delete_cleanup_logs", boom_and_mark)
+    monkeypatch.setattr(svc.db, "commit", commit_router)
+
+    with pytest.raises(CleanupInterrupted) as caught:
+        svc.execute(dry_run=False, confirm_token=CONFIRM_TOKEN, reclaim_space=False)
+
+    assert caught.value.cleanup_log_id is None
+    assert caught.value.committed_counts == {"deleted_predictions": 2}
+    assert "2 行" in str(caught.value)
+    assert test_db.query(Prediction).filter(Prediction.id.in_(gone_ids)).count() == 0

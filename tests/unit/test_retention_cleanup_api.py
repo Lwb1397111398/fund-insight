@@ -1,3 +1,5 @@
+import os
+import stat
 from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -540,7 +542,201 @@ def test_reclaim_space_endpoint_vacuums_without_deleting(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["data"]["dialect"] == "sqlite"
+    # 这一趟是真跑了 VACUUM 的（落盘的 sqlite 文件），所以"完成"这一档归它
+    assert response.json()["success"] is True
+    assert "没跑" not in response.json()["message"]
     # 只回收空间，不动数据
     with session_factory() as db:
         assert db.query(FundInfo).filter_by(fund_code="APIORPH").first() is not None
         assert db.query(FundHistory).filter_by(fund_code="APIORPH").count() == 6
+
+
+RECLAIM_HEADERS = {**AUTH_HEADERS, "X-Danger-Confirm": "cleanup-data"}
+
+
+def _post_reclaim(monkeypatch, session_factory):
+    """走一次真实路由，把「回收磁盘空间」这一步的回执拿回来。"""
+    monkeypatch.setenv("ENABLE_DATA_CLEANUP", "true")
+    app, client = _client(monkeypatch, session_factory)
+    try:
+        return client.post(
+            "/api/config/cleanup/reclaim-space", headers=RECLAIM_HEADERS
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _assert_never_ran(response, fragment):
+    """一次"没跑"的回执：既不许买到 success，也不许把话说成完成。"""
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["success"] is False, body
+    assert body["skipped"] is True, body
+    assert fragment in body["message"], body
+    assert "完成" not in body["message"], body
+    return body
+
+
+def test_a_reclaim_that_never_ran_is_never_reported_as_done(monkeypatch, tmp_path):
+    """「回收磁盘空间」有四种没跑的形状，每一种都得自己说一句人话。
+
+    路由原来写的是 `success = 真跑了 or 跳过了` —— 开关关着、没有表、内存库、
+    方言不支持这四种都会让页面长出"空间回收完成"，而空间一个字节都没还。
+    """
+    from src.api.routes import config as config_routes
+    from src.services.retention_three_buckets import ThreeBucketRetentionService
+
+    # ① 总开关关着（真 sqlite 文件库，只是这一步不跑）
+    monkeypatch.setenv("ENABLE_SPACE_RECLAIM", "false")
+    _assert_never_ran(
+        _post_reclaim(monkeypatch, _database(tmp_path)), "回收开关（ENABLE_SPACE_RECLAIM）"
+    )
+    monkeypatch.delenv("ENABLE_SPACE_RECLAIM", raising=False)
+
+    # ② 这次压根没有要回收的表（表名来自三桶那张表，路由在调用时现取）
+    monkeypatch.setattr(ThreeBucketRetentionService, "BUCKET_TABLES", {})
+    _assert_never_ran(_post_reclaim(monkeypatch, _database(tmp_path)), "没有要回收的表")
+    monkeypatch.undo()
+
+    # ③ 内存数据库：没有磁盘文件可回收
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    body = _assert_never_ran(
+        _post_reclaim(monkeypatch, sessionmaker(bind=engine)), "内存数据库"
+    )
+    # 服务层那一份自己也不许同时带 success（两个互相打脸的旗标）
+    assert not body["data"].get("success"), body["data"]
+    engine.dispose()
+
+    # ④ 方言不支持：两个库（sqlite / PostgreSQL）都是支持的，路由级走不到这一档，
+    #    所以这一臂只钉那句话本身——它必须带出是哪个方言，不许退化成一句"没跑"。
+    sentence = config_routes._reclaim_skip_sentence("unsupported_dialect:mysql")
+    assert "mysql" in sentence and "不支持" in sentence
+    # 认不出的原因也不许静默变成空话
+    assert "没跑" in config_routes._reclaim_skip_sentence("因为某种别的原因")
+
+
+def test_a_reclaim_the_database_refused_says_why(tmp_path, monkeypatch):
+    """数据库自己拒了 VACUUM：这一档要说"没有完成"并把它的原话带出来。"""
+    path = tmp_path / "readonly-space.db"
+    engine = create_engine(f"sqlite:///{path.as_posix()}")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    base = date(2026, 1, 1)
+    session.bulk_save_objects(
+        [
+            FundHistory(
+                fund_code=f"F{i % 10:03d}",
+                fund_name="回收失败测试",
+                nav_date=base + timedelta(days=i // 10),
+                nav=1.0 + i / 10000,
+            )
+            for i in range(400)
+        ]
+    )
+    session.commit()
+    session.close()
+    engine.dispose()
+    # 只读文件 ⇒ sqlite 连不上写 ⇒ VACUUM 由数据库自己拒
+    path.chmod(stat.S_IREAD)
+
+    readonly_engine = create_engine(
+        f"sqlite:///{path.as_posix()}", connect_args={"check_same_thread": False}
+    )
+    try:
+        response = _post_reclaim(monkeypatch, sessionmaker(bind=readonly_engine))
+    finally:
+        path.chmod(stat.S_IREAD | stat.S_IWRITE)
+        readonly_engine.dispose()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["success"] is False
+    # "没做成"与"没跑"是两件事：这一档不该带 skipped
+    assert not body.get("skipped")
+    assert body["message"].startswith("空间回收没有完成")
+    # 原因必须是数据库给的那句话，不许退化成"数据库没给出原因"
+    assert "数据库没给出原因" not in body["message"]
+    assert body["data"].get("error")
+
+
+def test_a_pg_reclaim_failure_reaches_the_route_from_the_same_slot_the_page_reads(
+    tmp_path, monkeypatch
+):
+    """Postgres 是按表 VACUUM 的：原因在 `tables[表].error`，页面读的是顶层 `error`。
+
+    这一格量的是"路由与页面读同一个槽位"，两腿各问一次：
+    ⑴ 服务把那句话算到顶层（今天 `_vacuum_postgres` 就是这么做的）⇒ 路由必须**原样**带出来。
+        这里顶层那句与"按表自己拼一遍"的写法**故意不同**，路由要是绕过共用尺子去抄 tables，
+        屏幕上会出现另一句话（两处两个口径 = 第 71 轮 #158 那条同族）。
+    ⑵ 顶层没有（万一将来又漏了）⇒ 路由退到按表点名，也比"数据库没给出原因"强。
+    """
+    import src.services.db_space as db_space
+
+    per_table = {
+        "fund_history": {"mode": "failed", "success": False, "error": "被别的会话占着"},
+        "predictions": {"mode": "failed", "success": False, "error": "超时被池子掐了"},
+    }
+    payloads = {
+        "with_top_level": {
+            "dialect": "postgresql", "mode": "per-table", "success": False,
+            "error": "两张表都没还成空间（服务替页面算好的那一句）",
+            "tables": per_table,
+        },
+        "only_tables": {
+            "dialect": "postgresql", "mode": "per-table", "success": False,
+            "tables": per_table,
+        },
+    }
+    session_factory = _database(tmp_path)
+    seen = []
+
+    def fake_reclaim(db, tables, **kwargs):
+        seen.append(sorted(tables))
+        return payloads["with_top_level" if len(seen) == 1 else "only_tables"]
+
+    monkeypatch.setattr(db_space, "reclaim_space", fake_reclaim)
+
+    first = _post_reclaim(monkeypatch, session_factory).json()
+    second = _post_reclaim(monkeypatch, session_factory).json()
+
+    assert first["success"] is False and not first.get("skipped"), first
+    assert first["message"].startswith("空间回收没有完成"), first
+    assert "服务替页面算好的那一句" in first["message"], first
+    assert "fund_history：" not in first["message"], \
+        "顶层已经有了这句话，路由不许绕过共用尺子再按表拼一遍"
+
+    assert second["success"] is False and not second.get("skipped"), second
+    assert "数据库没给出原因" not in second["message"], second
+    assert "被别的会话占着" in second["message"] and "超时被池子掐了" in second["message"], second
+
+
+def test_a_reclaim_that_freed_bytes_says_the_number(tmp_path, monkeypatch):
+    """真还了空间 ⇒ 页面要拿到"释放 N"那一句，而不是含糊的"跑完了"。"""
+    session_factory = _database(tmp_path)
+    session = session_factory()
+    base = date(2026, 1, 1)
+    session.bulk_save_objects(
+        [
+            FundHistory(
+                fund_code=f"G{i % 20:03d}",
+                fund_name="释放量测试基金",
+                nav_date=base + timedelta(days=i // 20),
+                nav=1.0 + i / 10000,
+            )
+            for i in range(4000)
+        ]
+    )
+    session.commit()
+    # 删掉大半，腾出可回收的空间（这一步不动回收站逻辑，只是造"死页"）
+    session.query(FundHistory).filter(
+        FundHistory.nav_date < base + timedelta(days=100)
+    ).delete(synchronize_session=False)
+    session.commit()
+    session.close()
+
+    body = _post_reclaim(monkeypatch, session_factory).json()
+    assert body["success"] is True, body
+    assert "释放" in body["message"], body
+    assert body["data"]["bytes_freed"] > 0
+

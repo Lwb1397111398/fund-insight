@@ -61,6 +61,12 @@ RULER_TESTS = 'tests/unit/test_one_ruler_per_question.py'
 MAINT = 'src/services/prediction_maintenance_service.py'
 ROUTES = 'src/api/routes/predictions.py'
 GAP_TESTS = 'tests/unit/test_sector_gap_fill.py'
+RETENTION = 'src/services/retention_three_buckets.py'
+RETENTION_TESTS = 'tests/unit/test_retention_three_buckets.py'
+CONFIG_ROUTES = 'src/api/routes/config.py'
+CLEANUP_API_TESTS = 'tests/unit/test_retention_cleanup_api.py'
+DB_SPACE = 'src/services/db_space.py'
+DB_SPACE_TESTS = 'tests/unit/test_db_space.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -394,6 +400,68 @@ MUTATIONS = [
      '        if no_start and not buckets_spoken:\n',
      '        if no_start:\n',
      GAP_TESTS, 'test_the_no_start_sentences_are_pinnable_without_a_library_row'),
+    # 第 71 轮 #158 §C：真删崩在半路时，"已经删掉几行"这件事有三处出口（异常文本、
+    # failed 台账、路由那句话）。每一处各坏一次，都由同一格行为判据点名。
+    ('M59_the_abort_ledger_is_never_written', RETENTION,
+     '                self.db.add(aborted)\n',
+     '                pass\n',
+     RETENTION_TESTS, 'test_an_abort_midway_reports_the_rows_already_gone'),
+    # 台账写的是"计划里几行"而不是"已经消失几行" ⇒ 崩在半路那一次它替没删掉的行作保。
+    ('M60_the_abort_ledger_counts_the_plan_not_the_committed', RETENTION,
+     '                "failed", committed, dict(self._cascade_counts), datetime.now(), str(exc)\n',
+     '                "failed", {k: len(v) for k, v in plan.candidate_ids.items()},\n'
+     '                dict(self._cascade_counts), datetime.now(), str(exc)\n',
+     RETENTION_TESTS, 'test_an_abort_midway_reports_the_rows_already_gone'),
+    # 异常带着原始原因、却把已提交的数掏空 ⇒ 路由那句 task.error 只剩"模拟：…"，
+    # "已经删掉 N 行"这件事到不了页面（载荷掏空 counts 而不是换异常类型：后者会让
+    # pytest.raises 那一腿以"没抛出预期的异常"红，那按本工具的规矩算 HARNESS-FAIL）。
+    ('M61_the_abort_exception_loses_the_committed_counts', RETENTION,
+     '            raise CleanupInterrupted(committed, log_id, exc) from exc\n',
+     '            raise CleanupInterrupted({}, log_id, exc) from exc\n',
+     RETENTION_TESTS, 'test_an_abort_midway_reports_the_rows_already_gone'),
+    # 第 71 轮 #158 §E：「回收磁盘空间」那一步有五种"没跑/没成"的形状，旧路由把它们和
+    # "真跑完了"并成一句好话（`success = bool(ok) or bool(skipped)`）。这一处把跳过那一档
+    # 的 success 翻回 True ⇒ 页面上"空间还欠着"与"空间已还"同形。
+    ('M62_the_reclaim_success_flag_is_folded_with_skipped', CONFIG_ROUTES,
+     '            "success": False,\n            "skipped": True,\n',
+     '            "success": True,\n            "skipped": True,\n',
+     CLEANUP_API_TESTS, 'test_a_reclaim_that_never_ran_is_never_reported_as_done'),
+    # 服务层那圈"失败只记录不抛"的兜底，把异常换成一句"成功了"：删除本身确实成功了，
+    # 可回收空间这一步一个字没做，回执却带着 success —— 由同一格服务层判据点名。
+    ('M63_the_reclaim_wrapper_swallows_and_still_says_done', RETENTION,
+     '            return {"success": False, "error": str(exc), "tables": {}}\n',
+     '            return {"success": True, "error": str(exc), "tables": {}}\n',
+     RETENTION_TESTS, 'test_a_reclaim_that_raised_is_reported_as_not_done'),
+    # 第 71 轮 #158 §G：Postgres 是按表 VACUUM 的，数据库把原因逐表答出来，而页面上那一栏
+    # 读的是顶层 error。上一版顶层只有 `success: False` ⇒ "数据库明明答了、页面上问不出来"
+    # （本地 sqlite 整库那一路反而看不见，生产恰好是 PG 这一路）。摘掉服务层替页面补的那一句。
+    ('M64_the_pg_reason_stays_where_the_database_put_it', DB_SPACE,
+     '        payload["error"] = failure_detail(payload)\n',
+     '        pass\n',
+     DB_SPACE_TESTS, 'test_a_per_table_failure_puts_its_reason_where_the_page_reads_it'),
+    # 「这次没跑成的原因是什么」有一把共用的尺子（failure_detail），两处消费方读同一句话。
+    # 这一处让路由不再问它 ⇒ 回执那句只剩一个死字符串，页面上永远看不到数据库给的原因。
+    ('M65_the_route_stops_asking_the_shared_ruler', CONFIG_ROUTES,
+     '            "message": f"空间回收没有完成：{failure_detail(result)}",\n',
+     '            "message": "空间回收没有完成：数据库没给出原因",\n',
+     CLEANUP_API_TESTS,
+     'test_a_pg_reclaim_failure_reaches_the_route_from_the_same_slot_the_page_reads'),
+    # 同一件事的第二种坏法：路由自己按 tables 再拼一句（第二把尺子）。顶层已经写了这句话，
+    # 于是两处措辞不同形，而判据第一格钉的正是"路由不许绕过共用尺子按表再拼一遍"。
+    ('M66_the_route_derives_the_reason_a_second_time', CONFIG_ROUTES,
+     '            "message": f"空间回收没有完成：{failure_detail(result)}",\n',
+     '            "message": "空间回收没有完成：" + "; ".join(\n'
+     '                f"{name}：" + str(entry.get("error"))\n'
+     '                for name, entry in (result.get("tables") or {}).items()\n'
+     '                if isinstance(entry, dict) and not entry.get("success")),\n',
+     CLEANUP_API_TESTS,
+     'test_a_pg_reclaim_failure_reaches_the_route_from_the_same_slot_the_page_reads'),
+    # 共用那把尺子自己的第一档：数据库在顶层已经答了（sqlite 整库那一路）⇒ 原样带出。
+    # 摘掉这一档 ⇒ 真原因被"数据库没给出原因"顶掉，而它是驱动逐字给的那句话。
+    ('M67_the_shared_ruler_ignores_what_the_database_gave', DB_SPACE,
+     '    error = result.get("error")\n    if error:\n',
+     '    error = result.get("error")\n    if False:\n',
+     DB_SPACE_TESTS, 'test_the_failure_reason_has_one_home_and_prefers_what_the_database_gave'),
 ]
 
 

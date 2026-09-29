@@ -625,7 +625,7 @@
 
                     <div v-if="spaceReclaimResult" class="cleanup-warnings mb-20">
                         <h4><i class="ri-hard-drive-2-line"></i> 空间回收结果</h4>
-                        <span>{{ spaceReclaimResult }}</span>
+                        <span :class="{ 'text-danger': spaceReclaimFailed }">{{ spaceReclaimResult }}</span>
                     </div>
 
                     <div v-if="cleanupTask" class="cleanup-progress mb-20">
@@ -2382,7 +2382,7 @@ const fetchWeChatBatch = async () => {
                 };
                 const viewpointDetail = ref(null), fundDetail = ref(null), predictionDetail = ref(null), topBloggers = ref([]), adviceHistory = ref([]), configData = ref(null), cleanupPreview = ref(null), cleanupEnabled = ref(false), cleanupPreviewError = ref(''), cleanupTask = ref(null);
                 const retentionPreview = ref(null), retentionPreviewError = ref('');
-                const reclaiming = ref(false), spaceReclaimResult = ref('');
+                const reclaiming = ref(false), spaceReclaimResult = ref(''), spaceReclaimFailed = ref(false);
                 const CLEANUP_POLL_TIMEOUT_MS = 35 * 60 * 1000;
                 const postManager = window.createPostManager({
                     axios, ref, reactive, localStorage, alert, confirm, analyzing,
@@ -2829,19 +2829,41 @@ const fetchWeChatBatch = async () => {
                     while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
                     return size.toFixed(1) + ' ' + units[i];
                 };
+                // 「空间回收」这一步有四种结局，各说各话：删数据成功了不等于空间还了。
+                // 只认回执自己说的那一项（skipped / success），页面不许替它补一句好话。
+                const reclaimResult = (reclaim) => {
+                    if (!reclaim) return { ok: false, text: '空间回收：这次没执行（清理时没真删掉行，或回收没开）' };
+                    if (reclaim.skipped) return { ok: false, text: '空间回收：没跑 —— ' + (reclaim.reason || '数据库没给出原因') };
+                    if (reclaim.success === false) return { ok: false, text: '空间回收：没跑成 —— ' + (reclaim.error || '数据库没给出原因') };
+                    if (!reclaim.success) return { ok: false, text: '空间回收：回执里没写成没成，不敢算已完成' };
+                    const freed = reclaim.bytes_freed;
+                    return {
+                        ok: true,
+                        text: freed
+                            ? '空间回收：已释放 ' + formatBytes(freed)
+                            : '空间回收：跑完了，本次没测得可释放的空间',
+                    };
+                };
                 const reclaimSpace = async () => {
                     if (!confirm('回收磁盘空间会重整数据库文件（Postgres 用 VACUUM FULL，过程中该表短暂只读）。\n\n本操作不删除任何数据。继续吗？')) return;
                     reclaiming.value = true;
                     spaceReclaimResult.value = '';
+                    spaceReclaimFailed.value = false;
                     try {
                         const res = await axios.post('/api/config/cleanup/reclaim-space', null, {
                             headers: { 'X-Danger-Confirm': 'cleanup-data' }
                         });
-                        spaceReclaimResult.value = res.data.message || '完成';
-                        alert(res.data.message || '空间回收完成');
+                        // 200 + success:false 是这个后端的常规拒绝姿势（开关关着、内存库、
+                        // 方言不支持、数据库自己说没成）⇒ 必须读 success，不能读一句 message 就当 done。
+                        const ok = res.data?.success === true;
+                        const text = res.data?.message || '空间回收这一步没有给出原因';
+                        spaceReclaimFailed.value = !ok;
+                        spaceReclaimResult.value = text;
+                        alert((ok ? '' : '⚠ ') + text);
                         await fetchRetentionPreview();
                     } catch (e) {
                         const msg = e.response?.data?.detail?.message || e.response?.data?.detail || e.message;
+                        spaceReclaimFailed.value = true;
                         spaceReclaimResult.value = '失败：' + msg;
                         alert('空间回收失败: ' + msg);
                     }
@@ -3055,7 +3077,7 @@ const fetchWeChatBatch = async () => {
                         .map(([table, count]) => `连带${retentionTableLabel(table)} ${count} 行`)
                         .join('\n');
                     const totalRows = preview.total_rows_removed || preview.total;
-                    const message = `将永久删除 ${totalRows} 行数据（真删除，不可恢复）：\n\n${detail}${cascade ? '\n' + cascade : ''}\n\n保护规则：${excluded} 条已有验证结论的预测永不删除；仍被引用的基金及其预测窗口净值全部保留；每只基金保底留最近 ${preview.policy?.fund_history_keep_recent || 0} 条净值。\n\n删除后会自动回收磁盘空间。确定执行吗？`;
+                    const message = `将永久删除 ${totalRows} 行数据（真删除，不可恢复）：\n\n${detail}${cascade ? '\n' + cascade : ''}\n\n保护规则：${excluded} 条已有验证结论的预测永不删除；仍被引用的基金及其预测窗口净值全部保留；每只基金保底留最近 ${preview.policy?.fund_history_keep_recent || 0} 条净值。\n\n这次会顺带尝试回收磁盘空间：一条都没删掉时不回收，回收没跑成也不影响已经删掉的数据（结果会在下方「空间回收结果」里说明）。确定执行吗？`;
                     if (!confirm(message)) return;
                     analyzing.value = true;
                     cleanupTask.value = { status: 'pending', progress: 0, current_item: 0, total_items: preview.total };
@@ -3088,16 +3110,14 @@ const fetchWeChatBatch = async () => {
                                     .filter(([, count]) => count > 0)
                                     .map(([table, count]) => `${retentionTableLabel(table)} ${count}`)
                                     .join('，');
-                                const reclaim = task.result?.space_reclaim;
-                                const freed = reclaim?.bytes_freed;
-                                spaceReclaimResult.value = freed
-                                    ? `本次清理释放 ${formatBytes(freed)}`
-                                    : (reclaim ? '本次清理已回收空间（未测得可量化释放量）' : '');
+                                const reclaim = reclaimResult(task.result?.space_reclaim);
+                                spaceReclaimResult.value = reclaim.text;
+                                spaceReclaimFailed.value = !reclaim.ok;
                                 alert(
                                     `清理完成，共删除 ${task.result?.total_rows_removed || task.result?.total_deleted || 0} 行\n` +
                                     (summary ? `${summary}\n` : '') +
                                     (cascadeDone ? `连带删除：${cascadeDone}\n` : '') +
-                                    (freed ? `释放空间：${formatBytes(freed)}` : '空间回收已执行')
+                                    `${reclaim.ok ? '' : '⚠ '}${reclaim.text}`
                                 );
                             }
                         }
@@ -3515,7 +3535,7 @@ const fetchWeChatBatch = async () => {
                     predictionDetail, topBloggers, adviceHistory, configData, cleanupPreview, cleanupTask,
                     cleanupEnabled, cleanupPreviewError, fetchCleanupPreview, expiredPredictionsList, expiredViewpointsList,
                     retentionPreview, retentionPreviewError, fetchRetentionPreview, retentionBucketLabel,
-                    retentionTableLabel, reclaimSpace, reclaiming, spaceReclaimResult, formatBytes,
+                    retentionTableLabel, reclaimSpace, reclaiming, spaceReclaimResult, spaceReclaimFailed, formatBytes,
                     expiredPredictions, expiredViewpoints, testData, llmTesting, visionTesting,
                     testResult, showPasswordModal, passwordInput, passwordVerifying, passwordError,
                     authReady, submitPassword, fetchBloggers, loadView, addBlogger, addPost, addFund,

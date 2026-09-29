@@ -38,6 +38,24 @@ def space_reclaim_enabled() -> bool:
     return os.getenv("ENABLE_SPACE_RECLAIM", "true").lower() != "false"
 
 
+def failure_detail(result: Dict) -> str:
+    """「没跑成」时原因出自哪里，只有一个答案。
+
+    SQLite 整库 VACUUM 把原因写在顶层 error；Postgres 是按表 VACUUM 的，
+    原因只在 tables[表].error 里。两处消费方（路由那句回执、页面上那一栏）
+    必须读到同一句话，否则同一件事有两个口径。
+    """
+    error = result.get("error")
+    if error:
+        return str(error)
+    failing = [
+        f"{name}：{entry.get('error')}"
+        for name, entry in (result.get("tables") or {}).items()
+        if isinstance(entry, dict) and not entry.get("success")
+    ]
+    return "; ".join(failing) or "数据库没给出原因"
+
+
 def reclaim_space(
     db: Session,
     tables: Sequence[str],
@@ -87,10 +105,10 @@ def _vacuum_sqlite(bind, tables: List[str]) -> Dict:
     url = bind.url
     database = getattr(url, "database", None)
     if not database or database == ":memory:":
+        # 一个"没跑"的结果不许同时带 success —— 那是两句互相打脸的话。
         return {
             "dialect": "sqlite",
             "mode": "database",
-            "success": True,
             "skipped": True,
             "reason": "in_memory_database",
             "tables": {t: "database-wide" for t in tables},
@@ -191,14 +209,20 @@ def _vacuum_postgres(bind, tables: List[str], *, force_full: Optional[bool]) -> 
                 logger.warning("postgres VACUUM %s 失败: %s", table, exc)
                 entry = {"mode": "failed", "success": False, "error": str(exc)}
             result[table] = entry
-    return {
+    succeeded = all(e.get("success") for e in result.values())
+    payload: Dict = {
         "dialect": "postgresql",
         "mode": "per-table",
-        "success": all(e.get("success") for e in result.values()),
+        "success": succeeded,
         "bytes_freed": total_freed or None,
         "full_vacuum_max_rows": max_rows,
         "tables": result,
     }
+    if not succeeded:
+        # 按表失败也要在顶层留一句原因：页面上那一栏读的是顶层 error，
+        # 只把它留在 tables 里等于"数据库答了、页面上问不出来"。
+        payload["error"] = failure_detail(payload)
+    return payload
 
 
 def _pg_table_size(conn, table: str) -> Optional[int]:
