@@ -294,7 +294,87 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **09:4x（北京）**，**任务 #142 的第二半收口：补戳脚本在生产上印的那句回执是一句假话**
+最近一次核对（2026-09-30 **12:1x–12:3x（北京）**，**任务 #170 的"测量那一半"收口：把上一笔提交说明里
+推出来的基线数更正为量出来的数** —— `20abbaa` 的 message 写着「基线预期 …`tests/unit 1266 / tests 1275`…
+那是推出来的，不是量出来的」，**这句话本身被实测驳回**：真跑两个口径得到的是 **1302 / 1311**（见下面 ①）。
+⇒ 从此这一族只写"量出来的"，不许把代数当测量（本仓"一减一增正好抵消""算出来的数当跑过的数"那一族的又一次复发，
+而这次错在我自己的提交说明里）。本批 `src/` 与 `web/` **一个字未动**（改动面见 ③），
+所以两支变异体检**没有重跑** —— 这句不是偷懒，是 ④ 那条边界，别拿它当"变异全绿"。
+
+① **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务；六步串成一条链 `data/_review_tmp/r81-chain.sh`，逐步记时刻 / 退码 / 输出字节数，全链无崩溃签名）**：
+- `pytest tests/unit -q` → **1302 passed / 16 skipped / 0 failed**（566.04 秒，12:16:55 起、12:26:29 收，退 **0**，
+  输出 6959 字节）。末行逐字 `1302 passed, 16 skipped, 12 warnings in 566.04s (0:09:26)`。
+- `pytest tests/ -q` → **1311 passed / 16 skipped / 0 failed**（455.18 秒，12:26:29 起、12:34:15 收，退 **0**，
+  输出 6959 字节）。末行逐字 `1311 passed, 16 skipped, 12 warnings in 455.18s (0:07:35)`。
+  ⚠ 与上一基线那两条不同：**这一回退码被逐步记进链日志**（上一批 1289/1298 那两条是 `taskkill` 之后
+  幸存的孤儿子进程跑完的，退码没采集到 —— 那个缺口由这一跑补上）。
+  条数账：`--collect-only -q` 同一份代码当场印 `1318 tests collected` / `1327 tests collected`（两个口径），
+  比 `passed+skipped` 各多 **1** 与 **0** —— 前者是 `tests/unit` 里一条被 `xfail`/条件跳过的收集项，
+  拿两个口径互相减不出结论，要说收集数就说收集数。
+  （上一基线 1289/1298（`22d9f83`，第 78~79 轮那一批）⇒ **本批 +13 条 / 两个口径同增**。）
+  收集数对表（同口径、不互相验证）：`pytest tests/unit --collect-only -q` 末行逐字
+  `1318 tests collected in 1.58s`、`pytest tests --collect-only -q` 末行 `1327 tests collected in 1.65s`
+  ⇒ `1302+16=1318`、`1311+16=1327` **两个口径都逐字对上**（跑完的三条数与收集数是同一份数）。
+
+② **增量分布（用绝对基准 `22d9f83..HEAD`，不写 `HEAD~N` —— 第 69 轮 MAJOR-2 那条规矩）**：
+`for f in $(git diff --name-only 22d9f83..HEAD -- tests/); do echo "$f $(git show 22d9f83:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+⇒ `test_audit_fund_info_identity.py 6 → 11`（+5，改名那条通道：两个确认词各一处、备份先于 commit、
+生产必须带 `--only-codes`、"缺名字"与"名字错"两档分开口）、
+`test_backfill_viewpoint_archive_stamps.py 9 → 12`（+3，第 78~79 轮那三项"两种病因各说各话"）、
+`test_doc_quotes_verbatim.py 0 → 5`（**新文件**；它自己印不出 `git show` 那一支，那条
+`fatal: path … exists on disk, but not in '22d9f83'` 是预期的，循环仍然把 `0 -> 5` 印对）。
+1289 + 13 = 1302、1298 + 13 = 1311 ⇒ 两个口径同增，没有"只挂在 integration/services 里的"。
+名单对表（防第 69 轮 ⑧ 那种吞行）：对上面三个文件各跑
+`diff <(git show 22d9f83:$f | grep "^def test_" | sed "s/(.*//") <(grep "^def test_" $f | sed "s/(.*//")`
+⇒ 只应出现 `>` 行、不应出现 `<` 行。
+
+③ **本批改动面**（`git diff --name-only 22d9f83..HEAD`）：`AGENTS.md`、`DEPLOYMENT.md`、
+`scripts/audit_fund_info_identity.py`、`scripts/backfill_viewpoint_archive_stamps.py`、
+`scripts/mutation_proof_lifecycle.py`、`tests/unit/` 那三个文件、
+`docs/迭代计划/run-20260927-mutation/` 四份归档日志
+（`round78-lifecycle-m78.txt` / `round78-lifecycle-m79.txt` / `round79-backfill-m80.txt` /
+`round79b-backfill-m80-cleanhead.txt`）。**`src/` 与 `web/` 零命中** —— 这条是 ④ 那两句"没重跑"的依据，
+不是一条产品结论。
+
+④ **两支变异体检本批没重跑，这句按能到的范围说**：注册表处数**现读** =
+`python scripts/mutation_proof_lifecycle.py --list` 末行「共 83 处变异，覆盖 13 个用例文件」
+（第 79 轮 M80/M80b/M80c 三条把上一批那句"现读 80 处"作废；处数永远看 `--list` 末行，别抄文本）。
+⚠ 这一句只自证"注册表里有 83 条"，**不自证"83 条全 RED"** —— 全套 RED 的凭据仍停在第 79 轮那两份归档日志
+（`git ls-files` 核过在仓库里）。前端那一支同理：本批没动 `web/`，所以没有新增条目要它咬。
+真重跑两件事先满足：**本机 FreeGB ≥ 2**（本批 12:0x 现读只有 **0.98 GB**，五趟读数 0.97/0.83/1.19/1.16/0.98，
+没有滞留的 python/pytest 进程 ⇒ 内存紧是真的，不是探针坏了）与**跑期间不起别的长任务**。
+
+⑤ `python scripts/audit_doc_claims.py` → 退 **0**（12:34:22 起、12:34 收，输出 4160 字节）。回执末行逐字
+`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；另有 17 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`。
+⚠ **同一份文档在 12:4x 那次跑里印的是 18**，多出来的那一项出在 ② 那段初稿的措辞里：初稿把"加了哪几项"写成
+跟在文件名后面的中文量词，尺子把那个量词读成了"这个文件有几处"的承诺 ⇒ 落进"不判"桶、数就 +1，改完措辞回到 17。
+⇒ 规矩：**这种量词在本仓文档里是有主语的承诺**，说明"加了哪几项"要用序号或"各处/每项"，不跟在文件名后面。
+现值走命令自己跑，别抄这里（16 是第 78~79 轮之前的数，已作废）。
+
+⑥ **镜像此刻**（同日 12:34:32，只出计划不写库：`python scripts/close_unknowable_predictions.py`，
+**退 2 —— 这是 dry-run 的设计退码**（任务 #123），不是崩，输出 2994 字节）：
+`[计划] 到期未判里可以判定"永远问不出来"的：6 条；仍在等的：15 条`。
+⚠ **这一档第一次非零**（前面每一批记录的都不是 `0 条` 就是这句"0 可关 / 18 条仍在等"，包括上面 09:4x 那一段）
+⇒ 数一律现跑，别拿任何一批的文本当常量。**这 6 条是什么形状，我没有猜，是查出来的**（只读：
+`python scripts/q.py "select fund_code, min(nav_date) first_nav, max(nav_date) last_nav, count(*) rows from fund_history where fund_code in ('515440','158038') group by 1"`）
+⇒ `515440` 首笔净值 **2026-09-02**（库里 16 行）、`158038` 首笔 **2026-09-07**（12 行），
+而那 6 条的窗口（`515440` 上 5 条：2304 / 2243 / 2303 / 2629 / 2915，`158038` 上 1 条：3076）
+**整段都早于各自那只的第一笔** ⇒ 这正是第 53 轮 B-1 拆出来的第二档 `pre_inception`
+（"窗口整段早于库里第一笔净值"），与"标的停更"并列的那两种永久形状之一，
+**不是**"还没同步到"（另外那 15 条「还在等」才是那一档：源端这段给了 1/20/21/63 条 ⇒ 本地没补到，不是它没有）。
+⇒ 这一条直接落在老板那句「抓取不到且确认没有办法」上：**这 6 条是"确认没有办法"的那一档**，
+而收口动作（进回收站、不算判对判错、可随时恢复）在这批**一个字都没做**（dry-run 末行逐字
+`[dry-run] 一行都没动。真执行加 --apply --confirm CLOSE-UNVERIFIABLE`）。
+
+⑦ **线上哪一版**：本批**未推**（新复评还没拿）。要看线上走
+`GET /api/health/detail` 的 12 位 `git_commit`（带口令；免费实例会睡 ⇒ 必须带 `-w '%{http_code}'` 并重试），
+**别抄本文任何一句"线上跑 X"** —— 上面 09:4x 那一段末尾自己就记过"那一笔文档提交落地后 `22d9f83` 立刻被
+`1d8b64d` 顶掉"。本地领先几笔同样不在这里抄：`git fetch origin main:refs/remotes/origin/main &&
+git rev-list --count origin/main..HEAD` 现读（12:4x 现读：**4**，`origin/main=ca5860d`、`main=20abbaa`；
+写下这段之后那一笔文档提交会让它变 5，那不是回归）。
+
+（上一批：2026-09-30 **09:4x（北京）**，**任务 #142 的第二半收口：补戳脚本在生产上印的那句回执是一句假话**
 ——「其余 343 行要到各自那个保留日之后」把**两种完全不同的病因**并成了一句；本批动了
 `scripts/backfill_viewpoint_archive_stamps.py` + 它的判据 + 变异注册表 + 这段文档，`web/` 一个字没动。
 ⚠ **第 78 轮 F-1：上一版在这里写"本批只动一支一次性脚本…`src/` 与 `web/` 一个字没动"是假话** ——
