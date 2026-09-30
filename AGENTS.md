@@ -294,9 +294,20 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **13:5x–14:5x（北京）**，**任务 #171：到期未判、用自己那只标的问不出这段窗口的行 ⇒
+最近一次核对（2026-09-30 **13:5x–14:5x（北京）**，**第 82 轮 / 任务 #171：到期未判、用自己那只标的问不出这段窗口的行 ⇒
 让"备选标签"（`fund_info.sector_type`）也把补标计划表喂得出，从而换到给得出的标的上**；本批最重的一条不在代码里，
 是**我自己写进文档的那条复现命令印不出它自己声称量到的数**（见 ② 的 ⚠））：
+
+⚠⚠ **这一批的编号先记一笔我自己的假账（本批唯一一条文本账，按本仓尺度按 MAJOR 计）**：
+`341857f` / `cdd2410` / `060deb0` 三笔的提交说明都把它写成「**第 71 轮**」，而第 71 轮**早就用过了** ——
+`b308631`（09-29 20:57）「第 71 轮 88 分的收口账落地」，那一轮的复评是 **88/100**、被评的那一版 `adae245`
+**已推已部署**（见下面第 71 轮那一段），而下面 ① 段里那句「结果记在这儿防下一轮再派一次第 71 轮」
+正是它收口的证据。更明白的反证：归档计数器当时已经跑到**第 81 轮**（`bb5a5cf`，09-30 12:47），
+本批是它的下一轮 ⇒ 真号 **82**。⇒ **本批从此叫第 82 轮**（提交历史不改写，错的那三句在原处标作废、
+按这条更正来读）；两支体检日志原来叫 `round85-*`（那个 85 是从本批变异编号 M81~**M85** 串过来的，
+而仓库里从来没有「第 85 轮」）⇒ 已 `git mv` 成 `round82-*`，与本批的轮次号一致
+（复核 `git ls-files docs/迭代计划/run-20260927-mutation | grep round82` 印两份、`grep round85` 印 0 行）。
+这一族本仓记过很多次：**一个过时的标识符被复用成另一批的代号，下一轮就会照着它去查已经推掉的那一批**。
 
 ① **产品那一半（#171，代码在 `341857f`）**：`sync_sector_mappings` 查映射**只用预测自己那个 `sector` 标签**，
 永远不看 `fund_info.sector_type` ⇒ 那 6 行"确认没有办法"其实有办法：备选标签在内置补标表里给得出
@@ -335,8 +346,8 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 判据文件在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL / 无 `[还原失败]`；跑完
 `git status --porcelain -- src/ web/ tests/ scripts/` 为空）。首行逐字
 `# run @ 2026-09-30T14:05:55+08:00  git=341857fcfae9  worktree=clean  python=3.12.10  共 88 处变异 / 14 个判据文件`。
-原始日志**随仓库走** `docs/迭代计划/run-20260927-mutation/round85-lifecycle-mutations.txt`（已 `git add`，
-核对 `git ls-files docs/迭代计划/run-20260927-mutation | grep round85`）。本批新增 M81~M85 五处
+原始日志**随仓库走** `docs/迭代计划/run-20260927-mutation/round82-lifecycle-mutations.txt`（本批已 `git mv` 到这个名字，
+核对 `git ls-files docs/迭代计划/run-20260927-mutation | grep round82`）。本批新增 M81~M85 五处
 （把①那条例外摘掉 / 把②的 `+ plan_hits` 摘掉 / 把③的入口恒假 / `if kind == 'cannot'` 改成 `if True` /
 摘掉"备选也要被问过"那一腿），各自单独 `--only` 跑过（先 CONTROL-GREEN 再 RED）；
 另把 M40 的锚点换到 `pairs.append((prediction, mapping, key, via_gap))`。
@@ -349,10 +360,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 收完 `git status --porcelain -- src/ web/ tests/ scripts/` 为**空**）。
 ⚠ **本批 `web/` 一个字未动 ⇒ 这一轮是回归跑**，所以处数没有增量可报（147 与上一批同数，这里不许写成 `+0`）；
 重跑的理由是"那 147 处仍然逐条有牙"这句话需要一份当场的凭据。
-原始日志**随仓库走** `docs/迭代计划/run-20260927-mutation/round85-frontend-mutations.txt`（已 `git add`，
-核对 `git ls-files docs/迭代计划/run-20260927-mutation | grep round85` 应印两份：lifecycle 与 frontend）。
+原始日志**随仓库走** `docs/迭代计划/run-20260927-mutation/round82-frontend-mutations.txt`（本批已 `git mv` 到这个名字，
+核对 `git ls-files docs/迭代计划/run-20260927-mutation | grep round82` 应印两份：lifecycle 与 frontend）。
 数它别用 `grep -c '⇒ RED'` —— 前端日志每行**没有** `⇒`，那样会回 0 而看着像"一条都没跑"；
-用 `grep -c 'RED（判据有效）' docs/迭代计划/run-20260927-mutation/round85-frontend-mutations.txt` ⇒ 147。
+用 `grep -c 'RED（判据有效）' docs/迭代计划/run-20260927-mutation/round82-frontend-mutations.txt` ⇒ 147。
 
 ⑥ **文档条数对账**：`python scripts/audit_doc_claims.py` → 退 **0**，末行逐字
 `[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；另有 17 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`。
