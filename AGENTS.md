@@ -294,7 +294,90 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **12:1x–12:3x（北京）**，**任务 #170 的"测量那一半"收口：把上一笔提交说明里
+最近一次核对（2026-09-30 **13:5x–14:5x（北京）**，**任务 #171：到期未判、用自己那只标的问不出这段窗口的行 ⇒
+让"备选标签"（`fund_info.sector_type`）也把补标计划表喂得出，从而换到给得出的标的上**；本批最重的一条不在代码里，
+是**我自己写进文档的那条复现命令印不出它自己声称量到的数**（见 ② 的 ⚠））：
+
+① **产品那一半（#171，代码在 `341857f`）**：`sync_sector_mappings` 查映射**只用预测自己那个 `sector` 标签**，
+永远不看 `fund_info.sector_type` ⇒ 那 6 行"确认没有办法"其实有办法：备选标签在内置补标表里给得出
+一只这段窗口给得出净值的标的。三条链路一起接上（① 到期未判的行让备选标签也进补标计划表；② 备选池带上内置表
+那一档；③ 只有 `calendar_answer == 'cannot'` 才许换标，且备选自己也要被问过），真换走的行仍走
+`retag_prediction`（留台账、清旧结论、重算博主统计列、把重问锁退回目标日）。判据两文件现数：
+`grep -c '^def test_' tests/unit/test_sector_remap.py`、
+`grep -c '^def test_' tests/unit/test_sector_gap_fill.py`（本批现数 14 与 28，上一批分别是 5 与 27）。
+
+② **配对测量（镜像、只读 dry-run；命令逐字写在 `docs/模块总览/板块与基金匹配.md` 末尾那一节）**：
+`OFF {'would_update': 103, 'predictions_unchanged': 921, 'predictions_via_gap_fill_planned': 0, 'predictions_with_verdict': 72, 'predictions_skipped_unservable': 6}` 对
+`ON {'would_update': 112, 'predictions_unchanged': 912, 'predictions_via_gap_fill_planned': 6, 'predictions_with_verdict': 72, 'predictions_skipped_unservable': 6}`
+⇒ `+9 / −9` 两个数互为相反数、必须一起报（本仓"配对测量"那条规矩）。只因这一路而动的 9 行是
+`2243 / 2303 / 2304 / 2629 / 2915 / 3076 / 3099 / 3126 / 3178`，其中真走补标那一路（`via_gap_fill=True`）的是
+`2303/2304 → 515000`、`3076/3099/3126/3178 → 159825`。
+⚠ **文档原来抄的是 `predictions_via_gap_fill_planned: 2`，那个数没有凭据**：那条可粘贴命令把 `run()` 的两个出口
+接反了（`on_rows, on = run()` ⇒ `print('OFF', off)` 印的是逐行明细，差集恒空）⇒ 它印不出自己声称量到的数。
+命令已改对、数已现跑（真值 **6**），原处也写明"这一句原来没有凭据"，防下一轮的我把那个 2 加回去。
+
+③ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、不起任何长任务）**：
+- `pytest tests/unit -q` → **1312 passed / 16 skipped / 0 failed**（13:50:38 起、13:58:22 收，退 **0**）。
+  末行逐字 `1312 passed, 16 skipped, 12 warnings in 454.88s (0:07:34)`。
+- `pytest tests/ -q` → **1321 passed / 16 skipped / 0 failed**（14:38:34 起、14:47:04 收，退 **0**）。
+  末行逐字 `1321 passed, 16 skipped, 12 warnings in 502.59s (0:08:22)`。
+  ⚠ **14:47 这一次是重跑**：13:58 那次 `tests/` 红一条
+  （`tests/unit/test_doc_claims.py::test_the_repository_has_no_stale_doc_counts`），根因不在代码而在**文档里的中文量词**
+  ——「另一个标签」「第二个标签」紧挨测试文件名，被 `audit_doc_claims` 读成"当场条数承诺"（文档写 1 条 / 2 条，
+  当场 14 / 28）。措辞改成"备选标签"（无数词）并把真数绑上 ① 那两条 `grep -c` 命令之后重跑，该条转绿、两个口径同数。
+  ⇒ 规矩进本仓那一族：**"另一个 / 第二个"这类中文数词写在文件名旁边就是一句当场账，会被对表**。
+  （上一基线 1302 / 1311 ⇒ 两个口径各 +10，就是 ① 那两个文件。分布绑**绝对基准**：
+  `for f in $(git diff --name-only bb5a5cf..HEAD -- tests/); do echo "$f $(git show bb5a5cf:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ 只有那两个文件动。改动面 `git diff --name-only bb5a5cf..HEAD | grep -E '^(src|web)/'` 今天只印一行
+  `src/services/prediction_maintenance_service.py` ⇒ `web/` 本批一个字未动，前端那一轮是**回归跑**。）
+
+④ **变异（逻辑侧）**：`python scripts/mutation_proof_lifecycle.py` → **88 处全 RED、退 0**（CONTROL-GREEN = 14 个
+判据文件在干净代码上全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL / 无 `[还原失败]`；跑完
+`git status --porcelain -- src/ web/ tests/ scripts/` 为空）。首行逐字
+`# run @ 2026-09-30T14:05:55+08:00  git=341857fcfae9  worktree=clean  python=3.12.10  共 88 处变异 / 14 个判据文件`。
+原始日志**随仓库走** `docs/迭代计划/run-20260927-mutation/round85-lifecycle-mutations.txt`（已 `git add`，
+核对 `git ls-files docs/迭代计划/run-20260927-mutation | grep round85`）。本批新增 M81~M85 五处
+（把①那条例外摘掉 / 把②的 `+ plan_hits` 摘掉 / 把③的入口恒假 / `if kind == 'cannot'` 改成 `if True` /
+摘掉"备选也要被问过"那一腿），各自单独 `--only` 跑过（先 CONTROL-GREEN 再 RED）；
+另把 M40 的锚点换到 `pairs.append((prediction, mapping, key, via_gap))`。
+
+⑤ **变异（前端）**：`python scripts/mutation_proof_frontend.py` → **147 处全 RED、退 0**（链日志
+`=== frontend exit=0`，14:47:32 起、15:05:32 收）。首行逐字
+`# run @ 2026-09-30T14:47:32+08:00  git=cdd241039787  worktree=clean  python=3.12.10  共 147 处变异 / 3 个判据文件`
+（CONTROL-GREEN 在干净代码上先全绿；0 GREEN / 0 ANCHOR-MISS / 0 HARNESS-FAIL；末尾
+`已还原 web/index.html、web/post-manager.js、web/prediction-manager.js、web/viewpoint-manager.js（逐文件回读比对一致）`，
+收完 `git status --porcelain -- src/ web/ tests/ scripts/` 为**空**）。
+⚠ **本批 `web/` 一个字未动 ⇒ 这一轮是回归跑**，所以处数没有增量可报（147 与上一批同数，这里不许写成 `+0`）；
+重跑的理由是"那 147 处仍然逐条有牙"这句话需要一份当场的凭据。
+原始日志**随仓库走** `docs/迭代计划/run-20260927-mutation/round85-frontend-mutations.txt`（已 `git add`，
+核对 `git ls-files docs/迭代计划/run-20260927-mutation | grep round85` 应印两份：lifecycle 与 frontend）。
+数它别用 `grep -c '⇒ RED'` —— 前端日志每行**没有** `⇒`，那样会回 0 而看着像"一条都没跑"；
+用 `grep -c 'RED（判据有效）' docs/迭代计划/run-20260927-mutation/round85-frontend-mutations.txt` ⇒ 147。
+
+⑥ **文档条数对账**：`python scripts/audit_doc_claims.py` → 退 **0**，末行逐字
+`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；另有 17 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`。
+⚠ **那句"另有 16 条"从这一批起是 17**（上一批 #168 专门把它压回 16，本批又添了一条中文数词的"看得见但不判"账）
+⇒ 这个数只跑命令，别抄文本。
+
+⑦ **镜像此刻**（14:47:32，只出计划不写库：`python scripts/close_unknowable_predictions.py`，退 **2**＝dry-run）：
+`[计划] 到期未判里可以判定"永远问不出来"的：6 条；仍在等的：15 条`。那 6 行逐行带着原因：`515440` 五行窗口在
+2026-07/08、`158038` 一行在 2026-08-28~09-04，回执都是"源端 0 条、库里末条净值 2026-09-29"
+（＝窗口整段早于该标的首笔净值那一档，`pre_inception`）。
+⚠ **上一批那句「0 条可关 / 18 条仍在等」不再成立**，而**收口动作本批一个字都没做**（末行逐字
+`[dry-run] 一行都没动。真执行加 --apply --confirm CLOSE-UNVERIFIABLE`）⇒ 这是老板那句"该删的数据就该删"里
+**要他点名才按的那一步**（进回收站、可还原、不算判对也不算判错）。
+另：这 6 行与 ② 那 6 行**部分重合但不是一回事** —— 补标那一路给 `2303/2304/3076` 换得出标的（先换标再问），
+`2243/2629/2915` 换不出（`sector_type` 也答不出）⇒ 只有后者才是"确认没有办法"。
+这种"两组数看着像同一批"的形状，报数必须把两边的 id 都列出来（本仓"两个数恰好相等"那一族）。
+
+⑧ **门禁一句**：本批代码 `341857f` + 文档 `cdd2410` 都只在本地，**还没推**（新的独立复评还没拿）。
+现读 `git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`
+（14:5x 现读 **7**、`origin/main=ca5860d`；**这一段文档自己落地后它就变 8** ⇒ 这就是为什么这里只写"某时刻现读得几"
+并给命令，不写"现在是几"）⇒ 本文任何一句"线上跑 X"都不要抄，线上以
+`GET /api/health/detail` 的 12 位 `git_commit` 为准。一份**新的**独立复评 ≥75 才推；
+推之后再走 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）。
+
+（上一批：2026-09-30 **12:1x–12:3x（北京）**，**任务 #170 的"测量那一半"收口：把上一笔提交说明里
 推出来的基线数更正为量出来的数** —— `20abbaa` 的 message 写着「基线预期 …`tests/unit 1266 / tests 1275`…
 那是推出来的，不是量出来的」，**这句话本身被实测驳回**：真跑两个口径得到的是 **1302 / 1311**（见下面 ①）。
 ⇒ 从此这一族只写"量出来的"，不许把代数当测量（本仓"一减一增正好抵消""算出来的数当跑过的数"那一族的又一次复发，
