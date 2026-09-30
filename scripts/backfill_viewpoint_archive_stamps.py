@@ -149,6 +149,7 @@ def apply_backfill(db, items, retention_days, today, stamp_from):
 
     by_id = {v.id: v for v in db.query(Viewpoint).filter(Viewpoint.id.in_(ids)).all()}
     done = 0
+    written_ids = set()
     for i in items:
         v = by_id.get(i['viewpoint_id'])
         if v is None:
@@ -172,20 +173,41 @@ def apply_backfill(db, items, retention_days, today, stamp_from):
             stamped = archive_stamp(retention_days=retention_days, base=v.created_at)
         v.deleted_at, v.restore_before = stamped
         done += 1
+        written_ids.add(v.id)
         print('[已补] 观点 %s 归档时刻 %s ⇒ 保留到 %s（原来那一列：%s / %s）'
               % (v.id, _iso(stamped[0]), _iso(stamped[1]),
                  _iso(i['had_deleted_at']), _iso(i['had_restore_before'])))
     db.commit()
 
     # 回查用**那把真尺子**，不用我这里的算式：补完之后三桶的预览到底选中几行。
+    # 只问我真正写过的那几行 ⇒ `written_ids` 之外（已有值、被还原过）不算"这轮回查的对象"。
     from src.services.retention_three_buckets import ThreeBucketRetentionService
-    plan = ThreeBucketRetentionService(db, today=today).build_plan()
-    got = plan.candidate_ids[ThreeBucketRetentionService.BUCKET_DELETED_VP]
-    now_candidates = [i['viewpoint_id'] for i in items if i['viewpoint_id'] in set(got)]
-    print('[回执] 补了 %d / 计划 %d 行；%d 行今天就进「已删观点」清理候选，'
-          '其余 %d 行要到各自那个保留日之后（选中与否由 `retention_three_buckets` 回答，'
-          '不是这里的算式）' % (done, len(items), len(now_candidates),
-                                     len(items) - len(now_candidates)))
+    svc = ThreeBucketRetentionService(db, today=today)
+    plan = svc.build_plan()
+    got = set(plan.candidate_ids[ThreeBucketRetentionService.BUCKET_DELETED_VP])
+    mine = [i for i in items if i['viewpoint_id'] in written_ids]
+    now_candidates = [i for i in mine if i['viewpoint_id'] in got]
+    starved = [i for i in mine if i['viewpoint_id'] not in got]
+    print('[回执] 补了 %d / 计划 %d 行；本轮清理预览在「已删观点」这一桶选中 %d 行'
+          '（选中与否由 `retention_three_buckets` 回答，不是这里的算式）'
+          % (done, len(items), len(now_candidates)))
+    # "没被选中"有两种完全不同的原因，并成一句就是说谎（2026-09-30 生产实测：计划那句按窗口
+    # 算出 411 行已过，回执只说 75 行 ⇒ 差额不是"日子还没到"，是清理那一次的**全局单次额度**
+    # `max_total_per_run` 被排在前面的桶（回收站预测当场选出 425 行）先用完了，`plan.truncated` 为真）。
+    if starved:
+        past_due = [i for i in starved if i['until'] <= today]
+        print('[回执] 没被本轮选中的 %d 行：其中 %d 行窗口已经过了、%d 行确实还没到各自那个保留日。'
+              % (len(starved), len(past_due), len(starved) - len(past_due)))
+        # 那句"缺额度"只在真有过期却没轮到的行时才成立：全是"还没到期"时把它印出来，
+        # 就把一句日历的话说成了容量的话（同一族，反过来也错）。
+        if past_due:
+            print('[回执] 窗口已过却没被选中的那 %d 行缺的是额度不是日历（清理单次全局上限 %d 行，'
+                  '按 `%s` 的顺序分给各桶，这一桶前面还排着回收站预测/清理日志/结构性不可验三档%s）'
+                  % (len(past_due), svc.policy.max_total_per_run,
+                     ' → '.join(ThreeBucketRetentionService.BUCKETS[:4]),
+                     '，本轮预览自己报了 truncated ⇒ 前面那些桶一旦清掉，后面的桶才轮到'
+                     if plan.truncated else
+                     '，而本轮预览没报 truncated ⇒ 请核对清理那把尺子'))
     print('[回执] 还原命令：python scripts/backfill_viewpoint_archive_stamps.py '
           '--restore-from %s' % backup_path)
     return backup_path

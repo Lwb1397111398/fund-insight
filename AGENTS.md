@@ -294,7 +294,106 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **02:5x（北京）**，**任务 #142 的代码半：AI 判拒绝的观点从此写那一对归档
+最近一次核对（2026-09-30 **09:4x（北京）**，**任务 #142 的第二半收口：补戳脚本在生产上印的那句回执是一句假话**
+——「其余 343 行要到各自那个保留日之后」把**两种完全不同的病因**并成了一句；本批只动一支一次性脚本
+`scripts/backfill_viewpoint_archive_stamps.py` + 它的判据 + 变异注册表 + 这段文档，`src/` 与 `web/` 一个字没动）：
+
+① **生产实测那一次为什么"计划 411 / 回执只选中 75"**（只读，命令在下面 ⑤）：不是"日子还没到"，是
+**清理那一次的单次全局额度** `max_total_per_run = 500` 被排在前面的桶先用掉了 —— 按 `BUCKETS` 的顺序走一遍：
+回收站预测当场选出 **425** 行 ⇒ 额度只剩 75 ⇒ 「已删观点」这一桶按它自己的日历选出 **410** 行、
+本轮额度内只有 **75** 行、`plan.truncated` 为真。上一版那句"要到各自那个保留日之后"对这 335 行是**反话**：
+它们的日子早过了，缺的是额度。
+② **顺带量出那两把日历尺子差一天**（同一条命令印）：真尺子 `_deleted_viewpoint_ids:640` 比的是
+`deleted_at < 今天减保留天数那一刻`（含时刻，严格），脚本计划那句比的是 `restore_before <= today` ⇒
+**410 对 411**，不一致的正好 **1** 行（它的恢复窗口恰好到今天）。这一格不再靠我口算，回执改问**那把真尺子**
+（`ThreeBucketRetentionService.build_plan()`），我这里的算式只用于**分类**没被选中的行是哪种病因。
+③ **修法**（`apply_backfill` 的回执段）：`got` 取 `plan.candidate_ids[BUCKET_DELETED_VP]`（选中与否由清理回答）；
+只问真写过的那几行（`written_ids`）；没被选中的分成两句 —— `%d 行窗口已经过了、%d 行确实还没到各自那个保留日`，
+并且**只有前者非空时**才印那句"缺的是额度不是日历（清理单次全局上限 500 行，按 `… → …` 的顺序分给各桶…，
+本轮预览自己报了 truncated ⇒ 前面那些桶一旦清掉，后面的桶才轮到 / 没报 truncated ⇒ 请核对清理那把尺子）"。
+`max_total_per_run` 与桶顺序都从 `svc.policy` / `ThreeBucketRetentionService.BUCKETS` 现取，不在脚本里立第二个数。
+⚠ 我还删掉了一句没量过的承诺「⇒ 下一次跑批还会选中它们」—— 前面那些桶清没清、下一轮能轮到几行都是未知数。
+④ **这一格第一版是恒过的**（本批最该记的一条，第 68/69 轮刚写过我又踩一次）：夹具里那一行原本按
+`created` 补之后**日历上根本没到期**，我以为在验"缺额度"，其实验的是"还没到"。现在夹具起手就把那一行的窗口
+摆成已过，并且动手之后**问两把尺子本身**（`_deleted_viewpoint_ids()` 里有它 / capped 之后的计划里没有它 /
+`plan.truncated` 为真）才允许说那句话。变异两处各问一件不同的事（`python scripts/mutation_proof_lifecycle.py --list`
+末行今天印「共 80 处变异，覆盖 13 个用例文件」）：**M78** 让回执改回"我自己的算式"当选中数、
+**M79** 让那句"缺额度"对任何没选中的行都印出来（把 `if past_due:` 换成 `if True:`）——
+两处都**单独**跑过（`--only M78` / `--only M79`），各自先 CONTROL-GREEN 再 RED（判据有效）。
+⚠ `--only backfill` 匹配的是**标签文本**，那两条标签里没有 "backfill" ⇒ 第一次这么跑它们**一条都没跑到**，
+是 `--list` 的末两行让我去看注册表才发现的。
+⑤ **两个库的补戳都做完了**（老板 09-30 选了 `--stamp-from created`，即按入站那天算，接受约 411 行成为清理候选）：
+镜像与生产各 418 / 418 行补上，逐行回执与备份在 `backup/backfill-vp-stamps-20260930-091902.json`（镜像）、
+`backup/backfill-vp-stamps-20260930-092042.json`（生产，418 行原样）。**物理删除一行都还没发生** ——
+那要等清理按钮/跑批按额度一批批走。复核这一族今天的数（只读，两库各跑一次，生产要显式给那句旗）：
+先把这段存成 `data/_r78-bucket-probe.py`（`data/` 不入库，跑完自己删）——
+
+```python
+import sys
+ROOT = r'E:\AI Agent\work area\fund-insight'
+sys.path.insert(0, ROOT); sys.path.insert(0, ROOT + r'\scripts')
+import _db_guard as g
+engine, db, label = g.read_only_connect(['--production'] if '--production' in sys.argv else [])
+print('[库] %s' % label)
+from datetime import datetime, timedelta
+from src.services.prediction_lifecycle import current_as_of
+from src.services.retention_three_buckets import ThreeBucketRetentionService as S
+from src.models.database import Viewpoint
+today = current_as_of(); svc = S(db, today=today)
+lists = {S.BUCKET_DELETED: svc._deleted_prediction_ids()[0], S.BUCKET_LOGS: svc._cleanup_item_log_ids(),
+         S.BUCKET_UNVERIFIABLE: svc._unverifiable_prediction_ids(), S.BUCKET_DELETED_VP: svc._deleted_viewpoint_ids(),
+         S.BUCKET_SUMMARY_VP: svc._summary_viewpoint_ids()}
+print('[各桶 limit=%d，全局单次额度 max_total_per_run=%d]' % (svc.policy.max_per_bucket, svc.policy.max_total_per_run))
+rem = svc.policy.max_total_per_run
+for n in S.BUCKETS:
+    if lists.get(n) is None: continue
+    took = 0 if rem <= 0 else min(len(lists[n]), rem); rem -= took
+    print('  %-24s 选出 %4d ⇒ 额度内 %4d，额度剩 %d' % (n, len(lists[n]), took, rem))
+cut = datetime.combine(today - timedelta(days=svc.policy.deleted_viewpoint_days), datetime.min.time())
+rows = db.query(Viewpoint.id, Viewpoint.deleted_at, Viewpoint.restore_before).filter(
+    Viewpoint.is_deleted.is_(True), Viewpoint.deleted_at.isnot(None)).all()
+print('[回收站观点已补戳 %d 行 / today=%s / 截止 %s]' % (len(rows), today, cut))
+print('  真尺子 deleted_at < 截止：%d 行；计划算式 restore_before <= today：%d 行；两条不一致：%d 行'
+      % (sum(1 for r in rows if r.deleted_at < cut),
+         sum(1 for r in rows if r.restore_before and r.restore_before <= today),
+         sum(1 for r in rows if r.restore_before and r.restore_before <= today and not r.deleted_at < cut)))
+db.close()
+```
+
+跑法：`python data/_r78-bucket-probe.py`（镜像）与 `python data/_r78-bucket-probe.py --production`（线上）。
+**09:5x 两库各跑过一次，逐字同数**（`deleted_predictions 425` ⇒ 额度剩 75 ⇒ `deleted_viewpoints` 选出 410、
+额度内 75、`summary_viewpoints` 13 行轮不到；已补戳 418 行 / 截止 2026-08-31 / `410` 对 `411` / 不一致 `1`）
+⇒ ① 与 ② 那四个数不是生产一侧的偶然，两个库今天同形。**这段代码本身在 AGENTS 上面那个代码块里逐字存着**
+（`data/` 不入库，跑完删；下一轮要复核就从那一块另存再跑，别指 `data/_review_tmp/`）。
+⑥ **本批没重跑的**（别拿上一批的数当这一批的凭据）：逻辑侧全套 80 处只逐条跑了 backfill 那一族
+（M17 / M74~M77 上一次整族 `--only` 跑过全 RED，本批 M78/M79 各单独跑过）；前端那把
+（处数一律 `python scripts/mutation_proof_frontend.py --list` 末行）**本批一个字没跑** —— `web/` 未动，
+但"前端体检全绿"这句话本批没有凭据。
+
+最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
+不起任何长任务 —— ⑤ 那两趟只读探针跑在基线之前，没有在基线中途并发）：
+
+- `pytest tests/unit -q` → **1289 passed / 16 skipped / 0 failed**（541.56 秒，09:41:43 起、09:51 收，北京）。
+  ⚠ **这一跑的退码没被记进任何日志**：它是我 `taskkill` 杀断那条串行链之后**幸存的孤儿子进程**跑完的
+  （链日志只记到被杀那一步）⇒ 凭据是日志末行逐字
+  `1289 passed, 16 skipped, 12 warnings in 541.56s (0:09:01)`，不是退码 0。日志在 `data/_review_tmp/r78-unit.txt`
+  （整目录不入库），下一轮要引用先重跑。
+- `pytest tests/ -q` → **1298 passed / 16 skipped / 0 failed**（558.64 秒，09:52 起、10:01 收，北京）。
+  ⚠ 这一跑与上面那一条同：**detach 起的进程，退码没被采集**；凭据是 `data/_review_tmp/r78-all.txt` 末行逐字
+  `1298 passed, 16 skipped, 12 warnings in 558.64s (0:09:18)`（零 failed）。
+  （上一基线 1280/1289（`2195356`，第 75 轮收口那一批）⇒ 本批 **+9 条 / 两个口径同增**，分布用绝对基准
+  `for f in $(git diff --name-only 2195356..HEAD -- tests/); do echo "$f $(git show 2195356:$f | grep -c '^def test_') -> $(grep -c '^def test_' $f)"; done`
+  ⇒ `test_backfill_viewpoint_archive_stamps.py 0 → 9`（新文件；`--collect-only -q` 也印 9，无参数化）、
+  `test_one_ruler_per_question.py 5 → 5`（②③ 那格是**改契约**：归档时钟那把棘轮把补戳脚本的写站登记进去）。
+  名单对表（防"吞行"那一族）：
+  `diff <(git show 2195356:tests/unit/test_one_ruler_per_question.py | grep "^def test_" | sed "s/(.*//") <(grep "^def test_" tests/unit/test_one_ruler_per_question.py | sed "s/(.*//")` ⇒ 应为空。）
+  变异（逻辑侧）：本批只逐条跑了 backfill 那一族（见 ⑥），**全套 80 处没重跑**；
+  注册表处数现读 = `python scripts/mutation_proof_lifecycle.py --list` 末行「共 80 处变异，覆盖 13 个用例文件」。
+  `audit_doc_claims.py` → 退 **0**（回执末行逐字 `[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
+  另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`；本批新写的那段里 "+9 条" 走增量写法，
+  没进当场承诺集合）。
+
+（上一批：2026-09-30 **02:5x（北京）**，**任务 #142 的代码半：AI 判拒绝的观点从此写那一对归档
 时间戳** —— 老板那句「某预测对应板块对应的基金被发现抓取不到且确认没有办法的情况，可以把该板块对应的
 基金变成其他好的基金」是产品账，而这条是它隔壁那一族：**清理按钮管不到的行，永远留在回收站里，
 页面上还不说话**（观点的软删不写 `deleted_at` ⇒ 线上唯一真在删观点行的那把尺子对它结构性失明）——

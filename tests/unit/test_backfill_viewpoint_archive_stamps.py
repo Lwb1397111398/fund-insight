@@ -17,7 +17,7 @@
    而**选中与否由那把真尺子回答**（判据直接跑 `ThreeBucketRetentionService.build_plan()`，
    不读脚本自己印的那句话）；
 ③ 保留天数**只有 `ThreeBucketPolicy().deleted_viewpoint_days` 一个出处**（改成写死 30 当场红
-   —— 那是 M71 的载荷）；
+   —— 那是 M74 的载荷）；
 ④ 缺 `created_at` 的行**拒绝补**，不许拿今天或 `viewpoint_date` 冒充它进来的那天；
 ⑤ 默认 dry-run 一个字都不写、缺确认词/缺点名在**连库之前**退出，且能按备份原样还原；
 ⑥ **两种缺口分开分组**，并且由真清理尺子作证：只缺 `restore_before` 的行今天已在删除候选里，
@@ -150,7 +150,7 @@ def _retention_days():
 
 
 def test_the_retention_window_is_the_policys_number_not_a_hard_coded_thirty(test_db, monkeypatch):
-    """M71 的载荷：把 `deleted_viewpoint_days` 改掉，补出来的"保留到哪天"必须跟着动。
+    """M74 的载荷：把 `deleted_viewpoint_days` 改掉，补出来的"保留到哪天"必须跟着动。
 
     问的是**脚本自己取的那个数**（`policy_retention_days()`），不是我这里递进去的参数：
     只断"我传 47 它就算 47"的话，把 `main()` 里那句换成写死 30 也不会红。
@@ -221,6 +221,90 @@ def test_the_write_is_guarded_before_the_database_is_touched():
         assert '[abort]' in proc.stdout
         assert '[target]' not in proc.stdout, (
                 '它已经去认库并自报了目标 ⇒ 确认门排在连库之后（这里要的是先拒用法）')
+
+
+def test_a_budget_starved_row_is_never_called_a_calendar_case(test_db, capsys):
+    """补完之后"没被选中"有**两种**原因：窗口还没到 vs 清理那一次的单次额度用完了。
+
+    2026-09-30 生产实测：计划那句按窗口算出 411 行已过，回执只说 75 行 ⇒ 差额是
+    `max_total_per_run` 被排在前面的桶用掉了（`plan.truncated` 为真）。上一版在这里
+    写成"其余 N 行要到各自那个保留日之后"，对那 336 行是**反话**：它们的日子早过了，
+    缺的是额度。⇒ 这一格把两句话分开钉，并且不许再出现"下一次跑批还会选中"这种
+    我没有量过的承诺。
+    """
+    mod = _import_script()
+    from src.models.database import CleanupItemLog
+    from src.services.retention_three_buckets import ThreeBucketPolicy
+    budget = ThreeBucketPolicy().max_total_per_run
+    today = _today()
+
+    # 这一行按 `created` 补 ⇒ 恢复窗口**已经过了**（日历上今天就该被清掉）
+    old = _seed(test_db, content='广告引流',
+                created_at=datetime.now() - timedelta(days=_retention_days() + 40))
+    items, _ = mod.plan_for(test_db, mod.candidates(test_db), 'created',
+                             _retention_days(), today)
+    assert [i['until'] <= today for i in items] == [True], '夹具没摆出"窗口已过"那一格'
+    capsys.readouterr()
+
+    # 前面的桶把整次额度吃干净：清理日志按策略留 90 天，造 `budget` 行过期日志就够
+    test_db.bulk_insert_mappings(
+        CleanupItemLog,
+        [{'data_type': 'post', 'data_id': i, 'action': 'delete',
+          'created_at': datetime.now() - timedelta(days=200)} for i in range(budget)])
+    test_db.commit()
+
+    mod.apply_backfill(test_db, items, _retention_days(), today, 'created')
+    out = capsys.readouterr().out
+
+    # 夹具真走到了"缺额度"那一格吗？问两把尺子本身，不问回执里那句话：
+    # 日历那一把（`_deleted_viewpoint_ids`）选中它，带额度的那一把（`build_plan`）不选，
+    # 并且计划自己报 truncated。少了这三句，"选中 0 行"可能是行压根不该被选（比如还没到期），
+    # 那句话就成了描述另一种形状的判据。
+    from src.services.retention_three_buckets import ThreeBucketRetentionService
+    svc = ThreeBucketRetentionService(test_db, today=today)
+    plan = svc.build_plan()
+    assert old.id in svc._deleted_viewpoint_ids(), (
+            '清理那把尺子的日历判据本身就选不中这一行 ⇒ 夹具没摆出"该清却没轮到"那一格，'
+            '这一格验的其实是"还没到期"')
+    assert old.id not in plan.candidate_ids[ThreeBucketRetentionService.BUCKET_DELETED_VP], (
+            '额度用完之后这一桶仍然选中了它 ⇒ 前面的桶没把 `max_total_per_run` 吃干净，'
+            '这一格不是"缺额度"的形状')
+    assert plan.truncated, '计划没报 truncated ⇒ 差额是别的原因，那句"缺额度"归因归错了'
+
+    assert '选中 0 行' in out, '回执没把"本轮被选中 0 行"说出来 ⇒ 它还在拿自己的算式当选中数'
+    assert '缺的是额度不是日历' in out
+    assert ('其中 1 行窗口已经过了、0 行确实还没到' in out), out[out.find('[回执] 没被本轮选中'):][:200]
+    assert ('清理单次全局上限 %d 行' % budget) in out, (
+            '那句解释没把额度上限说成一句能核对的话 ⇒ 只印一个数字或压根没印，'
+            '读的人都分不清是"全局上限"还是"这一桶的上限"')
+    assert '下一次跑批还会选中' not in out, (
+            '我没量过"下一次"：前面那些桶清没清、这一桶下一次能轮到几行都是未知数')
+    test_db.refresh(old)
+    assert old.deleted_at is not None and old.restore_before is not None
+
+
+def test_a_row_that_really_has_not_arrived_is_still_described_as_a_calendar_case(test_db, capsys):
+    """对照：额度没被用完时，同一批行该被说成"选中了"，那句"缺额度"一个字都不许出现。
+
+    上一格只验"额度形状"，这一格验"日历形状 + 正常形状" ⇒ 少了这一格，把那句"缺额度"
+    改成无条件打印（或把回查整个短路）都不会红。
+    """
+    mod = _import_script()
+    retention = _retention_days()
+    today = _today()
+    fresh = _seed(test_db, content='情绪表达',
+                  created_at=datetime.now() - timedelta(days=1))
+    items, _ = mod.plan_for(test_db, mod.candidates(test_db), 'created', retention, today)
+    assert items[0]['until'] > today, '夹具没摆出"窗口还没到"那一格'
+
+    mod.apply_backfill(test_db, items, retention, today, 'created')
+    out = capsys.readouterr().out
+    assert '缺的是额度不是日历' not in out, (
+            '额度根本没被用完却说了"缺额度" ⇒ 那句话不再是按真尺子分的档')
+    assert '选中 0 行' in out  # 这一行还没到保留日，正常不该被选中
+    assert '其中 0 行窗口已经过了、1 行确实还没到' in out
+    test_db.refresh(fresh)
+    assert fresh.restore_before == today + timedelta(days=retention - 1)
 
 
 def test_the_two_gaps_are_not_one_gap_and_the_cleaner_only_ever_sees_one_of_them(test_db):

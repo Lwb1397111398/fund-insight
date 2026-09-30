@@ -535,6 +535,19 @@ MUTATIONS = [
      '    no_stamp = [v for v in rows if v.deleted_at is None]\n',
      '    no_stamp = list(rows)\n',
      VP_BACKFILL_TESTS, 'test_the_two_gaps_are_not_one_gap_and_the_cleaner_only_ever_sees_one_of_them'),
+    # 2026-09-30 生产那句假话的两条腿（"其余 343 行要到各自那个保留日之后"）。
+    # M78：选中数**不读真尺子**，改回脚本自己按窗口算 ⇒ 生产那种"额度被前面的桶吃光"的形状
+    #      会被报成"今天就有 411 行进了候选"，正是我上一版印出去的那句话。
+    ('M78_the_receipt_answers_with_its_own_arithmetic', VP_BACKFILL,
+     '    got = set(plan.candidate_ids[ThreeBucketRetentionService.BUCKET_DELETED_VP])\n',
+     '    got = set(i["viewpoint_id"] for i in items if i["until"] <= today)\n',
+     VP_BACKFILL_TESTS, 'test_a_budget_starved_row_is_never_called_a_calendar_case'),
+    # M79：把"缺额度"那句摘掉 `if past_due` 那道门 ⇒ 对一行**只是还没到保留日**的行也说"缺的是
+    #      额度不是日历"，与 M78 方向相反、同一族（两句话并成一句），各咬一次。
+    ('M79_the_budget_sentence_blames_capacity_for_a_calendar_case', VP_BACKFILL,
+     '        if past_due:\n',
+     '        if True:\n',
+     VP_BACKFILL_TESTS, 'test_a_row_that_really_has_not_arrived_is_still_described_as_a_calendar_case'),
 ]
 
 
