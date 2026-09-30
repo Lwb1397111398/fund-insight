@@ -1,0 +1,6 @@
+# run @ 2026-09-30T11:11:36+08:00  git=aaa0c0e70d03  worktree=dirty(1)  python=3.12.10  共 3 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M80_the_past_due_classifier_is_one_day_looser_than_the_ruler ⇒ RED（判据有效）
+M80b_the_recycle_bin_guard_is_blind_at_write_time          ⇒ RED（判据有效）
+M80c_the_already_stamped_guard_is_blind_at_write_time      ⇒ RED（判据有效）
+已还原 scripts/backfill_viewpoint_archive_stamps.py

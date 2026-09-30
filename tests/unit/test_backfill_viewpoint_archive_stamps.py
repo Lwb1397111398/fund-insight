@@ -10,7 +10,7 @@
 400 行有 `deleted_at`、只缺 `restore_before` ⇒ 它们今天已在候选里，缺的只是"保留到哪天"那句话。
 ⇒ 两组的后果相反，`gap_kinds` 必须分开交回来，脚本那句话也不许并成一句。
 
-要钉住的五件事：
+要钉住的八件事：
 ① 只补"缺那一列"的行，**已经有值的一行都不覆盖**（别人手动归档的署名与日期不是我的靶子）；
 ② "补哪一天"是**决定不是默认值**：`--stamp-from today` 让窗口从今天重算、
    `created` 让早就过期的行当场成为清理候选 ⇒ 两种结果都在清单里，`--apply` 必须点名，
@@ -21,7 +21,14 @@
 ④ 缺 `created_at` 的行**拒绝补**，不许拿今天或 `viewpoint_date` 冒充它进来的那天；
 ⑤ 默认 dry-run 一个字都不写、缺确认词/缺点名在**连库之前**退出，且能按备份原样还原；
 ⑥ **两种缺口分开分组**，并且由真清理尺子作证：只缺 `restore_before` 的行今天已在删除候选里，
-   两列都缺的那一组才永远进不了桶（并成一句"缺那一对"就会对前一组说反话）。
+   两列都缺的那一组才永远进不了桶（并成一句"缺那一对"就会对前一组说反话）；
+⑦ **"窗口已过"那一句用的算式必须与那把真尺子同一条**：清理问的是
+   `deleted_at < combine(today - N, 00:00)`，而每行的 `until = 归档日 + N` ⇒ 等价写法是
+   `until < today`。写 `<=` 就**多算一天**：`restore_before` 正好等于今天的那一行会被说成
+   "缺的是额度不是日历"，而真尺子那天根本选不中它（M80 的载荷，两库现读差的正是这一行）；
+⑧ 真写之前的那两处防御各有一条判据：计划与写之间隔着备份与逐行回执，那一行随时可能**被人还原**
+   （还原了的行不许再补归档时刻 —— 补了就等于把它送回清理候选）或**被别人补过戳**
+   （别人那一天的值不是我的靶子）。摘掉任何一处各自当场红（M80b / M80c）。
 """
 import json
 import os
@@ -331,3 +338,89 @@ def test_the_two_gaps_are_not_one_gap_and_the_cleaner_only_ever_sees_one_of_them
     assert both.id not in got, (
             '两个时间戳都没有的行进了清理候选 ⇒ `_deleted_viewpoint_ids` 那把尺子改了，'
             '那么"代码只修未来的行"这条整段账要重写')
+
+
+def test_a_deadline_that_arrives_today_is_not_yet_past_due_on_the_real_ruler(test_db, capsys):
+    """**差一天那一格**：`until == today` 的行，清理那把尺子不选它，脚本也不许说"窗口已经过了"。
+
+    真尺子是 `deleted_at < combine(today - N, 00:00)`（`_deleted_viewpoint_ids`），而补出来的
+    `until = 归档日 + N` ⇒ 与之**等价**的分类式是 `until < today`，不是 `until <= today`。
+    2026-09-30 两库现读到的 `411` 对 `410` 就差在这一格：那一行 `restore_before` 恰好等于今天，
+    按 `<=` 被归进"缺额度"那一档，对它是**反话**（它不缺额度，缺的是今天过完）。
+    """
+    mod = _import_script()
+    retention = _retention_days()
+    today = _today()
+    edge = _seed(test_db, content='广告引流2',
+                 created_at=datetime.combine(today - timedelta(days=retention), datetime.min.time()))
+
+    items, _ = mod.plan_for(test_db, mod.candidates(test_db), 'created', retention, today)
+    assert [i['until'] for i in items] == [today], '夹具没摆出"保留日正好是今天"那一格'
+
+    from src.services.retention_three_buckets import ThreeBucketRetentionService
+    svc = ThreeBucketRetentionService(test_db, today=today)
+    capsys.readouterr()
+    mod.apply_backfill(test_db, items, retention, today, 'created')
+
+    # 先问那把真尺子（不问脚本自己印的话）：等号这一边它不认。
+    assert edge.id not in svc._deleted_viewpoint_ids(), (
+            '清理那把尺子在 `deleted_at` 正好等于 cutoff 时**选中**了这一行 ⇒ 它改成了 `<=`，'
+            '下面那句"还没到"跟着作废，分类式要按真尺子重推')
+    out = capsys.readouterr().out
+    assert '其中 0 行窗口已经过了、1 行确实还没到' in out, out[out.find('[回执] 没被本轮选中'):][:200]
+    assert '缺的是额度不是日历' not in out, (
+            '把"保留日正好是今天"那一行说成"缺额度"⇒ 分类式又回到与真尺子差一天的 `<=`')
+
+
+def test_a_row_that_left_the_recycle_bin_between_plan_and_write_gets_no_stamp(test_db, capsys):
+    """`apply_backfill` 里那句"已经不在回收站"以前**零判据**：摘掉它没有一条用例会红。
+
+    走到那一支的形状是"计划算完之后有人把那行还原了"⇒ `--apply` 拿着一份过期的名单往下写。
+    这一格不验"该不该补"，只验**它不动那一行**（`deleted_at` / `restore_before` 必须仍是 NULL）。
+    """
+    mod = _import_script()
+    retention = _retention_days()
+    today = _today()
+    v = _seed(test_db)
+    items, _ = mod.plan_for(test_db, mod.candidates(test_db), 'created', retention, today)
+    assert [i['viewpoint_id'] for i in items] == [v.id]
+
+    v.is_deleted = False  # 计划之后、落笔之前
+    test_db.commit()
+    capsys.readouterr()
+    mod.apply_backfill(test_db, items, retention, today, 'created')
+
+    out = capsys.readouterr().out
+    assert ('[没写] 观点 %d：这一行已经不在回收站' % v.id) in out, (
+            '过期的名单被照单执行，却没有一句"这一行不在回收站"⇒ 那一格静默写下去了')
+    test_db.refresh(v)
+    assert v.deleted_at is None and v.restore_before is None, (
+            '给一行**已经出了回收站**的预测补归档时间戳 ⇒ 它凭空多了一段"恢复窗口"')
+
+
+def test_a_row_someone_else_stamped_in_the_meantime_is_never_overwritten(test_db, capsys):
+    """另一格零判据：`deleted_at` / `restore_before` 都有值了 ⇒ 不覆盖别人的写（包括日期本身）。
+
+    与上面那条同一族（计划与落笔之间的竞态），差别在**动的是谁的行**：这一行今天由别人手动归档，
+    那两个日期带着别人的署名。摘掉那道门 ⇒ 脚本把它自己的"今天"盖上去。
+    """
+    mod = _import_script()
+    retention = _retention_days()
+    today = _today()
+    v = _seed(test_db)
+    items, _ = mod.plan_for(test_db, mod.candidates(test_db), 'created', retention, today)
+    assert [i['viewpoint_id'] for i in items] == [v.id]
+
+    theirs = today + timedelta(days=99)
+    v.deleted_at = datetime.combine(today - timedelta(days=999), datetime.min.time())
+    v.restore_before = theirs
+    test_db.commit()
+    capsys.readouterr()
+    mod.apply_backfill(test_db, items, retention, today, 'created')
+
+    out = capsys.readouterr().out
+    assert ('[没写] 观点 %d：那一列已经有值了' % v.id) in out, (
+            '已经有值的一行被照单执行，却没有一句"不覆盖别人的写"')
+    test_db.refresh(v)
+    assert v.restore_before == theirs, (
+            '别人手动归档的那个日期被脚本自己的"今天 + %d"盖掉了' % retention)

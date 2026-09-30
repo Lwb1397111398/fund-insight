@@ -195,7 +195,12 @@ def apply_backfill(db, items, retention_days, today, stamp_from):
     # 算出 411 行已过，回执只说 75 行 ⇒ 差额不是"日子还没到"，是清理那一次的**全局单次额度**
     # `max_total_per_run` 被排在前面的桶（回收站预测当场选出 425 行）先用完了，`plan.truncated` 为真）。
     if starved:
-        past_due = [i for i in starved if i['until'] <= today]
+        # 分类式必须与那把真尺子**同一条**：清理问的是 `deleted_at < combine(today - N, 00:00)`，
+        # 而这里每一行的 `until = 归档日 + N` ⇒ 等价写法是 `until < today`。
+        # `<=` 多算一天：2026-09-30 两库现读的 `411`（按 `<=` 数）对 `410`（清理自己数的）差的正是
+        # `restore_before == today` 那一行 ⇒ 对那一行说"缺的是额度"是反话（判据
+        # `test_a_deadline_that_arrives_today_is_not_yet_past_due_on_the_real_ruler`）。
+        past_due = [i for i in starved if i['until'] < today]
         print('[回执] 没被本轮选中的 %d 行：其中 %d 行窗口已经过了、%d 行确实还没到各自那个保留日。'
               % (len(starved), len(past_due), len(starved) - len(past_due)))
         # 那句"缺额度"只在真有过期却没轮到的行时才成立：全是"还没到期"时把它印出来，

@@ -406,6 +406,46 @@ db.close()
 **下一批第一件事**：拿 `ps-mem.ps1` 再量一次，可用内存回到 2 GB 以上才整跑逻辑侧那 80 处与前端那把
 （处数一律看 `--list` 末行，别抄这里）；跑之前先确认没有活的 python 在握着那两把锁，
 **陈旧锁文件绝不 `rm`**。
+⑧ **第 78 轮那两条 MINOR 已于 2026-09-30 11:1x（北京）修完**（它们一直躺在 #170 队列里，本批收掉）：
+⑴ **真缺陷（不是文字账）**：回执那句"窗口已过却没被选中的那 N 行缺的是额度不是日历"里，
+   分类算式与那把真尺子**差一天**。清理问的是 `deleted_at < combine(today - N, 00:00)`（**严格**小于），
+   而每行 `until = 归档日 + N` ⇒ 等价写法是 `until < today`，上一批我写的是 `<=`。
+   **先复现再动**：新用例 `test_a_deadline_that_arrives_today_is_not_yet_past_due_on_the_real_ruler`
+   造一行 `restore_before` **正好等于今天**的，先让脚本自己印"其中 1 行窗口已经过了"+ 那句"缺的是额度"，
+   再拿 `svc._deleted_viewpoint_ids()` 证它那天压根没被选中 ⇒ 当场 `1 failed, 11 passed`，
+   换成 `<` 才绿。这一行不是理论形状：上面 ⑤ 那两个数（`411` 按 `<=` 数 / `410` 由清理自己数）
+   差的正是它，而且**两库同形**。
+⑵ **那两处防御分支零判据**：`if not v.is_deleted`（计划与真写之间隔着备份和逐行回执，
+   那一行可能已被人还原 ⇒ 再补就等于把它送回清理候选）、`if v.deleted_at is not None and
+   v.restore_before is not None`（别人那一天的值不是我的靶子）各补一条用例
+   （`test_a_row_that_left_the_recycle_bin_between_plan_and_write_gets_no_stamp` /
+   `test_a_row_someone_else_stamped_in_the_meantime_is_never_overwritten`）。
+   ⚠ **这两条写成时是绿的**（守卫本来就在）⇒ 它们的价值由下面两处变异兑现，不是由"跑过一次"兑现。
+三条各配一处变异并逐条跑过：`python scripts/mutation_proof_lifecycle.py --only M80` ⇒
+**M80 / M80b / M80c 三处全 RED**、CONTROL-GREEN（1 个判据文件在干净代码上全绿）、无 ANCHOR-MISS、
+`已还原 scripts/backfill_viewpoint_archive_stamps.py`。日志随仓库走
+`docs/迭代计划/run-20260927-mutation/round79-backfill-m80.txt`，首行逐字
+`# run @ 2026-09-30T11:11:36+08:00  git=aaa0c0e70d03  worktree=dirty(1)  python=3.12.10  共 3 处变异 / 1 个判据文件`。
+⚠ **那一行 `worktree=dirty(1)` 数的是什么，必须说白**：那个计数器只看 `src/ web/ tests/`，
+而本批的**载荷**在 `scripts/`（`<` 那一行与注册表那三条）⇒ `git=` 是当时 HEAD（`aaa0c0e`，一笔纯文档），
+`dirty(1)` 是那一个新写的判据文件；**"M80 的锚点在 `aaa0c0e` 里 grep 不到"是真的**（它当时只存在于工作树）。
+这不算跑错版本（体检读的就是磁盘上的文件），但**别拿这份日志当"锚点已在 HEAD 里"的凭据**——
+下一批要复核这三条有无牙，在本批提交之后再 `--only M80` 跑一次。
+⇒ 注册表处数因此 **80 → 83**（现读 `python scripts/mutation_proof_lifecycle.py --list` 末行
+「共 83 处变异，覆盖 13 个用例文件」）；上面 ⑦ 那句"那 80 处"从此按这个数读。
+⑨ **本批仍然没跑两个口径的基线，理由与 ⑦ 同一把尺子**：11:1x 现读
+`powershell -File data/_review_tmp/ps-mem.ps1` ⇒ `TotalGB=7.34 FreeGB=0.98`（不到我自己钉的 2 GB 门）。
+本批的凭据只到这三条当场账（全部**串行**、子进程显式 `PYTHONIOENCODING=utf-8`）：
+`pytest tests/unit/test_backfill_viewpoint_archive_stamps.py -q` → **12 passed**（该文件 `--collect-only -q` 同数；
+上一基线 `9 → 12`，+3 就是 ⑴⑵ 那三条）；
+`pytest tests/unit/test_one_ruler_per_question.py tests/unit/test_structurally_unverifiable_hold.py
+tests/unit/test_backfill_viewpoint_archive_stamps.py -q` → **60 passed**（把写站棘轮与那只钟的两把邻座一起跑，
+因为 ⑵ 改的那两行正落在归档棘轮看着的形状上）；
+`python scripts/audit_doc_claims.py` → 退 **0**（回执末行逐字
+`[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；另有 17 条"看得见但不判"`）。
+⚠ 那个 17 比上一批的 16 多一条，多出来的正是本批回标的那句「共 83 处变异」（基线流水里的数按写法进"不判"桶）。
+**线上哪一版**：本批未推（没跑基线就没资格谈门禁），要复核走
+`GET /api/health/detail` 的 12 位 `git_commit`，别抄 ⑦/⑧ 里任何一个 `git=`。
 
 最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
 不起任何长任务 —— ⑤ 那两趟只读探针跑在基线之前，没有在基线中途并发）：
@@ -426,6 +466,8 @@ db.close()
   `diff <(git show 2195356:tests/unit/test_one_ruler_per_question.py | grep "^def test_" | sed "s/(.*//") <(grep "^def test_" tests/unit/test_one_ruler_per_question.py | sed "s/(.*//")` ⇒ 应为空。）
   变异（逻辑侧）：本批只逐条跑了 backfill 那一族（见 ⑥），**全套 80 处没重跑**；
   注册表处数现读 = `python scripts/mutation_proof_lifecycle.py --list` 末行「共 80 处变异，覆盖 13 个用例文件」。
+  ⚠ **那句"现读 80 处"已被下一批（第 79 轮，M80/M80b/M80c 三条注册进补戳脚本那一路）作废**：
+  2026-09-30 现跑同一条命令末行印「共 83 处变异，覆盖 13 个用例文件」⇒ 处数永远看 `--list` 末行，别抄文本。
   `audit_doc_claims.py` → 退 **0**（回执末行逐字 `[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
   另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`；本批新写的那段里 "+9 条" 走增量写法，
   没进当场承诺集合）。

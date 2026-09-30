@@ -548,6 +548,25 @@ MUTATIONS = [
      '        if past_due:\n',
      '        if True:\n',
      VP_BACKFILL_TESTS, 'test_a_row_that_really_has_not_arrived_is_still_described_as_a_calendar_case'),
+    # 2026-09-30 第 78 轮那两条 MINOR 落地时补的三条。前两条各有明确病因，第三条是我自己在返修
+    # 途中现读出来的：**分类式与那把真尺子差一天**（清理问 `deleted_at < combine(today-N, 00:00)`，
+    # 而 `until = 归档日 + N` ⇒ 等价写法是 `until < today`；`<=` 把 `restore_before == today`
+    # 那一行算成"窗口已过"，于是对它说"缺的是额度"——生产与镜像现读差的正是这一行：411 对 410）。
+    ('M80_the_past_due_classifier_is_one_day_looser_than_the_ruler', VP_BACKFILL,
+     "        past_due = [i for i in starved if i['until'] < today]\n",
+     "        past_due = [i for i in starved if i['until'] <= today]\n",
+     VP_BACKFILL_TESTS, 'test_a_deadline_that_arrives_today_is_not_yet_past_due_on_the_real_ruler'),
+    # `apply_backfill` 里那两处防御分支：写之前问"这一行还在回收站吗""那一列已经有值了吗"。
+    # 建计划与真写之间隔着备份与逐行回执，那一行随时可能被人还原/别人补过戳。摘掉任何一处
+    # 都是把别人的写盖掉、或给一行已经活过来的行补上归档时刻（＝当场送进清理候选）。
+    ('M80b_the_recycle_bin_guard_is_blind_at_write_time', VP_BACKFILL,
+     '        if not v.is_deleted:\n',
+     '        if False:\n',
+     VP_BACKFILL_TESTS, 'test_a_row_that_left_the_recycle_bin_between_plan_and_write_gets_no_stamp'),
+    ('M80c_the_already_stamped_guard_is_blind_at_write_time', VP_BACKFILL,
+     '        if v.deleted_at is not None and v.restore_before is not None:\n',
+     '        if False:\n',
+     VP_BACKFILL_TESTS, 'test_a_row_someone_else_stamped_in_the_meantime_is_never_overwritten'),
 ]
 
 
