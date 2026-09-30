@@ -1,0 +1,19 @@
+# run @ 2026-09-30T20:00:36+08:00  git=7516255b219b  python=3.12.10
+# 命令：PYTHONIOENCODING=utf-8 python data/_review_tmp/gate_scan.py 
+# 载荷 sha256：c5d84a1a7f8088ce62e7cc382188e341b2a780240a5db78ba12d4b1aa6ec3140
+[env] 脚本显式声明使用本地镜像（.env 指向远程库，已忽略）：sqlite:///E:/AI Agent/work area/fund-insight/data/fund_insight.db
+[env] DATABASE_URL = sqlite:///E:/AI Agent/work area/fund-insight/data/fund_insight.db
+[库] 准备以引擎级只读连 本地镜像库（data/fund_insight.db）
+[库] 本地镜像库（data/fund_insight.db）（引擎级只读；要分析线上数据得显式 --production，等价命令 scripts/q.py --production）
+C:\Users\李文彬\AppData\Local\Programs\Python\Python312\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+[库] 本地镜像库（data/fund_insight.db）（引擎级只读；要分析线上数据得显式 --production，等价命令 scripts/q.py --production）
+[册] 未判预测的板块标签 100 档
+[拦回] 改出字面 ⇒ 过门回原样：3 个标签 / 53 行
+  金融 -> 黄金 (35 行)
+  贵金属 -> 黄金 (16 行)
+  债券 -> 券商 (2 行)
+[放过] 改词但仍是原标签的子串 ⇒ 过门交归一结果：2 个标签 / 4 行次
+  海外科技 -> 科技 (3 行次)
+  大盘指数 -> 大盘 (1 行次)
+退码=0

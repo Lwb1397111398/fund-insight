@@ -1,0 +1,4 @@
+# run @ 2026-09-30T20:45:09+08:00  git=7516255b219b  worktree=dirty(2)  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M86_the_normalizer_is_allowed_to_rename_the_sector         ⇒ RED（判据有效）
+已还原 src/services/prediction_maintenance_service.py

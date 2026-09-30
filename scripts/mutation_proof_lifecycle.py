@@ -623,6 +623,27 @@ MUTATIONS = [
      '            normalized = self._gap_label(sector)\n',
      '            normalized = sector\n',
      REMAP_TESTS, 'test_an_affix_spelling_still_finds_the_row_it_normalized_to'),
+    # M88（第 85 轮 A-5）：库里别名那一臂**必须收原样串**（第 66 轮 ① 的教训，当时只有一条
+    # 判据 `test_alias_lets_synonym_sector_match` 替它作保、没有变异 ⇒ "有判据"与"判据有牙"是两件事）。
+    # ⚠ 那条老判据第一次跑它是 **GREEN**（判据无效）。根因**不是"结构上无牙"**
+    # （第 85 轮 MI-4 驳回我上一版那句"两种都不红"）：它取决于 `_DB_ALIASES_CACHE` 那份
+    # **进程级、只填一次**的缓存处在哪个跑序。只读门现测（命令与两份输出逐字写在
+    # `docs/模块总览/板块与基金匹配.md` 那一节末尾）：
+    #   缓存含 `RMAP绿色电力→RMAP绿电` ⇒ 归一第 3 步命中 ⇒ 交回 `RMAP绿电`，
+    #     它不是原标签的字面 ⇒ `_gap_label` 打回原样 ⇒ ③换不换键**等价**（老判据不红）；
+    #   缓存**空** ⇒ 归一第 4 步被子串 `电力` 命中 ⇒ 交回 `电力`，**是**原标签的字面 ⇒ 放行
+    #     ⇒ ③的键真变了、表里没有 `电力` 那一行 ⇒ **老判据在这一格会红**。
+    # 载荷不变、**判据换成有牙的那一格**：`生物医药` 由硬编码 `SECTOR_ALIASES`（第 2 步，排在
+    # 读库内别名之前）归成 `医药` ⇒ 两种缓存状态下都交回 `医药`（实测两行相同），牙不随跑序漂；
+    # 映射表里没有 `医药` 这一行**由那条用例自己的断言证明**（第 85 轮 MI-3：上一版靠别的文件清表）。
+    # 现读 A/B：干净 `[updated] 1 / fund_code RMAP01`、
+    # 落载荷 `[updated] 0 / no_mapping 1 / fund_code 仍是 999999`。
+    ('M88_the_alias_arm_is_asked_with_the_normalized_label', MAINT,
+     '            if alias_targets.get(sector) in sector_map:\n'
+     '                return sector_map[alias_targets[sector]]\n',
+     '            if alias_targets.get(normalized) in sector_map:\n'
+     '                return sector_map[alias_targets[normalized]]\n',
+     REMAP_TESTS, 'test_the_library_alias_arm_is_asked_with_the_raw_label_not_the_normalized_one'),
 ]
 
 

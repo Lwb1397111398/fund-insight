@@ -139,6 +139,42 @@ def test_alias_lets_synonym_sector_match(db_session):
     assert prediction.fund_code == 'RMAP01'
 
 
+def test_the_library_alias_arm_is_asked_with_the_raw_label_not_the_normalized_one(db_session):
+    """库里别名那一臂**必须收原样串**（第 85 轮 A-5，变异 M88）。
+
+    上一邻那条用例（`RMAP绿电` / `RMAP绿色电力`）**喂不出差别**，但原因不是"结构上无牙"
+    （第 85 轮 MI-4 驳回了我上一版那句"两种情形都不红"）：它取决于**进程内那份别名缓存的跑序**。
+    现读实测（只读门 + 把 `_DB_ALIASES_CACHE` 各摆成两种状态，命令逐字写在
+    `docs/模块总览/板块与基金匹配.md` 那一节末尾）：
+      缓存里有 `RMAP绿色电力→RMAP绿电` ⇒ 归一第 3 步命中 ⇒ 交回 `RMAP绿电`，
+        而它不是原标签的字面 ⇒ `_gap_label` 打回原样 ⇒ ③ 换不换键**等价**（老判据不红）；
+      缓存是空的 ⇒ 归一第 4 步用 `SECTOR_FUND_MAP` 的键 `电力` 做子串命中 ⇒ 交回 `电力`，
+        而 `电力` **是**原标签的字面 ⇒ `_gap_label` 放行 ⇒ ③ 的键真变了、映射表里没有 `电力` 这一行
+        ⇒ 老判据在这一格**会红**。
+    ⇒ 老判据有没有牙由"谁先跑了那一次 `_load_db_aliases()`"决定，这正是要换夹具的理由：
+
+    有牙的形状要让归一**改词**、而改出来的词与库里别名指向的那块板块**不是同一个**：
+    `生物医药` 在硬编码的 `SECTOR_ALIASES` 里就压着一条 `→ 医药`（不依赖
+    `_load_db_aliases()` 那份进程内缓存，所以不受用例先后影响），而库里登记的别名是
+    `生物医药 → RMAP药`。于是 `normalized = '医药'` 在映射表里没有行 ⇒ ②交不出人，
+    只有③拿**原样** `生物医药` 去问别名表才查得到 `RMAP药` ⇒
+    把③的键改成 `normalized`，这一条当场从"绑到 RMAP01"变成"一条都没改"。
+    """
+    prediction = _seed(db_session, sector='RMAP药', confidence=0.95, alias='生物医药')
+    from src.constants.sector_fund_map import normalize_sector_name
+    assert normalize_sector_name('生物医药') == '医药', \
+        '夹具前提：归一必须把标签改成另一块板块，否则这条用例又变成描述自己'
+    # 夹具前提二（第 85 轮 MI-3）：②交不出人这件事必须由**这一条用例自己**证明，
+    # 不能靠"别的文件恰好清了映射表"——那个前提由别人的跑序决定，跟缓存那一格同病。
+    assert db_session.query(SectorFundMapping).filter_by(sector_name='医药').first() is None, \
+        '夹具前提二：映射表里不许有 `医药` 这一行，否则②自己就命中、③根本走不到，这条又变成描述自己'
+    result = _service(db_session).sync_sector_mappings(
+        dry_run=False, min_confidence=0.85, run_id='t-alias-raw')
+    assert result['predictions_updated'] == 1
+    db_session.refresh(prediction)
+    assert prediction.fund_code == 'RMAP01'
+
+
 def test_run_id_written_and_rollback_restores_previous_state(db_session):
     from src.utils.blogger_stats import recalculate_blogger_stats
 
