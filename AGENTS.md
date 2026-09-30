@@ -312,6 +312,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 推完立刻把跟踪引用拨到真值 ⇒ `git rev-list --count origin/main..HEAD` 现读 **0**。
 线上：`GET /api/health/detail`（带口令）自报 `git_commit=1e2ea4730bbd`、`git_commit_source=RENDER_GIT_COMMIT`、
 `started_at=2026-09-30T23:06:17.089742+08:00`、**`scheduler_running=false`**（老板 09-29 定的"不加定时任务"⇒ 预期值）。
+⚠ **这一句本身会被写下它之后的文档提交顶掉**：本批在它之后又推了 `28be32c`（收口脚本两库现读）与
+`9afeceb`（镜像五步跑通 + `dry_run` 契约），每次推完 Render 会重新部署 ⇒ "线上跑哪一版"只走
+`GET /api/health/detail` 现读，别把上面这个哈希当"现在"。
 ⚠ **第二腿"页面 md5"这一批对部署不具区分力**：`web/` 一个字没动 ⇒ LF 归一后仍是
 `fd901a776a7c513e3bb1547672d4aa0d`（推之前从 `git show HEAD:web/index.html` 预算，与线上一字不差）
 ⇒ "新代码到了"只由 `git_commit` 那一腿回答，别说成"双凭据都现读过"。
