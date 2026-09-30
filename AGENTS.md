@@ -430,7 +430,10 @@ db.close()
 而本批的**载荷**在 `scripts/`（`<` 那一行与注册表那三条）⇒ `git=` 是当时 HEAD（`aaa0c0e`，一笔纯文档），
 `dirty(1)` 是那一个新写的判据文件；**"M80 的锚点在 `aaa0c0e` 里 grep 不到"是真的**（它当时只存在于工作树）。
 这不算跑错版本（体检读的就是磁盘上的文件），但**别拿这份日志当"锚点已在 HEAD 里"的凭据**——
-下一批要复核这三条有无牙，在本批提交之后再 `--only M80` 跑一次。
+⇒ **本批提交之后已按这句话做了**（`3cae0cb` 落地后 11:18 重跑同一条命令，退 0、
+`git=3cae0cb189c0  worktree=clean`、CONTROL-GREEN 后 M80/M80b/M80c 三处仍 `⇒ RED（判据有效）`、
+`已还原 …`、`git status --porcelain -- src/ web/ tests/ scripts/` 为空；日志随仓库走
+`docs/迭代计划/run-20260927-mutation/round79b-backfill-m80-cleanhead.txt`）。
 ⇒ 注册表处数因此 **80 → 83**（现读 `python scripts/mutation_proof_lifecycle.py --list` 末行
 「共 83 处变异，覆盖 13 个用例文件」）；上面 ⑦ 那句"那 80 处"从此按这个数读。
 ⑨ **本批仍然没跑两个口径的基线，理由与 ⑦ 同一把尺子**：11:1x 现读
