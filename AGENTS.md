@@ -334,10 +334,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 上一基线 1315 / 1324 ⇒ **两个口径各 +3**，就是 ② 那个新文件（`^def test_` 现数 3，本批无参数化）。
 `python scripts/audit_doc_claims.py` → 退 **0**。
 
-⑤ **仍然没做的，登记而不是当成已封**：**93 处全套逻辑侧体检本批已重跑并全 RED**（见下面 ⑥），
-所以 #170 那一半到此结；前端那 147 处本批没动 `web/`、这一轮也在重跑（结果写在这里而不是抄上面）；
-m-5 要的"生产四个数各一份归档"仍欠两个。
-⑥ **逻辑侧全套体检（#170 那一半到此结）**：`python scripts/mutation_proof_lifecycle.py` →
+⑤ **仍然没做的，登记而不是当成已封**：m-5 要的"生产四个数各一份归档"仍欠两个
+（清单 81 行 / `sector='金融'` 0 / `sector_type='金融'` 35 行 / `大盘指数→510300` 有命令、无归档）。
+**两把体检这一批都重跑了**，见 ⑥⑦。
+⑥ **逻辑侧全套体检（#170 的第一把）**：`python scripts/mutation_proof_lifecycle.py` →
 **93 处全 RED、退 0**（运行头逐字
 `# run @ 2026-10-01T00:47:38+08:00  git=4e44bb7d5c2a  worktree=clean  python=3.12.10  共 93 处变异 / 15 个判据文件`
 ⇒ 跑的就是刚部署那一版，且**工作树干净**：`CONTROL ⇒ CONTROL-GREEN（15 个判据文件在干净代码上全绿）`，
@@ -347,6 +347,17 @@ m-5 要的"生产四个数各一份归档"仍欠两个。
 原始日志随仓库走 `docs/迭代计划/run-20260930-gate-scan/round88-lifecycle-mutations.txt`
 （在不在仓库用 `git ls-files docs/迭代计划/run-20260930-gate-scan` 核）。
 ⇒ 这一句"93 处逐条有牙"现在由一份当场回执撑着，不再是从 91 处旧账推的。
+⑦ **前端那把也重跑了（#170 到此整体结）**：`python scripts/mutation_proof_frontend.py` →
+**147 处全 RED、退 0**，首行逐字
+`# run @ 2026-10-01T01:06:56+08:00  git=4e44bb7d5c2a  worktree=clean  python=3.12.10  共 147 处变异 / 3 个判据文件`，
+末尾逐字 `已还原 web/index.html、web/post-manager.js、web/prediction-manager.js、web/viewpoint-manager.js
+（逐文件回读比对一致）`，收完 `git status --porcelain -- src/ web/ tests/ scripts/` 为**空**，
+异常项（GREEN / ANCHOR-MISS / HARNESS-FAIL / NOT-LANDED / NO-OP / JUDGE-MISS / 还原失败）**一条都没有**。
+⚠ 数它别用 `grep -c '⇒ RED'`（前端日志每行没有 `⇒`）⇒ 用
+`grep -c 'RED（判据有效）' docs/迭代计划/run-20260930-gate-scan/round88-frontend-mutations.txt` ⇒ **147**。
+本批没改 `web/` ⇒ 这一轮是**回归跑**：处数没有增量可报（147 与第 82 轮同数，不许写成 `+0`），
+重跑的理由是"那 147 处仍然逐条有牙"这句话需要一份当场的凭据。
+⇒ **#170 的两把都齐了**：现在"仓库里每一处变异都当场咬过"这句在逻辑侧（93）与前端侧（147）各有一份归档。
 
 （上一批：2026-09-30 **22:2x–23:2x（北京）**，**第 87 批：门禁换成"我自己复核一次"，然后推上线 + 生产改标清单重出一版**
 （老板 22:2x 原话见上面《修改规则》那条门禁 ⇒ 这一批**没派复评席**，改由我自己把数字与凭据逐条回到命令上）：
