@@ -1,0 +1,7 @@
+# run @ 2026-09-30T21:40:51.231829+08:00  git=0143e8ded0ee  worktree=dirty(9)
+# 这两次跑的是 data/_review_tmp/label_set.py（一次性探针，不入库）；可粘贴的等价内联命令这次真写进了 docs/模块总览/板块与基金匹配.md 那一节末尾（第 86 轮 M-3：上一批那句"写在"只有散文、没有命令）
+# 两份标签集合逐行在 data/_review_tmp/lab-{m,p}.txt（不入库）：镜像 100 行 / 生产 99 行
+[本地镜像库（data/fund_insight.db）（引擎级只读；要分析线上数据得显式 --production，等价命令 scripts/q.py --production）] 100 档
+[线上生产库（postgresql://aws-1-ap-south-1.pooler.supabase.com:6543/postgres）（引擎级只读，写探针已被数据库拒绝）] 99 档
+[comm -3] 镜像独有：粮食
+[comm -3] 生产独有：（无）

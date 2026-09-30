@@ -1,0 +1,7 @@
+# run @ 2026-09-30T21:27:59+08:00  git=0143e8ded0ee  worktree=dirty  argv='--production'
+# 命令：D=$(date -u -d '+8 hours' +%F); PYTHONIOENCODING=utf-8 python - --production <<'PY'  （三段 count 见 docs/模块总览/板块与基金匹配.md 那一节）
+[库] 准备以引擎级只读连 线上生产库（postgresql://aws-1-ap-south-1.pooler.supabase.com:6543/postgres）
+[库] 线上生产库（postgresql://aws-1-ap-south-1.pooler.supabase.com:6543/postgres）（引擎级只读，写探针已被数据库拒绝）
+[同词双列] 线上生产库（postgresql://aws-1-ap-south-1.pooler.supabase.com:6543/postgres）（引擎级只读，写探针已被数据库拒绝） ⇒ 62 行
+[预测行] 389
+[union行次] 778

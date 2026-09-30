@@ -1,0 +1,9 @@
+# run @ 2026-09-30T21:27:52+08:00  git=0143e8ded0ee  worktree=dirty  argv=''
+# 命令：D=$(date -u -d '+8 hours' +%F); PYTHONIOENCODING=utf-8 python -  <<'PY'  （三段 count 见 docs/模块总览/板块与基金匹配.md 那一节）
+[env] 脚本显式声明使用本地镜像（.env 指向远程库，已忽略）：sqlite:///E:/AI Agent/work area/fund-insight/data/fund_insight.db
+[env] DATABASE_URL = sqlite:///E:/AI Agent/work area/fund-insight/data/fund_insight.db
+[库] 准备以引擎级只读连 本地镜像库（data/fund_insight.db）
+[库] 本地镜像库（data/fund_insight.db）（引擎级只读；要分析线上数据得显式 --production，等价命令 scripts/q.py --production）
+[同词双列] 本地镜像库（data/fund_insight.db）（引擎级只读；要分析线上数据得显式 --production，等价命令 scripts/q.py --production） ⇒ 64 行
+[预测行] 400
+[union行次] 800
