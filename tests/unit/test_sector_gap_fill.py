@@ -717,7 +717,9 @@ def test_the_mapping_lookup_still_asks_with_the_raw_sector_label(test_db):
 
     先归一再查，库里那一行（键是 `RMAP黄金`）永远查不到 ⇒ "按板块对齐标的"整条路静默失效，
     而这条路上还挂着一道归一（`_gap_label`）——两种拼法混在一起，谁也对不上谁。
-    归一**只**许用作补标计划表的键（`_lookup_mapping` 自己那三步里已经有归一那一臂）。
+    ⚠ 2026-09-30（任务 #172）改了一句：`_lookup_mapping` 里"归一那一臂"现在走的也是
+    `_gap_label`（只认摘前后缀，不许改词），但**查映射仍先拿原样标签**（精确命中在前、
+    库内别名那一臂拿的仍是原样串）⇒ 这一条验的方向没变，变的只是"归一那臂是哪把尺子"。
     """
     builtin, builtin_name = _builtin_target()
     _nav_in_window(test_db, builtin, builtin_name)     # 补标那一路答得出、也真会答

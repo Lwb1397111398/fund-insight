@@ -603,6 +603,26 @@ MUTATIONS = [
      '                        continue\n',
      '                    pass\n',
      REMAP_TESTS, 'test_an_alternate_that_cannot_be_evidenced_either_is_not_a_way_out'),
+    # ── 任务 #172「归一化把板块改成另一块板块 ⇒ 查映射那一腿被它骗走」──
+    # 生产 2026-09-30 现读：144 行待改标里 **81 行**是 `金融 → 黄金`（`SECTOR_ALIASES`
+    # 149 条里 22 条是单字别名，`normalize_sector_name` 第 5 步做的是 `if alias in sector`
+    # 的子串匹配）。第 67 轮 MAJOR-3 那道"归一结果必须是原样标签的子串"的门当时只装在
+    # `_gap_label`（补标那一路），查映射这一路没有 ⇒ 同一个词形归一、两条路两种待遇。
+    # M86 = 把那道门摘掉（回到裸 `normalize_sector_name`）：`金融` 会命中 `黄金` 那行映射，
+    # 那条预测被改标到 `518880` 那一行挂的标的上 ⇒ 负面对照点红。
+    ('M86_the_normalizer_is_allowed_to_rename_the_sector', MAINT,
+     '            normalized = self._gap_label(sector)\n',
+     '            from src.constants.sector_fund_map import normalize_sector_name\n'
+     '            normalized = normalize_sector_name(sector)\n',
+     REMAP_TESTS, 'test_a_normalization_that_renames_the_sector_buys_no_mapping_row'),
+    # M87 反方向：把归一那一腿整条不要了（恒等）。`黄金行情 → 黄金` 那种"摘掉后缀"的
+    # 正常词形归一从此查不到库行 ⇒ 正面控制点红。
+    # ⚠ 为什么必须有这一条：少了它，M86 的修法可以被"归一那一路干脆删掉"满足，
+    # 而那会顺手打死第 66 轮 ⑨ 之前就一直在跑的前缀/后缀剥离（`RMAP白酒` 那一族）。
+    ('M87_the_normalization_leg_never_runs_at_all', MAINT,
+     '            normalized = self._gap_label(sector)\n',
+     '            normalized = sector\n',
+     REMAP_TESTS, 'test_an_affix_spelling_still_finds_the_row_it_normalized_to'),
 ]
 
 

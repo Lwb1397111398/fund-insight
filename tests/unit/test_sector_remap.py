@@ -357,3 +357,49 @@ def test_a_row_that_neither_label_can_answer_stays_put(db_session):
     assert result['predictions_updated'] == 0
     db_session.refresh(prediction)
     assert prediction.fund_code == before
+
+
+def test_a_normalization_that_renames_the_sector_buys_no_mapping_row(db_session):
+    """任务 #172：`normalize_sector_name` 把 `金融` 归成 `黄金`（共用一个"金"字的模糊别名），
+    这种归一**不配**替一块板块选出映射行。
+
+    生产 2026-09-30 实测：144 行待改标里 **81 行**是这一族（板块 `金融` 被绑到
+    `518880 黄金ETF华安` 那一行映射上）。第 67 轮 MAJOR-3 那道"归一结果必须是原样标签的子串"
+    当时只装在 `_gap_label`（补标那一路），没装在 `_lookup_mapping`（既有映射改标这一路）⇒
+    同一个词形归一，两条路两种待遇。
+
+    钱在 `SECTOR_CATEGORIES['金融']` 里明列着 `银行/券商/保险`，`get_fund_for_sector('金融')`
+    答的是 `001594`（银行 ETF 联接）—— 所以这不是"没人给金融定价"，是**拿错行的定价**。
+    """
+    prediction = _seed(db_session, sector='金融', mapping_sector='黄金',
+                       mapping_fund='RMAPGOLD', pred_fund='RMAPFIN', confidence=0.95)
+    _navs(db_session, 'RMAPGOLD', (date(2026, 6, 1), date(2026, 6, 4), date(2026, 6, 8)))
+    _navs(db_session, 'RMAPFIN', (date(2026, 6, 1), date(2026, 6, 4), date(2026, 6, 8)))
+
+    result = _service(db_session).sync_sector_mappings(
+        dry_run=False, min_confidence=0.85, run_id='t-rename-not-buy')
+
+    assert result['predictions_updated'] == 0, \
+        '归一成了别的板块（金融 → 黄金），却拿那块板块的映射行改了标 ⇒ #172 那一族又开门了'
+    db_session.refresh(prediction)
+    assert prediction.fund_code == 'RMAPFIN'
+    assert prediction.status == 'pending'
+
+
+def test_an_affix_spelling_still_finds_the_row_it_normalized_to(db_session):
+    """反面控制（不许把门建成墙）：`黄金行情` 归一成 `黄金`，`黄金` 是原样标签的子串 ⇒
+    词形去重那一路照常命中库里那一行。
+
+    少了这一格，上一条用例可以被"归一那一腿整条不要了"满足 —— 那会把
+    `test_sector_remap.py` 里既有的一条（`RMAP白酒` 走前缀剥离）一起打死。
+    """
+    prediction = _seed(db_session, sector='黄金行情', mapping_sector='黄金',
+                       mapping_fund='RMAPGOLD2', pred_fund='RMAPFIN2', confidence=0.95)
+    _navs(db_session, 'RMAPGOLD2', (date(2026, 6, 1), date(2026, 6, 4), date(2026, 6, 8)))
+
+    result = _service(db_session).sync_sector_mappings(
+        dry_run=False, min_confidence=0.85, run_id='t-affix-still-works')
+
+    assert result['predictions_updated'] == 1
+    db_session.refresh(prediction)
+    assert prediction.fund_code == 'RMAPGOLD2'

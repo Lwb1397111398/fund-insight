@@ -813,8 +813,12 @@ class PredictionMaintenanceService:
         if mapping:
             return mapping
         try:
-            from src.constants.sector_fund_map import normalize_sector_name
-            normalized = normalize_sector_name(sector)
+            # 归一那一腿用的是补标那一路同一道门（`_gap_label`）：只认"把前后缀摘掉"，
+            # 不认"把板块改成另一块板块"。生产 2026-09-30 实测 144 行待改标里 81 行是
+            # `金融 → 黄金`（共用一个"金"字的模糊别名）这一族 ⇒ 板块 `金融` 被绑到
+            # `518880 黄金ETF华安` 那一行映射上（任务 #172）。第 67 轮 MAJOR-3 那道门当时
+            # 只装在补标那一路，查映射这一路没有 ⇒ 同一个词形归一、两条路两种待遇。
+            normalized = self._gap_label(sector)
             if normalized in sector_map:
                 return sector_map[normalized]
             if alias_targets is None:
