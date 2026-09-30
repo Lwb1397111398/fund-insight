@@ -16,6 +16,7 @@
 import csv
 import glob
 import io
+import json
 import os
 from datetime import date, datetime
 
@@ -88,6 +89,26 @@ def _run(monkeypatch, db, *argv):
     rc = tool.main()
     db.expire_all()
     return rc
+
+
+def _listing(path):
+    """目录不存在回空列表：没带 `--apply` 的那一趟连目录都不该被建出来。"""
+    return sorted(os.listdir(path)) if os.path.isdir(path) else []
+
+
+@pytest.fixture(autouse=True)
+def _artifacts_go_to_tmp(tmp_path, monkeypatch):
+    """用例产物不许堆进仓库（第 43 轮那条"用例产物不许堆进 docs/"的同一把尺子）。
+
+    这条脚本**每一趟**都在 `OUT_DIR` 落一份带秒数的 CSV，真改名还要在 `BACKUP_DIR`
+    落一份 JSON —— 断言中途红的话这两个目录就留着残渣，而 `.gitignore` 只护住 `backup/`。
+    两个目录必须**分开指**：都指 `tmp_path` 的话，那条"备份只落了一个文件"的断言
+    会把 CSV 也数进去，永远红。
+    """
+    from scripts import audit_fund_info_identity as tool
+    monkeypatch.setattr(tool, 'OUT_DIR', str(tmp_path / 'report'))
+    monkeypatch.setattr(tool, 'BACKUP_DIR', str(tmp_path / 'backup'))
+    return tmp_path
 
 
 def _names(db):
@@ -177,3 +198,93 @@ def test_a_dry_run_counts_the_rows_it_listed(monkeypatch, seeded, capsys):
     assert '[可补] 000725 → 大成添利宝货币B' in out, out
     assert '空 fund_name：可补（未写库） 1 行' in out, out
     assert seeded.query(FundInfo).filter_by(fund_code='000725').first().fund_name == ''
+
+
+# ---------------------------------------------------------------------------
+# 生产改名那条通道（任务 #86）：老板逐行点名 + 自己的确认词 + 写之前先备份
+# ---------------------------------------------------------------------------
+
+def test_the_production_rename_channel_needs_named_codes_and_its_own_token(
+        monkeypatch, seeded, capsys):
+    """`--production` 的改名有两道新拒，且都排在第一次 commit 之前。
+
+    ① 没有 `--only-codes` ⇒ 拒：生产的改名必须由老板逐行点名，"批量把股票名换成官方名"
+      这一键永远不许存在（名字是博主原话的唯一线索）。
+    ② 点了名却拿补空名那个词（`FUND-INFO-FILL`）⇒ 拒：两种写的代价不同 ——
+      补空名没有旧值可丢，改名会覆盖已有名字，所以各要各的确认词。
+    """
+    PROD_URL = 'postgresql+psycopg2://svc@db.example.com:5432/proddb'
+    monkeypatch.setenv('DATABASE_URL', PROD_URL)
+
+    assert _run(monkeypatch, seeded, '--production', '--rename-to-official',
+                '--apply', '--confirm', 'FUND-INFO-RENAME') == 4
+    assert '点名' in capsys.readouterr().out
+
+    assert _run(monkeypatch, seeded, '--production', '--rename-to-official',
+                '--only-codes', '001309', '--apply',
+                '--confirm', 'FUND-INFO-FILL') == 4
+    out = capsys.readouterr().out
+    assert 'FUND-INFO-RENAME' in out, out
+    assert _names(seeded)['001309'] == '德明利', '两道拒有任何一道先写了库，这条就会红'
+
+
+def test_only_codes_chooses_which_rows_may_be_renamed(seeded, monkeypatch):
+    """`--only-codes` 是白名单不是黑名单：没点名的行一个字都不许动。
+
+    这里点的是 002354（有活预测引用 ⇒ 本来就该跳过），故意不点 001309（可改名）。
+    要是实现成"点名只是多一道检查、别的行照改"，001309 会被顺手改名 ⇒ 当场红。
+    """
+    assert _run(monkeypatch, seeded, '--rename-to-official', '--apply',
+                '--only-codes', '002354') == 0
+    names = _names(seeded)
+    assert names['001309'] == '德明利', '没点名的行不该被顺手改名'
+    assert names['002354'] == '天娱数科', '点名了但被活预测挡住 ⇒ 仍然不动'
+
+
+def test_a_named_code_missing_from_the_library_is_said_out_loud(seeded, monkeypatch,
+                                                                capsys):
+    """打错一个代码 ⇒ 必须点名说"库里没有这一行"，不许安静地返回"改名 0 行"。"""
+    assert _run(monkeypatch, seeded, '--rename-to-official',
+                '--only-codes', '001309,999999') == 0
+    out = capsys.readouterr().out
+    assert '[点名未找到] 999999' in out, out
+
+
+def test_a_real_rename_backs_up_the_old_names_before_it_commits(seeded, monkeypatch,
+                                                                tmp_path, capsys):
+    """真改名的那一次必须在 commit 之前把旧名字落成 JSON，并且回执逐行说出旧 → 新。
+
+    备份默认落在仓库里的 `backup/`（`.gitignore` 有一条 `backup/`），所以 autouse 夹具
+    把 `BACKUP_DIR` 指到 `tmp_path/backup`；这里再对着**默认那个目录**核一次
+    "用例一个字节都没多写进去" —— 上一版这里把路径拼成了 `dirname(ROOT)`（仓库的**父目录**），
+    而末尾那句断言写成 `A if cond else [] == before` 这种三元表达式，两种情况下都可能为真，
+    等于一条没有牙的判据（本仓反复扣分的同一族）。
+    """
+    from scripts import audit_fund_info_identity as tool
+    repo_backup_before = _listing(tool.BACKUP_DIR_DEFAULT)
+
+    assert _run(monkeypatch, seeded, '--rename-to-official', '--apply',
+                '--only-codes', '001309') == 0
+    assert _names(seeded)['001309'] == '东方红睿逸定开混合'
+    out = capsys.readouterr().out
+    assert '[已改名] 001309 德明利 → 东方红睿逸定开混合' in out, out
+
+    backup_dir = str(tmp_path / 'backup')
+    files = sorted(os.listdir(backup_dir))
+    assert len(files) == 1, files
+    with io.open(os.path.join(backup_dir, files[0]), encoding='utf-8') as f:
+        data = json.load(f)
+    entry = [e for e in data['entries'] if e['fund_code'] == '001309']
+    assert entry and entry[0]['old_name'] == '德明利', data
+    assert entry[0]['new_name'] == '东方红睿逸定开混合', data
+    # 这条断言排在跑完之后、且拿同一个函数取前后：仓库那个目录多一个文件就红
+    assert _listing(tool.BACKUP_DIR_DEFAULT) == repo_backup_before, \
+        '用例把备份写进了仓库里的 backup/'
+
+
+def test_a_plan_writes_no_backup(seeded, monkeypatch, tmp_path):
+    """没带 `--apply` 的那一趟一个字都不写 —— 备份文件也不算"写了没事"的副产品。"""
+    assert _run(monkeypatch, seeded, '--rename-to-official',
+                '--only-codes', '001309') == 0
+    assert _listing(str(tmp_path / 'backup')) == []
+    assert _names(seeded)['001309'] == '德明利'
