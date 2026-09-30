@@ -328,13 +328,16 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 末行今天印「共 80 处变异，覆盖 13 个用例文件」）：**M78** 让回执改回"我自己的算式"当选中数、
 **M79** 让那句"缺额度"对任何没选中的行都印出来（把 `if past_due:` 换成 `if True:`）——
 两处都**单独**跑过（`--only M78` / `--only M79`），各自先 CONTROL-GREEN 再 RED（判据有效）。
-⚠ **那两次的原始日志没归档进仓库**（第 78 轮 MINOR；上一版在这里写"本批只归档了两份"也是一句没数过的话 ——
-`git ls-files -- docs/迭代计划/run-20260927-mutation | grep -c round74` 今天印 **4**）。随仓库走的那四份里
-逻辑侧最近的两支单跑是 `round74-lifecycle-vp-refusal.txt`（M71~M73）与 `round74-lifecycle-vp-backfill.txt`
-（M74~M77），全套那份 `round74-lifecycle-mutations.txt` 首行 `共 71 处变异 / git=dd783063a09d` ——
-**三份里 M78/M79 一个都不出现**（复核 `grep -o 'M7[0-9][^ ]*' <那几份> | sort -u`，与 `--list` 末两行对表）
-⇒ "先 CONTROL-GREEN 再 RED"这一句的凭据只有 `data/_review_tmp/` 里的输出（整目录不入库），
-**下一批要把 M78/M79 的单跑日志按规矩 `git add` 进那个目录**，在那之前这句话算"我说的"，不算随仓库走的证据。
+⚠ **那两次的原始日志现在随仓库走**（第 78 轮 MINOR 的收口；上一版在这里写"本批只归档了两份"是一句没数过的话，
+而它说"下一批要 git add"是当时立下的义务 —— 本批已兑现，义务句留在下面并注明兑现方式）：
+`git -c core.quotepath=false ls-files -- docs/迭代计划/run-20260927-mutation | grep round78` 今天逐字印
+`round78-lifecycle-m78.txt` 与 `round78-lifecycle-m79.txt` 两条路径。两份首行逐字是
+`# run @ 2026-09-30T10:15:16+08:00  git=9217b33ca6a7  worktree=clean  python=3.12.10  共 1 处变异 / 1 个判据文件`
+（M78）与 `# run @ 2026-09-30T10:15:53+08:00  git=9217b33ca6a7 … 共 1 处变异 / 1 个判据文件`（M79），
+第二行都是 `CONTROL ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）`，M78/M79 各自那行都是
+`⇒ RED（判据有效）`。⇒ "先 CONTROL-GREEN 再 RED"这句话从"我说的"变成有命令可查的凭据。
+⚠ 那两遍跑在 `9217b33`（被审的代码那一笔）上，而它之后的 `22d9f83` **只改 `AGENTS.md`**
+（复核 `git show --name-only 22d9f83` 末段只列这一个文件）⇒ 日志里的 `git=` 与"跑的就是被审的那一版"不矛盾。
 ⚠ `--only backfill` 匹配的是**标签文本**，那两条标签里没有 "backfill" ⇒ 第一次这么跑它们**一条都没跑到**，
 是 `--list` 的末两行让我去看注册表才发现的。
 ⑤ **两个库的补戳都做完了**（老板 09-30 选了 `--stamp-from created`，即按入站那天算，接受约 411 行成为清理候选）：
@@ -415,6 +418,24 @@ db.close()
   `audit_doc_claims.py` → 退 **0**（回执末行逐字 `[结论] 全部对得上（条数 3 条、数据源 4 行都认得出来自哪个库）；
   另有 16 条"看得见但不判"（编号列表账、基线流水），逐条列在上面`；本批新写的那段里 "+9 条" 走增量写法，
   没进当场承诺集合）。
+
+**门禁一句**：第 78 轮独立复评 **79/100、0 BLOCKER ≥75** ⇒ 本批**已推已部署**，线上跑的是 `22d9f83`。
+凭据两条独立、都不是"命令没报错"（**10:4x 现读**，不是抄上一轮）：
+① `GET /api/health/detail`（**带口令**，不带回 401）自报
+`git_commit=22d9f83ac6fd`、`git_commit_source=RENDER_GIT_COMMIT`、
+`started_at=2026-09-30T10:39:13.716248+08:00`、**`scheduler_running=False`** ⇒
+"生产没有任何自动化在跑"这一件事本批一个字没变（见记忆 `fund-insight-no-automation`）。
+② `GET /index.html` 294724 字节、**LF 归一后** md5 `fd901a776a7c513e3bb1547672d4aa0d`，
+与 `git show 2195356:web/index.html` 和 `git show 22d9f83:web/index.html` 两个 blob 预先算出的数**逐字相同**
+⇒ 这一条证的是"本批没换页面"（⑤ 那批只动 `scripts/` + `src/services/`），**不证**"新代码到了"；
+"新代码到了"只由 ① 那 12 位哈希回答。复核命令（免费实例会睡，直接 curl 拿到的是**空字节**而不是 401 ⇒
+必须带 `-w '%{http_code}'` 并重试）：
+`PW=$(grep -E '^ACCESS_PASSWORD=' .env | cut -d= -f2- | tr -d '"'); curl -s -H "X-Access-Password: $PW" https://fund-insight.onrender.com/api/health/detail`
+（**口令只留在 shell 变量里，绝不印出来、绝不写进文件**）。
+⚠ **本地领先几笔别在这里抄**：`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`
+现读为 **0**（`origin/main` 就是 `22d9f83`）；写下这段之后的那一笔文档提交会让它变成 1，那不是回归。
+推完 #160 那五步（只读预检 → 预览 → 执行 → 台账抽核 → 净值/验证）里"清理"那一半还有一件事没做：
+**物理删除一行都还没发生**，那要等清理按钮/跑批按 500 行的共用额度一批批走（见 ①②③）。
 
 （上一批：2026-09-30 **02:5x（北京）**，**任务 #142 的代码半：AI 判拒绝的观点从此写那一对归档
 时间戳** —— 老板那句「某预测对应板块对应的基金被发现抓取不到且确认没有办法的情况，可以把该板块对应的
@@ -550,6 +571,14 @@ rejected_no_stamp from viewpoints"`。
   `AGENTS.md`（就是这一段）是链跑完之后才写的 ⇒ 那是第七个。另要知道 `worktree=dirty(N)` 只数
   **`src` `web` `tests` 三棵树**（`_worktree_state()` 里那条 `git status --porcelain -- src web tests`），
   所以 `scripts/` 与 `docs/` 的改动**永远不会**出现在 N 里 —— 看见 `dirty(3)` 别读成"只有三处改动"。
+
+⚠⚠ **下面这段"门禁一句"整条作废**（2026-09-30 写第 78 轮那一批时现读撞出来的自相矛盾，按本仓规矩留在原处标废、不删）：
+它说"本批**未推**、`origin/main` 是 `3fd79c6`"，而**同一段后面的 ⑦ 已经写着**（用 `grep -n "87/100" AGENTS.md`
+定位，别抄行号 —— 行号会被我自己这一笔顶掉）「第 75 轮独立复评 87/100 ⇒
+本批已推已部署」并给了 `git_commit=0dcad1523b0c`、`started_at=2026-09-30T03:35:05.520547+08:00`。
+两个数各自都曾是当时真值（这句是复评回来之前写的，⑦ 是之后的），留下的问题是**下一轮读到这里会以为第 75 批没上线**。
+现在的真值走现读：`git fetch origin main:refs/remotes/origin/main && git rev-list --count origin/main..HEAD`，
+线上哪一版走 `GET /api/health/detail`（10:4x 现读 `git_commit=22d9f83ac6fd`，见上面第 78 轮那条门禁一句）。
 
 **门禁一句**：本批**未推**（推之前先拿一份**新的**独立复评，≥75 才推）；`origin/main` 是
 `3fd79c6`（第 74 轮，95/100 已推已部署），本批那一笔在它之上。线上此刻本批没有新东西在跑，

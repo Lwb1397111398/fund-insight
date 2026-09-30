@@ -1,0 +1,4 @@
+# run @ 2026-09-30T10:15:16+08:00  git=9217b33ca6a7  worktree=clean  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M78_the_receipt_answers_with_its_own_arithmetic            ⇒ RED（判据有效）
+已还原 scripts/backfill_viewpoint_archive_stamps.py

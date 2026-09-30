@@ -1,0 +1,4 @@
+# run @ 2026-09-30T10:15:53+08:00  git=9217b33ca6a7  worktree=clean  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M79_the_budget_sentence_blames_capacity_for_a_calendar_case ⇒ RED（判据有效）
+已还原 scripts/backfill_viewpoint_archive_stamps.py
