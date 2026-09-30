@@ -395,6 +395,17 @@ db.close()
 （M17 / M74~M77 上一次整族 `--only` 跑过全 RED，本批 M78/M79 各单独跑过）；前端那把
 （处数一律 `python scripts/mutation_proof_frontend.py --list` 末行）**本批一个字没跑** —— `web/` 未动，
 但"前端体检全绿"这句话本批没有凭据。
+⑦ **这一批（收口那两笔 `1d8b64d` / `ca5860d`）连逐条都没起，而且我知道为什么不起**：
+现读内存 `powershell -File data/_review_tmp/ps-mem.ps1`（两条 ASCII 键，别靠控制台编码读中文）
+09:5x 量到 `TotalGB=7.34 FreeGB=0.54`、**11:00 前后再量 `FreeGB=0.46`** —— 这正是第 56 / 57 轮
+把刚起的子进程打死那一档（退码 `0xC0000374`、stdout/stderr 全零字节）。在这种情况下起 80 处长任务的
+结果是**一份废日志**，更坏的是它可能死在"已改写 `src/`、还没还原"那一步，把工作树留在变异载荷上
+（`git status --porcelain -- src/` 里那一行消失才算还原，`.mutbackup` 得手工 `cp` 回去 —— 第 59 轮那笔操作账）。
+⇒ 所以这一批的凭据只到"M78 / M79 各自单独跑过（CONTROL-GREEN 后 RED，日志已入库
+`docs/迭代计划/run-20260927-mutation/round78-lifecycle-m78.txt` / `-m79.txt`）"。
+**下一批第一件事**：拿 `ps-mem.ps1` 再量一次，可用内存回到 2 GB 以上才整跑逻辑侧那 80 处与前端那把
+（处数一律看 `--list` 末行，别抄这里）；跑之前先确认没有活的 python 在握着那两把锁，
+**陈旧锁文件绝不 `rm`**。
 
 最后一次核对（**串行**、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、跑期间不起第二个会话、
 不起任何长任务 —— ⑤ 那两趟只读探针跑在基线之前，没有在基线中途并发）：
