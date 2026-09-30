@@ -295,14 +295,22 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 ## 当前测试基线
 
 最近一次核对（2026-09-30 **09:4x（北京）**，**任务 #142 的第二半收口：补戳脚本在生产上印的那句回执是一句假话**
-——「其余 343 行要到各自那个保留日之后」把**两种完全不同的病因**并成了一句；本批只动一支一次性脚本
-`scripts/backfill_viewpoint_archive_stamps.py` + 它的判据 + 变异注册表 + 这段文档，`src/` 与 `web/` 一个字没动）：
+——「其余 343 行要到各自那个保留日之后」把**两种完全不同的病因**并成了一句；本批动了
+`scripts/backfill_viewpoint_archive_stamps.py` + 它的判据 + 变异注册表 + 这段文档，`web/` 一个字没动。
+⚠ **第 78 轮 F-1：上一版在这里写"本批只动一支一次性脚本…`src/` 与 `web/` 一个字没动"是假话** ——
+`95a738c` 动了 `src/services/prediction_lifecycle.py`（`archive_stamp()` 加 `base=`，
+就是归档时钟唯一出处那一处）。`web/` 那半句仍然成立。**这一批到底几笔不在这里抄**（写下这段文字的
+返修那一笔本身会让它多一笔，第 69 轮 MAJOR-2 同族）：逐笔数与改动面都走绝对基准
+`git log --oneline 2195356..HEAD` 与 `git diff --name-only 2195356..HEAD`）：
 
 ① **生产实测那一次为什么"计划 411 / 回执只选中 75"**（只读，命令在下面 ⑤）：不是"日子还没到"，是
 **清理那一次的单次全局额度** `max_total_per_run = 500` 被排在前面的桶先用掉了 —— 按 `BUCKETS` 的顺序走一遍：
 回收站预测当场选出 **425** 行 ⇒ 额度只剩 75 ⇒ 「已删观点」这一桶按它自己的日历选出 **410** 行、
-本轮额度内只有 **75** 行、`plan.truncated` 为真。上一版那句"要到各自那个保留日之后"对这 335 行是**反话**：
-它们的日子早过了，缺的是额度。
+本轮额度内只有 **75** 行、`plan.truncated` 为真。上一版那句"要到各自那个保留日之后"是**反话**，
+反话覆盖的行数按哪把尺子数给两个不同的数（第 78 轮 F-2：上一版这里只写了一个"335"，没有命令印得出它）：
+**回执自己**用的是它分类那半步的算式（`i['until'] <= today`，即 `restore_before <= today` 那把差一天的尺子）
+⇒ `411 - 75 = 336` 行；清理那把**真尺子**（`deleted_at < 截止那一刻`）⇒ `410 - 75 = 335` 行。
+两个数差的那 1 行就是 ② 那一格。这里不再只留一个数：说"反话覆盖多少行"必须同时说用的是哪把尺子。
 ② **顺带量出那两把日历尺子差一天**（同一条命令印）：真尺子 `_deleted_viewpoint_ids:640` 比的是
 `deleted_at < 今天减保留天数那一刻`（含时刻，严格），脚本计划那句比的是 `restore_before <= today` ⇒
 **410 对 411**，不一致的正好 **1** 行（它的恢复窗口恰好到今天）。这一格不再靠我口算，回执改问**那把真尺子**
@@ -320,12 +328,27 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 末行今天印「共 80 处变异，覆盖 13 个用例文件」）：**M78** 让回执改回"我自己的算式"当选中数、
 **M79** 让那句"缺额度"对任何没选中的行都印出来（把 `if past_due:` 换成 `if True:`）——
 两处都**单独**跑过（`--only M78` / `--only M79`），各自先 CONTROL-GREEN 再 RED（判据有效）。
+⚠ **那两次的原始日志没归档进仓库**（第 78 轮 MINOR；上一版在这里写"本批只归档了两份"也是一句没数过的话 ——
+`git ls-files -- docs/迭代计划/run-20260927-mutation | grep -c round74` 今天印 **4**）。随仓库走的那四份里
+逻辑侧最近的两支单跑是 `round74-lifecycle-vp-refusal.txt`（M71~M73）与 `round74-lifecycle-vp-backfill.txt`
+（M74~M77），全套那份 `round74-lifecycle-mutations.txt` 首行 `共 71 处变异 / git=dd783063a09d` ——
+**三份里 M78/M79 一个都不出现**（复核 `grep -o 'M7[0-9][^ ]*' <那几份> | sort -u`，与 `--list` 末两行对表）
+⇒ "先 CONTROL-GREEN 再 RED"这一句的凭据只有 `data/_review_tmp/` 里的输出（整目录不入库），
+**下一批要把 M78/M79 的单跑日志按规矩 `git add` 进那个目录**，在那之前这句话算"我说的"，不算随仓库走的证据。
 ⚠ `--only backfill` 匹配的是**标签文本**，那两条标签里没有 "backfill" ⇒ 第一次这么跑它们**一条都没跑到**，
 是 `--list` 的末两行让我去看注册表才发现的。
 ⑤ **两个库的补戳都做完了**（老板 09-30 选了 `--stamp-from created`，即按入站那天算，接受约 411 行成为清理候选）：
 镜像与生产各 418 / 418 行补上，逐行回执与备份在 `backup/backfill-vp-stamps-20260930-091902.json`（镜像）、
 `backup/backfill-vp-stamps-20260930-092042.json`（生产，418 行原样）。**物理删除一行都还没发生** ——
-那要等清理按钮/跑批按额度一批批走。复核这一族今天的数（只读，两库各跑一次，生产要显式给那句旗）：
+那要等清理按钮/跑批按额度一批批走。
+⚠ **第 78 轮回标（本批写库之后，下面这几处旧话作废）**：本文件里"观点侧两个时间戳一个都不写 / 那 18 行永远进不了
+清理桶"那一段（写于第 59~61 轮）说的是 `rejected:` 那一族缺 `deleted_at`，**已由本批补戳改掉**；
+`docs/模块总览/预测验证与准确率统计.md` §2d 里同一句"一行都没订正"（指 `--fix-wording` 那一趟）仍然成立、
+不要混淆成"补戳也没做"。复核本批做没做：`ls backup/backfill-vp-stamps-20260930-*.json` 两份都在，
+行数各数一遍 `python -c "import json,glob;[print(p, len(json.load(open(p, encoding='utf-8'))['rows'])) for p in sorted(glob.glob('backup/backfill-vp-stamps-20260930-*.json'))]"`
+（今天逐字印 `backup\backfill-vp-stamps-20260930-091902.json 418` 与 `...-092042.json 418`；
+**那一格键名 `rows` 是现读那份备份自己的结构得到的，不是猜的** —— 备份是 dict，键为
+`created_at / as_of / reason_kind / stamp_from / retention_days / rows / plan`）；复核这一族今天的数（只读，两库各跑一次，生产要显式给那句旗）：
 先把这段存成 `data/_r78-bucket-probe.py`（`data/` 不入库，跑完自己删）——
 
 ```python
