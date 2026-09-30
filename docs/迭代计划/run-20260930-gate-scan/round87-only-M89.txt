@@ -1,0 +1,4 @@
+# run @ 2026-10-01T00:12:56+08:00  git=0bcd31617420  worktree=dirty(3)  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M89_the_blogger_week_window_asks_the_wall_clock            ⇒ RED（判据有效）
+已还原 src/api/routes/bloggers.py

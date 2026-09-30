@@ -296,7 +296,50 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **22:2x–23:2x（北京）**，**第 87 批：门禁换成"我自己复核一次"，然后推上线 + 生产改标清单重出一版**
+最近一次核对（2026-10-01 **00:1x–00:3x（北京）**，**第 88 批：任务 #145/#146 的最后一档墙钟收掉
+——「近 7 天」与「每日汇总幂等闸」从此都问北京钟，两把钟在同一模块里两种待遇那一族到此没有活对应物**：
+
+① **改的两处**（`src/` 行为，都在页面上看得见）：
+⑴ `src/api/routes/bloggers.py` 那个 `active_posts_count` 以前 `date.today() - 7`，而被筛的
+`Prediction.target_date` 按北京日排期 ⇒ 容器在 UTC 时，北京 00:00~08:00 那一周**少算一天**（博主榜那格数字
+莫名变小）。现在 `current_as_of() - 7`（那只钟的唯一出处 `prediction_lifecycle.current_as_of`）。
+⑵ `src/services/viewpoint_workflow_service.py` 的「每日汇总」幂等闸以前比
+`BatchAnalysisTask.created_at.date()`，而 `created_at` 是朴素 `datetime.now()`（容器 = UTC）⇒
+**同一个北京日会被判成"昨天那条，不算今天"，凌晨点一次、早上再点一次，跑出两份汇总**。
+现在按新加的 `_summary_run_date()` 问：优先读任务自己写进 `task_params['run_date']` 的北京日
+（新任务在创建时就写 —— 复核 `grep -n "run_date" src/services/viewpoint_workflow_service.py`），
+老行没这个键才退回墙钟日 ⇒ **退回的是既有行为，不是"修好了"**，这一点写在函数 docstring 里。
+同模块早就有 `beijing_today()`（`grep -n "def beijing_today" src/services/viewpoint_workflow_service.py`）
+—— 这次是把它该管的那一站交回去，不是新立一把尺子。
+
+② **判据**：新文件 `tests/unit/test_beijing_clock_last_two_sites.py` **3 条**
+（`grep -c '^def test_' tests/unit/test_beijing_clock_last_two_sites.py` 现读，本批当场 `3 passed`）。
+夹具把北京钟钉在 `2026-03-14`（**故意不等于本机今天**，否则"问哪把钟"量不出来）：
+边界那行 `-7 天` 必须在、`-8 天` 必须不在；幂等闸必须认 `run_date=北京今天` 而 `created_at` 是墙钟昨天；
+**反面对照**那条钉"run_date 是昨天的那条不许拦住今天"（少了它，这道闸会从"跟着北京钟"退化成
+"永远说已经做过"—— 过宽的闸活不过一轮，本仓尺度）。
+③ **牙是真咬过的**：两处变异各注册并单独跑过 ——
+`python scripts/mutation_proof_lifecycle.py --only M89` / `--only M90` 都是
+**CONTROL-GREEN ⇒ RED（判据有效）、退 0**，日志随仓库走
+`docs/迭代计划/run-20260930-gate-scan/round87-only-{M89,M90}.txt`
+（在不在仓库用 `git ls-files docs/迭代计划/run-20260930-gate-scan` 核）。
+注册表处数因此 **91 → 93**（现读 `python scripts/mutation_proof_lifecycle.py --list` 末行
+「共 93 处变异，覆盖 15 个用例文件」）。动手前我还用"改回旧写法 ⇒ 当场 2 failed"手工反证过一次，
+还原后 3 条全绿（`git diff --stat src/` 只剩这两支文件）。
+
+④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间不起第二个会话、
+不起长任务；链 `data/_review_tmp/r88-chain.sh`，`HEAD=0bcd316`）**：
+`pytest tests/unit -q` → **1318 passed / 16 skipped / 0 failed**（608.73 秒，00:24:02 收，退 **0**，6959 字节）；
+`pytest tests/ -q` → **1327 passed / 16 skipped / 0 failed**（529.65 秒，00:33:02 收，退 **0**，6959 字节）。
+上一基线 1315 / 1324 ⇒ **两个口径各 +3**，就是 ② 那个新文件（`^def test_` 现数 3，本批无参数化）。
+`python scripts/audit_doc_claims.py` → 退 **0**。
+
+⑤ **仍然没做的，登记而不是当成已封**：**93 处全套逻辑侧体检仍未重跑**（#170；本批只逐条跑了
+M89/M90 两处新臂 —— 本批动了 `src/` 的两个新站点，锚点都落在改动文本上，其余 91 处未重跑，
+所以"93 处全 RED"这句话今天不配说）；前端那 147 处本批没动 `web/`、也没重跑；
+m-5 要的"生产四个数各一份归档"仍欠两个。
+
+（上一批：2026-09-30 **22:2x–23:2x（北京）**，**第 87 批：门禁换成"我自己复核一次"，然后推上线 + 生产改标清单重出一版**
 （老板 22:2x 原话见上面《修改规则》那条门禁 ⇒ 这一批**没派复评席**，改由我自己把数字与凭据逐条回到命令上）：
 
 ① **两个口径是跑出来的，不是我推的**（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、

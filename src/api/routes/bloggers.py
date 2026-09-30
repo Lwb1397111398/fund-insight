@@ -11,6 +11,7 @@ from datetime import date, timedelta
 
 from src.api.deps import get_db
 from src.models.database import Prediction
+from src.services.prediction_lifecycle import current_as_of
 from src.services import BloggerService
 
 router = APIRouter(prefix="/bloggers", tags=["博主"])
@@ -69,7 +70,9 @@ def get_bloggers(
     else:
         bloggers = service.get_all(skip=skip, limit=limit)
 
-    cutoff_date = date.today() - timedelta(days=7)
+    # "近 7 天"问的是北京日：Prediction.target_date 按北京日历排期，
+    # 用 date.today() 会在北京 00:00~08:00 少算一天（容器是 UTC）。
+    cutoff_date = current_as_of() - timedelta(days=7)
 
     blogger_ids = [b.id for b in bloggers]
     active_count_map = {}

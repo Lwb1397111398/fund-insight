@@ -1,0 +1,4 @@
+# run @ 2026-10-01T00:13:14+08:00  git=0bcd31617420  worktree=dirty(3)  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M90_the_summary_gate_falls_back_to_the_wall_clock_date     ⇒ RED（判据有效）
+已还原 src/services/viewpoint_workflow_service.py

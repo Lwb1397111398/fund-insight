@@ -917,6 +917,24 @@ class ViewpointWorkflowService:
         return {"success": True, "completed": completed, "skipped": skipped}
 
     @classmethod
+    def _summary_run_date(cls, task: BatchAnalysisTask) -> Optional[date]:
+        """这条汇总任务算哪一天：优先它自己写进去的北京日，回退到 created_at 的墙钟日。
+
+        `created_at` 是 `datetime.now()` 落的**朴素**时间（Render 容器里就是 UTC），
+        而"今天已经汇总过没有"问的是**北京日** ⇒ 北京 00:00~08:00 之间点「每日汇总」，
+        按 `created_at.date()` 比会判成"昨天那条，不算今天"，于是**同一天再跑一次**。
+        新任务在创建时就把北京日写进 `task_params['run_date']`（下面 :951 那一格），
+        老行没有这个键才退回墙钟日 —— 退回的是既有行为，不是"修好了"。
+        """
+        raw = (task.task_params or {}).get("run_date")
+        if raw:
+            try:
+                return date.fromisoformat(str(raw))
+            except ValueError:
+                pass
+        return task.created_at.date() if task.created_at else None
+
+    @classmethod
     def run_daily_summary_task(
         cls,
         *,
@@ -926,18 +944,18 @@ class ViewpointWorkflowService:
         db = session_factory()
         task = None
         try:
-            today = date.today()
+            today = beijing_today()
             latest = db.query(BatchAnalysisTask).filter(
                 BatchAnalysisTask.task_type == "viewpoint_summary",
             ).order_by(BatchAnalysisTask.created_at.desc()).first()
-            if latest and latest.created_at and latest.created_at.date() == today and latest.status == "succeeded":
+            if latest and latest.status == "succeeded" and cls._summary_run_date(latest) == today:
                 # 仅当上次实际汇总过(completed 非空)才视为"已完成"; 全被跳过则允许重试
                 prev_completed = (latest.result_summary or {}).get("completed") or []
                 if prev_completed:
                     return {"success": True, "already_completed": True, "task_id": latest.id, **(latest.result_summary or {})}
                 task = latest
             else:
-                task = latest if latest and latest.created_at and latest.created_at.date() == today else None
+                task = latest if latest and cls._summary_run_date(latest) == today else None
             if task is None:
                 task = BatchAnalysisTask(
                     task_type="viewpoint_summary",

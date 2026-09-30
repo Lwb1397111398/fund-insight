@@ -72,6 +72,8 @@ VP_WORKFLOW = 'src/services/viewpoint_workflow_service.py'
 VP_TESTS = 'tests/unit/test_viewpoint_refactor.py'
 VP_BACKFILL = 'scripts/backfill_viewpoint_archive_stamps.py'
 VP_BACKFILL_TESTS = 'tests/unit/test_backfill_viewpoint_archive_stamps.py'
+BLOGGERS_ROUTES = 'src/api/routes/bloggers.py'
+CLOCK_TESTS = 'tests/unit/test_beijing_clock_last_two_sites.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -644,6 +646,20 @@ MUTATIONS = [
      '            if alias_targets.get(normalized) in sector_map:\n'
      '                return sector_map[alias_targets[normalized]]\n',
      REMAP_TESTS, 'test_the_library_alias_arm_is_asked_with_the_raw_label_not_the_normalized_one'),
+    # M89 / M90（第 87 批，任务 #145 的最后一档：两处"墙钟 vs 北京钟"）：
+    # M89 把博主榜"近 7 天"的截止日换回 `date.today()` —— 容器在 UTC 时那一周少算一天，
+    # 夹具把北京钟钉在 2026-03-14 上，边界那一行（-7 天）必须还在、-8 那行必须不在。
+    ('M89_the_blogger_week_window_asks_the_wall_clock', BLOGGERS_ROUTES,
+     '    cutoff_date = current_as_of() - timedelta(days=7)\n',
+     '    cutoff_date = date.today() - timedelta(days=7)\n',
+     CLOCK_TESTS, 'test_the_seven_day_blogger_window_is_counted_on_the_beijing_clock'),
+    # M90 「每日汇总」的幂等闸退回比 `created_at` 的墙钟日：北京凌晨那次会被认成"昨天的任务"，
+    # 同一天再跑一次汇总。反面对照（run_date 是昨天 ⇒ 必须还能跑）钉住这道闸不许过宽。
+    ('M90_the_summary_gate_falls_back_to_the_wall_clock_date', VP_WORKFLOW,
+     '            if latest and latest.status == "succeeded" and cls._summary_run_date(latest) == today:\n',
+     '            if latest and latest.status == "succeeded" and '
+     'latest.created_at is not None and latest.created_at.date() == today:\n',
+     CLOCK_TESTS, 'test_the_summary_gate_reads_its_own_beijing_run_date_not_the_wall_clock'),
 ]
 
 
