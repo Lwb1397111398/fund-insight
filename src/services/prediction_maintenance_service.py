@@ -147,6 +147,30 @@ class PredictionMaintenanceService:
     GAP_FILL_SOURCE = 'seed_builtin'
 
     @staticmethod
+    def _sector_labels(prediction) -> list:
+        """一条预测身上其实挂着**两个**板块标签，查映射时按顺序都问一遍。
+
+        为什么要有这一条（任务 #171，实测）：`predictions.sector` 是 LLM 从正文里抽出来的**说法**
+        （`A股` / `粮食`），而 `predictions.sector_type` 是它同时给出的**归类**（`综合` / `科技`）。
+        老写法 `raw = prediction.sector or prediction.sector_type` 只在 `sector` **为空**时才看第二个，
+        于是"sector 非空、而它谁都对不上"的行永远走不到已经能答出标的的那一行
+        （镜像 2026-09-29 现读：`sector_type='综合'` 有 `018536`、`'宽基'` 有 `510300`、
+        内置表对 `科技` 给 `515000`、对 `农业` 给 `159825`，而那 6 条 `pre_inception` 的未判行
+        全卡在 `predictions_no_mapping` 里 ⇒ 只能被"永远问不出来"关掉，改不了标的）。
+
+        边界一（这条只做**加法**）：`sector` 自己能查到行的那些行，第一步就命中并 break，
+        字节级与改前同一条路 —— 所以它不会把"按 sector 定价"改成"按 sector_type 定价"。
+        边界二（不会因此硬凑）：第二个标签查出来的新标的**仍要过同一条证据门**
+        （`calendar_gap`，补标那一路还多一道"只紧不松"）⇒ 新标的给不出这段窗口的净值时，
+        行进 `skipped_unservable` 并带逐行原因，一个字都不动。
+        """
+        labels = []
+        for label in (prediction.sector, prediction.sector_type):
+            if label and label not in labels:
+                labels.append(label)
+        return labels
+
+    @staticmethod
     def _gap_label(sector: Optional[str]) -> Optional[str]:
         """板块标签在**进 gap-fill 这条计划表之前**先归一，但只认"把前后缀摘掉"那一种归一。
 
@@ -339,18 +363,41 @@ class PredictionMaintenanceService:
 
         # 没有可用映射的板块**按板块**算一遍，而不是按预测：一条预测各查一次库正是
         # 生产那次「100 秒零字节」的根因（第 51 轮）。第二遍逐条判证据时只在内存里查。
+        # 今天（北京）取一次，不在循环里逐条问 —— 与队列/分类同一把钟（第 52 轮 B-3 那一族）。
+        from src.services.prediction_lifecycle import current_as_of, is_expired_computed
+
+        today = current_as_of()
+
+        def _waiting_for_a_verdict(row: Prediction) -> bool:
+            """**到期了、而结论还没有**（含被重问锁压着的那一档）—— 只有这一档值得为它另找标的。
+            "有没有结论"问共用的 `has_verdict_trace`，"到没到期"问共用的 `is_expired_computed`，
+            这里不立第二把尺子。还没到期的不动它：它现在问不出结果，等到期那天自然会问。"""
+            return not has_verdict_trace(row) and is_expired_computed(row, as_of=today)
+
         missing_labels = []
         for prediction in predictions:
-            raw = prediction.sector or prediction.sector_type
+            labels = self._sector_labels(prediction)
             # ⚠ 查映射一律用**原样标签**。`_lookup_mapping` 内部是"原样 → 归一 → 库内别名(原样)"
             # 三步，别名那一步的输入就是原样串；在这里先归一等于把别名那一步的键换掉
             # ⇒ 靠别名命中的行再也查不到（第 66 轮返修：`tests/unit/test_sector_remap.py`
             # 四条一起红，`predictions_updated` 全成 0）。归一**只**用作补标计划表的键。
-            if not raw or self._lookup_mapping(sector_map, raw, alias_targets):
+            if not labels:
                 continue
-            label = self._gap_label(raw)
-            if label and label not in missing_labels:
-                missing_labels.append(label)
+            answered = any(self._lookup_mapping(sector_map, label, alias_targets)
+                           for label in labels)
+            # 两个标签里只要有一个已经在库里答出标的 ⇒ 下面逐条时轮不到补标计划表，
+            # 这里也就不为它立计划（否则预览会说"这块要补一只"而一条预测都不落到它身上）。
+            # ⚠ 一个**例外**（任务 #171）：到期还没结论的行，库里那个答案可能就是它现在挂着的
+            # 那只验不了的标的 ⇒ 另一个标签（库里没有行的那一个）得有机会进补标计划表，
+            # 否则"粮食→158038 答出了、农业压根没有行"这种行永远换不出去。
+            for raw in labels:
+                if answered and not _waiting_for_a_verdict(prediction):
+                    continue
+                if self._lookup_mapping(sector_map, raw, alias_targets):
+                    continue
+                label = self._gap_label(raw)
+                if label and label not in missing_labels:
+                    missing_labels.append(label)
         existing_rows = {}
         if missing_labels:
             # 排序与上面建 sector_map 那一条**同一把尺子**（更新的在前）：真要改写已有行时，
@@ -390,27 +437,55 @@ class PredictionMaintenanceService:
         unchanged = 0
         no_mapping = 0
         pairs = []
+        deferred = []
         for prediction in predictions:
-            raw = prediction.sector or prediction.sector_type
-            mapping = self._lookup_mapping(sector_map, raw, alias_targets)
-            gap_key = None
-            if mapping is None:
-                # 库里没有行 ⇒ 才轮到补标计划表。键与建计划那一侧同一把尺子（`_gap_label`），
-                # 归一前后各试一次：拿不准的标签原样返回，两种拼法都得沾上。
+            labels = self._sector_labels(prediction)
+            # 查映射一律用**原样标签**（`_lookup_mapping` 内部那三步的输入），归一只用作补标计划表的键
+            # —— 见上面建计划那一侧同一条注释（第 66 轮返修：先归一 ⇒ `test_sector_remap.py` 四条一起红）。
+            looked = [(raw, self._lookup_mapping(sector_map, raw, alias_targets))
+                      for raw in labels]
+            library_hits = [(raw, hit, False) for raw, hit in looked if hit is not None]
+            # 内置表（补标计划表）只答**库里没行的那些标签**；键与建计划那一侧同一把尺子
+            # （`_gap_label`），归一前后各试一次：拿不准的标签原样返回，两种拼法都得沾上。
+            plan_hits = []
+            for raw, hit in looked:
+                if hit is not None:
+                    continue
                 for key in (self._gap_label(raw), raw):
                     if key in gap_targets:
-                        mapping, gap_key = gap_targets[key], key
+                        plan_hits.append((key, gap_targets[key], True))
                         break
-            if not mapping:
+            # 备选池：库里答案里剩下的那几个，**加上**内置表给剩下的标签答出的那些。
+            # 优先级仍是"任何标签的库里答案都排在内置表之前"（那块板块已有人定过价，机器不越它）：
+            # 库里一题都没答时才让整份计划表顶上（`hits = plan_hits`），那种情况下备选只有
+            # `plan_hits[1:]` —— 把 `plan_hits` 再并一次会把同一只标的数成两条候选。
+            if library_hits:
+                hits, alts = library_hits, library_hits[1:] + plan_hits
+            else:
+                hits, alts = plan_hits, plan_hits[1:]
+            if not hits:
                 no_mapping += 1
                 continue
-            if prediction.fund_code == mapping.fund_code:
-                unchanged += 1
+            if prediction.fund_code == hits[0][1].fund_code:
+                # 第一个答案正是它现在挂着的那只。⚠ 但有一种行不能就此收工（任务 #171）：
+                # **到期了、结论还没有**的那些（含被重问锁压着、`classify` 报「结构性不可验」的那一档）。
+                # 它挂着的可能正是"这段窗口问不出净值"的那只，而另一个标签给出的**另一只**
+                # 从没被问过 ⇒ 老板那句"抓取不到且确认没有办法 ⇒ 换成别的基金"落的正是这一格。
+                # 备选**包括内置表那一档**：镜像现读 6 条这样的行里，`2303/2304`（A股→515440 挂着，
+                # 第二个标签「科技」库里没行）与 `3076`（粮食→158038，第二个标签「农业」同理）
+                # 只有内置表答得出，早期版本只看 `len(hits) > 1` 就把这三条数成 `unchanged`。
+                # 这里只**收集候选**，换不换由下面 `deferred` 那段用共用那把尺子问：
+                # 这种行按定义没有结论可清，最坏情况是"没换"，不会更坏。
+                if alts and _waiting_for_a_verdict(prediction):
+                    deferred.append((prediction, [hits[0]] + alts))
+                else:
+                    unchanged += 1
                 continue
+            key, mapping, via_gap = hits[0]
             # `sector` 交回给下面的是**这块板块在补标计划里的键**（不是预测自己那个标签）：
             # 只有走了补标那一路才有它。把它当"标签在不在计划表里"来判 `via_gap` 是不可的
             # ——一条命中库里映射行的预测，其归一标签可能恰好等于别的板块的键。
-            pairs.append((prediction, mapping, gap_key or raw, gap_key is not None))
+            pairs.append((prediction, mapping, key, via_gap))
 
         # 证据门：**预览与实跑必须问同一句话、给出同一个数**。第 100 轮那道门当时只装在
         # `retag_prediction` 里面，而 dry-run 那支根本不调它 ⇒ 2026-09-26 生产实测
@@ -429,12 +504,46 @@ class PredictionMaintenanceService:
             wanted_codes.add(mapping.fund_code)
             if via_gap and prediction.fund_code:
                 wanted_codes.add(prediction.fund_code)
+        # `deferred` 那一档要问的码一起读：它自己的那只（问"这段窗口答得出吗"）+ 各只备选。
+        # 这一档今天只有"到期还没结论"那么几十行（镜像 2026-09-30 现读 18 条到期未判），
+        # 不是"每条预测都把自己的标的带上"——第 66 轮复评 MI-6 量的正是后者（生产读取量翻倍）。
+        for prediction, hits in deferred:
+            if prediction.fund_code:
+                wanted_codes.add(prediction.fund_code)
+            for _key, alt, _gap in hits:
+                wanted_codes.add(alt.fund_code)
         wanted = sorted(code for code in wanted_codes if code)
         calendar = nav_calendar(self.db, wanted)
         # 有没有档案要**一次读全**：逐条预测各查一次 `fund_info` 就是生产那次
         # 「预览 100 秒零字节」的同一个形状（第 51 轮）。
         archived = {row[0] for row in self.db.query(FundInfo.fund_code).filter(
             FundInfo.fund_code.in_(wanted)).all()} if wanted else set()
+
+        # 现在才答得出上面留给它的那一问（日历与档案都在手上了）。
+        for prediction, hits in deferred:
+            # 先问**它自己现在挂着的那只标的**对这段窗口答的是什么（与门共用同一次切片、
+            # 同一组 config 阈值）。只有 `cannot`（这段净值不会再来）才允许换：
+            # `unknown` 的两格病因各是"补一次净值"与"改那条预测的起点日期"，
+            # **都不是**"换一只基金"（第 69 轮 MINOR-6 那把尺子）。
+            kind, _reason, _cause = calendar_answer(
+                calendar, prediction.fund_code,
+                prediction.prediction_date, prediction.target_date)
+            moved = False
+            if kind == 'cannot':
+                for key, alt, via_gap in hits[1:]:
+                    if not alt.fund_code or alt.fund_code == prediction.fund_code:
+                        continue
+                    # 换了也问不出来 ⇒ 不动它：这一档要的是"能判出来"，不是"换个标的继续验不了"。
+                    if calendar_gap(calendar, alt.fund_code,
+                                    prediction.prediction_date, prediction.target_date):
+                        continue
+                    pairs.append((prediction, alt, key, via_gap))
+                    moved = True
+                    break
+            if not moved:
+                # 与今天同一条归宿：它仍挂在自己那只标的上 ⇒ 数进 `unchanged`，
+                # 回执里不会多出一条"动了但其实没动"的行。
+                unchanged += 1
         kept_own_target = 0
         kept_window_not_due = 0
         kept_no_nav = 0

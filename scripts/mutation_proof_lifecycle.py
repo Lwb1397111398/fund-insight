@@ -61,6 +61,7 @@ RULER_TESTS = 'tests/unit/test_one_ruler_per_question.py'
 MAINT = 'src/services/prediction_maintenance_service.py'
 ROUTES = 'src/api/routes/predictions.py'
 GAP_TESTS = 'tests/unit/test_sector_gap_fill.py'
+REMAP_TESTS = 'tests/unit/test_sector_remap.py'
 RETENTION = 'src/services/retention_three_buckets.py'
 RETENTION_TESTS = 'tests/unit/test_retention_three_buckets.py'
 CONFIG_ROUTES = 'src/api/routes/config.py'
@@ -294,8 +295,8 @@ MUTATIONS = [
     # 一起红就是这一族的现场）。`via_gap` 因此必须是显式旗标，不是"标签在不在计划表里"
     # 那种推断 —— 把旗标恒真，门就盖到了映射那一路。
     ('M40_the_tightening_gate_also_applies_to_mapped_rows', MAINT,
-     '            pairs.append((prediction, mapping, gap_key or raw, gap_key is not None))\n',
-     '            pairs.append((prediction, mapping, gap_key or raw, True))\n',
+     '            pairs.append((prediction, mapping, key, via_gap))\n',
+     '            pairs.append((prediction, mapping, key, True))\n',
      GAP_TESTS, 'test_a_sector_with_its_own_mapping_row_is_never_treated_as_a_gap_fill'),
     # 第 67 轮复评 MAJOR-3：归一里除了摘前后缀，还有一条**别名替换**会把标签改成另一块板块
     # （实测 `normalize_sector_name('债券')` = `'券商'`）。上一版 `_gap_label` 照单全收 ⇒
@@ -567,6 +568,41 @@ MUTATIONS = [
      '        if v.deleted_at is not None and v.restore_before is not None:\n',
      '        if False:\n',
      VP_BACKFILL_TESTS, 'test_a_row_someone_else_stamped_in_the_meantime_is_never_overwritten'),
+    # ── 任务 #171「到期了、结论还没有、而现在挂着的那只问不出这段净值 ⇒ 换一只问得出的」──
+    # 这一段的行为判据落在两个文件里：库里映射那一路由 `test_sector_remap.py` 负责，
+    # 内置补标表答得出的那一路由 `test_sector_gap_fill.py` 负责（镜像现读的 6 条行里
+    # `2303/2304/3076` 只有后者给得出，早期版本把备选只数成 `library_hits[1:]` 就漏了它们）。
+    # M81 摘掉 pass-1 那个例外 ⇒ 第二根标签根本进不了补标计划表（预览说"这块要补一只"
+    # 却一条都不动），M82 摘掉 pass-2 的合并 ⇒ 计划表给了标的也不许当备选。
+    ('M81_the_second_label_never_reaches_the_gap_plan', MAINT,
+     '                if answered and not _waiting_for_a_verdict(prediction):\n',
+     '                if answered:\n',
+     GAP_TESTS, 'test_a_stale_mapping_row_does_not_blind_the_second_sector_label'),
+    ('M82_the_builtin_plan_is_never_an_alternate', MAINT,
+     '                hits, alts = library_hits, library_hits[1:] + plan_hits\n',
+     '                hits, alts = library_hits, library_hits[1:]\n',
+     GAP_TESTS, 'test_a_stale_mapping_row_does_not_blind_the_second_sector_label'),
+    # M83 把"只等结论的那些行才有资格被换"整条关掉 ⇒ 停在验不了的标的上、到期没有结论的行
+    # 永远原样待着（老板那句"换成别的基金"落空），方向与 M84/M85 相反：那一格是**换过头**。
+    ('M83_a_stuck_row_is_counted_as_unchanged', MAINT,
+     '                if alts and _waiting_for_a_verdict(prediction):\n',
+     '                if False and alts:\n',
+     REMAP_TESTS, 'test_a_stuck_row_moves_to_the_second_label_when_the_first_one_cannot_be_judged'),
+    # M84：回落那一路只允许在"这段净值不会再来了"（`cannot`）时动。换成恒真 ⇒ `unknown` 的
+    # 两格病因（库里一笔净值都没有＝跑一次「更新基金」；起点说不清＝改那条预测的日期）
+    # 也会被换成别的标的 —— 把补数据的活计说成换基金，正是第 69 轮那把尺子要拦的形状。
+    ('M84_the_fallback_moves_rows_that_only_need_a_sync', MAINT,
+     "            if kind == 'cannot':\n",
+     '            if True:\n',
+     REMAP_TESTS, 'test_no_nav_in_the_library_is_a_sync_job_not_a_reason_to_change_fund'),
+    # M85：备选自己也得问得出这段窗口才许换。摘掉这一问 ⇒ 从一只停更的搬到另一只停更的，
+    # 还清掉了原标的上本来就问不出的那些证据（这一格是回落那一路唯一会写错的方向）。
+    ('M85_the_alternate_is_taken_without_being_asked', MAINT,
+     '                    if calendar_gap(calendar, alt.fund_code,\n'
+     '                                    prediction.prediction_date, prediction.target_date):\n'
+     '                        continue\n',
+     '                    pass\n',
+     REMAP_TESTS, 'test_an_alternate_that_cannot_be_evidenced_either_is_not_a_way_out'),
 ]
 
 

@@ -110,7 +110,7 @@ def _nav(db, code, name, start=date(2026, 7, 1)):
 
 
 def _prediction(db, *, sector=GOLD, fund_code='DEAD01', verified=False,
-                window=None):
+                window=None, sector_type=None):
     blogger = Blogger(name='补标的测试博主', platform='wechat')
     db.add(blogger)
     db.flush()
@@ -121,7 +121,8 @@ def _prediction(db, *, sector=GOLD, fund_code='DEAD01', verified=False,
     start, end = window or (date(2026, 7, 1), date(2026, 7, 8))
     value = Prediction(post_id=post.id, blogger_id=blogger.id, fund_code=fund_code,
                        fund_name='挂在死标的上的基金' if fund_code else None,
-                       sector=sector, prediction_type='up', prediction_content='看涨',
+                       sector=sector, sector_type=sector_type,
+                       prediction_type='up', prediction_content='看涨',
                        confidence=80, prediction_date=start, prediction_period='1周',
                        target_date=end, status='success' if verified else 'pending',
                        is_expired=verified, is_correct=True if verified else None,
@@ -163,6 +164,45 @@ def test_a_sector_with_no_mapping_at_all_gets_the_builtin_target(test_db):
     # 台账：没有 run_id 的改标等于不可回滚（第 51 轮那条规矩）
     assert test_db.query(PredictionChangeLog).filter_by(
         prediction_id=pred.id, run_id='t-gapfill-1').count() == 1
+
+
+def test_a_stale_mapping_row_does_not_blind_the_second_sector_label(test_db):
+    """第一根标签**有**映射行、可那一行指的标的已经停更 ⇒ 第二根标签的补标那一路照样要走。
+
+    任务 #171 镜像现读的那两条 `2303/2304`（`sector='A股'` 命中库里 `515440` 那一行，
+    `sector_type='科技'` 库里没行、只有内置表答得出 `515000`）就是这个形状。
+    补标那一路此前只在"`sector` 与 `sector_type` 在库里都没有行"时才启动
+    （`missing_labels` 那一腿），于是这类行既走不到回落、也走不到补标，
+    最终只能等「关进回收站」—— 老板要的是"变成其他好的基金"。
+    这一格同时钉住两件事：**计划表里出现的是第二块板块**（不是第一块），
+    并且真跑之后映射行与预测都落了地。
+    """
+    farm_code, farm_name = _builtin_target('农业')
+    _archive(test_db, farm_code, farm_name, with_nav_for=(date(2026, 7, 1), date(2026, 7, 8)))
+    _stale_archive(test_db)
+    test_db.add(SectorFundMapping(sector_name=GOLD, fund_code='DEAD01',
+                                  fund_name='停更的标的', reviewed=True, is_active=True,
+                                  confidence=0.95))
+    pred = _prediction(test_db, sector=GOLD, fund_code='DEAD01', sector_type='农业')
+    test_db.commit()
+
+    service = PredictionMaintenanceService(test_db)
+    plan = service.sync_sector_mappings(dry_run=True)
+    assert [item['sector'] for item in plan['sectors_to_fill']] == ['农业'], plan['sectors_to_fill']
+    assert plan['sectors_to_fill'][0]['fund_code'] == farm_code
+    assert plan['sectors_to_fill'][0]['mode'] == 'insert'
+    assert plan['predictions_via_gap_fill_planned'] == 1, \
+        '这一条要动的是"第二块板块补出来的标的"，计划数不说出来就无法在点执行之前复核'
+    assert test_db.query(SectorFundMapping).filter_by(sector_name='农业').count() == 0
+
+    done = service.sync_sector_mappings(dry_run=False, run_id='t-gapfill-second-label')
+    test_db.refresh(pred)
+    assert done['sectors_filled'] == 1
+    assert done['predictions_via_gap_fill'] == 1
+    assert pred.fund_code == farm_code, '映射行补了、预测还挂在停更的那只上 ⇒ 白做一次'
+    assert test_db.query(SectorFundMapping).filter_by(sector_name='农业').count() == 1
+    assert test_db.query(SectorFundMapping).filter_by(sector_name=GOLD).count() == 1, \
+        '第一块板块那一行是老板审过的，一个字都不许动'
 
 
 def test_a_row_that_can_already_be_evidenced_is_left_alone(test_db):
