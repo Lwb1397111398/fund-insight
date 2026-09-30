@@ -296,7 +296,45 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-09-30 **21:4x–22:1x（北京）**，**第 86 轮独立复评 73/100（0 BLOCKER / 3 MAJOR /
+最近一次核对（2026-09-30 **22:2x–23:2x（北京）**，**第 87 批：门禁换成"我自己复核一次"，然后推上线 + 生产改标清单重出一版**
+（老板 22:2x 原话见上面《修改规则》那条门禁 ⇒ 这一批**没派复评席**，改由我自己把数字与凭据逐条回到命令上）：
+
+① **两个口径是跑出来的，不是我推的**（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、
+期间不起第二个会话、不起长任务；链 `data/_review_tmp/r87-chain.sh`，`HEAD=1d4772f`）：
+`pytest tests/unit -q` → **1315 passed / 16 skipped / 0 failed**（626.51 秒，22:40:49 收，退 **0**，6959 字节）；
+`pytest tests/ -q` → **1324 passed / 16 skipped / 0 failed**（651.07 秒，22:51:51 收，退 **0**，6959 字节）。
+⇒ **与第 85 轮那两条逐字同数** ⇒ "本批用例零增"从推论变成实测。
+`python scripts/audit_doc_claims.py` → 退 **0**（当场承诺 3 条、数据源 4 行、另有 17 条"看得见但不判"）。
+② **推送与部署凭据**：`057e77a..1e2ea47`（那两笔：`1d4772f` 归档与对照表 + `1e2ea47` 自我纠错收口；
+⚠ 写下这句的这一笔文档提交本身会让"本批共几笔"再 +1 ⇒ 笔数与领先几笔都只许现跑
+`git rev-list --count origin/main..HEAD`，别在这里抄）。
+判成功用的是 sha 逐字符：`git ls-remote … main` 回 `1e2ea4730bba…` == 本地 `git rev-parse HEAD`；
+推完立刻把跟踪引用拨到真值 ⇒ `git rev-list --count origin/main..HEAD` 现读 **0**。
+线上：`GET /api/health/detail`（带口令）自报 `git_commit=1e2ea4730bbd`、`git_commit_source=RENDER_GIT_COMMIT`、
+`started_at=2026-09-30T23:06:17.089742+08:00`、**`scheduler_running=false`**（老板 09-29 定的"不加定时任务"⇒ 预期值）。
+⚠ **第二腿"页面 md5"这一批对部署不具区分力**：`web/` 一个字没动 ⇒ LF 归一后仍是
+`fd901a776a7c513e3bb1547672d4aa0d`（推之前从 `git show HEAD:web/index.html` 预算，与线上一字不差）
+⇒ "新代码到了"只由 `git_commit` 那一腿回答，别说成"双凭据都现读过"。
+③ **本批最有产品价值的一条：那道门（#172）在生产上生效后，「按板块对齐标的」的只读预览从 `144` 掉到 `62`**。
+现读（同一条 `POST /api/predictions/sync-sector-mapping {"dry_run":true}`）：
+`would_update 62 / predictions_with_verdict 41 / unchanged 708 / kept_own_target 595 /
+kept_window_not_due 188 / kept_no_nav 0 / kept_no_start 0 / skipped_unservable 12 / no_mapping 36 /
+via_gap_fill_planned 0 / sectors_to_fill []`。62 行的板块标签只有 7 档
+（`黄金 28 / 高端制造 10 / 综合 8 / 资源 6 / 红利 5 / 有色金属 3 / 宽基 2`），
+**没有一行的标签是 `金融`**（现役未判非 flat 的 389 行里 `sector='金融'` **0** / `sector_type='金融'` **35**，
+只读命令在模块总览末尾）⇒ 旧清单 A 档那 **81 行**（把"金融"预测贴上 `518880 黄金ETF华安`）**整体从预览里消失**。
+⚠ **归因边界**：144 → 62 是**跨版本对照**（同库、同标签分布，代码 `057e77a`→`1e2ea47`），
+不是"同一版只把门关掉再跑一次"的配对测量。两次预览之间没执行过改标（变的只有 `is_correct`）
+⇒ 差额不来自数据漂移；"这 82 行全由那道门拦下"这句话的凭据是 `M86/M87/M88` 三处变异，不是这条对照。
+新清单落在 `docs/迭代计划/2026-09-30-生产改标清单-62行.md`（62 行逐行 id + 41 行"会清结论" + 12 行被证据门拦下
+的逐行原因；旧那份顶部已指路、没改写历史）。**仍然没点执行** —— 老板 09-25 那句「先出清单再点」管的是动数据，
+不随"放弃评分机制"放松。
+④ **本批确实没做的，登记而不是当成已封**：91 处逻辑侧全套体检仍未重跑（#170）；前端那 147 处本批没跑
+（`web/` 未动 ⇒ 那句"全 RED"的凭据仍停在第 82 轮归档）；镜像那条 `close_unknowable_predictions.py` 的
+"6 条可关 / 15 仍在等"**本批没现读**，不进任何账；m-5 要的"生产四个数各一份归档"只做了两个
+（`unit-account-production.txt`、`label-set-diff.txt` 生产那两行）。
+
+（上一批：2026-09-30 **21:4x–22:1x（北京）**，**第 86 轮独立复评 73/100（0 BLOCKER / 3 MAJOR /
 6 MINOR）的返修收口**：评审对象 `0143e8d`，扣的分全落在"我上一批亲手写下的那份数账"上 ——
 `src/` 只有一个 docstring 动了，产品行为与用例**一个字没加**（报告正文在
 `data/_review_tmp/round86-review.txt`，**`data/` 整目录不入库** ⇒ 下面按**修法**记；
