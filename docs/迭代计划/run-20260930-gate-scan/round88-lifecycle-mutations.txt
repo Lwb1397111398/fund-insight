@@ -1,0 +1,113 @@
+# run @ 2026-10-01T00:47:38+08:00  git=4e44bb7d5c2a  worktree=clean  python=3.12.10  共 93 处变异 / 15 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（15 个判据文件在干净代码上全绿）
+M1_any_failure_is_structural                               ⇒ RED（判据有效）
+M2_degenerate_endpoint_becomes_closable                    ⇒ RED（判据有效）
+M3_past_date_counts_as_second_ask                          ⇒ RED（判据有效）
+M3b_close_script_stops_asking_the_whole_gate               ⇒ RED（判据有效）
+M4_hold_only_covers_no_source_history                      ⇒ RED（判据有效）
+M5_rosters_stop_adding_up                                  ⇒ RED（判据有效）
+M5b_roster_invents_a_reason_the_verifier_never_answers     ⇒ RED（判据有效）
+M6_second_copy_of_the_structural_ruler                     ⇒ RED（判据有效）
+M7_refused_close_locks_nothing                             ⇒ RED（判据有效）
+M8_pre_inception_evidence_withdrawn                        ⇒ RED（判据有效）
+M9_retag_keeps_the_old_targets_lock                        ⇒ RED（判据有效）
+M10_manual_rebind_bypasses_the_evidence_gate               ⇒ RED（判据有效）
+M11_pending_bucket_reads_the_legacy_column_again           ⇒ RED（判据有效）
+M12_archive_stamp_goes_back_to_the_wall_clock              ⇒ RED（判据有效）
+M13_force_restore_promises_but_still_skips                 ⇒ RED（判据有效）
+M14_both_tiers_share_the_credential_clock                  ⇒ RED（判据有效）
+M15_the_reask_interval_becomes_a_second_number             ⇒ RED（判据有效）
+M17_the_backfill_window_becomes_a_constant                 ⇒ RED（判据有效）
+M18_the_sync_writer_hard_codes_its_window_again            ⇒ RED（判据有效）
+M19_the_sync_writer_stops_releasing_the_lock               ⇒ RED（判据有效）
+M20_releasing_ignores_what_actually_changed                ⇒ RED（判据有效）
+M21_releasing_forgets_to_ask_the_verifier                  ⇒ RED（判据有效）
+M16_fix_wording_dry_run_actually_writes                    ⇒ RED（判据有效）
+M22_env_py_silences_the_app_loggers_again                  ⇒ RED（判据有效）
+M23_the_as_of_fallback_trail_stops_naming_tzdata           ⇒ RED（判据有效）
+M24_lookback_written_as_a_positional_argument              ⇒ RED（判据有效）
+M25_unlock_called_with_an_empty_list_of_dates              ⇒ RED（判据有效）
+M26_unlock_hidden_behind_an_always_false_comparison        ⇒ RED（判据有效）
+M27_second_wall_clock_archive_stamp_inside_a_registered_function ⇒ RED（判据有效）
+M28_unlock_dates_piped_through_an_empty_variable           ⇒ RED（判据有效）
+M29_the_guard_that_keeps_servable_rows_is_blind            ⇒ RED（判据有效）
+M30_mapping_rows_are_created_even_when_nothing_moves       ⇒ RED（判据有效）
+M31_an_existing_sector_row_is_duplicated_not_rewritten     ⇒ RED（判据有效）
+M32_the_owner_signed_target_is_overwritten                 ⇒ RED（判据有效）
+M33_a_missing_archive_still_buys_a_refusal_reason          ⇒ RED（判据有效）
+M34_the_rewritten_row_stays_invisible_to_the_next_sync     ⇒ RED（判据有效）
+M35_the_old_targets_score_keeps_the_new_row_ineligible     ⇒ RED（判据有效）
+M36_every_refusal_is_blamed_on_the_static_table            ⇒ RED（判据有效）
+M37_the_receipt_counts_rows_it_never_moved                 ⇒ RED（判据有效）
+M38_the_retag_gate_gets_the_whole_history_instead_of_the_window ⇒ RED（判据有效）
+M39_affix_spellings_of_one_sector_stop_sharing_a_row       ⇒ RED（判据有效）
+M40_the_tightening_gate_also_applies_to_mapped_rows        ⇒ RED（判据有效）
+M41_a_normalization_that_renames_the_sector_buys_a_target  ⇒ RED（判据有效）
+M42_the_receipt_hides_how_many_conclusions_get_cleared     ⇒ RED（判据有效）
+M43_a_window_that_has_not_arrived_is_counted_as_evidenced  ⇒ RED（判据有效）
+M44_the_archive_check_is_skipped                           ⇒ RED（判据有效）
+M45_the_execute_sentence_reads_the_plan_not_the_recount    ⇒ RED（判据有效）
+M47_the_receipt_promises_what_the_plan_said                ⇒ RED（判据有效）
+M48_the_unknown_answer_is_folded_back_into_not_due         ⇒ RED（判据有效）
+M49_the_kept_buckets_are_described_twice                   ⇒ RED（判据有效）
+M50_the_waiting_bucket_is_described_twice                  ⇒ RED（判据有效）
+M51_the_no_nav_bucket_is_described_twice                   ⇒ RED（判据有效）
+M53_the_two_answer_causes_are_folded_into_one              ⇒ RED（判据有效）
+M54_the_answer_ruler_gives_back_only_two_slots             ⇒ RED（判据有效）
+M46_the_same_code_as_current_is_not_a_refusal              ⇒ RED（判据有效）
+M55_the_no_start_bucket_never_speaks                       ⇒ RED（判据有效）
+M56_the_no_start_bucket_gets_the_wrong_medicine            ⇒ RED（判据有效）
+M57_the_no_start_leg_never_speaks_when_executing           ⇒ RED（判据有效）
+M58_the_no_start_bucket_is_described_twice                 ⇒ RED（判据有效）
+M59_the_abort_ledger_is_never_written                      ⇒ RED（判据有效）
+M60_the_abort_ledger_counts_the_plan_not_the_committed     ⇒ RED（判据有效）
+M61_the_abort_exception_loses_the_committed_counts         ⇒ RED（判据有效）
+M62_the_reclaim_success_flag_is_folded_with_skipped        ⇒ RED（判据有效）
+M63_the_reclaim_wrapper_swallows_and_still_says_done       ⇒ RED（判据有效）
+M64_the_pg_reason_stays_where_the_database_put_it          ⇒ RED（判据有效）
+M65_the_route_stops_asking_the_shared_ruler                ⇒ RED（判据有效）
+M66_the_route_derives_the_reason_a_second_time             ⇒ RED（判据有效）
+M67_the_shared_ruler_ignores_what_the_database_gave        ⇒ RED（判据有效）
+M68_the_skip_ruler_only_repeats_the_machine_key            ⇒ RED（判据有效）
+M69_the_skip_exit_stops_stamping_the_sentence              ⇒ RED（判据有效）
+M70_the_route_translates_the_skip_key_a_second_time        ⇒ RED（判据有效）
+M71_the_rejected_viewpoint_gets_no_archive_stamp           ⇒ RED（判据有效）
+M72_the_rejected_viewpoint_hard_codes_its_retention        ⇒ RED（判据有效）
+M73_the_rejected_viewpoint_stamps_with_a_different_clock   ⇒ RED（判据有效）
+M74_the_backfill_hard_codes_its_retention                  ⇒ RED（判据有效）
+M75_the_backfill_stamps_with_a_different_clock             ⇒ RED（判据有效）
+M76_the_backfill_invents_a_stamp_for_a_row_that_cannot_say ⇒ RED（判据有效）
+M77_the_backfill_folds_the_two_gaps_into_one               ⇒ RED（判据有效）
+M78_the_receipt_answers_with_its_own_arithmetic            ⇒ RED（判据有效）
+M79_the_budget_sentence_blames_capacity_for_a_calendar_case ⇒ RED（判据有效）
+M80_the_past_due_classifier_is_one_day_looser_than_the_ruler ⇒ RED（判据有效）
+M80b_the_recycle_bin_guard_is_blind_at_write_time          ⇒ RED（判据有效）
+M80c_the_already_stamped_guard_is_blind_at_write_time      ⇒ RED（判据有效）
+M81_the_second_label_never_reaches_the_gap_plan            ⇒ RED（判据有效）
+M82_the_builtin_plan_is_never_an_alternate                 ⇒ RED（判据有效）
+M83_a_stuck_row_is_counted_as_unchanged                    ⇒ RED（判据有效）
+M84_the_fallback_moves_rows_that_only_need_a_sync          ⇒ RED（判据有效）
+M85_the_alternate_is_taken_without_being_asked             ⇒ RED（判据有效）
+M86_the_normalizer_is_allowed_to_rename_the_sector         ⇒ RED（判据有效）
+M87_the_normalization_leg_never_runs_at_all                ⇒ RED（判据有效）
+M88_the_alias_arm_is_asked_with_the_normalized_label       ⇒ RED（判据有效）
+M89_the_blogger_week_window_asks_the_wall_clock            ⇒ RED（判据有效）
+M90_the_summary_gate_falls_back_to_the_wall_clock_date     ⇒ RED（判据有效）
+已还原 src/services/prediction_lifecycle.py
+已还原 scripts/close_unknowable_predictions.py
+已还原 src/services/prediction_verify_service.py
+已还原 src/fund/fund_sync_manager.py
+已还原 src/services/prediction_service.py
+已还原 src/services/prediction_query_service.py
+已还原 src/fund/fund_api.py
+已还原 alembic/env.py
+已还原 src/fund/fund_auto_manager.py
+已还原 src/services/prediction_maintenance_service.py
+已还原 src/api/routes/predictions.py
+已还原 src/services/retention_three_buckets.py
+已还原 src/api/routes/config.py
+已还原 src/services/db_space.py
+已还原 src/services/viewpoint_workflow_service.py
+已还原 scripts/backfill_viewpoint_archive_stamps.py
+已还原 src/api/routes/bloggers.py
+EXIT=0 2026-10-01T01:03:55 bytes=9022
