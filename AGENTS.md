@@ -339,6 +339,30 @@ via_gap_fill_planned 0 / sectors_to_fill []`。62 行的板块标签只有 7 档
 生产现在 0 条属于 `pre_inception`。**执行那一腿仍然没点**，它等的是老板点名而不是我的判断。
 线上证据面同一晚现读（`GET /api/stats/evidence`）：`as_of=2026-09-30 / 已判 1212 / 判对 647 = 53.38% /
 nav_as_of=2026-09-29 / nav_lag_days=1` ⇒ 这几个数每天在动，别抄这里的文本。
+⑥ **本批最该说的一条：老板要的那个流程，在镜像上从第一步走到第五步、一次跑通**（写镜像库，动手前先拷了
+`data/_review_tmp/fund_insight-mirror-backup-before-retag.db`，全程走真接口，起服务用
+`python scripts/serve_mirror.py --port 8161`，口令只在 `data/_review_tmp/serve8161.log` 里）：
+⑴ 预览 `GET`-shape 那次印 `would_update 68 / with_verdict 39 / skipped_unservable 6`；
+⑵ **执行** `POST /api/predictions/sync-sector-mapping?dry_run=false` + 确认头
+`X-Danger-Confirm: sync-prediction-mapping` ⇒ `run_id=ui-sync-20260930-232111`、
+`predictions_updated 68 / verified_reset 39 / predictions_via_gap_fill 6 / sectors_filled 2`
+（`verified_reset` 是回查值不是计划值 —— 第 67 轮那条规矩在这一腿上兑现）；
+⑶ **重跑收口脚本现读**：`6 条可关` 变 **`0 条可关`**（那 6 行的标的换了，`pre_inception` 的证据当场不成立）
+⇒ 第 82 轮那个"编号 ③ 跑完才算数"的推论到此结；
+⑷ 「更新基金」`POST /api/funds/update-all` ⇒ 回执逐字「检测 1611 个预测、新增 0 个、关联 0 个、
+另有 131 条标的本来就是它、更新 235 个基金；1 只详情答不出但净值仍在更新（货币基金常见）：`000725`；
+1 只基金域查无此码、库里一行净值都没有 ⇒ 多半不是基金，不算更新失败：`603758`(秦安股份)」；
+⑸ 「验证全部」`POST /api/predictions/verify-all`（task_id 226）终态 `total 60 / processed 60 /
+success 57 / failed 3 / not_processed 0`，随后收口脚本现读 `0 条可关 / 3 条仍在等`，
+镜像证据面 `已判 1229 / 判对 617 = 50.2% / nav_as_of=2026-09-30 / lag 0`，队列 `due 1 / unverifiable 2 / all 1611`。
+⇒ **这一条把老板那句"抓不到且确认没有办法就把板块的基金换成好的基金"从"代码里有"变成"跑通并量过"**：
+换标 → 净值补上 → 当场判出来，中间不需要我或他做任何别的事。
+⚠ **一条接口契约（我这批自己踩的，写在这是为了不让下一轮把预览当执行）**：`dry_run` 是**查询参数**，
+请求体里那个 `{"dry_run":false}` 会被**忽略** —— 我第一发 POST 带 JSON 体打过去，回执老实印
+`dry_run: true / predictions_updated: 0`，看着像"跑了没效果"，其实压根没进执行分支；
+真要执行必须 `?dry_run=false` **且**带确认头，否则路由回 403。
+⇒ 判"这一发到底动了库没有"看两个键：`dry_run` 与 `run_id`（`run_id` 为 `None` ⇒ 没写）。
+生产那一侧**一个字没动**：那 62 行的执行仍然等老板点名（他 09-25 那句「先出清单再点」）。
 
 （上一批：2026-09-30 **21:4x–22:1x（北京）**，**第 86 轮独立复评 73/100（0 BLOCKER / 3 MAJOR /
 6 MINOR）的返修收口**：评审对象 `0143e8d`，扣的分全落在"我上一批亲手写下的那份数账"上 ——
