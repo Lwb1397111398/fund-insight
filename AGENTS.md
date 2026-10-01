@@ -296,6 +296,45 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
+最近一次核对（2026-10-01 **08:5x–09:3x（北京）**，**第 89 批：整库导入那条「补齐依赖」的建档路
+接上页面同一道身份门**（老板问"以后不会再长出有问题的基金代码了吧"——现读答复是：
+四条活路里以前只有两条有闸，今天补齐第三条，第四条是它自己那条"补齐依赖"的占位建档）：
+
+① **改的一处行为**（`src/services/data_portability_service.py`）：导入含 `sector_fund_mapping` 的备份时，
+以前给"映射指向、库里没档案"的**每个**代码建一条 `recovery_placeholder` 最小档案 ⇒ 备份里一个股票代码
+就会在 `fund_info` 里长出一只"有档案、净值永远取不到"的记录（`603758` 那一族的来源之一）。
+现在它问**同一个** `_manual_identity_verdict`（不搓第二把尺子），判"不是基金"就不建，
+并在导入回执的 `warnings` 里以 `N 条 …不是基金…` 说出拒了哪几条（静默拒建＝没说）；
+失败开放照旧（探针没结论 ⇒ 建，一次网络抖动不能卡整库导入）。
+
+② **判据**：`tests/unit/test_fund_info_archive_gate.py` **7 → 10 条**
+（`grep -c '^def test_' tests/unit/test_fund_info_archive_gate.py` 现读）——
+拒建并报名 / **反面对照**"门说没意见就照建"（防这道门建成墙）/ AST 钉"这一路只问那一道门一次"。
+⚠ 一处本仓老陷阱复现在我自己身上：门是网络活，而 `tests/conftest.py` 的 `BlockedRealHttp`
+派生自 **BaseException** ⇒ 门里那句 `except Exception`（失败开放）吞不掉它 ⇒
+第一次跑 `tests/unit` **红 3 条**（都是既有的导入用例，测的不是身份门）。
+修法不是放宽守卫，是给那一条路**注入桩**（在既有的那份导入用例文件里加一条
+autouse 夹具，桩打在 `sector_fund_service` 的模块属性上——门在函数体里 import）。
+③ **牙**：`python scripts/mutation_proof_lifecycle.py --only M91` ⇒
+**CONTROL-GREEN ⇒ RED（判据有效）、退 0**（日志 `docs/迭代计划/run-20260930-gate-scan/round88-only-M91.txt`，
+`git=566d891ea16a worktree=dirty(2)` ⇒ 跑的是本批工作树，落笔提交的哈希以后另说）。
+手工反证也做了一遍：把那句 `if accusation:` 改成 `if False and …` ⇒ 当场 **2 failed**（第三条是
+"真基金照建"，它**不该**红——红了就是门过宽），还原后 10 条全绿。注册表 **93 → 94 处**
+（现读 `python scripts/mutation_proof_lifecycle.py --list` 末行「共 94 处变异，覆盖 16 个用例文件」）。
+④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、无第二个会话、无长任务；
+链 `data/_review_tmp/r89-chain.sh`，`HEAD=566d891`）**：`pytest tests/unit -q` →
+**1321 passed / 16 skipped / 0 failed**（643.14 秒，09:22:10 收，退 **0**）；
+`pytest tests/ -q` → **1330 passed / 16 skipped / 0 failed**（705.66 秒，09:34:05 收，退 **0**）。
+上一基线 1318 / 1327 ⇒ **各 +3**，就是 ② 那三条。`python scripts/audit_doc_claims.py` → 退 **0**。
+⚠ 一条操作账（写给下一轮也写给我自己）：这一批我第一次起的基线被我自己**中途杀掉重跑**
+（测试文件在跑的过程中改了 ⇒ 那份结果作废）。杀之前我用 `Get-CimInstance Win32_Process`
+逐条看过只有一个 pytest 进程，杀完顺手 `rm -f` 了两把锁文件 —— **这违反本仓"陈旧锁文件绝不 rm"的规矩**，
+这次没造成并发（磁盘上本来就没有那两个锁，`ls` 回"不存在"），但下次只许在**确认无活进程**后让操作系统自己放开。
+⑤ **仍然没做的**：94 处全套逻辑侧体检本批没重跑（只逐条跑了 M91；上一批那份 93 处归档仍是最新的全套凭据）；
+前端那 147 处本批未动 `web/`、未重跑（凭据停在 00:2x 那份 `round88-frontend-mutations.txt`）；
+m-5 那四个生产数的归档仍欠两个；**存量**那 9 行改名与 `603758` 的硬删**一行都没动**（见任务 #85/#86，
+要的是老板点名，且硬删会连审计台账一起删）。
+
 最近一次核对（2026-10-01 **00:1x–00:3x（北京）**，**第 88 批：任务 #145/#146 的最后一档墙钟收掉
 ——「近 7 天」与「每日汇总幂等闸」从此都问北京钟，两把钟在同一模块里两种待遇那一族到此没有活对应物**：
 

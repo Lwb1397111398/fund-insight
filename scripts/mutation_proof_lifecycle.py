@@ -73,6 +73,8 @@ VP_TESTS = 'tests/unit/test_viewpoint_refactor.py'
 VP_BACKFILL = 'scripts/backfill_viewpoint_archive_stamps.py'
 VP_BACKFILL_TESTS = 'tests/unit/test_backfill_viewpoint_archive_stamps.py'
 BLOGGERS_ROUTES = 'src/api/routes/bloggers.py'
+PORTABILITY = 'src/services/data_portability_service.py'
+ARCHIVE_TESTS = 'tests/unit/test_fund_info_archive_gate.py'
 CLOCK_TESTS = 'tests/unit/test_beijing_clock_last_two_sites.py'
 
 MUTATIONS = [
@@ -660,6 +662,14 @@ MUTATIONS = [
      '            if latest and latest.status == "succeeded" and '
      'latest.created_at is not None and latest.created_at.date() == today:\n',
      CLOCK_TESTS, 'test_the_summary_gate_reads_its_own_beijing_run_date_not_the_wall_clock'),
+    # M91（第 88 批）：整库导入那条「补齐依赖」的占位建档，问的是页面同一道身份门。
+    # 载荷让门永远点头 ⇒ 股票代码也能在 fund_info 里长出「有档案、净值永远取不到」的占位记录
+    # （`603758` 那一族的来源之一），两条判据各问一件不同的事：拒建并说出拒了谁 / 不许把正常基金拦成墙。
+    ('M91_the_bulk_import_gate_always_says_yes', PORTABILITY,
+     '            accusation, _verdict = _manual_identity_verdict(\n'
+     '                fund_code, mapping.get("fund_name"), mapping.get("sector_name"))\n',
+     '            accusation, _verdict = (None, {})\n',
+     ARCHIVE_TESTS, 'test_the_import_gate_asks_the_same_ruler_and_says_the_count'),
 ]
 
 

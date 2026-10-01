@@ -23,6 +23,21 @@ from src.models.database import (
     VerificationTask,
 )
 from src.services.data_portability_service import DataPortabilityService
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _identity_gate_stubbed(monkeypatch):
+    """这一档测的是导入、豁免剥离与"补齐依赖"，**不是身份门本身**。
+
+    第 88 批给补齐依赖那条路接上了页面同一道身份门（`_manual_identity_verdict`），
+    而它是网络活：`tests/conftest.py` 禁真实外呼，抛的 `BlockedRealHttp` 派生自
+    **BaseException** ⇒ 门里那句"探针坏了就放行"的 `except Exception` 吞不掉它
+    （这正是当初把守卫做成 BaseException 的目的）。所以这里必须给它桩，
+    身份门自己的判据在 `tests/unit/test_fund_info_archive_gate.py`。
+    """
+    from src.services import sector_fund_service as sfs
+    monkeypatch.setattr(sfs, '_manual_identity_verdict', lambda *a, **k: (None, {}))
 
 
 def test_export_and_restore_crawler_article_records(test_db):

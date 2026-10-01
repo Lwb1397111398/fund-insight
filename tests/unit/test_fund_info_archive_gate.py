@@ -181,3 +181,76 @@ def test_an_existing_archive_is_not_probed_again(db, monkeypatch):
     service = sfs.get_sector_fund_service(db)
     assert service.ensure_fund_info_exists('512480', '半导体ETF', '半导体') is False
     assert asked == [], '已存在的档案又被探一次 ⇒ 每次保存都白打一圈外网'
+
+
+# ---------------------------------------------------------------------------
+# 第四处活路：整库导入的"补齐依赖"占位建档（第 88 批）
+# ---------------------------------------------------------------------------
+# `_create_mapping_fund_dependencies` 以前照单全收：导入的映射行里只要写着一个股票代码，
+# 它就在 `fund_info` 里补一条"有档案、净值永远取不到"的占位记录 —— 老板那批
+# `603758 / 600189 / 152788` 的形状有一个来源就是这里。它必须问**同一道门**，
+# 不在导入这一路立第二把尺子。
+
+def _mapping_spec():
+    from src.services.data_portability_service import TABLE_SPECS
+    return next(s for s in TABLE_SPECS if s.export_key == "sector_fund_mapping")
+
+
+def _import_placeholders(db, monkeypatch, rows, verdict):
+    """真走那条补齐路，把身份门的答复换成交进来的那一种。"""
+    from src.services import data_portability_service as dps
+    monkeypatch.setattr(dps, '_manual_identity_verdict', lambda *a, **k: verdict,
+                        raising=False)
+    # 门是在函数体里 import 的 ⇒ 打桩必须打在**来源模块**上
+    from src.services import sector_fund_service as sfs
+    monkeypatch.setattr(sfs, '_manual_identity_verdict', lambda *a, **k: verdict)
+    svc = dps.DataPortabilityService(db)
+    warnings = []
+    created = svc._create_mapping_fund_dependencies(_mapping_spec(), rows, warnings)
+    return created, warnings, svc
+
+
+def _rows(codes):
+    return [{"sector_name": "测试板块", "fund_code": c, "fund_name": "占位名"} for c in codes]
+
+
+def test_bulk_import_refuses_to_create_an_archive_for_a_stock_code(db, monkeypatch):
+    """门说"这不是基金" ⇒ 一行档案都不许多，而且必须把拒了谁说出来（不许静默）。"""
+    created, warnings, svc = _import_placeholders(
+        db, monkeypatch, _rows(["603758"]), ("这只代码在基金域查无此码", {}))
+    assert created == 0
+    assert db.query(FundInfo).count() == 0
+    assert any("603758" in w and "不是基金" in w for w in warnings), warnings
+    assert svc.placeholders_refused and "603758" in svc.placeholders_refused[0]
+
+
+def test_bulk_import_still_creates_the_placeholder_for_a_real_fund(db, monkeypatch):
+    """反面对照：门给出"没意见"（探针坏了 / 查不到）时**照建** ⇒ 这道门不许建成墙。"""
+    created, warnings, svc = _import_placeholders(
+        db, monkeypatch, _rows(["510300"]), (None, {"ok": True, "name": "沪深300ETF"}))
+    assert created == 1
+    assert db.query(FundInfo).filter(FundInfo.fund_code == "510300").count() == 1
+    assert svc.placeholders_refused == []
+    assert not any("不是基金" in w for w in warnings), warnings
+
+
+def test_the_import_gate_asks_the_same_ruler_and_says_the_count(db, monkeypatch):
+    """两件事一起钉：① 这一路问的是页面那道门（同一个函数），不是自己新搓一把；
+    ② 拒了几条就报几条，回执里的数必须数得出（不许"报了拒 2 条"而实际拦了 5 条）。"""
+    import ast
+    import io as _io
+    import os
+    src = _io.open(os.path.join('src', 'services', 'data_portability_service.py'),
+                   encoding='utf-8').read()
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_create_mapping_fund_dependencies")
+    asked = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == '_manual_identity_verdict']
+    assert len(asked) == 1, '这一路要么不问身份门，要么搓了第二把尺子'
+    accused = [c for c in ('900001', '900002', '900003')]
+    created, warnings, svc = _import_placeholders(
+        db, monkeypatch, _rows(accused), ("基金域查无此码", {}))
+    assert created == 0 and len(svc.placeholders_refused) == 3
+    counted = [w for w in warnings if "不是基金" in w]
+    assert len(counted) == 1 and counted[0].startswith("3 条"), counted

@@ -1,0 +1,4 @@
+# run @ 2026-10-01T08:58:57+08:00  git=566d891ea16a  worktree=dirty(2)  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M91_the_bulk_import_gate_always_says_yes                   ⇒ RED（判据有效）
+已还原 src/services/data_portability_service.py

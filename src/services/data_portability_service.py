@@ -80,6 +80,8 @@ class DataPortabilityService:
         self.db = db
         # 本次导入剔掉了多少行的"老板署名/体检豁免"（见 `_clean_row`）
         self.immunity_rows_stripped = 0
+        # 导入时因身份门被拒建的占位档案（代码+原因）；不拒任何一行时保持空表
+        self.placeholders_refused: List[str] = []
         self.last_row_stripped_immunity = False
 
     def export_data(self) -> Dict[str, Any]:
@@ -468,10 +470,23 @@ class DataPortabilityService:
             .all()
         }
         created = 0
+        refused: List[str] = []
 
         for mapping in mappings:
             fund_code = mapping.get("fund_code")
             if not fund_code or fund_code in existing_codes:
+                continue
+
+            # 占位建档也问过身份门 —— 这一路以前照单全收：导入的映射行里写一个股票代码，
+            # 就会在 fund_info 里长出一条"有档案、永远取不到净值"的记录（`603758` 那一族）。
+            # 用的还是页面保存映射那一道门（`sector_fund_service._manual_identity_verdict`），
+            # 不在这里立第二把尺子；探针是网络活，先结束只读事务再问（同一把姿势）。
+            from src.services.sector_fund_service import _manual_identity_verdict
+            self.db.rollback()
+            accusation, _verdict = _manual_identity_verdict(
+                fund_code, mapping.get("fund_name"), mapping.get("sector_name"))
+            if accusation:
+                refused.append(f"{fund_code}（{accusation}）")
                 continue
 
             self.db.add(FundInfo(
@@ -489,6 +504,14 @@ class DataPortabilityService:
             warnings.append(
                 f"已为 {created} 条板块映射补齐缺失的基金基础记录；请后续同步基金净值。"
             )
+        if refused:
+            warnings.append(
+                f'{len(refused)} 条映射指向的标的被身份门判为“不是基金”，**没有**为它补档案：'
+                + "、".join(refused[:10])
+                + ("…" if len(refused) > 10 else "")
+                + "（这一行映射仍会导入，但页面上会标成不可服务，等一次「更新基金」也补不出档案）"
+            )
+            self.placeholders_refused = refused
         return created
 
     def _clean_row(self, spec: TableSpec, item: Dict[str, Any]) -> Dict[str, Any]:
