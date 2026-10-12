@@ -38,7 +38,7 @@ GENERIC = (
     ('github 其它形态令牌', re.compile(rb'(?P<cred>github_pat_[A-Za-z0-9_]{20,})'
                                         rb'|(?P<cred2>gh[sour]_[A-Za-z0-9]{20,})')),
     ('带令牌的 git 远端', re.compile(rb'x-access' + rb'-token:(?P<cred>[^@\s]{10,})')),
-    ('私钥块', re.compile(rb'-----BEGIN [A-Z ]*PRIVATE KEY-----'
+    ('私钥块', re.compile(rb'-----BEGIN [A-Z ]*PRIVATE ' + rb'KEY-----'
                           rb'(?P<cred>[A-Za-z0-9+/=]{30,})')),
     ('sk- 型 API key', re.compile(rb'(?P<cred>sk-[A-Za-z0-9]{20,})')),
     # 带凭据的数据库连接串整体。那个 `?` 是第一版漏掉的字符：漏掉它 = 只认 `postgresql+driver://`，

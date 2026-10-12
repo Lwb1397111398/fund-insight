@@ -1,5 +1,5 @@
 {
- "copy_db": "C:\\Users\\李文彬\\AppData\\Local\\Temp\\fi_replay_2026-09-21.db",
+ "copy_db": "C:\\Users\\<用户名>\\AppData\\Local\\Temp\\fi_replay.db",
  "sampled": 80,
  "drift": [
   {
