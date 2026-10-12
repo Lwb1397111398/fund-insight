@@ -102,6 +102,10 @@ class AdviceService(BaseService[InvestmentAdvice]):
             "market_sentiment": advice.market_sentiment,
             "confidence": advice.confidence,
             "data_hash": advice.data_hash,
+            # v2 新列：老行为 None/空，前端据此回退到旧展示块
+            "market_stance": getattr(advice, "market_stance", None),
+            "position_advice": getattr(advice, "position_advice", None) or {},
+            "sector_actions": getattr(advice, "sector_actions", None) or [],
             "created_at": advice.created_at.isoformat() if advice.created_at else None
         }
     
@@ -186,6 +190,7 @@ class AdviceService(BaseService[InvestmentAdvice]):
             "predictions": pack.predictions,
             "viewpoints": pack.viewpoints,
             "funds": pack.funds,
+            "market_state": pack.market_state,
             "as_of_date": pack.as_of_date.isoformat(),
             "evidence_hash": pack.evidence_hash,
             "exclusions": pack.exclusions,
@@ -209,7 +214,10 @@ class AdviceService(BaseService[InvestmentAdvice]):
         referenced_predictions: List[Dict] = None,
         short_term_advice: Dict = None,
         mid_term_advice: Dict = None,
-        avoid_reasoning: str = None
+        avoid_reasoning: str = None,
+        market_stance: str = None,
+        position_advice: Dict = None,
+        sector_actions: List[Dict] = None
     ) -> Dict:
         """
         创建投资建议
@@ -230,6 +238,9 @@ class AdviceService(BaseService[InvestmentAdvice]):
             short_term_advice: 短期建议（1-3天）
             mid_term_advice: 中期建议（1-2周）
             avoid_reasoning: 回避理由
+            market_stance: 系统按宽基净值算出的大盘分档（strong/range/weak/very_weak/unknown）
+            position_advice: 仓位结论 {follow_gate, position_label, override_reason, basis...}
+            sector_actions: 板块动作清单（每项含后端附挂的 fund_code/fund_name）
             
         Returns:
             创建的投资建议
@@ -249,7 +260,10 @@ class AdviceService(BaseService[InvestmentAdvice]):
             referenced_predictions=referenced_predictions or [],
             market_sentiment=market_sentiment,
             confidence=confidence,
-            data_hash=data_hash
+            data_hash=data_hash,
+            market_stance=market_stance,
+            position_advice=position_advice or {},
+            sector_actions=sector_actions or []
         )
         
         self.db.add(db_advice)

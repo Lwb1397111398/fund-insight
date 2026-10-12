@@ -76,6 +76,17 @@ BLOGGERS_ROUTES = 'src/api/routes/bloggers.py'
 PORTABILITY = 'src/services/data_portability_service.py'
 ARCHIVE_TESTS = 'tests/unit/test_fund_info_archive_gate.py'
 CLOCK_TESTS = 'tests/unit/test_beijing_clock_last_two_sites.py'
+# 第 92 批（2026-10-12 可执行建议 v2）：市场闸 → 证据 → stage3 提示词 → 校验 → 落库/附码
+ADVICE_VAL = 'src/services/advice_validation.py'
+ADVICE_EVID = 'src/services/advice_evidence.py'
+ADVICE_LLM = 'src/analyzer/llm_analyzer.py'
+ADVICE_SVC = 'src/services/advice_service.py'
+ADVICE_ROUTE = 'src/api/routes/advice.py'
+MARKET_STATE = 'src/analyzer/market_state.py'
+VAL_TESTS = 'tests/unit/test_advice_validation.py'
+EVIDENCE_TESTS = 'tests/unit/test_advice_evidence.py'
+EXEC_TESTS = 'tests/unit/test_advice_executable_contract.py'
+GATE_TESTS = 'tests/unit/test_market_state_gate.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -670,6 +681,97 @@ MUTATIONS = [
      '                fund_code, mapping.get("fund_name"), mapping.get("sector_name"))\n',
      '            accusation, _verdict = (None, {})\n',
      ARCHIVE_TESTS, 'test_the_import_gate_asks_the_same_ruler_and_says_the_count'),
+    # ── M92~M106（第 92 批，可执行建议 v2：老板点名"别说关注，要说买还是卖"）──
+    # M92 软闸整支失效：弱势里无脑喊买入也能落库 —— 三条闸判据一起红才算有牙。
+    ('M92_the_market_gate_never_enforces', ADVICE_VAL,
+     '    if stance in GATE_ENFORCED_STANCES:\n',
+     '    if False:\n',
+     VAL_TESTS, 'test_weak_gate_buy_without_override_reason_rejected'),
+    # M93 "声称跟随系统闸却给买入"这一支被赦 —— gate_conflict 退化成 missing_override_reason。
+    ('M93_the_follow_gate_conflict_is_forgiven', ADVICE_VAL,
+     '            if follow_gate:\n',
+     '            if False:\n',
+     VAL_TESTS, 'test_weak_gate_buy_claiming_follow_rejected'),
+    # M94 "关注"禁令解除：含糊话又能落库（老板抱怨的本体）。
+    ('M94_the_word_guanzhu_is_allowed_again', ADVICE_VAL,
+     'AMBIGUOUS_WORDING = ("关注",)\n',
+     'AMBIGUOUS_WORDING = ()\n',
+     VAL_TESTS, 'test_ambiguous_wording_rejected'),
+    # M95 动作词白名单永不触发：正文可以只说天气。
+    ('M95_action_word_check_never_fires', ADVICE_VAL,
+     '    if not any(tok in content for tok in ACTION_TOKENS_ZH):\n',
+     '    if False:\n',
+     VAL_TESTS, 'test_content_without_action_word_rejected'),
+    # M96 空动作清单放行：建议可以一条动作都不给（"说了等于没说"回到老样子）。
+    ('M96_empty_sector_actions_is_enough', ADVICE_VAL,
+     '    if raw_actions is None or not isinstance(raw_actions, list) or not raw_actions:\n',
+     '    if raw_actions is None or not isinstance(raw_actions, list):\n',
+     VAL_TESTS, 'test_empty_sector_actions_rejected'),
+    # M97 中文动作标签不再生成：前端徽章只剩裸枚举。
+    ('M97_no_action_label_is_generated', ADVICE_VAL,
+     '                "action_label": ACTION_LABELS_ZH[action],\n',
+     '                "action_label": action,\n',
+     VAL_TESTS, 'test_action_label_and_market_stance_normalized'),
+    # M98 闸把 unknown 也当弱势拦：数据缺失时"绝不拦死"的承诺作废。
+    ('M98_the_gate_enforces_unknown_stance', ADVICE_VAL,
+     'GATE_ENFORCED_STANCES = frozenset({"weak", "very_weak"})\n',
+     'GATE_ENFORCED_STANCES = frozenset({"weak", "very_weak", "unknown"})\n',
+     VAL_TESTS, 'test_unknown_stance_never_enforces'),
+    # M99 stage3 提示词删掉【市场整体状态】块：模型又回到"只看博主意见拍脑袋"。
+    ('M99_stage3_prompt_drops_the_market_block', ADVICE_LLM,
+     '【市场整体状态】（系统按宽基指数净值算出的事实，不是猜测）\n'
+     '{json.dumps(market_block, ensure_ascii=False, indent=2)}\n\n',
+     '',
+     EXEC_TESTS, 'test_stage3_prompt_injects_market_block_and_action_contract'),
+    # M100 three_stage 忘把闸递给 stage3：软闸在链路上等于没装。
+    ('M100_three_stage_forgets_to_pass_the_gate', ADVICE_LLM,
+     '        advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers,\n'
+     '                                             market_state=market_state)\n',
+     '        advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers)\n',
+     EXEC_TESTS, 'test_three_stage_passes_market_state_to_stage3'),
+    # M101 兜底 JSON 丢了 v2 键：LLM 失败时回的形状不再带 position/sector_actions。
+    ('M101_the_fallback_json_loses_the_v2_keys', ADVICE_LLM,
+     '            "sector_actions": [],\n',
+     '',
+     EXEC_TESTS, 'test_stage3_llm_failure_fallback_carries_v2_keys'),
+    # M102 闸不计入 evidence_hash：净值天天涨跌，建议还吃昨天的缓存。
+    ('M102_the_gate_is_not_counted_into_the_hash', ADVICE_EVID,
+     '            # 大盘软闸进哈希：净值日/分档/涨幅任一变化 ⇒ 缓存失效重算建议\n'
+     '            "market": {\n'
+     '                "code": pack.market_state.get("index_code"),\n'
+     '                "stance": pack.market_state.get("stance"),\n'
+     '                "r5": pack.market_state.get("r5"),\n'
+     '                "r20": pack.market_state.get("r20"),\n'
+     '                "nav_as_of": pack.market_state.get("nav_as_of"),\n'
+     '            },\n',
+     '',
+     EVIDENCE_TESTS, 'test_evidence_hash_changes_with_market_state'),
+    # M103 服务层不把闸递出去：路由拿到 None，stage3 与校验双双失血。
+    ('M103_get_data_for_advice_drops_the_gate', ADVICE_SVC,
+     '            "market_state": pack.market_state,\n',
+     '',
+     EVIDENCE_TESTS, 'test_get_data_for_advice_returns_pack_fields'),
+    # M104 宽基退避顺序写死：510300 没数据时闸直接哑（本该退 510050/510100）。
+    ('M104_the_gate_only_reads_the_primary_index', MARKET_STATE,
+     'MARKET_INDEX_FUNDS: Tuple[str, ...] = ("510300", "510050", "510100")\n',
+     'MARKET_INDEX_FUNDS: Tuple[str, ...] = ("510300",)\n',
+     GATE_TESTS, 'test_falls_back_to_secondary_index'),
+    # M105 净值点数下限形同虚设：2 个点也敢分档，把噪声当趋势。
+    ('M105_min_rows_loosened_below_honesty', MARKET_STATE,
+     'MIN_ROWS = 6              # 少于 6 个净值点无法算 5 日涨跌 ⇒ unknown\n',
+     'MIN_ROWS = 2              # 少于 6 个净值点无法算 5 日涨跌 ⇒ unknown\n',
+     GATE_TESTS, 'test_insufficient_nav_rows_returns_unknown'),
+    # M106 极弱线从 -6% 松到 -20%："市场塌了"也喊不出空仓。
+    ('M106_the_very_weak_line_is_a_catastrophe_only', MARKET_STATE,
+     'VERY_WEAK_R20 = -6.0      # 近20日跌幅 ≤ -6%\n',
+     'VERY_WEAK_R20 = -20.0      # 近20日跌幅 ≤ -6%\n',
+     GATE_TESTS, 'test_flat_then_crash_classifies_very_weak'),
+    # M107 后端附码改为硬凑：映射答不出的板块也挂上 510300（"买不到行业基金就拿大盘凑数"
+    # 正是 sector_fund_agent 明令禁止的那一族）。
+    ('M107_the_attach_fabricates_a_target', ADVICE_ROUTE,
+     '        hit = (get_fund_for_sector(sector) or {}) if sector else {}\n',
+     '        hit = {"code": "510300", "name": "沪深300ETF华泰柏瑞"} if sector else {}\n',
+     EXEC_TESTS, 'test_attach_sector_fund_targets_maps_known_and_blanks_unknown'),
 ]
 
 

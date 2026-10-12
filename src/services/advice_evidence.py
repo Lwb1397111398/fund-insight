@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from src.core.config import config
 from src.models.database import Blogger, FundInfo, Prediction, Viewpoint
+from src.analyzer.market_state import compute_market_state
 from src.services import l1_weighting as l1
 from src.services.prediction_lifecycle import (
     ACTIVE,
@@ -40,6 +41,7 @@ class EvidencePack:
     funds: List[Dict[str, Any]] = field(default_factory=list)
     exclusions: List[Dict[str, Any]] = field(default_factory=list)
     conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    market_state: Dict[str, Any] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
     evidence_hash: Optional[str] = None
 
@@ -52,6 +54,7 @@ class EvidencePack:
             "funds": self.funds,
             "as_of_date": self.as_of_date.isoformat(),
             "conflicts": self.conflicts,
+            "market_state": self.market_state,
             "meta": self.meta,
         }
 
@@ -160,6 +163,7 @@ class AdviceEvidenceBuilder:
 
         funds = self._build_funds()
         conflicts = self._detect_conflicts(predictions, viewpoints)
+        market_state = self._build_market_state()
 
         pack = EvidencePack(
             as_of_date=as_of,
@@ -169,6 +173,7 @@ class AdviceEvidenceBuilder:
             funds=funds,
             exclusions=exclusions,
             conflicts=conflicts,
+            market_state=market_state,
             meta={
                 "prediction_truncated": pred_truncated,
                 "viewpoint_truncated": vp_truncated,
@@ -632,6 +637,15 @@ class AdviceEvidenceBuilder:
             for f in funds
         ]
 
+    # -------------------------------------------------------------- market_state
+    def _build_market_state(self) -> Dict[str, Any]:
+        """
+        大盘软闸状态（投资建议的仓位结论与"弱势不许无脑喊买入"的依据）。
+        计算本身在 src/analyzer/market_state.py（纯本地净值算法，不联网、不调 LLM）；
+        这里只负责进证据包。闸永不拦死：数据不足 ⇒ stance=unknown、enforce=False。
+        """
+        return compute_market_state(self.db)
+
     # ---------------------------------------------------------------- conflicts
     def _detect_conflicts(
         self, predictions: List[Dict[str, Any]], viewpoints: List[Dict[str, Any]]
@@ -714,6 +728,14 @@ class AdviceEvidenceBuilder:
                 }
                 for v in sorted(pack.viewpoints, key=lambda x: x.get("viewpoint_id") or 0)
             ],
+            # 大盘软闸进哈希：净值日/分档/涨幅任一变化 ⇒ 缓存失效重算建议
+            "market": {
+                "code": pack.market_state.get("index_code"),
+                "stance": pack.market_state.get("stance"),
+                "r5": pack.market_state.get("r5"),
+                "r20": pack.market_state.get("r20"),
+                "nav_as_of": pack.market_state.get("nav_as_of"),
+            },
             "strategy": pack.meta.get("weight_strategy_version"),
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

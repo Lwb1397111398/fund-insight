@@ -594,6 +594,11 @@ class InvestmentAdvice(Base):
     market_sentiment = Column(String(20))
     confidence = Column(Integer)
     data_hash = Column(String(32))
+    # ── v2 可执行建议（2026-10-12）：仓位结论 + 板块动作 + 系统大盘分档。
+    # 老行这三列保持 NULL，读路径容忍缺失，不做回填。
+    market_stance = Column(String(20))       # strong/range/weak/very_weak/unknown（系统按净值算，非LLM）
+    position_advice = Column(JSON)           # {follow_gate, position_label, override_reason, basis, ...}
+    sector_actions = Column(JSON)            # [{sector, action, action_label, confidence, reason, horizon, fund_code, fund_name}]
     created_at = Column(DateTime, default=datetime.now)
 
 

@@ -17,10 +17,13 @@ def test_login_success_only_loads_first_screen_data():
 
 
 def test_advice_view_loads_history_on_demand():
-    """进入投资建议视图时按需加载历史记录"""
+    """进入投资建议视图时按需加载：历史照拉；最新一条也拉（2026-10-12 v2——
+    以前刷新页面就回"暂无投资建议"空态，后端明明有 GET /api/advice，页面没接）。"""
     content = INDEX_HTML.read_text(encoding="utf-8")
 
-    assert "else if (view === 'advice') { await loadAdviceHistory(); }" in content
+    assert "else if (view === 'advice') {" in content
+    assert "await loadAdviceHistory(); }" in content
+    assert "if (!advice.value) { await loadLatestAdvice(); }" in content
 
 
 def test_config_button_loads_config_on_demand():

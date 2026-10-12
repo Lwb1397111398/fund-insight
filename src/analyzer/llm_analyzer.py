@@ -1864,8 +1864,12 @@ class LLMAnalyzer:
         }
     
     def generate_advice_stage3(self, viewpoint_summary: Dict, prediction_analysis: Dict, 
-                                bloggers: List[Dict]) -> Dict:
-        """第三阶段：基于观点摘要和预测分析，生成投资建议（短期/中期分层）"""
+                                bloggers: List[Dict], market_state: Optional[Dict] = None) -> Dict:
+        """第三阶段：基于观点摘要、预测分析与系统算出的大盘状态，生成可执行的投资建议。
+
+        market_state 来自 src/analyzer/market_state.compute_market_state（纯本地净值计算）；
+        缺省/缺失时按 stance=unknown 处理，软闸自动失效但不谎报仓位。
+        """
         blogger_info = []
         for b in bloggers[:10]:
             blogger_info.append({
@@ -1877,6 +1881,12 @@ class LLMAnalyzer:
         near_trend = prediction_analysis.get('near_term_trend', 'neutral')
         mid_trend = prediction_analysis.get('mid_term_trend', 'neutral')
         sector_preds = prediction_analysis.get('sector_predictions', {})
+        market_block = market_state or {
+            "stance": "unknown",
+            "stance_label": "无数据",
+            "position_label": "大盘数据缺失，系统无法给出仓位建议",
+            "basis": "未提供市场状态数据",
+        }
         
         prompt = f"""你是一个专业的基金投资顾问。请基于以下分析报告，给出分层投资建议。
 
@@ -1894,17 +1904,28 @@ class LLMAnalyzer:
 - 中期趋势（1个月内）: {mid_trend}
 - 板块预测汇总: {json.dumps(sector_preds, ensure_ascii=False)}
 
-请综合分析并返回JSON格式：
+【市场整体状态】（系统按宽基指数净值算出的事实，不是猜测）
+{json.dumps(market_block, ensure_ascii=False, indent=2)}
+
+请综合分析并返回JSON格式（枚举值逐字使用，不许自造）：
 {{
     "advice_type": "buy/sell/hold/watch",
-    "advice_content": "整体建议摘要（80字以内）",
+    "advice_content": "整体建议（100字以内）：第一句必须是仓位结论，然后说最重要的1-2个板块动作",
     "market_sentiment": "greedy/fearful/neutral",
     "confidence": 0-100,
-    "reasoning": "详细的分析理由（150字以内，说明为什么给出这个建议）",
-    "suggested_sectors": ["板块1", "板块2"],
+    "reasoning": "详细的分析理由（150字以内：依据哪些博主、板块看涨/看跌计数、置信度、大盘数据）",
+    "position": {{
+        "follow_gate": true,
+        "position_label": "最终仓位结论（30字以内，大白话）",
+        "override_reason": "仅当不采纳系统仓位建议（follow_gate=false）时必填：凭什么（80字以内）；采纳则留空字符串"
+    }},
+    "sector_actions": [
+        {{"sector": "板块名", "action": "buy|add|hold|reduce|exit|avoid|watch", "confidence": 0-100, "reason": "大白话理由（60字以内）", "horizon": "short|mid"}}
+    ],
+    "suggested_sectors": ["你建议买入/加仓的板块（最多3个）"],
     "short_term": {{
         "strategy": "momentum/watch/wait",
-        "watch_sectors": ["板块1", "板块2"],
+        "watch_sectors": ["短期只看不动手的板块"],
         "action": "追涨/观望/减仓",
         "reasoning": "短期理由（50字以内）",
         "risk_level": "high/medium/low",
@@ -1912,31 +1933,32 @@ class LLMAnalyzer:
     }},
     "mid_term": {{
         "strategy": "position/reduce/wait",
-        "buy_sectors": ["板块1", "板块2"],
+        "buy_sectors": ["中期建议买入/加仓布局的板块"],
         "action": "布局/减仓/观望",
         "reasoning": "中期理由（50字以内）",
         "risk_level": "high/medium/low",
         "valid_days": 7
     }},
-    "avoid_sectors": ["板块1"],
-    "avoid_reasoning": "回避理由（30字以内）",
+    "avoid_sectors": ["建议回避/卖出的板块"],
+    "avoid_reasoning": "回避理由（30字以内，用条件句式）",
     "risk_warning": "风险提示（50字以内）"
 }}
 
-分析要点：
-1. 短期建议（1-3天）：基于观点的热度和近期趋势（{near_trend}），适合动量策略或观望
-2. 中期建议（1-2周）：基于预测的方向（{mid_trend}）和博主准确率，适合布局策略
-3. 短期和中期可以不同：比如短期观望等回调，中期逐步布局
-4. 明确区分"追涨"（短期动量）和"布局"（中期价值）
-5. 给出具体的有效天数
-6. reasoning字段要详细说明分析逻辑和依据
-7. 参考板块预测汇总中的数据，看涨数量多的板块更适合关注
-8. suggested_sectors字段填写综合短期和中期最值得关注的板块（最多3个）
+硬性规则（违反任何一条，这份建议会被系统拒绝落库）：
+1. advice_content 第一句必须先给仓位结论，与 position.position_label 一致；position 默认采纳【市场整体状态】的 position_label 措辞（follow_gate=true）。
+2. 全文禁止出现"关注"二字——它说不清是买还是卖。想表达"看看再说"用 action=watch（含义：只看不动手）。
+3. sector_actions 每个板块只给一个动作，最多6个板块。枚举含义：buy=建议买入建仓，add=已有仓位加仓，hold=继续持有不动，reduce=减仓（reason 写清减到几成），exit=建议全部卖出，avoid=别买/清出场，watch=只看不动手。
+4. 卖出类动作（reduce/exit/avoid）的 reason 用条件句式，例如"若持有有色金属板块，建议全部卖出，因为…"。
+5. stance 为 weak 或 very_weak 时，若仍要给 buy/add（或 advice_type=buy），必须 follow_gate=false 并在 override_reason 写明凭什么逆着弱势看多；不给理由就是违规。
+6. stance=unknown（大盘数据缺失）时 position_label 写"大盘数据缺失，暂无法给出仓位建议"，follow_gate=true，不再引用任何仓位措辞。
+7. 理由要落到实体：谁（博主/等级）在预测、看涨/看跌计数多少、置信度、目标日期，不要只说"板块热度高"。
+8. 短期（1-3天）与中期（1-2周）动作可以不同。参考板块预测汇总：看涨计数多且A级博主集中的板块才值得给 buy/add；中性(N)不算方向；A级博主权重最高。
 """
         
         try:
             # 同 stage2：verbose 模型的分层建议 JSON 可能较长，给足 token 避免截断
-            result_text = self._call_llm(prompt, task_type='advice', max_tokens=2000, temperature=0.5)
+            # （v2 契约新增 position 与 sector_actions，输出更长，2000 已不够）
+            result_text = self._call_llm(prompt, task_type='advice', max_tokens=3000, temperature=0.5)
             result = self._parse_json_with_fallback(result_text)
             if result:
                 result.setdefault("_stage_status", "ok")
@@ -1952,6 +1974,12 @@ class LLMAnalyzer:
             "market_sentiment": "neutral",
             "confidence": 50,
             "reasoning": "当前市场信号不明确，建议保持观望态度",
+            "position": {
+                "follow_gate": True,
+                "position_label": "AI 分析失败，无法给出仓位建议",
+                "override_reason": "",
+            },
+            "sector_actions": [],
             "suggested_sectors": [],
             "short_term": {
                 "strategy": "wait",
@@ -1979,8 +2007,9 @@ class LLMAnalyzer:
         }
     
     def generate_investment_advice_three_stage(self, bloggers: List[Dict], predictions: List[Dict],
-                                                viewpoints: List[Dict]) -> Dict:
-        """三阶段分析生成投资建议"""
+                                                viewpoints: List[Dict],
+                                                market_state: Optional[Dict] = None) -> Dict:
+        """三阶段分析生成投资建议（market_state=系统算出的大盘软闸状态）"""
         logger.info("[LLM] 开始三阶段分析...")
         
         # 第一阶段：分析观点
@@ -1993,7 +2022,8 @@ class LLMAnalyzer:
         
         # 第三阶段：生成投资建议
         logger.info("[LLM] 第三阶段：生成投资建议...")
-        advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers)
+        advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers,
+                                             market_state=market_state)
         
         # 保存中间结果与阶段状态（供 P1 落库前校验）
         advice["viewpoint_summary"] = viewpoint_summary

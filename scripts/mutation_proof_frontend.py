@@ -74,12 +74,15 @@ VP = 'web/viewpoint-manager.js'
 T = 'tests/unit/test_frontend_cold_start.py'
 WIRING = 'tests/unit/test_frontend_wiring.py'
 FUND = 'tests/unit/test_frontend_fund_update.py'
+ADVICE = 'tests/unit/test_frontend_advice_v2.py'
 # 判据不止一个文件：接线闸（`test_frontend_wiring.py`）与「更新所有基金」那条行为判据
 # （`test_frontend_fund_update.py`，第 64 轮 M-2 从文本断言改成跑真实调用链）也得能被自己的变异打红。
 WIRING_TESTS = ('test_every_option_the_manager_reads_is_actually_injected',
                 'test_everything_the_page_destructures_is_actually_exported')
 FUND_TESTS = ('test_the_fund_button_waits_for_the_result_and_shares_the_one_poll',)
-JUDGE_FILES = {T: (), WIRING: WIRING_TESTS, FUND: FUND_TESTS}
+# v2 建议页判据（2026-10-12）：仓位指挥牌/板块操作清单/禁"关注"/进页拉最新
+ADVICE_TESTS = ('test_the_advice', 'test_no_page_uses', 'test_entering_advice')
+JUDGE_FILES = {T: (), WIRING: WIRING_TESTS, FUND: FUND_TESTS, ADVICE: ADVICE_TESTS}
 
 
 def _judge_file(test):
@@ -695,6 +698,46 @@ MUTATIONS = [
      'the_unflagged_reclaim_receipt_is_forgiven', HTML,
      "if (!reclaim.success) return { ok: false, text: '空间回收：回执里没写成没成，不敢算已完成' };",
      "if (!reclaim.success) return { ok: true, text: '空间回收：跑完了，本次没测得可释放的空间' };", False),
+    # ── v2 建议页（2026-10-12，判据在 test_frontend_advice_v2.py）──
+    ('test_the_advice_page_renders_the_position_card', 'stance_binding_replaced_by_literal',
+     HTML, ":class=\"'stance-' + (advice.position_advice.stance || 'unknown')\"",
+     ":class=\"'stance-unknown'\"", False),
+    ('test_the_advice_page_renders_the_position_card', 'override_leg_deleted_from_card',
+     HTML, _js(
+         '                            <div v-if="advice.position_advice.override_reason" class="position-override">',
+         '                                ⚡ AI 没有采纳上面的系统仓位建议，理由：{{ advice.position_advice.override_reason }}',
+         '                            </div>'),
+     '', False),
+    ('test_the_advice_page_renders_the_position_card', 'card_drops_data_basis',
+     HTML, _js(
+         '                            <div v-if="advice.position_advice.basis" class="position-basis">',
+         '                                依据：{{ advice.position_advice.basis }}',
+         '                            </div>'),
+     '', False),
+    ('test_the_advice_page_lists_sector_actions_with_explicit_badges',
+     'action_list_guard_never_fires', HTML,
+     'advice.sector_actions && advice.sector_actions.length > 0',
+     'advice.sector_actions_v2_removed && advice.sector_actions.length > 0', False),
+    ('test_the_advice_page_lists_sector_actions_with_explicit_badges',
+     'badge_back_to_raw_enum', HTML,
+     '<span class="action-badge" :class="\'action-\' + a.action">{{ a.action_label }}</span>',
+     '<span class="action-badge" :class="\'action-\' + a.action">{{ a.action }}</span>', False),
+    ('test_the_advice_page_lists_sector_actions_with_explicit_badges',
+     'fund_target_not_rendered', HTML,
+     '<span v-if="a.fund_code" class="action-fund">{{ a.fund_code }} {{ a.fund_name }}</span>',
+     '', False),
+    ('test_the_advice_page_lists_sector_actions_with_explicit_badges',
+     'old_rows_lose_their_fallback_block', HTML,
+     'v-else-if="advice.suggested_sectors && advice.suggested_sectors.length > 0"',
+     'v-else-if="false"', False),
+    ('test_no_page_uses_the_ambiguous_word_guanzhu_in_advice_blocks', 'guanzhu_label_back',
+     HTML, '观察板块（只看不买）：', '关注板块：', False),
+    ('test_no_page_uses_the_ambiguous_word_guanzhu_in_advice_blocks', 'guanzhu_title_back',
+     HTML, '建议板块（旧版，未标动作）', '建议关注板块', False),
+    ('test_entering_advice_view_fetches_the_latest_advice', 'latest_fetch_unwired_from_view',
+     HTML, 'if (!advice.value) { await loadLatestAdvice(); }', '/* 进页不拉最新：刷新即空态的老形状 */', False),
+    ('test_entering_advice_view_fetches_the_latest_advice', 'latest_fetch_hits_wrong_endpoint',
+     HTML, "axios.get('/api/advice')", "axios.get('/api/advice/typo')", False),
 ]
 
 

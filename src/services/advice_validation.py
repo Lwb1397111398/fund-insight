@@ -29,6 +29,26 @@ SHORT_STRATEGIES = frozenset({"momentum", "watch", "wait"})
 MID_STRATEGIES = frozenset({"position", "reduce", "wait"})
 RISK_LEVELS = frozenset({"high", "medium", "low"})
 
+# ── v2 可执行建议契约（2026-10-12 老板点名"别说关注，要说买还是卖"）──────────
+# 板块动作七档：买/加/持/减/清/避/只看不动手
+SECTOR_ACTIONS = frozenset({"buy", "add", "hold", "reduce", "exit", "avoid", "watch"})
+BUYISH_ACTIONS = frozenset({"buy", "add"})
+ACTION_LABELS_ZH = {
+    "buy": "建议买入建仓",
+    "add": "建议加仓",
+    "hold": "继续持有",
+    "reduce": "建议减仓",
+    "exit": "建议全部卖出",
+    "avoid": "回避别买",
+    "watch": "只看不动手",
+}
+VALID_HORIZONS = frozenset({"short", "mid"})
+# advice_content 必须落出的明确动作词（至少含一个；"关注"被明令禁止）
+ACTION_TOKENS_ZH = ("买入", "加仓", "持有", "减仓", "卖出", "清仓", "空仓", "回避", "观望", "不动手")
+AMBIGUOUS_WORDING = ("关注",)
+# 软闸生效档：与 src/analyzer/market_state.GATE_ENFORCED_STANCES 同一把尺子
+GATE_ENFORCED_STANCES = frozenset({"weak", "very_weak"})
+
 
 @dataclass
 class ValidationResult:
@@ -180,7 +200,8 @@ def detect_stage_failures(advice: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 # 缓存键版本：升级 prompt/模型策略时递增，迫使重算
-ADVICE_PROMPT_VERSION = "advice.three_stage.v1"
+# v2（2026-10-12）：契约新增 position 与 sector_actions、明令禁止"关注"、弱势软闸
+ADVICE_PROMPT_VERSION = "advice.three_stage.v2"
 
 
 def build_advice_cache_key(
@@ -252,6 +273,21 @@ def validate_advice_output(
             message="advice_content 缺失或为空",
         )
 
+    # v2 措辞纪律：说不清买卖的"关注"直接拒；必须落到明确动作词
+    for word in AMBIGUOUS_WORDING:
+        if word in content:
+            return ValidationResult(
+                ok=False,
+                code="ambiguous_wording",
+                message=f"advice_content 含含糊词「{word}」，请改为明确动作（买入/加仓/持有/减仓/全部卖出/回避/只看不动手）",
+            )
+    if not any(tok in content for tok in ACTION_TOKENS_ZH):
+        return ValidationResult(
+            ok=False,
+            code="missing_action_word",
+            message="advice_content 必须包含至少一个明确动作词（如 买入/减仓/全部卖出/空仓/观望）",
+        )
+
     raw_sentiment = advice.get("market_sentiment")
     if raw_sentiment not in MARKET_SENTIMENTS:
         return ValidationResult(
@@ -297,6 +333,100 @@ def validate_advice_output(
     )
     if err:
         return ValidationResult(ok=False, code="invalid_mid_term", message=err)
+
+    # ---- v2：板块动作清单（必填、七档枚举、后端统一动作标签） ----
+    raw_actions = advice.get("sector_actions")
+    if raw_actions is None or not isinstance(raw_actions, list) or not raw_actions:
+        return ValidationResult(
+            ok=False,
+            code="missing_sector_actions",
+            message="sector_actions 缺失或为空：每条建议必须落到具体板块的具体动作",
+            details={"received": type(raw_actions).__name__},
+        )
+    sector_items: List[Dict[str, Any]] = []
+    for idx, a in enumerate(raw_actions[:6]):
+        if not isinstance(a, dict):
+            return ValidationResult(
+                ok=False, code="invalid_sector_actions", message=f"sector_actions[{idx}] 必须是对象"
+            )
+        sector = (a.get("sector") or "").strip()
+        if not sector:
+            return ValidationResult(
+                ok=False, code="invalid_sector_actions", message=f"sector_actions[{idx}] 缺板块名"
+            )
+        action = a.get("action")
+        if action not in SECTOR_ACTIONS:
+            return ValidationResult(
+                ok=False,
+                code="invalid_sector_action",
+                message=f"sector_actions[{idx}].action 非法: {action}（允许 {sorted(SECTOR_ACTIONS)}）",
+            )
+        conf = _as_int_confidence(a.get("confidence"))
+        if conf is None:
+            return ValidationResult(
+                ok=False,
+                code="invalid_sector_action_confidence",
+                message=f"sector_actions[{idx}].confidence 必须是 0-100 的整数",
+            )
+        reason = a.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            return ValidationResult(
+                ok=False, code="invalid_sector_action_reason", message=f"sector_actions[{idx}].reason 必须是字符串"
+            )
+        horizon = a.get("horizon")
+        if horizon is not None and horizon not in VALID_HORIZONS:
+            return ValidationResult(
+                ok=False,
+                code="invalid_sector_action_horizon",
+                message=f"sector_actions[{idx}].horizon 非法: {horizon}",
+            )
+        sector_items.append(
+            {
+                "sector": sector,
+                "action": action,
+                "action_label": ACTION_LABELS_ZH[action],
+                "confidence": conf,
+                "reason": (reason or "").strip(),
+                "horizon": horizon or "mid",
+            }
+        )
+
+    # ---- v2：仓位结论块 + 大盘软闸一致性（老板定的"软提醒"：弱势可 override 但必须说理由） ----
+    stance = (evidence or {}).get("market_state") or {}
+    stance = stance.get("stance") if isinstance(stance, dict) else None
+    position = advice.get("position")
+    if not isinstance(position, dict):
+        return ValidationResult(
+            ok=False, code="invalid_position", message="position 必须是对象（含 follow_gate/position_label）"
+        )
+    follow_gate = position.get("follow_gate")
+    if not isinstance(follow_gate, bool):
+        return ValidationResult(
+            ok=False, code="invalid_position", message="position.follow_gate 必须是 true/false"
+        )
+    position_label = position.get("position_label")
+    if not isinstance(position_label, str) or not position_label.strip():
+        return ValidationResult(
+            ok=False, code="invalid_position", message="position.position_label 必须是非空字符串"
+        )
+    override_reason = (position.get("override_reason") or "").strip()
+    if stance in GATE_ENFORCED_STANCES:
+        buyish = any(i["action"] in BUYISH_ACTIONS for i in sector_items) or advice_type == "buy"
+        if buyish:
+            if follow_gate:
+                return ValidationResult(
+                    ok=False,
+                    code="gate_conflict",
+                    message=f"大盘处于「{stance}」，仓位结论声称跟随系统建议，却仍给出买入/加仓动作",
+                    details={"stance": stance},
+                )
+            if not override_reason:
+                return ValidationResult(
+                    ok=False,
+                    code="missing_override_reason",
+                    message="大盘弱势/极弱时逆市看多必须写明 override_reason（凭什么敢买）",
+                    details={"stance": stance},
+                )
 
     # 引用校验：若输出带 prediction_id，必须属于证据集
     evidence = evidence or {}
@@ -348,6 +478,14 @@ def validate_advice_output(
         "avoid_reasoning": advice.get("avoid_reasoning") or "",
         "viewpoint_summary": advice.get("viewpoint_summary"),
         "prediction_analysis": advice.get("prediction_analysis"),
+        # v2 新增：仓位结论、板块动作清单、系统大盘分档（读路径老行为 None/空）
+        "position": {
+            "follow_gate": follow_gate,
+            "position_label": position_label.strip(),
+            "override_reason": override_reason,
+        },
+        "sector_actions": sector_items,
+        "market_stance": stance,
     }
     return ValidationResult(
         ok=True,

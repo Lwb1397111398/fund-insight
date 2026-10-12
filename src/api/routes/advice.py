@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import date
 import logging
 import traceback
@@ -48,6 +48,23 @@ def _log_advice_rejection(code: str, message: str, details: Optional[dict] = Non
         message,
         details or {},
     )
+
+
+def _attach_sector_fund_targets(sector_actions: List[Dict]) -> List[Dict]:
+    """
+    给每条板块动作确定性附挂标的（板块→基金）。
+
+    代码**不由 LLM 报**（它会编），复用板块-基金映射的唯一现成尺子
+    `get_fund_for_sector`（内置表 + 用户别名 + 子串匹配；答不出就留空，不硬凑）。
+    """
+    from src.constants.sector_fund_map import get_fund_for_sector
+
+    for a in sector_actions or []:
+        sector = (a.get("sector") or "").strip()
+        hit = (get_fund_for_sector(sector) or {}) if sector else {}
+        a["fund_code"] = hit.get("code") or ""
+        a["fund_name"] = hit.get("name") or ""
+    return sector_actions or []
 
 
 @router.post("")
@@ -106,10 +123,19 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             (evidence_hash or "")[:12],
         )
 
+        # 大盘软闸状态：系统按宽基净值本地算出，进 stage3 提示词与落库前一致性校验
+        market_state = data.get("market_state") or {}
+        logger.info(
+            "[Advice API] 市场闸: stance=%s 依据=%s",
+            market_state.get("stance"),
+            (market_state.get("basis") or "")[:80],
+        )
+
         advice = llm_analyzer.generate_investment_advice_three_stage(
             data["bloggers"],
             data["predictions"],
             viewpoints=data["viewpoints"],
+            market_state=market_state,
         )
 
         output_check = validate_advice_output(advice, evidence=data)
@@ -139,6 +165,19 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             }
 
         normalized = output_check.normalized or advice
+        # 标的由后端按板块映射附挂（防 LLM 编造代码；映射答不出则留空）
+        sector_actions = _attach_sector_fund_targets(normalized.get("sector_actions") or [])
+        position_advice = {
+            **(normalized.get("position") or {}),
+            "stance": normalized.get("market_stance"),
+            "stance_label": market_state.get("stance_label"),
+            "basis": market_state.get("basis"),
+            "index_code": market_state.get("index_code"),
+            "nav_as_of": market_state.get("nav_as_of"),
+            "r5": market_state.get("r5"),
+            "r20": market_state.get("r20"),
+            "drawdown": market_state.get("drawdown"),
+        }
 
         referenced_predictions = []
         for p in data["predictions"][:20]:
@@ -171,6 +210,9 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             short_term_advice=normalized.get("short_term"),
             mid_term_advice=normalized.get("mid_term"),
             avoid_reasoning=normalized.get("avoid_reasoning"),
+            market_stance=normalized.get("market_stance"),
+            position_advice=position_advice,
+            sector_actions=sector_actions,
         )
 
         result["viewpoint_summary"] = (

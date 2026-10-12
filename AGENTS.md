@@ -296,7 +296,67 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-10-01 **09:4x–09:5x（北京）**，**第 90 批：老板一句"改名且删除"，生产档案身份欠账当场清掉**
+最近一次核对（2026-10-12 **20:2x–21:0x（北京）**，**第 92 批：投资建议 v2——"关注某某板块"改成可执行动作**
+（老板点名：建议得说清买还是卖、市场差要敢喊空仓。三拍板：不加持仓用条件句式 / 软闸可 override 但必须说理由 /
+买入建议带具体基金）：
+
+① **改的层**（`src/` 5 文件 + `web/` 2 文件 + 新模块）：
+- 新 `src/analyzer/market_state.py`：纯本地读 `fund_history` 宽基净值（510300→510050→510100 退避），
+  算 r5/r20/高点回撤，常量阈值分 strong/range/weak/very_weak；净值点<6 ⇒ unknown、enforce=False（闸自动失效不硬拦）。
+- `advice_evidence.py`：闸进 EvidencePack + **evidence_hash**（净值日/档位/涨跌任一变 ⇒ 缓存失效）。
+- `llm_analyzer.py` stage3：提示词加【市场整体状态】事实块；输出契约新增 `position`（follow_gate/override_reason）
+  与 `sector_actions`（七档动作 buy/add/hold/reduce/exit/avoid/watch）；明令禁"关注"、卖出用"若持有…"条件句式；
+  max_tokens 2000→3000；兜底 JSON 同形状。`ADVICE_PROMPT_VERSION` → `advice.three_stage.v2`（旧缓存强制失效）。
+- `advice_validation.py`：七档枚举 + `sector_actions` 必填 + 中文动作标签后端统一挂 + 措辞两闸
+  （含"关注"拒 `ambiguous_wording`、无动作词拒 `missing_action_word`）+ **软闸一致性**：
+  weak/very_weak 出 buyish（或 advice_type=buy）时 follow_gate=false 且 override_reason 非空，否则
+  `gate_conflict`/`missing_override_reason` 拒落库；unknown 永不拦。
+- `database.py`：`investment_advice` 加 3 可空列 `market_stance`/`position_advice`(JSON)/`sector_actions`(JSON)；
+  老行 NULL、读路径容忍（镜像已用 `sync_db_columns --allow-sqlite --apply --confirm SYNC-COLUMNS` 补列，
+  回读 `[ok] 复查：列与索引都已存在`；**生产待老板点头后同法补列**）。
+- `routes/advice.py`：`_attach_sector_fund_targets()` 用 `get_fund_for_sector` 给每条动作附挂具体基金
+  （**代码不由 LLM 报**；映射答不出留空不硬凑）；三新列随 normalized 落库。
+- `web/index.html`+`common.css`：仓位指挥牌（stance 分色 + position_label + 数据依据 + AI 逆闸理由黄条）、
+  板块操作清单（七档彩色徽章/置信/理由/标的基金）、短期"关注板块"改"观察板块（只看不买）"、
+  历史弹窗同步；**进建议页先 `GET /api/advice`**（修"刷新即空态"老毛病）。全页 `关注` 字样现读 0 次。
+
+② **判据**：新文件 `test_market_state_gate.py` 10、`test_advice_executable_contract.py` 5、
+`test_frontend_advice_v2.py` 4；改 `test_advice_validation.py` **16→30**（+14，全在 v2 契约块）、
+`test_advice_evidence.py` 5→6（闸进哈希）、`test_frontend_loading.py` 3→3（进页拉最新的新形状顶掉钉死旧行的断言）。
+分布绑绝对基准 `for f in $(git diff --name-only HEAD -- tests/); do ...`（本批 34 条）。
+
+③ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二会话、链
+`data/_review_tmp/r92-chain.log`，起 20:51:05 收 21:06:36，HEAD=`0f67c33`）**：
+`pytest tests/unit -q` → **1362 passed / 16 skipped / 0 failed**（423.21s，退 **0**）；
+`pytest tests/ -q` → **1371 passed / 16 skipped / 0 failed**（487.33s，退 **0**）。
+⚠ 与 1321/1330 差 41 而本批只 +34：另 **7 条属于 `fb173a6`（LLM 双渠道）新建的
+`test_llm_secondary_fallback.py`（现数 7，`git show ec3e924` 里此文件不存在 0→7）**——第 91 批收尾没把这条账
+落进基线，本批实测补上：1321 + 7 + 34 = 1362 ⇒ 两口径逐字闭合。`audit_doc_claims.py` → 退 **0**
+（条数 4、数据源 4 行都认得；"看得见但不判"现读 18）。
+
+④ **变异（27 处新账全当场咬过、逐条 `--only`）**：逻辑侧 M92~M107 共 16 处（注册表现读
+`--list` 末行「共 110 处变异，覆盖 20 个用例文件」），前端 11 处（现读「共 158 处 / 59 条判据」）；
+每条先 CONTROL-GREEN 再 RED、退 0，逐份回执**随仓库走** `docs/迭代计划/run-20261012-advice-v2/`
+（复核 `git ls-files docs/迭代计划/run-20261012-advice-v2`）。一处本批自纠：`card_drops_data_basis`
+第一版把 `v-if` 换成 `v-if="false && …"` ⇒ 子串还在判据打不红（**no-op 变异**），改成删整三行块后才 RED。
+⚠ **110/158 两套"全套全 RED"本批没重跑**（上一份全套凭据仍是第 88 批 93 处 + 前端 147 处那两份归档）。
+
+⑤ **镜像真跑（`.env` 的火山 key 实测欠费 403 AccountOverdueError ⇒ 按全局规矩改用 Agent Manager `main` 档案
+（sensenova OpenAI 兼容），起 `scripts/serve_mirror.py --port 8175`，口令只在 `data/_review_tmp/serve8175.log`）**：
+连撞两次 429 TPM 限流（fail-closed 顺带验真：回执 `code=stage_failed`、库里一字没动）⇒ 第三次成功：
+落库行现读 `market_stance=weak / follow_gate=1 / sector_actions 6 条`；`advice_content` 首句
+「仓位控制在三成以内，不新开仓」全文无"关注"；每条动作带实体理由（真博主名/信心值），
+红利→`510880`、医药→`512010`、CPO 映射答不出 `fund_code=""` 留空；
+闸 basis 逐字「沪深300ETF华泰柏瑞（510300）近5日 -4.04%、近20日 -5.28%、自窗口高点回撤 5.28%，净值截至 2026-09-30」；
+`GET /api/advice` 读路径回同一形状。⚠ 这条真跑同时暴露**部署顺序硬约束**：`market_stance` 等三列不在 alembic 里
+（head 未动），Render 部署**先于**生产补列的那几分钟里 `/api/advice` 会 500（ORM SELECT 缺列）⇒
+push 与生产补列必须连着做，窗口要说人话报给老板。
+
+⑥ **仍然没做的，登记而不是当成已封**：生产库补列 + push + 线上现读验收（等老板点头）；
+110/158 两套全套；`docs/INVESTMENT_ADVICE_THREE_STAGE_OPTIMIZATION.md` 那份 2026-03-08 旧报告没随 v2 更新
+（它描述 v1 契约，本批未动它，读到它要知道已过时）。
+
+（上一批：2026-10-01 **09:4x–09:5x（北京）**，**第 90 批：老板一句"改名且删除"，生产档案身份欠账当场清掉**
 （`src/` 一个字未动 ⇒ 不需重跑基线与体检；这一批全是数据动作 + 一处文档假话改正）：
 
 ① **9 行改名已在生产执行**：`audit_fund_info_identity.py --production --rename-to-official

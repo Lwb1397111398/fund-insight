@@ -1214,6 +1214,166 @@
             border: 1px solid rgba(255, 77, 79, 0.5);
         }
 
+        /* ── v2 可执行建议（2026-10-12）：仓位指挥牌 + 板块操作清单 ── */
+        .position-card {
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: var(--radius-lg);
+            border-left: 4px solid rgba(255, 255, 255, 0.25);
+            padding: var(--space-4) var(--space-5);
+            margin-bottom: var(--space-4);
+        }
+
+        .position-card.stance-strong {
+            border-left-color: rgba(82, 196, 26, 0.9);
+        }
+
+        .position-card.stance-range {
+            border-left-color: rgba(250, 173, 20, 0.8);
+        }
+
+        .position-card.stance-weak {
+            border-left-color: rgba(255, 120, 70, 0.9);
+        }
+
+        .position-card.stance-very_weak {
+            border-left-color: rgba(255, 77, 79, 1);
+        }
+
+        .position-card.stance-unknown {
+            border-left-color: rgba(160, 160, 160, 0.6);
+        }
+
+        .position-main {
+            display: flex;
+            align-items: baseline;
+            gap: var(--space-3);
+            flex-wrap: wrap;
+        }
+
+        .position-stance {
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .position-label {
+            font-size: 14px;
+            opacity: 0.92;
+        }
+
+        .position-basis {
+            margin-top: var(--space-2);
+            font-size: 12px;
+            opacity: 0.65;
+        }
+
+        .position-override {
+            margin-top: var(--space-2);
+            font-size: 13px;
+            background: rgba(250, 173, 20, 0.14);
+            border: 1px solid rgba(250, 173, 20, 0.4);
+            border-radius: var(--radius-md);
+            padding: var(--space-2) var(--space-3);
+        }
+
+        .action-list {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-lg);
+            padding: var(--space-4);
+        }
+
+        .action-row {
+            padding: var(--space-3) 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .action-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .action-line {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            flex-wrap: wrap;
+        }
+
+        .action-badge {
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: var(--radius-full);
+            padding: 2px var(--space-3);
+            white-space: nowrap;
+        }
+
+        .action-badge.action-buy {
+            background: rgba(82, 196, 26, 0.35);
+            border: 1px solid rgba(82, 196, 26, 0.6);
+            color: #95de64;
+        }
+
+        .action-badge.action-add {
+            background: rgba(130, 200, 80, 0.25);
+            border: 1px solid rgba(130, 200, 80, 0.5);
+            color: #b7eb8f;
+        }
+
+        .action-badge.action-hold {
+            background: rgba(24, 144, 255, 0.25);
+            border: 1px solid rgba(24, 144, 255, 0.5);
+            color: #69c0ff;
+        }
+
+        .action-badge.action-reduce {
+            background: rgba(250, 140, 22, 0.28);
+            border: 1px solid rgba(250, 140, 22, 0.55);
+            color: #ffc069;
+        }
+
+        .action-badge.action-exit {
+            background: rgba(255, 77, 79, 0.35);
+            border: 1px solid rgba(255, 77, 79, 0.6);
+            color: #ff7875;
+        }
+
+        .action-badge.action-avoid {
+            background: rgba(200, 40, 60, 0.4);
+            border: 1px solid rgba(255, 77, 79, 0.75);
+            color: #ffa39e;
+        }
+
+        .action-badge.action-watch {
+            background: rgba(160, 160, 160, 0.2);
+            border: 1px solid rgba(160, 160, 160, 0.4);
+            color: #bfbfbf;
+        }
+
+        .action-sector {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .action-fund {
+            font-size: 12px;
+            opacity: 0.75;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-md);
+            padding: 1px var(--space-2);
+        }
+
+        .action-meta {
+            font-size: 12px;
+            opacity: 0.6;
+            margin-left: auto;
+        }
+
+        .action-reason {
+            margin-top: 6px;
+            font-size: 13px;
+            line-height: 1.55;
+            opacity: 0.85;
+        }
+
         .advice-details-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);

@@ -156,3 +156,52 @@ def test_get_data_for_advice_returns_pack_fields(test_db, monkeypatch):
     assert data["predictions"]
     assert "weight" in data["predictions"][0]
     assert "prediction_id" in data["predictions"][0]
+    # 服务层必须把市场闸递出去（路由靠它喂 stage3 与校验）；空库=unknown，不许缺键
+    assert "market_state" in data, "get_data_for_advice 漏了 market_state ⇒ 三阶段拿不到大盘闸"
+    assert data["market_state"]["stance"] == "unknown"
+
+
+def test_evidence_hash_changes_with_market_state(test_db, monkeypatch):
+    """市场闸计入 evidence_hash：净值入库/更新改变分档或数值 ⇒ 旧缓存必须失效，
+    不许"今天还拿着昨天的弱势结论不重算"。"""
+    from src.models.database import FundHistory
+
+    as_of = date(2026, 8, 10)
+    monkeypatch.setattr(lc, "current_as_of", lambda: as_of)
+    b = _blogger(test_db)
+    _pred(test_db, b, as_of + timedelta(days=2))
+
+    builder = AdviceEvidenceBuilder(test_db)
+    pack0 = builder.build(as_of=as_of)
+    assert pack0.market_state["stance"] == "unknown"  # 库里还没有宽基净值
+    h0 = pack0.evidence_hash
+
+    for i, v in enumerate([100] * 20 + [92]):
+        test_db.add(
+            FundHistory(
+                fund_code="510300",
+                fund_name="沪深300ETF华泰柏瑞",
+                nav_date=as_of - timedelta(days=20 - i),
+                nav=float(v),
+                day_growth=0.0,
+            )
+        )
+    test_db.commit()
+
+    pack1 = builder.build(as_of=as_of)
+    assert pack1.market_state["stance"] == "very_weak"
+    assert pack1.market_state["enforce"] is True
+    assert pack1.evidence_hash != h0  # 闸从 unknown 变 very_weak ⇒ 哈希变
+
+    # 末笔净值再跌：分档不变但 r5/r20 变 ⇒ 哈希仍须变（净值每天追上来就重算）
+    last_row = (
+        test_db.query(FundHistory)
+        .filter(FundHistory.fund_code == "510300")
+        .order_by(FundHistory.nav_date.desc())
+        .first()
+    )
+    last_row.nav = 85.0
+    test_db.commit()
+    pack2 = builder.build(as_of=as_of)
+    assert pack2.market_state["stance"] == "very_weak"
+    assert pack2.evidence_hash != pack1.evidence_hash

@@ -1,0 +1,3 @@
+# run @ 2026-10-12T20:17:46+08:00  git=0f67c33b5382  worktree=dirty(14)  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M105_min_rows_loosened_below_honesty                       ⇒ RED（判据有效）

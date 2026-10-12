@@ -847,6 +847,24 @@
                             </span>
                         </div>
 
+                        <!-- 仓位指挥牌：系统按宽基指数净值算出的大盘状态（v2 新增，老建议无此块自动隐藏） -->
+                        <div v-if="advice.position_advice && Object.keys(advice.position_advice).length > 0"
+                            class="position-card" :class="'stance-' + (advice.position_advice.stance || 'unknown')">
+                            <div class="position-main">
+                                <span class="position-stance">{{ advice.position_advice.stance === 'strong' ? '📈 强势'
+                                    : advice.position_advice.stance === 'weak' ? '📉 弱势'
+                                    : advice.position_advice.stance === 'very_weak' ? '🆘 极弱'
+                                    : advice.position_advice.stance === 'range' ? '➖ 震荡' : '❔ 大盘无数据' }}</span>
+                                <span class="position-label">{{ advice.position_advice.position_label }}</span>
+                            </div>
+                            <div v-if="advice.position_advice.basis" class="position-basis">
+                                依据：{{ advice.position_advice.basis }}
+                            </div>
+                            <div v-if="advice.position_advice.override_reason" class="position-override">
+                                ⚡ AI 没有采纳上面的系统仓位建议，理由：{{ advice.position_advice.override_reason }}
+                            </div>
+                        </div>
+
                         <div class="advice-meta-row">
                             <div class="advice-meta-item">
                                 <span class="label">📅 日期：</span>
@@ -891,7 +909,7 @@
                                     <span class="term-value action-text">{{ advice.short_term_advice.action }}</span>
                                 </div>
                                 <div class="term-row" v-if="advice.short_term_advice.watch_sectors && advice.short_term_advice.watch_sectors.length > 0">
-                                    <span class="term-label">关注板块：</span>
+                                    <span class="term-label">观察板块（只看不买）：</span>
                                     <div class="advice-sectors">
                                         <span v-for="s in advice.short_term_advice.watch_sectors" :key="s"
                                             class="advice-sector-tag sector-bullish">{{ s }}</span>
@@ -942,9 +960,22 @@
                             </div>
                         </div>
 
-                        <div v-if="advice.suggested_sectors && advice.suggested_sectors.length > 0"
+                        <!-- 板块操作清单：每个板块一个明确动作（v2；老建议没有这份清单时回退旧标签块） -->
+                        <div v-if="advice.sector_actions && advice.sector_actions.length > 0" class="action-list mb-20">
+                            <h4 class="text-base mb-12">🎯 板块操作建议（每条都是明确动作）</h4>
+                            <div v-for="(a, i) in advice.sector_actions" :key="i" class="action-row">
+                                <div class="action-line">
+                                    <span class="action-badge" :class="'action-' + a.action">{{ a.action_label }}</span>
+                                    <span class="action-sector">{{ a.sector }}</span>
+                                    <span v-if="a.fund_code" class="action-fund">{{ a.fund_code }} {{ a.fund_name }}</span>
+                                    <span class="action-meta">{{ a.horizon === 'short' ? '短期' : '中期' }} · 置信 {{ a.confidence }}%</span>
+                                </div>
+                                <div v-if="a.reason" class="action-reason">{{ a.reason }}</div>
+                            </div>
+                        </div>
+                        <div v-else-if="advice.suggested_sectors && advice.suggested_sectors.length > 0"
                             class="mb-20">
-                            <h4 class="text-base mb-12">✅ 建议关注板块</h4>
+                            <h4 class="text-base mb-12">✅ 建议板块（旧版，未标动作）</h4>
                             <div class="advice-sectors">
                                 <span v-for="s in advice.suggested_sectors" :key="s"
                                     class="advice-sector-tag sector-bullish">{{ s }}</span>
@@ -1616,7 +1647,7 @@
                                 <span class="meta-value">{{ a.referenced_bloggers.join('、') }}</span>
                             </div>
                             <div class="meta-row" v-if="a.short_term_advice && a.short_term_advice.watch_sectors && a.short_term_advice.watch_sectors.length > 0">
-                                <span class="meta-label">⚡ 短期关注:</span>
+                                <span class="meta-label">⚡ 短期观察（只看不买）:</span>
                                 <span class="meta-value sectors-bullish">{{ a.short_term_advice.watch_sectors.join('、') }}</span>
                                 <span class="meta-sub" v-if="a.short_term_advice.action">({{ a.short_term_advice.action }})</span>
                             </div>
@@ -1625,8 +1656,12 @@
                                 <span class="meta-value sectors-bullish">{{ a.mid_term_advice.buy_sectors.join('、') }}</span>
                                 <span class="meta-sub" v-if="a.mid_term_advice.action">({{ a.mid_term_advice.action }})</span>
                             </div>
-                            <div class="meta-row" v-if="a.suggested_sectors && a.suggested_sectors.length > 0">
-                                <span class="meta-label">建议关注:</span>
+                            <div class="meta-row" v-if="a.sector_actions && a.sector_actions.length > 0">
+                                <span class="meta-label">🎯 板块动作:</span>
+                                <span class="meta-value">{{ a.sector_actions.map(x => x.sector + '→' + x.action_label).join('；') }}</span>
+                            </div>
+                            <div class="meta-row" v-else-if="a.suggested_sectors && a.suggested_sectors.length > 0">
+                                <span class="meta-label">建议板块（旧版，未标动作）:</span>
                                 <span class="meta-value sectors-bullish">{{ a.suggested_sectors.join('、') }}</span>
                             </div>
                             <div class="meta-row" v-if="a.avoid_sectors && a.avoid_sectors.length > 0">
@@ -3056,6 +3091,8 @@ const fetchWeChatBatch = async () => {
                     adviceGenerating.value = false;
                 };
                 const loadAdviceHistory = async () => { try { const res = await withWakeRetry(() => axios.get('/api/advice/history')); if (res.data.success) { adviceHistory.value = res.data.data; adviceError.value = ''; } else { adviceError.value = '历史建议没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { adviceError.value = '历史建议拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
+                // 进「投资建议」页先拉最新一条：以前只有当场点生成才有内容，刷新页面就回空态
+                const loadLatestAdvice = async () => { try { const res = await withWakeRetry(() => axios.get('/api/advice')); if (res.data.success && res.data.data) { advice.value = res.data.data; adviceIsNew.value = false; } } catch (e) { /* 拿不到就维持空态，生成按钮仍在 */ } };
                 const loadConfig = async () => { configError.value = ''; try { const res = await axios.get('/api/config'); if (res.data.success) { configData.value = res.data.data; } else { configError.value = '配置没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { configError.value = '配置拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); console.error(e); } };
                 const openConfig = async () => { showConfig.value = true; configTab.value = 'llm'; await loadConfig(); await loadTestData(); };
                 const updateConfig = async () => { try { const res = await axios.post('/api/config', configData.value); alert(res.data.message); showConfig.value = false; } catch (e) { alert('保存失败'); } };
@@ -3215,7 +3252,7 @@ const fetchWeChatBatch = async () => {
                     else if (view === 'viewpoints') await run('viewpoints', '观点', loadViewpoints);
                     else if (view === 'funds') await fetchFunds();
                     else if (view === 'cleanup') { await fetchRetentionPreview(); await fetchCleanupPreview(); await loadTestData(); }
-                    else if (view === 'advice') { await loadAdviceHistory(); }
+                    else if (view === 'advice') { if (!advice.value) { await loadLatestAdvice(); } await loadAdviceHistory(); }
                 };
                 // ===== 板块别名管理 =====
                 const configTab = ref('llm');
