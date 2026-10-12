@@ -8,50 +8,51 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: oklch(97.5% 0.008 255);
             min-height: 100vh;
             padding: 2rem;
         }
         .container {
             max-width: 800px;
             margin: 0 auto;
-            background: white;
+            background: oklch(99% 0.004 255);
+            border: 1px solid oklch(89% 0.018 255);
             border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 8px 18px -12px oklch(22% 0.035 255 / 0.22);
             padding: 2.5rem;
         }
         h1 {
-            color: #1a202c;
+            color: oklch(22% 0.035 255);
             font-size: 2rem;
             margin-bottom: 0.5rem;
         }
         .subtitle {
-            color: #718096;
+            color: oklch(43% 0.04 255);
             margin-bottom: 2rem;
         }
         .upload-area {
-            border: 3px dashed #cbd5e0;
+            border: 3px dashed oklch(82% 0.07 255);
             border-radius: 12px;
             padding: 3rem 2rem;
             text-align: center;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: border-color 0.2s ease, background 0.2s ease;
             margin-bottom: 1.5rem;
         }
         .upload-area:hover, .upload-area.dragover {
-            border-color: #667eea;
-            background: #f7fafc;
+            border-color: oklch(53% 0.16 255);
+            background: oklch(96% 0.025 255);
         }
         .upload-icon {
             font-size: 4rem;
             margin-bottom: 1rem;
         }
         .upload-text {
-            color: #4a5568;
+            color: oklch(30% 0.04 255);
             font-size: 1.1rem;
         }
         .upload-hint {
-            color: #a0aec0;
+            color: oklch(64% 0.035 255);
             font-size: 0.9rem;
             margin-top: 0.5rem;
         }
@@ -59,7 +60,7 @@
             display: none;
         }
         .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: oklch(53% 0.16 255);
             color: white;
             border: none;
             padding: 1rem 2rem;
@@ -67,12 +68,11 @@
             font-size: 1rem;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: background 0.2s ease;
             width: 100%;
         }
         .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+            background: oklch(48% 0.17 255);
         }
         .btn:disabled {
             opacity: 0.5;
@@ -85,58 +85,84 @@
         .progress-bar {
             width: 100%;
             height: 20px;
-            background: #e2e8f0;
+            background: oklch(94% 0.012 255);
             border-radius: 10px;
             overflow: hidden;
         }
         .progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            background: oklch(53% 0.16 255);
             width: 0%;
             transition: width 0.3s ease;
         }
         .status-text {
             margin-top: 1rem;
-            color: #4a5568;
+            color: oklch(30% 0.04 255);
         }
         .result-area {
             margin-top: 2rem;
             padding: 1.5rem;
-            background: #f7fafc;
+            background: oklch(96% 0.025 255);
             border-radius: 8px;
             display: none;
         }
         .result-success {
-            color: #2f855a;
+            color: oklch(57% 0.15 148);
             font-weight: 600;
         }
         .result-error {
-            color: #c53030;
+            color: oklch(56% 0.19 27);
             font-weight: 600;
         }
         .result-details {
             margin-top: 1rem;
             font-size: 0.9rem;
-            color: #4a5568;
+            color: oklch(30% 0.04 255);
         }
         .password-input {
             width: 100%;
             padding: 0.75rem 1rem;
-            border: 2px solid #e2e8f0;
+            border: 2px solid oklch(89% 0.018 255);
             border-radius: 8px;
             font-size: 1rem;
             margin-bottom: 1rem;
-            transition: border-color 0.3s ease;
+            transition: border-color 0.2s ease;
         }
         .password-input:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: oklch(53% 0.16 255);
         }
         .label {
             display: block;
-            color: #4a5568;
+            color: oklch(30% 0.04 255);
             font-weight: 600;
             margin-bottom: 0.5rem;
+        }
+
+        /* 手机（480px 以下）：收紧留白，内容不再被 padding 挤到 246px */
+        @media (max-width: 480px) {
+            body {
+                padding: 0.75rem;
+            }
+            .container {
+                padding: 1.25rem 1rem;
+                border-radius: 12px;
+            }
+            h1 {
+                font-size: 1.5rem;
+            }
+            .subtitle {
+                margin-bottom: 1.25rem;
+            }
+            .upload-area {
+                padding: 2rem 1rem;
+            }
+            .upload-icon {
+                font-size: 3rem;
+            }
+            .btn {
+                min-height: 44px;
+            }
         }
     </style>
 </head>

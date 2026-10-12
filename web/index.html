@@ -829,10 +829,11 @@
                 <div v-if="currentView === 'advice'">
                     <div v-if="adviceGenerating" class="advice-view">
                         <div class="advice-empty">
-                            <div class="loading-spinner"
-                                style="border-color: rgba(255,255,255,0.3); border-top-color: white;"></div>
-                            <h3>正在生成投资建议...</h3>
-                            <p>AI 正在分析市场数据，请稍候</p>
+                            <div class="advice-generating-banner">
+                                <div class="loading-spinner"></div>
+                                <h3>正在生成投资建议...</h3>
+                                <p>AI 正在分析市场数据，请稍候</p>
+                            </div>
                         </div>
                     </div>
                     <div v-else-if="advice" class="advice-view">
@@ -1315,6 +1316,7 @@
                         </div>
                         <div style="background: #fff; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
                             <h5 class="mb-8 text-secondary">📐 分数计算规则</h5>
+                            <div class="data-table" style="box-shadow: none; margin-bottom: 0;">
                             <table class="w-full text-xs">
                                 <thead>
                                     <tr style="background: #fafafa;">
@@ -1354,6 +1356,7 @@
                                     </tr>
                                 </tbody>
                             </table>
+                            </div>
                         </div>
                         <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0 && predictionDetail.is_correct !== null && predictionDetail.is_correct !== undefined"
                             style="background: #fff; padding: 12px; border-radius: 6px;">
@@ -1424,6 +1427,7 @@
                     <div v-if="predictionDetail.verify_history && predictionDetail.verify_history.length > 0"
                         class="detail-section">
                         <h4>验证历史（新规则：过程验证 + 分数机制）</h4>
+                        <div class="data-table" style="box-shadow: none;">
                         <table class="w-full text-xs">
                             <thead>
                                 <tr>
@@ -1471,6 +1475,7 @@
                                 </tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1549,6 +1554,7 @@
                     </div>
                     <div v-if="fundDetail.history && fundDetail.history.length > 0" class="detail-section">
                         <h4>历史净值（最近{{ fundDetail.history.length }}天）</h4>
+                        <div class="data-table" style="box-shadow: none;">
                         <table class="w-full text-xs">
                             <thead>
                                 <tr>
@@ -1566,6 +1572,7 @@
                                 </tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                     <div v-else class="detail-section">
                         <h4>历史净值</h4>
@@ -1778,6 +1785,7 @@
                         <div v-else>
                             <div class="text-sm text-muted" style="margin-bottom: 4px;">以下基金抓取失败，建议修正代码或删除对应板块映射：</div>
                             <div style="max-height: 220px; overflow-y: auto; border: 1px solid #ffccc7; border-radius: 4px;">
+                                <div class="data-table" style="box-shadow: none; margin-bottom: 0; border: none;">
                                 <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
                                     <thead>
                                         <tr style="background: #fff2f0;">
@@ -1796,10 +1804,12 @@
                                         </tr>
                                     </tbody>
                                 </table>
+                                </div>
                             </div>
                         </div>
                     </div>
                     <div style="max-height: 450px; overflow-y: auto; border: 1px solid #f0f0f0; border-radius: 6px;">
+                        <div class="data-table" style="box-shadow: none; margin-bottom: 0; border: none;">
                         <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
                             <thead>
                                 <tr style="background: #fafafa; position: sticky; top: 0; z-index: 1;">
@@ -1876,6 +1886,7 @@
                                 </tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                     <div v-if="aiBatch.running || aiBatch.status === 'completed'" style="margin-bottom: 10px; padding: 8px 10px; border: 1px solid #87e8de; border-radius: 6px; background: #e6fffb; font-size: 13px;">
                         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">

@@ -27,6 +27,12 @@
             --color-danger-border: oklch(82% 0.09 27);
             --color-info: oklch(56% 0.12 220);
             --color-info-light: oklch(96% 0.03 220);
+            --color-info-border: oklch(82% 0.08 220);
+
+            /* 仓位档位专用色：weak 介于 warning(琥珀) 与 danger(红) 之间的橙红 */
+            --color-weak: oklch(60% 0.15 45);
+            --color-weak-light: oklch(96% 0.045 45);
+            --color-weak-border: oklch(83% 0.09 45);
 
             /* 涨跌色 */
             --color-up: oklch(57% 0.15 148);
@@ -68,6 +74,8 @@
             --space-4: 16px;
             --space-5: 20px;
             --space-6: 24px;
+            --space-8: 32px;
+            --space-10: 40px;
 
             /* 过渡 */
             --transition-fast: 150ms ease;
@@ -101,6 +109,12 @@
             --color-danger: oklch(68% 0.17 27);
             --color-danger-light: oklch(25% 0.055 27);
             --color-danger-border: oklch(43% 0.09 27);
+            --color-info: oklch(68% 0.11 220);
+            --color-info-light: oklch(26% 0.045 220);
+            --color-info-border: oklch(43% 0.08 220);
+            --color-weak: oklch(72% 0.14 48);
+            --color-weak-light: oklch(26% 0.055 48);
+            --color-weak-border: oklch(44% 0.09 48);
 
             --color-up: oklch(70% 0.14 148);
             --color-up-bg: oklch(24% 0.055 148);
@@ -670,13 +684,13 @@
 
         .empty-state {
             text-align: center;
-            padding: var(--space-10);
+            padding: var(--space-8);
             color: var(--color-text-secondary);
         }
 
         .loading {
             text-align: center;
-            padding: var(--space-10);
+            padding: var(--space-8);
             color: var(--color-text-secondary);
         }
 
@@ -947,7 +961,7 @@
         }
 
         .history-list {
-            max-height: 300px;
+            max-height: 420px;
             overflow-y: auto;
         }
 
@@ -1075,34 +1089,21 @@
         }
 
         .advice-view {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: var(--radius-lg);
-            padding: var(--space-6);
-            color: white;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .advice-view::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -50%;
-            width: 100%;
-            height: 100%;
-            background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 70%);
-            pointer-events: none;
+            padding: 0;
+            color: var(--color-text);
         }
 
         .advice-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: var(--space-5);
+            flex-wrap: wrap;
+            gap: var(--space-2);
+            margin-bottom: var(--space-4);
         }
 
         .advice-header h2 {
-            font-size: 24px;
+            font-size: 20px;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -1114,49 +1115,63 @@
             border-radius: var(--radius-full);
             font-size: 14px;
             font-weight: 600;
+            border: 1px solid transparent;
         }
 
         .advice-type-buy {
-            background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+            background: var(--color-success-light);
+            border-color: var(--color-success-border);
+            color: var(--color-success);
         }
 
         .advice-type-sell {
-            background: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%);
+            background: var(--color-danger-light);
+            border-color: var(--color-danger-border);
+            color: var(--color-danger);
         }
 
         .advice-type-hold {
-            background: linear-gradient(135deg, #faad14 0%, #d48806 100%);
+            background: var(--color-warning-light);
+            border-color: var(--color-warning-border);
+            color: var(--color-warning);
         }
 
         .advice-type-watch {
-            background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+            background: var(--color-info-light);
+            border-color: var(--color-info-border);
+            color: var(--color-info);
         }
 
         .advice-content-box {
-            background: rgba(255, 255, 255, 0.15);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
             border-radius: var(--radius-lg);
             padding: var(--space-5);
-            margin-bottom: var(--space-5);
-            backdrop-filter: blur(10px);
+            margin-bottom: var(--space-4);
+            box-shadow: var(--shadow-sm);
         }
 
         .advice-content-box h3 {
             font-size: 16px;
             margin-bottom: var(--space-3);
-            opacity: 0.9;
+            color: var(--color-text);
         }
 
         .advice-content-box p {
             font-size: 15px;
             line-height: 1.8;
             white-space: pre-wrap;
+            color: var(--color-text);
         }
 
         .advice-meta-row {
             display: flex;
-            gap: var(--space-6);
-            margin-bottom: var(--space-5);
+            gap: var(--space-4) var(--space-6);
+            margin-bottom: var(--space-4);
             flex-wrap: wrap;
+            background: var(--color-bg-muted);
+            border-radius: var(--radius-md);
+            padding: var(--space-3) var(--space-4);
         }
 
         .advice-meta-item {
@@ -1166,34 +1181,35 @@
         }
 
         .advice-meta-item .label {
-            opacity: 0.8;
+            color: var(--color-text-secondary);
             font-size: 13px;
         }
 
         .advice-meta-item .value {
             font-weight: 600;
             font-size: 15px;
+            color: var(--color-text);
         }
 
         .advice-confidence-bar {
             width: 120px;
             height: 8px;
-            background: rgba(255, 255, 255, 0.2);
+            background: var(--color-border);
             border-radius: var(--radius-sm);
             overflow: hidden;
         }
 
         .advice-confidence-fill {
             height: 100%;
-            background: linear-gradient(90deg, #52c41a, #faad14, #ff4d4f);
+            background: var(--color-primary);
             border-radius: var(--radius-sm);
             transition: width 0.3s;
         }
 
         .advice-sectors {
             display: flex;
-            gap: var(--space-3);
-            margin-bottom: var(--space-5);
+            gap: var(--space-2);
+            margin-bottom: var(--space-4);
             flex-wrap: wrap;
         }
 
@@ -1205,85 +1221,128 @@
         }
 
         .sector-bullish {
-            background: rgba(82, 196, 26, 0.3);
-            border: 1px solid rgba(82, 196, 26, 0.5);
+            background: var(--color-success-light);
+            border: 1px solid var(--color-success-border);
+            color: var(--color-success);
         }
 
         .sector-bearish {
-            background: rgba(255, 77, 79, 0.3);
-            border: 1px solid rgba(255, 77, 79, 0.5);
+            background: var(--color-danger-light);
+            border: 1px solid var(--color-danger-border);
+            color: var(--color-danger);
         }
 
         /* ── v2 可执行建议（2026-10-12）：仓位指挥牌 + 板块操作清单 ── */
         .position-card {
-            background: rgba(0, 0, 0, 0.25);
+            background: var(--color-bg-muted);
             border-radius: var(--radius-lg);
-            border-left: 4px solid rgba(255, 255, 255, 0.25);
+            border: 1px solid var(--color-border);
             padding: var(--space-4) var(--space-5);
             margin-bottom: var(--space-4);
         }
 
         .position-card.stance-strong {
-            border-left-color: rgba(82, 196, 26, 0.9);
+            background: var(--color-success-light);
+            border-color: var(--color-success-border);
         }
 
         .position-card.stance-range {
-            border-left-color: rgba(250, 173, 20, 0.8);
+            background: var(--color-warning-light);
+            border-color: var(--color-warning-border);
         }
 
         .position-card.stance-weak {
-            border-left-color: rgba(255, 120, 70, 0.9);
+            background: var(--color-weak-light);
+            border-color: var(--color-weak-border);
         }
 
         .position-card.stance-very_weak {
-            border-left-color: rgba(255, 77, 79, 1);
+            background: var(--color-danger-light);
+            border-color: var(--color-danger-border);
         }
 
         .position-card.stance-unknown {
-            border-left-color: rgba(160, 160, 160, 0.6);
+            background: var(--color-bg-muted);
+            border-color: var(--color-border);
         }
 
         .position-main {
             display: flex;
-            align-items: baseline;
+            align-items: center;
             gap: var(--space-3);
             flex-wrap: wrap;
         }
 
         .position-stance {
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 700;
+            padding: var(--space-1) var(--space-3);
+            border-radius: var(--radius-full);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            color: var(--color-text);
+            white-space: nowrap;
+        }
+
+        .position-card.stance-strong .position-stance {
+            background: var(--color-success);
+            border-color: var(--color-success);
+            color: var(--color-text-inverse);
+        }
+
+        .position-card.stance-range .position-stance {
+            background: var(--color-warning);
+            border-color: var(--color-warning);
+            color: var(--color-text-inverse);
+        }
+
+        .position-card.stance-weak .position-stance {
+            background: var(--color-weak);
+            border-color: var(--color-weak);
+            color: var(--color-text-inverse);
+        }
+
+        .position-card.stance-very_weak .position-stance {
+            background: var(--color-danger);
+            border-color: var(--color-danger);
+            color: var(--color-text-inverse);
         }
 
         .position-label {
-            font-size: 14px;
-            opacity: 0.92;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--color-text);
         }
 
         .position-basis {
             margin-top: var(--space-2);
-            font-size: 12px;
-            opacity: 0.65;
+            font-size: 13px;
+            color: var(--color-text-secondary);
+            line-height: 1.6;
         }
 
         .position-override {
             margin-top: var(--space-2);
             font-size: 13px;
-            background: rgba(250, 173, 20, 0.14);
-            border: 1px solid rgba(250, 173, 20, 0.4);
+            color: var(--color-text);
+            background: var(--color-warning-light);
+            border: 1px solid var(--color-warning-border);
             border-radius: var(--radius-md);
             padding: var(--space-2) var(--space-3);
+            line-height: 1.6;
         }
 
         .action-list {
-            background: rgba(255, 255, 255, 0.08);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
             border-radius: var(--radius-lg);
             padding: var(--space-4);
+            box-shadow: var(--shadow-sm);
         }
 
         .action-row {
             padding: var(--space-3) 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            border-bottom: 1px solid var(--color-border);
         }
 
         .action-row:last-child {
@@ -1294,7 +1353,7 @@
         .action-line {
             display: flex;
             align-items: center;
-            gap: var(--space-3);
+            gap: var(--space-2) var(--space-3);
             flex-wrap: wrap;
         }
 
@@ -1303,126 +1362,135 @@
             font-weight: 600;
             border-radius: var(--radius-full);
             padding: 2px var(--space-3);
-            white-space: nowrap;
+            border: 1px solid transparent;
         }
 
         .action-badge.action-buy {
-            background: rgba(82, 196, 26, 0.35);
-            border: 1px solid rgba(82, 196, 26, 0.6);
-            color: #95de64;
+            background: var(--color-success-light);
+            border-color: var(--color-success-border);
+            color: var(--color-success);
         }
 
         .action-badge.action-add {
-            background: rgba(130, 200, 80, 0.25);
-            border: 1px solid rgba(130, 200, 80, 0.5);
-            color: #b7eb8f;
+            background: var(--color-success-light);
+            border-color: var(--color-success-border);
+            color: var(--color-success);
         }
 
         .action-badge.action-hold {
-            background: rgba(24, 144, 255, 0.25);
-            border: 1px solid rgba(24, 144, 255, 0.5);
-            color: #69c0ff;
+            background: var(--color-info-light);
+            border-color: var(--color-info-border);
+            color: var(--color-info);
         }
 
         .action-badge.action-reduce {
-            background: rgba(250, 140, 22, 0.28);
-            border: 1px solid rgba(250, 140, 22, 0.55);
-            color: #ffc069;
+            background: var(--color-weak-light);
+            border-color: var(--color-weak-border);
+            color: var(--color-weak);
         }
 
         .action-badge.action-exit {
-            background: rgba(255, 77, 79, 0.35);
-            border: 1px solid rgba(255, 77, 79, 0.6);
-            color: #ff7875;
+            background: var(--color-danger-light);
+            border-color: var(--color-danger-border);
+            color: var(--color-danger);
         }
 
         .action-badge.action-avoid {
-            background: rgba(200, 40, 60, 0.4);
-            border: 1px solid rgba(255, 77, 79, 0.75);
-            color: #ffa39e;
+            background: var(--color-danger-light);
+            border-color: var(--color-danger-border);
+            color: var(--color-danger);
         }
 
         .action-badge.action-watch {
-            background: rgba(160, 160, 160, 0.2);
-            border: 1px solid rgba(160, 160, 160, 0.4);
-            color: #bfbfbf;
+            background: var(--color-bg-muted);
+            border-color: var(--color-border);
+            color: var(--color-text-secondary);
         }
 
         .action-sector {
             font-size: 15px;
             font-weight: 600;
+            color: var(--color-text);
         }
 
         .action-fund {
             font-size: 12px;
-            opacity: 0.75;
-            background: rgba(255, 255, 255, 0.08);
+            color: var(--color-text-secondary);
+            background: var(--color-bg-muted);
             border-radius: var(--radius-md);
             padding: 1px var(--space-2);
         }
 
         .action-meta {
             font-size: 12px;
-            opacity: 0.6;
+            color: var(--color-text-tertiary);
             margin-left: auto;
+            white-space: nowrap;
         }
 
         .action-reason {
             margin-top: 6px;
             font-size: 13px;
             line-height: 1.55;
-            opacity: 0.85;
+            color: var(--color-text-secondary);
         }
 
         .advice-details-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: var(--space-4);
         }
 
         .advice-detail-card {
-            background: rgba(255, 255, 255, 0.1);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
             border-radius: var(--radius-lg);
             padding: var(--space-4);
+            box-shadow: var(--shadow-sm);
         }
 
         .advice-detail-card h4 {
             font-size: 13px;
-            opacity: 0.8;
+            color: var(--color-text-secondary);
             margin-bottom: var(--space-2);
         }
 
         .advice-detail-card p {
             font-size: 14px;
             line-height: 1.6;
+            color: var(--color-text);
         }
 
         .advice-term-section {
-            background: rgba(255, 255, 255, 0.08);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
             border-radius: var(--radius-lg);
             padding: var(--space-4);
+            box-shadow: var(--shadow-sm);
         }
 
         .term-card {
-            background: rgba(0, 0, 0, 0.2);
+            background: transparent;
             border-radius: var(--radius-md);
-            padding: var(--space-3) var(--space-4);
+            padding: 0;
         }
 
         .term-row {
             display: flex;
             align-items: flex-start;
             gap: var(--space-2);
-            margin-bottom: var(--space-2);
+            padding: var(--space-2) 0;
+            border-bottom: 1px dashed var(--color-border);
         }
 
         .term-row:last-child {
-            margin-bottom: 0;
+            border-bottom: none;
+            padding-bottom: 0;
         }
 
         .term-label {
             font-size: 13px;
-            opacity: 0.7;
+            color: var(--color-text-secondary);
             min-width: 70px;
             flex-shrink: 0;
         }
@@ -1430,11 +1498,12 @@
         .term-value {
             font-size: 14px;
             line-height: 1.5;
+            color: var(--color-text);
         }
 
         .term-value.action-text {
             font-weight: 600;
-            color: #ffd700;
+            color: var(--color-primary);
         }
 
         .risk-badge {
@@ -1445,18 +1514,18 @@
         }
 
         .risk-badge.risk-high {
-            background: rgba(255, 82, 82, 0.2);
-            color: #ff5252;
+            background: var(--color-danger-light);
+            color: var(--color-danger);
         }
 
         .risk-badge.risk-medium {
-            background: rgba(255, 193, 7, 0.2);
-            color: #ffc107;
+            background: var(--color-warning-light);
+            color: var(--color-warning);
         }
 
         .risk-badge.risk-low {
-            background: rgba(76, 175, 80, 0.2);
-            color: #4caf50;
+            background: var(--color-success-light);
+            color: var(--color-success);
         }
 
         .advice-actions {
@@ -1469,7 +1538,7 @@
         .advice-action-btn {
             padding: var(--space-2) var(--space-5);
             border-radius: var(--radius-md);
-            border: none;
+            border: 1px solid transparent;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
@@ -1477,24 +1546,24 @@
         }
 
         .advice-action-btn.primary {
-            background: white;
-            color: #764ba2;
+            background: var(--color-primary);
+            color: var(--color-text-inverse);
         }
 
         .advice-action-btn.secondary {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            background: var(--color-bg-elevated);
+            color: var(--color-text);
+            border-color: var(--color-border);
         }
 
         .advice-action-btn:hover {
-            filter: brightness(0.98);
+            filter: brightness(0.97);
             box-shadow: var(--shadow-md);
         }
 
         .advice-empty {
             text-align: center;
-            padding: var(--space-10) var(--space-5);
+            padding: var(--space-8) var(--space-5);
         }
 
         .advice-empty-icon {
@@ -1510,9 +1579,18 @@
         }
 
         .advice-empty p {
-            opacity: 0.7;
-            margin-bottom: var(--space-5);
             color: var(--color-text-secondary);
+            margin-bottom: var(--space-5);
+        }
+
+        .new-badge {
+            background: var(--color-success-light);
+            border: 1px solid var(--color-success-border);
+            color: var(--color-success);
+            padding: var(--space-1) var(--space-2);
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 600;
         }
 
         .sentiment-indicator {
@@ -1525,25 +1603,14 @@
             font-size: 20px;
         }
 
-        .new-badge {
-            background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
-            padding: var(--space-1) var(--space-2);
-            border-radius: var(--radius-full);
-            font-size: 11px;
-            font-weight: 600;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.7;
-            }
+        /* 生成态：横幅与 spinner 同色系（spinner 基础形在 .loading-spinner 通用轨） */
+        .advice-generating-banner {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            text-align: center;
+            padding: var(--space-8) var(--space-5);
         }
 
         .trend-analysis-box {
@@ -1929,6 +1996,42 @@
                 white-space: nowrap;
                 flex-shrink: 0;
             }
+
+            /* 投资建议页：双列详情并单列，指挥牌/操作清单收紧内边距 */
+            .advice-details-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .advice-view .position-card,
+            .advice-view .action-list,
+            .advice-view .advice-term-section,
+            .advice-view .advice-content-box {
+                padding: var(--space-3) var(--space-4);
+            }
+
+            .advice-meta-row {
+                gap: var(--space-2) var(--space-4);
+            }
+
+            .advice-meta-item .label {
+                font-size: 12px;
+            }
+
+            .advice-meta-item .value {
+                font-size: 14px;
+            }
+
+            .advice-confidence-bar {
+                width: 90px;
+            }
+
+            .advice-header h2 {
+                font-size: 18px;
+            }
+
+            .action-meta {
+                margin-left: 0;
+            }
         }
 
         /* 手机设备 (480px 以下) */
@@ -2276,7 +2379,7 @@
         textarea:focus {
             outline: none;
             border-color: var(--color-primary);
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+            box-shadow: 0 0 0 3px var(--color-primary-border);
         }
 
         /* 标签页激活效果 */
@@ -2611,6 +2714,34 @@
         font-size: 16px; /* 防 iOS 缩放 */
         min-height: 40px;
     }
+    /* 投资建议页：按钮纵排满宽可点、仓位牌再收紧 */
+    .advice-actions {
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+    .advice-action-btn {
+        width: 100%;
+        min-height: 44px;
+    }
+    .advice-view .position-card,
+    .advice-view .action-list,
+    .advice-view .advice-term-section,
+    .advice-view .advice-content-box {
+        padding: var(--space-3);
+    }
+    .advice-details-grid {
+        grid-template-columns: 1fr;
+    }
+    .history-list {
+        max-height: 60vh;
+    }
+    .term-row {
+        flex-direction: column;
+        gap: var(--space-1);
+    }
+    .term-label {
+        min-width: 0;
+    }
 }
 
 /* 帖子分析进度面板 */
@@ -2647,7 +2778,7 @@
 }
 .ap-bar {
     height: 100%;
-    background: linear-gradient(90deg, #65a6ff, #1677ff);
+    background: var(--color-primary);
     border-radius: 6px;
     transition: width 0.4s ease;
     min-width: 2px;
