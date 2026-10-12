@@ -60,6 +60,8 @@ predictions_check.json
 .codegraph/
 .codeartsdoer/
 .codex/
+.zcode/
+.zcodeignore
 
 # SQLite
 *.sqlite
