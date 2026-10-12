@@ -352,9 +352,20 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 （head 未动），Render 部署**先于**生产补列的那几分钟里 `/api/advice` 会 500（ORM SELECT 缺列）⇒
 push 与生产补列必须连着做，窗口要说人话报给老板。
 
-⑥ **仍然没做的，登记而不是当成已封**：生产库补列 + push + 线上现读验收（等老板点头）；
-110/158 两套全套；`docs/INVESTMENT_ADVICE_THREE_STAGE_OPTIMIZATION.md` 那份 2026-03-08 旧报告没随 v2 更新
-（它描述 v1 契约，本批未动它，读到它要知道已过时）。
+⑥ **生产补列与线上验收（2026-10-12 21:2x–21:4x，老板当批点头"确认补列"，并点名把 `.env` 的欠费火山渠道换成 Agent Manager 免费 LLM）**：
+- `sync_db_columns.py --against-production` 先 dry-run（计划逐字只有那 3 列）⇒ `--apply --confirm SYNC-COLUMNS` ⇒
+  回执 `[ok] 已补 3 列 / 0 索引` + `[ok] 复查：列与索引都已存在`（模型没声明的 9 个表/对象一字未动）。
+- 线上现读：`GET /api/advice` 回 200，老行 3 新列 NULL、读路径按设计回退；
+  `POST /api/advice {"force":true}` 真生成并 persisted——21:40 现读 `stance=weak`、5 条动作、
+  `position_label`「市场弱势，建议减仓为主（持仓不超过三成），不要新开仓买入」。
+  ⚠ **Render 仪表盘那侧的 LLM 渠道当场就能用**（不是 `.env` 里欠费那把火山 key 的连坐——线上没换也生成了，
+  生产账单走的是仪表盘自己的凭据；要不要也换成免费档是老板的省钱决定，不是功能缺陷）。
+- 本地 `.env`：`LLM_PROVIDER` 由 `volcengine` 改 `custom`，`LLM_API_KEY/BASE_URL/MODEL/LIGHT_MODEL` 换成档案库 `main`
+  （sensenova，`deepseek-flash`）；改前整份备份 `data/_review_tmp/.env-backup-20261012-before-llm-switch`（不入库）；
+  验证方式是镜像 8176 **不覆盖任何环境变量**照 `.env` 真生成 ⇒ persisted（weak 闸 + 6 条动作，回执
+  `data/_review_tmp/advice-v2-dotenv.json`，形状与 ⑤ 同）。
+- 仍然没做的：110/158 两套全套；`docs/INVESTMENT_ADVICE_THREE_STAGE_OPTIMIZATION.md`（2026-03-08 的 v1 旧报告）
+  没随 v2 更新——读到它要知道 §契约部分已过时。
 
 （上一批：2026-10-01 **09:4x–09:5x（北京）**，**第 90 批：老板一句"改名且删除"，生产档案身份欠账当场清掉**
 （`src/` 一个字未动 ⇒ 不需重跑基线与体检；这一批全是数据动作 + 一处文档假话改正）：
