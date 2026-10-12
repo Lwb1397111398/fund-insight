@@ -47,7 +47,8 @@ def _bare_analyzer(client):
         "model_usage": {},
     }
     analyzer.circuit_breaker = SimpleNamespace(
-        record_success=lambda: None, record_failure=lambda: None
+        record_success=lambda: None, record_failure=lambda: None,
+        can_execute=lambda: True,
     )
     analyzer.strategy = "auto"
     analyzer.model = "main-model"

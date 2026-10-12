@@ -23,6 +23,10 @@ PERSIST_FIELDS = [
     "LLM_MODEL",
     "LLM_LIGHT_MODEL",
     "LLM_STRATEGY",
+    "LLM_SECONDARY_API_KEY",
+    "LLM_SECONDARY_BASE_URL",
+    "LLM_SECONDARY_MODEL",
+    "LLM_SECONDARY_LIGHT_MODEL",
     "VOLCENGINE_API_KEY",
     "VOLCENGINE_BASE_URL",
     "VOLCENGINE_MODEL",
@@ -114,6 +118,13 @@ class Config:
     VOLCENGINE_BASE_URL = os.getenv("VOLCENGINE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
     VOLCENGINE_MODEL = os.getenv("VOLCENGINE_MODEL", "doubao-seed-2-0-pro-260215")
     VOLCENGINE_LIGHT_MODEL = os.getenv("VOLCENGINE_LIGHT_MODEL", "doubao-seed-2-0-lite-260215")
+
+    # 辅助 API：与主动渠道同构的 OpenAI 兼容端点。主动渠道重试耗尽或熔断时
+    # 整体切过去（换 client 也换模型）；四个变量缺一即视为未配置辅助渠道。
+    LLM_SECONDARY_API_KEY = os.getenv("LLM_SECONDARY_API_KEY", "")
+    LLM_SECONDARY_BASE_URL = os.getenv("LLM_SECONDARY_BASE_URL", "")
+    LLM_SECONDARY_MODEL = os.getenv("LLM_SECONDARY_MODEL", "")
+    LLM_SECONDARY_LIGHT_MODEL = os.getenv("LLM_SECONDARY_LIGHT_MODEL", "")
 
     DATABASE_URL = os.getenv("DATABASE_URL", "")
     DB_PATH = DATA_DIR / "fund_insight.db"

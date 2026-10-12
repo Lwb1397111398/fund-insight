@@ -1907,6 +1907,14 @@
                             <option value="volcengine">火山引擎 (Volcengine)</option>
                         </select>
                     </div>
+                    <div class="config-item">
+                        <label>LLM 提供商</label>
+                        <select v-model="configData.llm_provider">
+                            <option value="siliconflow">硅基流动 (SiliconFlow)</option>
+                            <option value="volcengine">火山引擎 (Volcengine)</option>
+                            <option value="custom">自定义 (OpenAI 兼容)</option>
+                        </select>
+                    </div>
                     <div v-if="configData.llm_provider === 'volcengine'" style="background: #fff7e6; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
                         <h4 style="color: #d46b08; margin-bottom: 8px;">🔥 火山引擎配置</h4>
                         <div class="config-item"><label>API Key</label><input type="password"
@@ -1915,12 +1923,21 @@
                         <div class="config-item"><label>辅助模型</label><input v-model="configData.volcengine_light_model" placeholder="如: doubao-seed-2-0-lite-260215"></div>
                     </div>
                     <div v-else style="background: #f6ffed; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
-                        <h4 style="color: #389e0d; margin-bottom: 8px;">🌿 硅基流动配置</h4>
+                        <h4 style="color: #389e0d; margin-bottom: 8px;">{{ configData.llm_provider === 'custom' ? '🛠 自定义 OpenAI 兼容配置（主动 API）' : '🌿 硅基流动配置' }}</h4>
                         <div class="config-item"><label>API Key</label><input type="password"
                                 v-model="configData.llm_api_key" :placeholder="configData.llm_api_key_set ? '已设置' : '未设置'"></div>
-                        <div class="config-item"><label>Base URL</label><input v-model="configData.llm_base_url"></div>
+                        <div class="config-item"><label>Base URL</label><input v-model="configData.llm_base_url" placeholder="如: https://api.deepseek.com/v1"></div>
                         <div class="config-item"><label>主模型</label><input v-model="configData.llm_model"></div>
                         <div class="config-item"><label>轻量模型</label><input v-model="configData.llm_light_model"></div>
+                    </div>
+                    <div style="background: #f9f0ff; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px dashed #b37feb;">
+                        <h4 style="color: #531dab; margin-bottom: 8px;">🛟 辅助 API（主动渠道故障时自动切换，可选）</h4>
+                        <div class="config-item"><label>API Key</label><input type="password"
+                                v-model="configData.llm_secondary_api_key" :placeholder="configData.llm_secondary_api_key_set ? '已设置' : '未设置'"></div>
+                        <div class="config-item"><label>Base URL</label><input v-model="configData.llm_secondary_base_url" placeholder="如: https://api.siliconflow.cn/v1"></div>
+                        <div class="config-item"><label>主模型</label><input v-model="configData.llm_secondary_model" placeholder="主动渠道主模型不可用时切到这里"></div>
+                        <div class="config-item"><label>轻量模型</label><input v-model="configData.llm_secondary_light_model"></div>
+                        <div class="text-2xs text-muted" style="margin-top: 4px;">四项都填写才启用辅助渠道；主动渠道重试耗尽或熔断时自动整体切换。</div>
                     </div>
                     <div class="config-item"><label>爬虫状态</label><span>{{ configData.crawler_enabled ? '✅ 已启用' : '❌ 未启用'
                             }}</span></div>
@@ -1934,6 +1951,9 @@
                             </button>
                             <button v-if="configData.llm_provider === 'volcengine'" class="action-btn small" @click="testVolcengineLight" :disabled="visionTesting">
                                 {{ visionTesting ? '测试中...' : '测试辅助模型' }}
+                            </button>
+                            <button class="action-btn small" @click="testSecondaryLLM" :disabled="secondaryTesting">
+                                {{ secondaryTesting ? '测试中...' : '测试辅助 API' }}
                             </button>
                         </div>
                         <div v-if="testResult" style="margin-top: 10px; padding: 10px; background: #f6ffed; border-radius: 6px;">
@@ -3145,8 +3165,10 @@ const fetchWeChatBatch = async () => {
                 const testData = ref(null);
                 const llmTesting = ref(false);
                 const visionTesting = ref(false);
+                const secondaryTesting = ref(false);
                 const testResult = ref(null);
                 const testLLM = async () => { llmTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-llm'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } llmTesting.value = false; };
+                const testSecondaryLLM = async () => { secondaryTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-secondary-llm'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } secondaryTesting.value = false; };
                 const testVolcengineLight = async () => { visionTesting.value = true; testResult.value = null; try { const res = await axios.post('/api/config/test-volcengine-light'); testResult.value = res.data; } catch (e) { testResult.value = { success: false, message: '测试失败: ' + e.message }; } visionTesting.value = false; };
                 const loadTestData = async () => { testDataError.value = ''; try { const res = await axios.get('/api/test-data/find'); if (res.data.success) { testData.value = res.data.data; } else { testDataError.value = '测试数据没扫到：' + (res.data.message || '接口未给出原因'); } } catch (e) { testDataError.value = '测试数据扫描失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); console.error('加载测试数据失败:', e); } };
                 const previewTestData = () => { if (!testData.value) return; let msg = '测试数据详情:\n\n'; if (testData.value.bloggers.length > 0) { msg += `测试博主 (${testData.value.bloggers.length}):\n`; testData.value.bloggers.forEach(b => msg += `  - ${b.name} (${b.posts_count}帖子, ${b.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.posts.length > 0) { msg += `测试帖子 (${testData.value.posts.length}):\n`; testData.value.posts.forEach(p => msg += `  - ${p.title}\n`); msg += '\n'; } if (testData.value.funds.length > 0) { msg += `测试基金 (${testData.value.funds.length}):\n`; testData.value.funds.forEach(f => msg += `  - ${f.fund_name} (${f.predictions_count}预测)\n`); msg += '\n'; } if (testData.value.viewpoints.length > 0) { msg += `测试观点 (${testData.value.viewpoints.length}):\n`; testData.value.viewpoints.forEach(v => msg += `  - ${v.content}\n`); msg += '\n'; } if (testData.value.predictions && testData.value.predictions.length > 0) { msg += `测试预测 (${testData.value.predictions.length}):\n`; testData.value.predictions.forEach(p => msg += `  - ${p.fund_name || p.fund_code || p.prediction_content}\n`); } alert(msg); };
@@ -3565,7 +3587,7 @@ const fetchWeChatBatch = async () => {
                     updateAllFunds, fetchWeChatBatch, generateAdvice,
                     loadAdviceHistory, loadConfig, openConfig, updateConfig, cleanupData,
                     cleanupCategoryLabel, cleanupWarningLabel, loadTestData, previewTestData, cleanupTestData,
-                    parseTrendAnalysis, testLLM, testVolcengineLight, configTab, aliases, newAlias,
+                    parseTrendAnalysis, testLLM, testVolcengineLight, testSecondaryLLM, secondaryTesting, configTab, aliases, newAlias,
                     loadAliases, addAlias, deleteAlias, sectorMappings, mappingFilter,
                     identityFilter, identityStats,
                     mappingSearchKeyword, filteredMappings, editingMappingKey, editingMapping,

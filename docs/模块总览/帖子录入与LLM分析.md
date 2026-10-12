@@ -26,8 +26,14 @@
 - 被 `src/tasks/scheduler.py`（本地常驻）与 `scripts/run_scheduled_tasks.py`（Render Cron）调度。
 
 ## 上游依赖
-LLM 服务（`LLM_PROVIDER/LLM_BASE_URL/LLM_MODEL/LLM_API_KEY`，火山引擎用 `VOLCENGINE_API_KEY`）、
-`sector_fund_agent` + `fund_api`（补基金时要抓站）、`system_config`（线上持久化配置）。
+LLM 服务：**主动渠道**（`LLM_PROVIDER/LLM_BASE_URL/LLM_MODEL/LLM_LIGHT_MODEL/LLM_API_KEY`，
+火山引擎用 `VOLCENGINE_*`，选 `custom` 时同样走 `LLM_BASE_URL/LLM_MODEL`，只是不预设服务商）+
+**辅助渠道**（`LLM_SECONDARY_API_KEY/LLM_SECONDARY_BASE_URL/LLM_SECONDARY_MODEL/LLM_SECONDARY_LIGHT_MODEL`，
+四个全配才启用；主动渠道重试耗尽或熔断时整体切过去，换 client 也换模型；
+主选轻量模型那档时辅助也用它自己的轻量模型）。
+配置可在页面「系统设置 → LLM 配置」改（落 `system_config`/`llm_config.json`），
+「测试辅助 API」按钮测辅助渠道连通；熔断按渠道各挂一把（`circuit_breaker` / `secondary_circuit_breaker`）。
+另有 `sector_fund_agent` + `fund_api`（补基金时要抓站）、`system_config`（线上持久化配置）。
 
 ## 关键数据结构
 `posts`（`analysis_result` JSON、`analyzed`）、`predictions`（`sector`/`fund_code`/`prediction_type`/
@@ -45,6 +51,10 @@ LLM 服务（`LLM_PROVIDER/LLM_BASE_URL/LLM_MODEL/LLM_API_KEY`，火山引擎用
 - 低质量帖子有清理任务（`/api/test-data`、`test_data_cleanup_service`），批量分析前先确认不是测试数据。
 
 ## 最后更新
+2026-10-12：LLM 改「主动 + 辅助」双渠道：新增 `LLM_SECONDARY_*` 四变量（OpenAI 兼容），
+`LLM_PROVIDER` 新增 `custom`；`_call_llm_internal` 改为逐渠道尝试（主动失败/熔断整体切辅助，
+不可重试错误如 401 也立即换渠道），每渠道独立熔断器；config 路由与设置页透出辅助渠道并新增
+`POST /api/config/test-secondary-llm`；判据 `tests/unit/test_llm_secondary_fallback.py`（7 条）。
 2026-09-20：`_fill_fund_from_sector` 第 4/5 层改走 `sector_fund_agent`；删除
 `_find_fund_in_fundinfo` 的 `.contains()`/反向子串匹配及其自动写库（错配自我固化的主路径）；
 `LLMAnalyzer.get_fund_for_sector` 改为只做精确匹配；`fund_match_level` 落点更正为

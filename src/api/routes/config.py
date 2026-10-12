@@ -44,6 +44,10 @@ class ConfigUpdate(BaseModel):
     llm_model: Optional[str] = None
     llm_light_model: Optional[str] = None
     llm_provider: Optional[str] = None
+    llm_secondary_api_key: Optional[str] = None
+    llm_secondary_base_url: Optional[str] = None
+    llm_secondary_model: Optional[str] = None
+    llm_secondary_light_model: Optional[str] = None
     volcengine_api_key: Optional[str] = None
     volcengine_model: Optional[str] = None
     volcengine_light_model: Optional[str] = None
@@ -70,6 +74,10 @@ def get_config():
             "llm_model": config.LLM_MODEL,
             "llm_light_model": config.LLM_LIGHT_MODEL,
             "llm_strategy": config.LLM_STRATEGY,
+            "llm_secondary_api_key_set": bool(config.LLM_SECONDARY_API_KEY),
+            "llm_secondary_base_url": config.LLM_SECONDARY_BASE_URL,
+            "llm_secondary_model": config.LLM_SECONDARY_MODEL,
+            "llm_secondary_light_model": config.LLM_SECONDARY_LIGHT_MODEL,
             "volcengine_api_key_set": bool(config.VOLCENGINE_API_KEY),
             "volcengine_base_url": config.VOLCENGINE_BASE_URL,
             "volcengine_model": config.VOLCENGINE_MODEL,
@@ -108,7 +116,23 @@ def update_config(config_update: ConfigUpdate):
     if config_update.llm_light_model:
         config.LLM_LIGHT_MODEL = config_update.llm_light_model
         updated.append("llm_light_model")
-    
+
+    if config_update.llm_secondary_api_key:
+        config.LLM_SECONDARY_API_KEY = config_update.llm_secondary_api_key
+        updated.append("llm_secondary_api_key")
+
+    if config_update.llm_secondary_base_url:
+        config.LLM_SECONDARY_BASE_URL = config_update.llm_secondary_base_url
+        updated.append("llm_secondary_base_url")
+
+    if config_update.llm_secondary_model:
+        config.LLM_SECONDARY_MODEL = config_update.llm_secondary_model
+        updated.append("llm_secondary_model")
+
+    if config_update.llm_secondary_light_model:
+        config.LLM_SECONDARY_LIGHT_MODEL = config_update.llm_secondary_light_model
+        updated.append("llm_secondary_light_model")
+
     if config_update.volcengine_api_key:
         config.VOLCENGINE_API_KEY = config_update.volcengine_api_key
         updated.append("volcengine_api_key")
@@ -839,6 +863,52 @@ def test_volcengine_light():
             "message": f"辅助模型测试失败: {str(e)}",
             "data": {
                 "provider": config.LLM_PROVIDER,
+                "error": str(e)
+            }
+        }
+
+
+@router.post("/test-secondary-llm")
+def test_secondary_llm():
+    """测试辅助 API 渠道连通性（用当前配置临时建客户端，不影响分析器单例）"""
+    try:
+        from openai import OpenAI
+
+        if not (config.LLM_SECONDARY_API_KEY and config.LLM_SECONDARY_BASE_URL):
+            return {
+                "success": False,
+                "message": "辅助 API 未配置（需要 Key、Base URL、主模型、轻量模型四项齐全）",
+                "data": None
+            }
+
+        client = OpenAI(
+            api_key=config.LLM_SECONDARY_API_KEY,
+            base_url=config.LLM_SECONDARY_BASE_URL
+        )
+        test_prompt = "你好，请回复'辅助API连接成功！'这七个字，不要回复其他内容。"
+        response = client.chat.completions.create(
+            model=config.LLM_SECONDARY_MODEL,
+            messages=[{"role": "user", "content": test_prompt}],
+            max_tokens=50,
+            temperature=0.1
+        )
+        result = response.choices[0].message.content
+
+        return {
+            "success": True,
+            "message": "辅助 API 连接测试成功",
+            "data": {
+                "provider": "secondary",
+                "model": config.LLM_SECONDARY_MODEL,
+                "response": result.strip() if result else None
+            }
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"辅助 API 连接测试失败: {str(e)}",
+            "data": {
+                "provider": "secondary",
                 "error": str(e)
             }
         }

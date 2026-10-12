@@ -124,7 +124,13 @@ class AnalysisResultCache:
 
 class LLMAnalyzer:
     """LLM分析器 - 增强版（支持多模型、熔断器、缓存、指数退避重试）"""
-    
+
+    # 辅助 API 渠道的类级默认：测试用 object.__new__ 构造裸实例（绕过 __init__）时
+    # 也能看到"未配置辅助渠道"，不会 AttributeError
+    secondary_client: Optional["OpenAI"] = None
+    secondary_model: str = ""
+    secondary_light_model: str = ""
+
     SYSTEM_PROMPT = """你是一个专业的基金投资分析助手，具备以下能力：
 1. 精准识别基金代码、板块名称和投资方向
 2. 分析博主观点的信心程度和预测周期
@@ -252,12 +258,12 @@ class LLMAnalyzer:
         self.model = config.LLM_MODEL
         self.light_model = config.LLM_LIGHT_MODEL
         self.strategy = config.LLM_STRATEGY
-        
+
         self.volcengine_api_key = config.VOLCENGINE_API_KEY
         self.volcengine_base_url = config.VOLCENGINE_BASE_URL
         self.volcengine_model = config.VOLCENGINE_MODEL
         self.volcengine_light_model = config.VOLCENGINE_LIGHT_MODEL
-        
+
         if self.provider == 'volcengine':
             if not self.volcengine_api_key:
                 raise ValueError("使用火山引擎时，请设置 VOLCENGINE_API_KEY 环境变量")
@@ -276,8 +282,32 @@ class LLMAnalyzer:
                 client_kwargs['base_url'] = self.base_url
             self.client = OpenAI(**client_kwargs)
             logger.info(f"[LLM] 使用 {self.provider} (模型: {self.model})")
-        
+
+        # 辅助 API 渠道：任意 OpenAI 兼容端点（自定义 base_url + api_key + 模型名）。
+        # 四个变量都配置才算启用；主动渠道重试耗尽或熔断时整体切过去。
+        self.secondary_client = None
+        self.secondary_model = ""
+        self.secondary_light_model = ""
+        if (config.LLM_SECONDARY_API_KEY and config.LLM_SECONDARY_BASE_URL
+                and config.LLM_SECONDARY_MODEL and config.LLM_SECONDARY_LIGHT_MODEL):
+            self.secondary_client = OpenAI(
+                api_key=config.LLM_SECONDARY_API_KEY,
+                base_url=config.LLM_SECONDARY_BASE_URL
+            )
+            self.secondary_model = config.LLM_SECONDARY_MODEL
+            self.secondary_light_model = config.LLM_SECONDARY_LIGHT_MODEL
+            logger.info(f"[LLM] 辅助渠道已启用 (base_url: {self.secondary_model} 所在端点, "
+                        f"主力模型: {self.secondary_model}, 轻量模型: {self.secondary_light_model})")
+        else:
+            logger.info("[LLM] 未配置辅助 API 渠道，仅使用主动渠道")
+
         self.circuit_breaker = CircuitBreakerState(
+            enabled=True,
+            failure_threshold=getattr(config, 'CIRCUIT_BREAKER_THRESHOLD', 5),
+            recovery_timeout=float(getattr(config, 'CIRCUIT_BREAKER_RECOVERY', 60))
+        )
+        # 辅助渠道独立熔断：主动渠道熔断不影响辅助渠道顶上
+        self.secondary_circuit_breaker = CircuitBreakerState(
             enabled=True,
             failure_threshold=getattr(config, 'CIRCUIT_BREAKER_THRESHOLD', 5),
             recovery_timeout=float(getattr(config, 'CIRCUIT_BREAKER_RECOVERY', 60))
@@ -435,14 +465,10 @@ class LLMAnalyzer:
                 self._call_stats['cache_hits'] += 1
                 logger.debug(f"[LLM] 缓存命中，跳过调用")
                 return cached.get('response', '')
-        
-        if not self.circuit_breaker.can_execute():
-            logger.warning("[LLM] 熔断器处于开启状态，拒绝请求")
-            raise Exception("熔断器开启，服务暂时不可用")
-        
+
         with self._semaphore:
             return self._call_llm_internal(prompt, task_type, max_tokens, temperature, use_cache, retry_count)
-    
+
     def _chat_create(self, **kwargs):
         """chat.completions.create 统一入口：默认关闭思考型模型的深度思考。
 
@@ -451,14 +477,16 @@ class LLMAnalyzer:
         GLM-5.2：22s → 4.8s，输出质量一致）。LLM_DISABLE_THINKING 开启（默认）
         时注入 extra_body 关闭思考；若模型拒绝该参数（个别模型/视觉模型），
         自动回退一次普通调用并按模型名记录，该模型后续调用不再附带。
+        client: 指定使用的 OpenAI 兼容客户端（主动渠道或辅助渠道），缺省主动渠道。
         """
+        client = kwargs.pop('_client', None) or self.client
         model = kwargs.get('model')
         extra_attached = False
         if self.disable_thinking and model not in self._thinking_rejected_models:
             kwargs = {**kwargs, 'extra_body': {'thinking': {'type': 'disabled'}}}
             extra_attached = True
         try:
-            return self.client.chat.completions.create(**kwargs)
+            return client.chat.completions.create(**kwargs)
         except Exception as exc:
             msg = str(exc).lower()
             if extra_attached and (
@@ -467,21 +495,64 @@ class LLMAnalyzer:
                 self._thinking_rejected_models.add(model)
                 logger.warning(f"[LLM] 模型 {model} 不支持 thinking 参数，已回退默认模式: {exc}")
                 kwargs.pop('extra_body', None)
-                return self.client.chat.completions.create(**kwargs)
+                return client.chat.completions.create(**kwargs)
             raise
+
+    def _build_channels(self, primary_model: str) -> List[Tuple[str, Any, str, CircuitBreakerState]]:
+        """按当前可用渠道构建调用序列：主动渠道在前，辅助渠道（若配置）在后。
+
+        返回 (渠道名, OpenAI 客户端, 该渠道模型, 该渠道熔断器) 列表；
+        辅助渠道的模型跟随主动渠道的选择：主选轻量模型时辅助也用它的轻量模型。
+        """
+        channels = [("主动", self.client, primary_model, self.circuit_breaker)]
+        if self.secondary_client is not None:
+            if primary_model == self.light_model:
+                secondary_model = self.secondary_light_model
+            else:
+                secondary_model = self.secondary_model
+            channels.append(("辅助", self.secondary_client, secondary_model,
+                             self.secondary_circuit_breaker))
+        return channels
 
     def _call_llm_internal(self, prompt: str, task_type: str = 'default', max_tokens: int = 500, temperature: float = 0.7,
                             use_cache: bool = True, retry_count: int = 3) -> str:
-        """LLM调用内部实现"""
-        model = self._select_model(task_type)
+        """LLM调用内部实现：逐渠道尝试，主动渠道失败后切辅助渠道"""
+        primary_model = self._select_model(task_type)
         start_time = time.time()
+        last_error: Optional[Exception] = None
+
+        for channel_name, client, model, circuit_breaker in self._build_channels(primary_model):
+            if not circuit_breaker.can_execute():
+                logger.warning(f"[LLM] {channel_name}渠道熔断器处于开启状态，跳过该渠道")
+                last_error = Exception(f"{channel_name}渠道熔断开启，服务暂时不可用")
+                continue
+
+            try:
+                return self._attempt_channel(
+                    channel_name, client, model, circuit_breaker,
+                    prompt, task_type, max_tokens, temperature, use_cache, retry_count, start_time)
+            except Exception as exc:
+                # 该渠道重试耗尽或遇到不可重试错误 → 整体换下一个渠道
+                last_error = exc
+                logger.error(f"[LLM] {channel_name}渠道不可用 (模型: {model})，尝试切换下一渠道: {exc}")
+
+        raise last_error if last_error is not None else Exception("所有 LLM 渠道均不可用")
+
+    def _attempt_channel(self, channel_name: str, client: Any, model: str,
+                         circuit_breaker: CircuitBreakerState,
+                         prompt: str, task_type: str, max_tokens: int, temperature: float,
+                         use_cache: bool, retry_count: int, start_time: float) -> str:
+        """单个渠道的调用实现：指数退避重试、熔断记录、成本统计。
+
+        成功返回响应文本；重试耗尽或不可重试错误抛异常（由上层决定是否换渠道）。
+        """
         last_error = None
-        
         for attempt in range(retry_count):
             try:
                 self._call_stats['total_calls'] += 1
-                
+
                 response = self._chat_create(
+                    _client=client,
                     model=model,
                     messages=[
                         {"role": "system", "content": self.SYSTEM_PROMPT},
@@ -490,28 +561,28 @@ class LLMAnalyzer:
                     temperature=temperature,
                     max_tokens=max_tokens
                 )
-                
+
                 result = response.choices[0].message.content.strip()
-                
-                self.circuit_breaker.record_success()
+
+                circuit_breaker.record_success()
                 self._call_stats['successful_calls'] += 1
-                
+
                 duration = time.time() - start_time
                 self._call_stats['total_duration'] += duration
-                
+
                 # 记录成本和模型使用统计
                 if hasattr(response, 'usage') and response.usage:
                     tokens_used = response.usage.total_tokens
                     self._call_stats['total_tokens'] += tokens_used
-                    
+
                     # 计算成本
                     cost = self._calculate_cost(
-                        model, 
-                        response.usage.prompt_tokens, 
+                        model,
+                        response.usage.prompt_tokens,
                         response.usage.completion_tokens
                     )
                     self._call_stats['total_cost'] += cost
-                    
+
                     # 更新模型使用统计
                     if model not in self._call_stats['model_usage']:
                         self._call_stats['model_usage'][model] = {
@@ -522,20 +593,20 @@ class LLMAnalyzer:
                     self._call_stats['model_usage'][model]['calls'] += 1
                     self._call_stats['model_usage'][model]['tokens'] += tokens_used
                     self._call_stats['model_usage'][model]['cost'] += cost
-                    
-                    logger.info(f"[LLM] 调用成功 (模型: {model}, 耗时: {duration:.2f}s, tokens: {tokens_used}, 成本: ¥{cost:.4f})")
+
+                    logger.info(f"[LLM] 调用成功 ({channel_name}渠道, 模型: {model}, 耗时: {duration:.2f}s, tokens: {tokens_used}, 成本: ¥{cost:.4f})")
                 else:
-                    logger.info(f"[LLM] 调用成功 (模型: {model}, 耗时: {duration:.2f}s)")
-                
+                    logger.info(f"[LLM] 调用成功 ({channel_name}渠道, 模型: {model}, 耗时: {duration:.2f}s)")
+
                 if use_cache:
                     self.result_cache.set(prompt, {'response': result}, task_type)
-                
+
                 return result
-                
+
             except Exception as e:
                 last_error = e
                 self._call_stats['failed_calls'] += 1
-                self.circuit_breaker.record_failure()
+                circuit_breaker.record_failure()
 
                 # 记录失败用于智能降级
                 self._downgrade_state['failure_count'] += 1
@@ -544,15 +615,15 @@ class LLMAnalyzer:
                 # 检查是否为可重试错误
                 status_code = getattr(e, 'status_code', None)
                 if status_code is not None and status_code not in RETRYABLE_STATUS_CODES:
-                    logger.error(f"[LLM] 不可重试错误 (模型: {model}, status_code={status_code}): {e}")
+                    logger.error(f"[LLM] 不可重试错误 ({channel_name}渠道, 模型: {model}, status_code={status_code}): {e}")
                     raise e
 
                 if attempt < retry_count - 1:
                     backoff_time = (2 ** attempt) + (0.5 * attempt)
-                    logger.warning(f"[LLM] 调用失败 (模型: {model}, 尝试: {attempt + 1}/{retry_count}): {e}, {backoff_time:.1f}秒后重试")
+                    logger.warning(f"[LLM] 调用失败 ({channel_name}渠道, 模型: {model}, 尝试: {attempt + 1}/{retry_count}): {e}, {backoff_time:.1f}秒后重试")
                     time.sleep(backoff_time)
-        
-        logger.error(f"[LLM] 所有重试失败 (模型: {model}): {last_error}")
+
+        logger.error(f"[LLM] {channel_name}渠道所有重试失败 (模型: {model}): {last_error}")
         raise last_error
     
     def generate_title(self, content: str, retry_count: int = 2) -> str:
@@ -2290,6 +2361,9 @@ class LLMAnalyzer:
             **self._call_stats,
             'circuit_breaker_state': self.circuit_breaker.state,
             'circuit_breaker_failures': self.circuit_breaker.failure_count,
+            'secondary_configured': self.secondary_client is not None,
+            'circuit_breaker_state_secondary': getattr(self, 'secondary_circuit_breaker', None).state
+                if getattr(self, 'secondary_circuit_breaker', None) is not None else 'not_initialized',
             'cache_size': len(self.result_cache._cache)
         }
     
@@ -2308,19 +2382,21 @@ class LLMAnalyzer:
 
 
 _analyzer: Optional[LLMAnalyzer] = None
-_analyzer_api_key: Optional[str] = None
+_analyzer_api_key: Optional[Tuple] = None
 
 
 def get_analyzer() -> LLMAnalyzer:
     """获取分析器单例（支持配置热更新）"""
     global _analyzer, _analyzer_api_key
-    
-    current_api_key = config.LLM_API_KEY
+
+    # 主/辅两把 key 都算进指纹：任一渠道的 key 变了都要重建客户端
+    current_api_key = (config.LLM_API_KEY, config.LLM_SECONDARY_API_KEY)
     if _analyzer is None or _analyzer_api_key != current_api_key:
-        logger.info(f"[LLM] 初始化分析器 (API Key: {'已设置' if current_api_key else '未设置'})")
+        logger.info(f"[LLM] 初始化分析器 (主动 Key: {'已设置' if current_api_key[0] else '未设置'}, "
+                    f"辅助 Key: {'已设置' if current_api_key[1] else '未设置'})")
         _analyzer = LLMAnalyzer()
         _analyzer_api_key = current_api_key
-    
+
     return _analyzer
 
 
