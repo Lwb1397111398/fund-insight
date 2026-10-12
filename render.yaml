@@ -35,15 +35,33 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: LLM_PROVIDER
-        value: volcengine
+        sync: false
       - key: VOLCENGINE_API_KEY
         sync: false
       - key: VOLCENGINE_BASE_URL
         value: "https://ark.cn-beijing.volces.com/api/v3"
-      # 模型由 Render 网页环境变量管理（不在蓝图写死，避免部署时覆盖线上配置）
+      # 模型与渠道选择由 Render 网页环境变量管理（不在蓝图写死，避免部署时覆盖线上配置）
       - key: VOLCENGINE_MODEL
         sync: false
       - key: VOLCENGINE_LIGHT_MODEL
+        sync: false
+      # 主动/辅助双渠道（均为 OpenAI 兼容）由仪表盘管理：LLM_PROVIDER 填 custom 即走 LLM_*；
+      # LLM_SECONDARY_* 四项全配才启用辅助渠道，缺省留空＝不启用
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_LIGHT_MODEL
+        sync: false
+      - key: LLM_SECONDARY_API_KEY
+        sync: false
+      - key: LLM_SECONDARY_BASE_URL
+        sync: false
+      - key: LLM_SECONDARY_MODEL
+        sync: false
+      - key: LLM_SECONDARY_LIGHT_MODEL
         sync: false
       # L1：正式加权默认关；shadow 双跑默认开（只记 log，服务 legacy）
       - key: ADVICE_L1_HIT_WEIGHTING
@@ -86,15 +104,32 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: LLM_PROVIDER
-        value: volcengine
+        sync: false
       - key: VOLCENGINE_API_KEY
         sync: false
       - key: VOLCENGINE_BASE_URL
         value: "https://ark.cn-beijing.volces.com/api/v3"
-      # 模型由 Render 网页环境变量管理（不在蓝图写死，避免部署时覆盖线上配置）
+      # 模型与渠道选择由 Render 网页环境变量管理（不在蓝图写死，避免部署时覆盖线上配置）
       - key: VOLCENGINE_MODEL
         sync: false
       - key: VOLCENGINE_LIGHT_MODEL
+        sync: false
+      # 主动/辅助双渠道（与 Web 服务同一套变量，Cron 跑分析/验证同样要能连 LLM）
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_LIGHT_MODEL
+        sync: false
+      - key: LLM_SECONDARY_API_KEY
+        sync: false
+      - key: LLM_SECONDARY_BASE_URL
+        sync: false
+      - key: LLM_SECONDARY_MODEL
+        sync: false
+      - key: LLM_SECONDARY_LIGHT_MODEL
         sync: false
 
   # 每周一 11:30 UTC ≈ 北京时间 19:30：三桶保留（cap 500 + verified 护栏 + 摘要归档）

@@ -54,7 +54,9 @@ LLM 服务：**主动渠道**（`LLM_PROVIDER/LLM_BASE_URL/LLM_MODEL/LLM_LIGHT_M
 2026-10-12：LLM 改「主动 + 辅助」双渠道：新增 `LLM_SECONDARY_*` 四变量（OpenAI 兼容），
 `LLM_PROVIDER` 新增 `custom`；`_call_llm_internal` 改为逐渠道尝试（主动失败/熔断整体切辅助，
 不可重试错误如 401 也立即换渠道），每渠道独立熔断器；config 路由与设置页透出辅助渠道并新增
-`POST /api/config/test-secondary-llm`；判据 `tests/unit/test_llm_secondary_fallback.py`（7 条）。
+`POST /api/config/test-secondary-llm`；`render.yaml` 把 `LLM_PROVIDER` 与 `LLM_MODEL` 等改为
+`sync: false`（渠道选择归 Render 仪表盘管，不再被蓝图写回 volcengine）。
+判据 `tests/unit/test_llm_secondary_fallback.py`（7 条）。
 2026-09-20：`_fill_fund_from_sector` 第 4/5 层改走 `sector_fund_agent`；删除
 `_find_fund_in_fundinfo` 的 `.contains()`/反向子串匹配及其自动写库（错配自我固化的主路径）；
 `LLMAnalyzer.get_fund_for_sector` 改为只做精确匹配；`fund_match_level` 落点更正为
