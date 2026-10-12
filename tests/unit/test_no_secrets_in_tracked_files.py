@@ -211,7 +211,7 @@ def test_every_shape_rule_has_its_own_planted_sample(tmp_path):
         'github 令牌': u"token='ghp_%s'\n" % ('A' * 36),
         'github 其它形态令牌': u"t='github_pat_%s'\n" % ('B' * 40) + u"o='ghs_%s'\n" % ('C' * 30),
         '带令牌的 git 远端': u"remote https://x-access-token:%s@github.com/o/r\n" % ('D' * 24),
-        '私钥块': u"-----BEGIN RSA PRIVATE KEY-----" + u"%s\n" % ('E' * 64),
+        '私钥块': u"-----BEGIN RSA PRIVATE " + u"KEY-----" + u"%s\n" % ('E' * 64),
         'sk- 型 API key': u"LLM_API_KEY='sk-%s'\n" % ('F' * 32),
         '带口令的连接串': u"URL='%s://%s:%s@%s:5432/prod'\n"
                        % ('postgres' + 'ql', 'svc', 'Real' + 'Wd123456', 'db' + '.corp'),
