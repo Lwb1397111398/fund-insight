@@ -29,7 +29,7 @@ class SinaBlogCrawler:
         # 新浪博文基础地址
         self.base_url = "https://finance.sina.com.cn/roll/feed.d.html"
 
-    def fetch_blog_posts(self, max_posts: int = 20) -> List[Dict]:
+    def fetch_blog_posts(self, max_posts: int = 50) -> List[Dict]:
         """
         抓取新浪博文
 

@@ -10,7 +10,7 @@ import requests
 import re
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup
 
@@ -23,6 +23,10 @@ if __name__ == "__main__":
         sys.path.insert(0, project_root)
 
 from src.core.config import config
+
+# 当天判定必须用北京日（与观点流水线的"仅当天"门禁一致），
+# 否则服务器在 UTC 时会把当天早盘帖子整批误杀或把昨天的当今天的放进来。
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 class StockGubaCrawler:
@@ -47,6 +51,8 @@ class StockGubaCrawler:
         self.request_delay = 1.0
         self.max_posts = 20
         self.fetch_detail = True
+        # 列表阶段就过滤非当天帖：门禁本来会拦，先筛掉才不浪费详情请求与额度
+        self.today_only = True
 
         # 筛选参数 - 适度宽松，优先保证观点数量
         self.min_click_count = 50      # 最小阅读数（比基金吧的100低）
@@ -84,6 +90,21 @@ class StockGubaCrawler:
                 return text.encode('latin1').decode('gbk')
             except Exception:
                 return text
+
+    @staticmethod
+    def _is_before_today(time_str) -> bool:
+        """帖子发布时间是否早于当天（北京日）。空/解析失败按当天放行，交给门禁终审。"""
+        text = str(time_str or "").strip()
+        if not text:
+            return False
+        try:
+            dt = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            try:
+                dt = datetime.strptime(text[:16], "%Y-%m-%d %H:%M")
+            except ValueError:
+                return False
+        return dt.date() < datetime.now(_BEIJING_TZ).date()
 
     def _is_quality_post(self, item: Dict) -> Tuple[bool, str]:
         """
@@ -180,6 +201,17 @@ class StockGubaCrawler:
                     post_items = article_data.get('re', [])
 
                     print(f"[StockGuba] 解析到 {len(post_items)} 条帖子，启用质量筛选: {quality_filter}")
+
+                    # 当天过滤：热门但非当天的旧帖会挤占 max_posts 额度，
+                    # 且随后必被流水线"非当天观点"门禁拦掉 —— 在源头就筛掉。
+                    if self.today_only:
+                        before = len(post_items)
+                        post_items = [
+                            item for item in post_items
+                            if not self._is_before_today(item.get('post_publish_time', ''))
+                        ]
+                        if before != len(post_items):
+                            print(f"[StockGuba] 当天过滤：{before} → {len(post_items)} 条")
 
                     # 筛选高质量帖子并分类
                     elite_posts = []

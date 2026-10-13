@@ -232,10 +232,8 @@ class ViewpointWorkflowService:
             return max(1, min(value, 50))
 
         def fetch_stock_guba(limit: int) -> List[Dict[str, Any]]:
-            """抓取热门股吧。最多 15 条，会补详情正文。"""
-            # 前端统一传 limit_per_source=20（给新浪）；股吧压到 15，
-            # 保证过滤后当天样本不至于太少（市场观点汇总至少需要 ~10 条）。
-            cap = min(_cap(limit, 15), 15)
+            """抓取热门股吧。最多 20 条，会补详情正文（源侧已按当天过滤）。"""
+            cap = min(_cap(limit, 20), 20)
             # 每个吧先抓一点列表，再统一截断，避免只打一个吧。
             per_board = max(3, (cap + len(HOT_STOCKS) - 1) // len(HOT_STOCKS))
             stock_guba.max_posts = per_board
@@ -246,8 +244,8 @@ class ViewpointWorkflowService:
             return all_posts[:cap]
 
         def fetch_fund_guba(limit: int) -> List[Dict[str, Any]]:
-            """抓取热门基金吧。最多 15 条，会补详情正文。"""
-            cap = min(_cap(limit, 15), 15)
+            """抓取热门基金吧。最多 20 条，会补详情正文（源侧已按当天过滤）。"""
+            cap = min(_cap(limit, 20), 20)
             fund_guba.max_posts = max(3, (cap + len(HOT_FUNDS) - 1) // len(HOT_FUNDS))
             all_posts: List[Dict[str, Any]] = []
             for fund_code in HOT_FUNDS:
@@ -258,7 +256,7 @@ class ViewpointWorkflowService:
             return all_posts[:cap]
 
         return {
-            "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=_cap(limit, 20)),
+            "sina_blog": lambda limit: get_blog_crawler().fetch_blog_posts(max_posts=_cap(limit, 50)),
             "stock_guba": fetch_stock_guba,
             "fund_guba": fetch_fund_guba,
         }

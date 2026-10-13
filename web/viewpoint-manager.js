@@ -189,12 +189,12 @@
                 .filter((item) => sources.includes(item.value))
                 .map((item) => `${item.value}: ${item.label}`)
                 .join('\n');
-            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n仅抓取当天发布的内容：新浪博客当天全部（≤20条），股吧/基金吧各约15条。`)) return;
+            if (!confirm(`确认抓取最新观点？\n\n数据源：\n${sourcesText}\n\n仅抓取当天发布的内容：新浪博客当天全部（≤50条），股吧/基金吧各约20条。`)) return;
             try {
                 const response = await axios.post('/api/viewpoints/fetch', {
                     sources,
-                    // 后端会对 sina 用 20、其他源按传入 limit 截断；20 作为上限即可。
-                    limit_per_source: 20,
+                    // 上限 50：新浪按此截断；股吧/基金吧在后端各自压到 20。
+                    limit_per_source: 50,
                     mode: 'fetch',
                 });
                 viewpointTask.value = response.data.data;
