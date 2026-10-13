@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from src.core.config import config
 from src.models.database import Blogger, FundInfo, Prediction, Viewpoint
-from src.analyzer.market_state import compute_market_state
+from src.analyzer.market_state import compute_market_state, compute_sector_states
 from src.services import l1_weighting as l1
 from src.services.prediction_lifecycle import (
     ACTIVE,
@@ -42,6 +42,9 @@ class EvidencePack:
     exclusions: List[Dict[str, Any]] = field(default_factory=list)
     conflicts: List[Dict[str, Any]] = field(default_factory=list)
     market_state: Dict[str, Any] = field(default_factory=dict)
+    # 板块自身强弱（2026-10-13）：{板块: {stance, fund_code, r5, r20, nav_as_of, basis}}
+    # 大盘弱时，买/加"自己正在涨(strong)"的板块不算逆闸（老板点名：不能一刀切）
+    sector_states: Dict[str, Any] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
     evidence_hash: Optional[str] = None
 
@@ -55,6 +58,7 @@ class EvidencePack:
             "as_of_date": self.as_of_date.isoformat(),
             "conflicts": self.conflicts,
             "market_state": self.market_state,
+            "sector_states": self.sector_states,
             "meta": self.meta,
         }
 
@@ -164,6 +168,7 @@ class AdviceEvidenceBuilder:
         funds = self._build_funds()
         conflicts = self._detect_conflicts(predictions, viewpoints)
         market_state = self._build_market_state()
+        sector_states = self._build_sector_states(predictions, viewpoints)
 
         pack = EvidencePack(
             as_of_date=as_of,
@@ -174,6 +179,7 @@ class AdviceEvidenceBuilder:
             exclusions=exclusions,
             conflicts=conflicts,
             market_state=market_state,
+            sector_states=sector_states,
             meta={
                 "prediction_truncated": pred_truncated,
                 "viewpoint_truncated": vp_truncated,
@@ -646,6 +652,26 @@ class AdviceEvidenceBuilder:
         """
         return compute_market_state(self.db)
 
+    # ------------------------------------------------------------- sector_states
+    def _build_sector_states(self, predictions: List[Dict], viewpoints: List[Dict]) -> Dict[str, Any]:
+        """
+        入选证据涉及的板块，各自净值强弱（2026-10-13 老板点名修的闸）。
+        板块来源：预测的 sector + 观点的 sectors_bullish/sectors_bearish（去重、上限 20）。
+        算法与阈值与大盘闸同一出处（market_state.compute_sector_states），不复制尺子。
+        """
+        sectors: List[str] = []
+        for p in predictions:
+            s = (p.get("sector") or "").strip()
+            if s:
+                sectors.append(s)
+        for v in viewpoints:
+            for key in ("sectors_bullish", "sectors_bearish"):
+                for s in v.get(key) or []:
+                    s = (s or "").strip()
+                    if s:
+                        sectors.append(s)
+        return compute_sector_states(self.db, sectors)
+
     # ---------------------------------------------------------------- conflicts
     def _detect_conflicts(
         self, predictions: List[Dict[str, Any]], viewpoints: List[Dict[str, Any]]
@@ -735,6 +761,16 @@ class AdviceEvidenceBuilder:
                 "r5": pack.market_state.get("r5"),
                 "r20": pack.market_state.get("r20"),
                 "nav_as_of": pack.market_state.get("nav_as_of"),
+            },
+            # 板块自身强弱进哈希（豁免判定依赖它，审计要能还原当时看到了什么）
+            "sectors": {
+                s: {
+                    "stance": st.get("stance"),
+                    "fund": st.get("fund_code"),
+                    "r20": st.get("r20"),
+                    "nav_as_of": st.get("nav_as_of"),
+                }
+                for s, st in sorted((pack.sector_states or {}).items())
             },
             "strategy": pack.meta.get("weight_strategy_version"),
         }

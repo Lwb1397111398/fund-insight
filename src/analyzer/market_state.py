@@ -157,3 +157,77 @@ def _unknown() -> Dict[str, Any]:
         "window_days": None,
         "basis": "宽基指数净值（510300/510050/510100）在库里不足 6 个交易日，闸自动失效",
     }
+
+
+SECTOR_STATES_MAX = 20  # 板块状态最多算多少个（证据里出现的板块去重后截断，防无界查询）
+
+
+def compute_sector_states(db: Session, sectors) -> Dict[str, Dict[str, Any]]:
+    """板块**自身**强弱分档（2026-10-13 老板点名：大盘弱 ≠ 板块弱，板块在涨就该敢给买入）。
+
+    每个板块 → 代表基金（与路由附挂标的同一把尺子 `get_fund_for_sector`，不另造映射）
+    → 读 `fund_history` 近期净值 → **复用与大盘同一套阈值**（`_metrics` + `classify_stance`）。
+
+    查不到映射 / 净值点不足 ⇒ stance='unknown'：不豁免（回到"弱势敢买就得写理由"）。
+    豁免只认 stance='strong'——涨出来的是事实；range 不算"马上雄起"的免检证据。
+
+    永不抛：单板块算不出就记 unknown，不拖垮整条证据链。
+    """
+    from src.constants.sector_fund_map import get_fund_for_sector
+
+    out: Dict[str, Dict[str, Any]] = {}
+    seen: List[str] = []
+    for raw in sectors or []:
+        s = (raw or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+    for sector in seen[:SECTOR_STATES_MAX]:
+        try:
+            out[sector] = _one_sector_state(db, sector, get_fund_for_sector)
+        except Exception as exc:  # noqa: BLE001 — 证据链不因一个板块崩
+            out[sector] = {"stance": "unknown", "fund_code": "", "fund_name": "",
+                           "r5": None, "r20": None, "nav_as_of": None,
+                           "basis": f"板块状态计算失败：{exc}"}
+    return out
+
+
+def _one_sector_state(db: Session, sector: str, get_fund_for_sector) -> Dict[str, Any]:
+    hit = (get_fund_for_sector(sector) or {})
+    code = str(hit.get("code") or "").strip()
+    name_hint = str(hit.get("name") or "").strip()
+    if not code:
+        return {"stance": "unknown", "fund_code": "", "fund_name": name_hint,
+                "r5": None, "r20": None, "nav_as_of": None,
+                "basis": f"板块「{sector}」映射答不出代表基金，无法判它自己的强弱"}
+    rows = (
+        db.query(FundHistory.nav_date, FundHistory.nav, FundHistory.fund_name)
+        .filter(FundHistory.fund_code == code)
+        .order_by(FundHistory.nav_date.desc())
+        .limit(WINDOW_DAYS + 1)
+        .all()
+    )
+    if len(rows) < MIN_ROWS:
+        return {"stance": "unknown", "fund_code": code, "fund_name": name_hint,
+                "r5": None, "r20": None, "nav_as_of": None,
+                "basis": f"{code} 净值不足 {MIN_ROWS} 个交易日，判不出板块强弱"}
+    navs = [float(r.nav) for r in reversed(rows)]
+    if any(v <= 0 for v in navs):
+        return {"stance": "unknown", "fund_code": code, "fund_name": name_hint,
+                "r5": None, "r20": None, "nav_as_of": None,
+                "basis": f"{code} 净值数据异常（含非正数），判不出板块强弱"}
+    metrics = _metrics(navs)
+    stance = classify_stance(metrics["r5"], metrics["r20"], metrics["drawdown"])
+    name = (rows[0].fund_name or name_hint or code).strip() or code
+    return {
+        "stance": stance,
+        "stance_label": STANCE_LABELS[stance],
+        "fund_code": code,
+        "fund_name": name,
+        "r5": metrics["r5"],
+        "r20": metrics["r20"],
+        "drawdown": metrics["drawdown"],
+        "nav_as_of": rows[0].nav_date.isoformat(),
+        "basis": (f"{name}（{code}）近5日 {metrics['r5']:+.2f}%、"
+                  f"近{metrics['window_days']}日 {metrics['r20']:+.2f}%，"
+                  f"净值截至 {rows[0].nav_date.isoformat()}"),
+    }

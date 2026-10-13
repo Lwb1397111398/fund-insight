@@ -296,7 +296,54 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-10-13 **18:2x–19:3x（北京）**，**第 95 批：生成今日投资建议——复用判定从证据哈希改按北京日 + 契约违规自纠错 + force 绕缓存**
+最近一次核对（2026-10-13 **20:1x–20:3x（北京）**，**第 96 批：投资建议软闸板块级豁免——大盘弱≠板块弱**
+（老板追问：「即使大盘弱势，仍可能有加仓买入的空间，因为不一定这个板块弱，可能马上雄起了」）：
+
+① **改的五层**（承接第 95 批同日，`src/` 5 文件 + `web/` 2 文件 + 新判据）：
+- `src/analyzer/market_state.py` 新增 `compute_sector_states()`：对入选证据涉及的每个板块
+  （预测的 `sector` + 观点看多看空板块，去重限 20），经 `get_fund_for_sector`（与附挂标的同一把尺子）
+  找代表基金，读它的 `fund_history` 净值，**复用与大盘完全同一套阈值**（`_metrics`+`classify_stance`，
+  不复制尺子）分档；映射答不出/净值点<6 ⇒ `unknown`（不豁免，"雄起"得有数据撑腰）。永不抛。
+- `advice_evidence.py`：`sector_states` 进 `EvidencePack`、进 `to_llm_input`、**进 `_hash_pack`**
+  （新增 `sectors` 键：任一板块档位/涨幅/净值日变 ⇒ 证据哈希变，审计可还原当时看到什么）。
+  `advice_service.get_data_for_advice` 透出 `sector_states`。
+- `advice_validation.py` 软闸豁免：大盘 weak/very_weak 时，买/加的板块若**自身 stance=strong** ⇒
+  不算逆闸（follow_gate=true 照过）；range/unknown/weak 板块仍要 follow_gate=false+override_reason；
+  `sector_states` 缺失 ⇒ strong=∅ ⇒ **行为与旧版逐字一致**（fail-closed，老调用方零变化）。
+  gate_conflict/missing_override_reason 的 message 现点名是哪个板块没依据。
+- `llm_analyzer.py`：stage3 加可选 `sector_states`（缺省 None，旧调用不受影响）+
+  【各板块自身强弱】JSON 事实块（无数据不塞空块）+ 硬性规则5改写（strong 板块可正常买）；
+  `three_stage` 透传。**路由两处 three_stage 调用都带 sector_states**（漏传 ⇒ 闸等于没装）。
+  `_attach_sector_fund_targets(actions, sector_states)` 给每条动作挂 `sector_stance` 等四字段
+  （映射/数据答不出的板块不硬塞）。
+- `web/index.html`+`common.css`：板块操作行加 `action-sector-state` chip（强势绿/震荡黄/弱势橙/极弱红/无数据灰，
+  显示"该板块自身近20日 ±x%"——大盘弱时它就是"敢给这条买入"的事实依据，摆明面）。
+
+② **判据**：新文件 `tests/unit/test_advice_sector_gate.py` **18 条**（`grep -c '^def test_'` 现读）。
+⚠ **一处本批自纠（M121 变异第一版是几乎 no-op）**：载荷 `sector_block = (""` 因相邻字符串字面量并置
+自动拼接，数据块照样进提示词、判据不可能红 ⇒ 改载荷为摘掉**带括注的块标题行**本身；同时判据第一断言
+从"【各板块自身强弱】"（规则5那句措辞也含此串，会顶穿断言）改判括注行 `（系统按各板块代表基金净值算出的事实`。
+这是"文本判据读不出实话"那一族在本批自己复发又当场抓住。
+
+③ **变异**：注册 M119~M122 四处（注册表现读末行「共 122 处变异，覆盖 22 个用例文件」）：
+M119 豁免永不命中 / M120 板块强弱永不算 / M121 提示词摘数据块 / M122 附挂丢状态——逐条 `--only`
+都 CONTROL-GREEN ⇒ RED。⚠ 第 94 批那 7 条仍欠注册（照旧登记，下一批全套体检时补）。
+
+④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二 pytest；
+链 `data/_review_tmp/r96-chain.log`，起 20:16:05 收 20:29:04）**：`pytest tests/unit -q` →
+**1398 passed / 16 skipped / 0 failed**（386.21s，退 **0**）；`pytest tests/ -q` →
+**1407 passed / 16 skipped / 0 failed**（377.03s，退 **0**）。上一基线 1380/1389（第 95 批）⇒
+**各 +18**，就是 ② 那个新文件；逐字闭合。`python scripts/audit_doc_claims.py` → 退 **0**（条数 5 都认得）。
+
+⑤ **镜像真实数据端到端**（`.env` 指生产 ⇒ 探针显式 `pin_local_sqlite(use_mirror_default=True)` 钉镜像）：
+只读探针印大盘 weak + 10 个板块各算自身强弱（红利 range、白酒 weak、机器人 very_weak、存储/纳指/CPO 映射答不出
+unknown）⇒ **当前一个 strong 都没有，这批今天不会豁免任何一笔**（豁免要涨出来才算数）。为证明
+"板块转 strong⇒豁免真放行"这条链，**临时种一只合成基金 `ZZSECTEST` 的 15 天连涨净值**（打桩映射，
+不碰真实映射与真实净值；第一次直写 161725 撞 `UNIQUE(fund_code,nav_date)` 当场改道合成码），
+`compute_sector_states` 判它 strong（r20 +18.18%）、软闸对它的 buy `follow_gate=true` 直接 `ok=True`；
+同份 advice 清空 sector_states ⇒ `gate_conflict`（向后对照）；测后删净（合成码残留 0）。
+
+（上一批：2026-10-13 **18:2x–19:3x（北京）**，**第 95 批：生成今日投资建议——复用判定从证据哈希改按北京日 + 契约违规自纠错 + force 绕缓存**
 （老板点名：今天点生成，屏上显示的是昨天的结果；期望=当天首点生成、复点复用当天首条、只有「重新生成」才重算）：
 
 ① **根因当场复现，不是推的**：用同参数（force=false）打生产复现 → 112 秒后回执

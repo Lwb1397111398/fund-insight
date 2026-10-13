@@ -976,6 +976,9 @@
                                     <span class="action-badge" :class="'action-' + a.action">{{ a.action_label }}</span>
                                     <span class="action-sector">{{ a.sector }}</span>
                                     <span v-if="a.fund_code" class="action-fund">{{ a.fund_code }} {{ a.fund_name }}</span>
+                                    <!-- 板块自身近期强弱（系统按该板块代表基金净值算的事实；大盘弱时它就是"敢给买入"的依据） -->
+                                    <span v-if="a.sector_stance_label" class="action-sector-state"
+                                        :class="'sector-state-' + a.sector_stance">{{ a.sector_stance_label }}<template v-if="a.sector_r20 !== null && a.sector_r20 !== undefined"> · 近20日 {{ a.sector_r20 > 0 ? '+' : '' }}{{ a.sector_r20 }}%</template></span>
                                     <span class="action-meta">{{ a.horizon === 'short' ? '短期' : '中期' }} · 置信 {{ a.confidence }}%</span>
                                 </div>
                                 <div v-if="a.reason" class="action-reason">{{ a.reason }}</div>

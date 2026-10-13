@@ -194,6 +194,7 @@ class AdviceService(BaseService[InvestmentAdvice]):
             "viewpoints": pack.viewpoints,
             "funds": pack.funds,
             "market_state": pack.market_state,
+            "sector_states": pack.sector_states,
             "as_of_date": pack.as_of_date.isoformat(),
             "evidence_hash": pack.evidence_hash,
             "exclusions": pack.exclusions,

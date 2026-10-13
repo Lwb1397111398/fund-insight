@@ -104,7 +104,8 @@ def test_three_stage_passes_market_state_to_stage3():
                     "mid_term_trend": "neutral", "sector_predictions": {}}
 
         def generate_advice_stage3(self, viewpoint_summary, prediction_analysis, bloggers,
-                                   market_state=None, correction_note=None, use_cache=True):
+                                   market_state=None, correction_note=None, use_cache=True,
+                                   sector_states=None):
             seen["market_state"] = market_state
             return {"advice_type": "hold", "advice_content": "建议观望",
                     "market_sentiment": "neutral", "confidence": 50,

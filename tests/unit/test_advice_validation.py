@@ -243,7 +243,8 @@ def test_three_stage_marks_stage2_failed_on_empty_predictions():
             return {"summary": "无观点", "market_sentiment": "neutral", "_stage_status": "ok"}
 
         def generate_advice_stage3(self, viewpoint_summary, prediction_analysis, bloggers,
-                                   market_state=None, correction_note=None, use_cache=True):
+                                   market_state=None, correction_note=None, use_cache=True,
+                                   sector_states=None):
             # 即使 stage3 成功，整体仍应因 stage2 failed 被标记
             return {
                 "advice_type": "hold",

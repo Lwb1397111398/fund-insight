@@ -1869,11 +1869,14 @@ class LLMAnalyzer:
     def generate_advice_stage3(self, viewpoint_summary: Dict, prediction_analysis: Dict, 
                                 bloggers: List[Dict], market_state: Optional[Dict] = None,
                                 correction_note: Optional[str] = None,
-                                use_cache: bool = True) -> Dict:
+                                use_cache: bool = True,
+                                sector_states: Optional[Dict] = None) -> Dict:
         """第三阶段：基于观点摘要、预测分析与系统算出的大盘状态，生成可执行的投资建议。
 
         market_state 来自 src/analyzer/market_state.compute_market_state（纯本地净值计算）；
         缺省/缺失时按 stance=unknown 处理，软闸自动失效但不谎报仓位。
+        sector_states 来自 compute_sector_states（板块自身净值强弱，2026-10-13）：
+        大盘弱时，板块自身 strong 的买/加**不算逆闸**——把这份事实喂给模型，它才敢正常给。
         correction_note：上一版输出被落库前校验拒绝时的原因。非空则追加到提示词末尾
         要求按硬性规则修正重出——提示词一变，结果缓存的键也变，才会真正重新采样。
         """
@@ -1894,6 +1897,20 @@ class LLMAnalyzer:
             "position_label": "大盘数据缺失，系统无法给出仓位建议",
             "basis": "未提供市场状态数据",
         }
+        # 板块自身强弱（每个板块代表基金近期净值算出来的事实，与大盘闸同一套阈值）
+        sector_facts = []
+        for name, st in (sector_states or {}).items():
+            if isinstance(st, dict):
+                sector_facts.append({
+                    "板块": name,
+                    "自身状态": st.get("stance_label") or st.get("stance"),
+                    "近20日": st.get("r20"),
+                    "净值截至": st.get("nav_as_of"),
+                })
+        sector_block = (
+            "\n【各板块自身强弱】（系统按各板块代表基金净值算出的事实：大盘弱不代表这些板块都弱）\n"
+            + json.dumps(sector_facts, ensure_ascii=False, indent=2) + "\n"
+        ) if sector_facts else ""
         
         prompt = f"""你是一个专业的基金投资顾问。请基于以下分析报告，给出分层投资建议。
 
@@ -1913,7 +1930,7 @@ class LLMAnalyzer:
 
 【市场整体状态】（系统按宽基指数净值算出的事实，不是猜测）
 {json.dumps(market_block, ensure_ascii=False, indent=2)}
-
+{sector_block}
 请综合分析并返回JSON格式（枚举值逐字使用，不许自造）：
 {{
     "advice_type": "buy/sell/hold/watch",
@@ -1956,7 +1973,7 @@ class LLMAnalyzer:
 2. 全文禁止出现"关注"二字——它说不清是买还是卖。想表达"看看再说"用 action=watch（含义：只看不动手）。
 3. sector_actions 每个板块只给一个动作，最多6个板块。枚举含义：buy=建议买入建仓，add=已有仓位加仓，hold=继续持有不动，reduce=减仓（reason 写清减到几成），exit=建议全部卖出，avoid=别买/清出场，watch=只看不动手。
 4. 卖出类动作（reduce/exit/avoid）的 reason 用条件句式，例如"若持有有色金属板块，建议全部卖出，因为…"。
-5. stance 为 weak 或 very_weak 时，若仍要给 buy/add（或 advice_type=buy），必须 follow_gate=false 并在 override_reason 写明凭什么逆着弱势看多；不给理由就是违规。
+5. stance 为 weak 或 very_weak 时：【各板块自身强弱】里标成"强势"的板块，可以正常给 buy/add（它的涨是净值算出来的事实，不算逆着大盘）；要对**没标强势**的板块给 buy/add（或 advice_type=buy 只押这类板块），必须 follow_gate=false 并在 override_reason 写明凭什么；不给理由就是违规。
 6. stance=unknown（大盘数据缺失）时 position_label 写"大盘数据缺失，暂无法给出仓位建议"，follow_gate=true，不再引用任何仓位措辞。
 7. 理由要落到实体：谁（博主/等级）在预测、看涨/看跌计数多少、置信度、目标日期，不要只说"板块热度高"。
 8. 短期（1-3天）与中期（1-2周）动作可以不同。参考板块预测汇总：看涨计数多且A级博主集中的板块才值得给 buy/add；中性(N)不算方向；A级博主权重最高。
@@ -2024,10 +2041,12 @@ class LLMAnalyzer:
                                                 viewpoints: List[Dict],
                                                 market_state: Optional[Dict] = None,
                                                 correction_note: Optional[str] = None,
-                                                use_cache: bool = True) -> Dict:
+                                                use_cache: bool = True,
+                                                sector_states: Optional[Dict] = None) -> Dict:
         """三阶段分析生成投资建议（market_state=系统算出的大盘软闸状态）；
         correction_note 非空时透传给 stage3（上一版被落库前校验拒绝的原因 ⇒ 要求修正重出）。
-        use_cache=False（「重新生成」）⇒ 三段都不回放结果缓存，真重算。"""
+        use_cache=False（「重新生成」）⇒ 三段都不回放结果缓存，真重算。
+        sector_states=各板块自身强弱（compute_sector_states），透传给 stage3 喂提示词。"""
         logger.info("[LLM] 开始三阶段分析...")
         
         # 第一阶段：分析观点
@@ -2044,7 +2063,8 @@ class LLMAnalyzer:
         advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers,
                                              market_state=market_state,
                                              correction_note=correction_note,
-                                             use_cache=use_cache)
+                                             use_cache=use_cache,
+                                             sector_states=sector_states)
         
         # 保存中间结果与阶段状态（供 P1 落库前校验）
         advice["viewpoint_summary"] = viewpoint_summary

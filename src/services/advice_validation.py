@@ -411,21 +411,46 @@ def validate_advice_output(
         )
     override_reason = (position.get("override_reason") or "").strip()
     if stance in GATE_ENFORCED_STANCES:
-        buyish = any(i["action"] in BUYISH_ACTIONS for i in sector_items) or advice_type == "buy"
+        # 2026-10-13 老板拍板：大盘弱 ≠ 板块弱。板块**自身**净值在涨（stance=strong，
+        # 与大盘闸同一套阈值算出来的事实）时，给它买/加不算逆闸——不许逼 AI 承认逆行；
+        # 只有对"没涨出来"的板块（range/unknown/weak）喊买，才必须 follow_gate=false + 写理由。
+        # sector_states 缺失/为空 ⇒ strong=∅ ⇒ 行为与旧版一致（老调用方零变化，fail-closed）。
+        sector_states = (evidence or {}).get("sector_states") or {}
+        strong_sectors = {
+            s for s, st in sector_states.items()
+            if isinstance(st, dict) and st.get("stance") == "strong"
+        }
+        unsupported_buyish = [
+            i["sector"] for i in sector_items
+            if i["action"] in BUYISH_ACTIONS and i["sector"] not in strong_sectors
+        ]
+        has_supported_buyish = any(
+            i["action"] in BUYISH_ACTIONS and i["sector"] in strong_sectors
+            for i in sector_items
+        )
+        buyish = bool(unsupported_buyish) or (advice_type == "buy" and not has_supported_buyish)
         if buyish:
+            _sectors_txt = "、".join(unsupported_buyish) or "（整体结论 advice_type=buy）"
             if follow_gate:
                 return ValidationResult(
                     ok=False,
                     code="gate_conflict",
-                    message=f"大盘处于「{stance}」，仓位结论声称跟随系统建议，却仍给出买入/加仓动作",
-                    details={"stance": stance},
+                    message=(
+                        f"大盘处于「{stance}」，仓位结论声称跟随系统建议，却仍对"
+                        f"自身不算强势的板块给出买入/加仓：{_sectors_txt}"
+                        f"（板块自身近20日涨出来才算数；否则请 follow_gate=false 并写明理由）"
+                    ),
+                    details={"stance": stance, "sectors": unsupported_buyish},
                 )
             if not override_reason:
                 return ValidationResult(
                     ok=False,
                     code="missing_override_reason",
-                    message="大盘弱势/极弱时逆市看多必须写明 override_reason（凭什么敢买）",
-                    details={"stance": stance},
+                    message=(
+                        "大盘弱势/极弱时对不算强势的板块逆市看多必须写明 override_reason"
+                        f"（凭什么敢买）：{_sectors_txt}"
+                    ),
+                    details={"stance": stance, "sectors": unsupported_buyish},
                 )
 
     # 引用校验：若输出带 prediction_id，必须属于证据集

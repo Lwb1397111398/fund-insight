@@ -89,6 +89,8 @@ EXEC_TESTS = 'tests/unit/test_advice_executable_contract.py'
 GATE_TESTS = 'tests/unit/test_market_state_gate.py'
 # 第 95 批（2026-10-13 生成建议按北京日复用）：路由复用判定 + 自纠错重试 + 日期归属
 DAILY_TESTS = 'tests/unit/test_advice_daily_gate.py'
+# 第 96 批（2026-10-13 同日）：板块自身强弱豁免大盘软闸
+SECTOR_TESTS = 'tests/unit/test_advice_sector_gate.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -818,6 +820,32 @@ MUTATIONS = [
      '        viewpoint_summary = self.analyze_viewpoints_stage1(viewpoints, use_cache=use_cache)\n',
      '        viewpoint_summary = self.analyze_viewpoints_stage1(viewpoints)\n',
      DAILY_TESTS, 'test_three_stage_propagates_use_cache_to_every_stage'),
+    # ── 第 96 批（2026-10-13 同日）：板块自身强弱豁免大盘软闸 ──
+    # M119 豁免判据失效（strong 比对换成永不相等）：大盘弱时连自身在涨的板块买入也被拦——
+    # 正是老板点名"大盘弱≠板块弱"那一刀切毛病回来了。
+    ('M119_the_sector_exemption_never_fires', ADVICE_VAL,
+     '            if isinstance(st, dict) and st.get("stance") == "strong"\n',
+     '            if isinstance(st, dict) and st.get("stance") == "never_matches"\n',
+     SECTOR_TESTS, 'test_weak_market_buy_on_strong_sector_passes_without_override'),
+    # M120 板块强弱永不计算（compute_sector_states 直接回空）：豁免拿不到事实、闸退回一刀切，
+    # 而且前端 chip、审计哈希里那份"当时看到的板块状态"也一起没了。
+    ('M120_sector_states_are_never_computed', MARKET_STATE,
+     '            out[sector] = _one_sector_state(db, sector, get_fund_for_sector)\n',
+     '            out[sector] = {"stance": "unknown"}\n',
+     SECTOR_TESTS, 'test_sector_strong_when_navs_rise'),
+    # M121 stage3 提示词不塞【板块自身强弱】数据块（只留规则5的措辞引用）：
+    # 模型看不见"哪些板块在自己涨"的事实，弱势大盘下就只能要么含糊、要么误逆行。
+    # ⚠ 第一版载荷 `sector_block = (""` 是**几乎 no-op**（相邻字符串字面量并置会自动拼接，
+    # 数据块照样进提示词、判据不可能红）——改成摘掉带括注的块标题行本身。
+    ('M121_stage3_prompt_omits_sector_facts', ADVICE_LLM,
+     '            "\\n【各板块自身强弱】（系统按各板块代表基金净值算出的事实：大盘弱不代表这些板块都弱）\\n"\n',
+     '            "\\n"\n',
+     SECTOR_TESTS, 'test_stage3_prompt_injects_sector_facts_block'),
+    # M122 附挂时不带板块自身状态：前端"敢买的依据"那行 chip 永远空着（豁免做了但不透明）。
+    ('M122_attach_drops_sector_state', ADVICE_ROUTE,
+     '            a["sector_stance"] = st.get("stance") or ""\n',
+     '            pass\n',
+     SECTOR_TESTS, 'test_attach_sector_targets_carries_own_state'),
 ]
 
 

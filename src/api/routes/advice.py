@@ -61,20 +61,30 @@ def _log_advice_rejection(code: str, message: str, details: Optional[dict] = Non
     )
 
 
-def _attach_sector_fund_targets(sector_actions: List[Dict]) -> List[Dict]:
+def _attach_sector_fund_targets(sector_actions: List[Dict],
+                                sector_states: Optional[Dict] = None) -> List[Dict]:
     """
     给每条板块动作确定性附挂标的（板块→基金）。
 
     代码**不由 LLM 报**（它会编），复用板块-基金映射的唯一现成尺子
     `get_fund_for_sector`（内置表 + 用户别名 + 子串匹配；答不出就留空，不硬凑）。
+    另把板块**自身**近期强弱（证据算好的事实，2026-10-13）逐条挂上——大盘弱时
+    对强势板块给 buy/add 是"跟闸"不是"逆行"，页面要把这份依据摆出来。
     """
     from src.constants.sector_fund_map import get_fund_for_sector
 
+    states = sector_states or {}
     for a in sector_actions or []:
         sector = (a.get("sector") or "").strip()
         hit = (get_fund_for_sector(sector) or {}) if sector else {}
         a["fund_code"] = hit.get("code") or ""
         a["fund_name"] = hit.get("name") or ""
+        st = states.get(sector) if sector else None
+        if isinstance(st, dict):
+            a["sector_stance"] = st.get("stance") or ""
+            a["sector_stance_label"] = st.get("stance_label") or ""
+            a["sector_r20"] = st.get("r20")
+            a["sector_nav_as_of"] = st.get("nav_as_of") or ""
     return sector_actions or []
 
 
@@ -146,10 +156,15 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
 
         # 大盘软闸状态：系统按宽基净值本地算出，进 stage3 提示词与落库前一致性校验
         market_state = data.get("market_state") or {}
+        # 板块自身强弱（2026-10-13）：大盘弱 ≠ 板块弱，strong 板块的买/加不算逆闸
+        sector_states = data.get("sector_states") or {}
+        _strong = [s for s, st in sector_states.items()
+                   if isinstance(st, dict) and st.get("stance") == "strong"]
         logger.info(
-            "[Advice API] 市场闸: stance=%s 依据=%s",
+            "[Advice API] 市场闸: stance=%s 依据=%s；自身强势的板块=%s",
             market_state.get("stance"),
             (market_state.get("basis") or "")[:80],
+            _strong or "无",
         )
 
         # force（「重新生成」）⇒ use_cache=False：三段都不回放结果缓存，
@@ -159,6 +174,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             data["predictions"],
             viewpoints=data["viewpoints"],
             market_state=market_state,
+            sector_states=sector_states,
             use_cache=not force_generate,
         )
         output_check = validate_advice_output(advice, evidence=data)
@@ -180,6 +196,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
                 data["predictions"],
                 viewpoints=data["viewpoints"],
                 market_state=market_state,
+                sector_states=sector_states,
                 correction_note=output_check.message,
                 use_cache=not force_generate,
             )
@@ -212,7 +229,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
 
         normalized = output_check.normalized or advice
         # 标的由后端按板块映射附挂（防 LLM 编造代码；映射答不出则留空）
-        sector_actions = _attach_sector_fund_targets(normalized.get("sector_actions") or [])
+        sector_actions = _attach_sector_fund_targets(normalized.get("sector_actions") or [], sector_states)
         position_advice = {
             **(normalized.get("position") or {}),
             "stance": normalized.get("market_stance"),

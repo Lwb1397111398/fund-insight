@@ -71,7 +71,7 @@ def _ok_output(**overrides):
 
 
 class _CountingAnalyzer:
-    """假三阶段：记录每次调用（含 correction_note/use_cache），按预置队列返回。"""
+    """假三阶段：记录每次调用（含 correction_note/use_cache/sector_states），按预置队列返回。"""
 
     def __init__(self, outputs):
         self.outputs = list(outputs)
@@ -79,8 +79,10 @@ class _CountingAnalyzer:
 
     def generate_investment_advice_three_stage(self, bloggers, predictions,
                                                viewpoints=None, market_state=None,
-                                               correction_note=None, use_cache=True):
-        self.calls.append({"correction_note": correction_note, "use_cache": use_cache})
+                                               correction_note=None, use_cache=True,
+                                               sector_states=None):
+        self.calls.append({"correction_note": correction_note, "use_cache": use_cache,
+                           "sector_states": sector_states})
         if self.outputs:
             return self.outputs.pop(0)
         raise AssertionError("预置输出用完了——LLM 被多调了")
