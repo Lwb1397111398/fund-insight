@@ -827,6 +827,13 @@
                 </div>
                 <!-- 投资建议视图 -->
                 <div v-if="currentView === 'advice'">
+                    <!-- 当场生成失败/被拒：页面持久说明，不能只弹一闪而过的 alert——
+                         昨天那条还挂在页面上，容易被当成"生成出来的是旧结果"（2026-10-13）。 -->
+                    <div v-if="adviceGenError && !adviceGenerating" class="advice-gen-error">⚠️ {{ adviceGenError }}</div>
+                    <div v-if="advice && !adviceGenerating && adviceIsStale" class="advice-gen-error stale">
+                        ⚠️ 当前显示的建议生成于 {{ advice.advice_date }}，不是今天的结果。
+                        点「🔄 重新生成」重算今天的建议。
+                    </div>
                     <div v-if="adviceGenerating" class="advice-view">
                         <div class="advice-empty">
                             <div class="advice-generating-banner">
@@ -1019,7 +1026,7 @@
                             <p>点击下方按钮生成 AI 投资建议</p>
                             <div class="advice-actions" style="margin-top: 20px;">
                                 <button class="advice-action-btn primary" @click="generateAdvice(false)">🚀
-                                    生成投资建议</button>
+                                    生成今日投资建议</button>
                                 <button class="advice-action-btn secondary" @click="showAdviceHistory = true">📜
                                     查看历史</button>
                             </div>
@@ -2341,6 +2348,14 @@
                 const fundLoading = ref(false), fundError = ref(''), fundPage = ref(1);
                 const fundMeta = ref({ total: 0, page: 1, page_size: 100, pages: 0 });
                 const advice = ref(null), adviceGenerating = ref(false), adviceIsNew = ref(false), analyzing = ref(false);
+                const adviceGenError = ref('');
+                // 页面显示的建议是否为「今天（北京日）」——不是则顶部警示，避免被误当成刚生成的结果。
+                const adviceIsStale = computed(() => {
+                    if (!advice.value || !advice.value.advice_date) return false;
+                    const now = new Date();
+                    const today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+                    return advice.value.advice_date < today;
+                });
                 const showAddBlogger = ref(false), showAddFund = ref(false), showViewpointDetail = ref(false), showFundDetail = ref(false), showPredictionDetail = ref(false);
                 const showEditPrediction = ref(false), editingPrediction = ref(null);
                 const showTopBloggersModal = ref(false), showAdviceHistory = ref(false), showConfig = ref(false);
@@ -3085,6 +3100,7 @@ const fetchWeChatBatch = async () => {
                     currentView.value = 'advice';
                     adviceGenerating.value = true;
                     adviceIsNew.value = false;
+                    adviceGenError.value = '';
                     try {
                         const res = await axios.post('/api/advice', { force: force });
                         if (res.data.success) {
@@ -3094,16 +3110,20 @@ const fetchWeChatBatch = async () => {
                         } else {
                             // 后端证据门拒绝时回的是 200 + success:false；以前没有 else
                             // ⇒ 老板点"生成投资建议"整屏没反应（第 32 轮 A-M5）。
+                            // 只弹 alert 也挡不住误解：alert 一闪就关，昨天的旧建议还挂在
+                            // 页面上一字不差（2026-10-13 老板报"点生成显示昨天的结果"）⇒ 原因持久上页面。
+                            adviceGenError.value = '这次没有生成建议：' + (res.data.message || '接口未给出原因') + '。可点「🔄 重新生成」重试。';
                             alert('这次没有生成建议：' + (res.data.message || '接口未给出原因'));
                         }
                     } catch (e) {
+                        adviceGenError.value = '生成失败：' + (e.response?.data?.message || e.message) + '。可点「🔄 重新生成」重试。';
                         alert('生成失败: ' + (e.response?.data?.message || e.message));
                     }
                     adviceGenerating.value = false;
                 };
                 const loadAdviceHistory = async () => { try { const res = await withWakeRetry(() => axios.get('/api/advice/history')); if (res.data.success) { adviceHistory.value = res.data.data; adviceError.value = ''; } else { adviceError.value = '历史建议没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { adviceError.value = '历史建议拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); } };
                 // 进「投资建议」页先拉最新一条：以前只有当场点生成才有内容，刷新页面就回空态
-                const loadLatestAdvice = async () => { try { const res = await withWakeRetry(() => axios.get('/api/advice')); if (res.data.success && res.data.data) { advice.value = res.data.data; adviceIsNew.value = false; } } catch (e) { /* 拿不到就维持空态，生成按钮仍在 */ } };
+                const loadLatestAdvice = async () => { try { const res = await withWakeRetry(() => axios.get('/api/advice')); if (res.data.success && res.data.data) { advice.value = res.data.data; adviceIsNew.value = false; adviceGenError.value = ''; } } catch (e) { /* 拿不到就维持空态，生成按钮仍在 */ } };
                 const loadConfig = async () => { configError.value = ''; try { const res = await axios.get('/api/config'); if (res.data.success) { configData.value = res.data.data; } else { configError.value = '配置没取到：' + (res.data.message || '接口未给出原因'); } } catch (e) { configError.value = '配置拉取失败：' + (isServiceDown(e) ? '服务连不上（可能在唤醒）' : '接口报错'); console.error(e); } };
                 const openConfig = async () => { showConfig.value = true; configTab.value = 'llm'; await loadConfig(); await loadTestData(); };
                 const updateConfig = async () => { try { const res = await axios.post('/api/config', configData.value); alert(res.data.message); showConfig.value = false; } catch (e) { alert('保存失败'); } };
@@ -3602,7 +3622,7 @@ const fetchWeChatBatch = async () => {
                     sourceMenuOpen, selectedSources, sourceOptions, fetchSourceOptions, taskRunning,
                     funds, fundFilter, fundsWithPredictions, fundsWithoutPredictions, filteredFunds,
                     fundLoading, fundError, fundPage, fundMeta, fetchFunds, fundPrevPage, fundNextPage,
-                    advice, adviceGenerating, adviceIsNew, analyzing,
+                    advice, adviceGenerating, adviceIsNew, analyzing, adviceGenError, adviceIsStale,
                     showAddBlogger, showAddPost, showEditPost, showAddFund, showPostDetail,
                     showViewpointDetail, showFundDetail, showPredictionDetail, showEditPrediction,
                     editingPrediction, editingPost, showTopBloggersModal, showAdviceHistory, showConfig,

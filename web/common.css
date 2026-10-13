@@ -1593,6 +1593,27 @@
             font-weight: 600;
         }
 
+        /* 建议生成失败/被拒的页面顶部警示（2026-10-13：以前只有一闪而过的 alert，
+           旧建议还挂在页面上，容易被当成"生成出来的是旧结果"）*/
+        .advice-gen-error {
+            background: var(--color-danger-light);
+            border: 1px solid var(--color-danger-border);
+            color: var(--color-danger);
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-md);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.5;
+            margin-bottom: var(--space-4);
+        }
+
+        /* 显示的是当天之前的旧建议（非今日结果）：用 warning 色，区别于一时失败 */
+        .advice-gen-error.stale {
+            background: var(--color-warning-light);
+            border-color: var(--color-warning-border);
+            color: var(--color-warning);
+        }
+
         .sentiment-indicator {
             display: flex;
             align-items: center;

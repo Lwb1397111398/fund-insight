@@ -296,7 +296,51 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-10-13 **16:4x–17:3x（北京）**，**第 94 批：市场观点抓取修复——基金吧整源重写 + 股吧当天过滤 + 新浪放开 50**
+最近一次核对（2026-10-13 **18:2x–19:3x（北京）**，**第 95 批：生成今日投资建议——复用判定从证据哈希改按北京日 + 契约违规自纠错 + force 绕缓存**
+（老板点名：今天点生成，屏上显示的是昨天的结果；期望=当天首点生成、复点复用当天首条、只有「重新生成」才重算）：
+
+① **根因当场复现，不是推的**：用同参数（force=false）打生产复现 → 112 秒后回执
+`code=gate_conflict`「大盘 weak 却给买入动作并声称跟随软闸」⇒ 当天那条**被质量闸拒绝、没落库**；
+`GET /api/advice` 进页面加载的还是 10-12 的 id=59 ⇒ 老板看到"点生成=显示昨天"。
+生产 10-13 全天零条新记录（`/api/advice/history` 现读），证实生成从未成功过。
+
+② **修的五层**（`src/` 3 文件 + `web/` 2 文件 + 新判据 + 总览）：
+- 路由复用判定**按北京日**：当天已生成 ⇒ 非 force 直接返回当天首条（一次 LLM 不调）；当天没有 ⇒ 生成；
+  `force=true` ⇒ 恒重算。旧"证据哈希比对"退役（`data_hash` 仍计算落库存档，审计用）。
+  这一改动同时把老板要的第二件事钉死：**复点不许因当天新增观点而自动重算**（旧哈希缓存会）。
+- **契约违规自纠错重试一次**（`gate_conflict/missing_override_reason/ambiguous_wording/missing_action_word`）：
+  拒绝理由注入 stage3 提示词（`correction_note`）——提示词一变、结果缓存键才变、才真重新采样；
+  **结构性失败（stage failed/坏 JSON）不重试**，fail-closed 原样保留。
+- **`advice_date` 走北京钟**（`current_as_of()`，第 88 轮"两把钟"族的第三处——前两处是博主榜
+  active_posts 和每日汇总幂等闸，这里漏了）：UTC 容器北京 0~8 点生成的不再写成"昨天"；
+  `get_latest_advice` 排序补 `created_at desc`（同日多条取最新，重新生成后复用拿最后一条）。
+- **force 绕 LLM 结果缓存**（端到端才暴露的）：`use_cache=not force_generate` 从路由透传三段
+  （stage1/2/3 各加缺省 True 的兼容参数）——镜像实测不绕时 force 复点 **0.1 秒回放同一份输出再落一条**，
+  "重新生成"名不副实。
+- 前端：非今日建议顶部黄色警示条（"不是今天的结果，点重新生成"）+ 生成失败/被拒原因**持久写页面**
+  （`adviceGenError`，红色；以前只有一闪而过的 alert，正是误导的来源）；空态按钮文案改「生成今日投资建议」。
+
+③ **判据**：新文件 `tests/unit/test_advice_daily_gate.py` **11 条**（`grep -c '^def test_'` 现读）。
+变异 **M111~M118 共 8 处全部当场注册并逐条 `--only` CONTROL-GREEN ⇒ RED**
+（复用不看日期/当天不复用/不重试/重试不带理由/墙钟日期/同日取最早/force 不绕缓存/stage1 仍吃缓存）。
+一处操作账：M117 锚点第一版单行 `use_cache=not force_generate,` **命中 2 次**（16 空格行包含 12 空格子串）
+⇒ 工具报 ANCHOR-MISS 拦下（这族拦截第三次证明有效），改两行组合锚点后 RED。
+另修 3 处既有测试桩签名（Dummy/_Passthrough/_CountingAnalyzer 加 correction_note/use_cache 可选参）。
+⚠ 第 94 批那 7 条仍未注册进注册表（欠账照旧，下一批全套体检时补）。
+
+④ **镜像端到端真跑**（serve_mirror 8191，sensenova main 档案，`.env` 现读）：当天已生成复点非 force
+⇒ **1.5 秒复用、cache_hit=true、不落新行**；force ⇒ **9.6 秒真重算**、落新行（今日 3 行）；
+撞 429 TPM 限流一发 ⇒ fail-closed 拒绝、库一字未动（回执 `stage3_advice explicit_failed`，正是设计）。
+
+⑤ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二 pytest 会话、
+链 `data/_review_tmp/r95b-chain.log`）**：`pytest tests/unit -q` → **1380 passed / 16 skipped / 0 failed**
+（378.12s，退 0）；`pytest tests/ -q` → **1389 passed / 16 skipped / 0 failed**（398.52s，退 0）。
+上一基线 1369/1378（第 94 批）⇒ **两个口径各 +11**，就是 ③ 那个新文件；逐字闭合。
+⚠ 本批内还跑过一次旧口径 1378/1387（use_cache 那两条判据加上**之前**）——那版已被本链顶掉，引用只看 1380/1389。
+`python scripts/audit_doc_claims.py` → 退 **0**（条数 4、数据源 4 行；"看得见但不判"现读 18）；
+注册表现读末行「共 118 处变异，覆盖 21 个用例文件」。
+
+（上一批：2026-10-13 **16:4x–17:3x（北京）**，**第 94 批：市场观点抓取修复——基金吧整源重写 + 股吧当天过滤 + 新浪放开 50**
 （老板点名：只抓到新浪 20 条，热门股吧/基金吧为啥抓不到）：
 
 ① **病根全是当场实测出来的**（不是推的）：

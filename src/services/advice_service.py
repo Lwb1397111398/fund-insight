@@ -14,6 +14,7 @@ from src.models.database import (
     InvestmentAdvice, Blogger, Prediction, Viewpoint, 
     AdviceReasoning, UserProfile, FundInfo
 )
+from src.services.prediction_lifecycle import current_as_of
 
 
 class AdviceService(BaseService[InvestmentAdvice]):
@@ -75,7 +76,9 @@ class AdviceService(BaseService[InvestmentAdvice]):
             投资建议字典或None
         """
         advice = self.db.query(InvestmentAdvice).order_by(
-            InvestmentAdvice.advice_date.desc()
+            InvestmentAdvice.advice_date.desc(),
+            # 同日多条（重新生成过）取最新那条，不能拿插入顺序赌
+            InvestmentAdvice.created_at.desc(),
         ).first()
         
         if not advice:
@@ -246,7 +249,9 @@ class AdviceService(BaseService[InvestmentAdvice]):
             创建的投资建议
         """
         db_advice = InvestmentAdvice(
-            advice_date=advice_date or date.today(),
+            # 建议归属日走北京钟（current_as_of 是唯一出处）：容器 UTC 时
+            # `date.today()` 会把北京 0~8 点生成的建议写成"昨天"（第 88 轮那族两把钟问题）。
+            advice_date=advice_date or current_as_of(),
             advice_type=advice_type,
             advice_content=advice_content,
             reasoning=reasoning,

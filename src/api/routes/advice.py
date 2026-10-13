@@ -20,6 +20,7 @@ from src.services.advice_validation import (
     advice_cache_digest,
     ADVICE_PROMPT_VERSION,
 )
+from src.services.prediction_lifecycle import current_as_of
 from src.core.config import config
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,16 @@ def _model_version() -> str:
         or getattr(config, "VOLCENGINE_MODEL", None)
         or ""
     )
+
+
+# 输出被拒的两族：**契约违规**（措辞/软闸不一致，重采样有机会变好 ⇒ 自纠错重试一次）
+# 与**结构性失败**（阶段 failed、JSON 坏形——重调只会命中缓存拿回同一份，或本来就缺输入，不重试）。
+_CONTRACT_VIOLATION_CODES = frozenset({
+    "ambiguous_wording",
+    "missing_action_word",
+    "gate_conflict",
+    "missing_override_reason",
+})
 
 
 def _log_advice_rejection(code: str, message: str, details: Optional[dict] = None):
@@ -75,6 +86,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
 
     try:
         force_generate = request.force if request else False
+        today_beijing = current_as_of()
 
         # 先构建证据集（本地 DB，无 LLM）
         data = service.get_data_for_advice()
@@ -87,13 +99,22 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
         # data_hash 列为 VARCHAR(32)，存缓存键的 32 位摘要而非完整 cache_key
         data_hash = advice_cache_digest(cache_key)
 
+        # 复用判定**按北京日**（老板 2026-10-13 定的语义）：
+        # 当天已经生成过 ⇒ 再点「生成」返回当天那条；只有「重新生成」（force）才重算。
+        # 证据哈希仍照常计算并落库存档（审计用），但不再参与命中判断——旧的哈希比对
+        # 会让"当天观点/净值一新增，复点就自动重算"，且跨天被拒后页面留着昨天的旧条，
+        # 老板看到的就成了"点生成出来的是昨天的结果"。
         if not force_generate:
             latest_advice = service.get_latest_advice()
-            if latest_advice and latest_advice.get("data_hash") == data_hash:
-                logger.info("[Advice API] 缓存命中 cache_key 前缀=%s", cache_key[:16])
+            if latest_advice and latest_advice.get("advice_date") == today_beijing.isoformat():
+                logger.info(
+                    "[Advice API] 今日已生成（北京日=%s），复用 id=%s",
+                    today_beijing,
+                    latest_advice.get("id"),
+                )
                 return {
                     "success": True,
-                    "message": "证据与模型版本未变化，返回最新投资建议",
+                    "message": "今日投资建议已生成，返回当天结果；需要重算请点「重新生成」",
                     "data": {**latest_advice, "is_new": False, "cache_hit": True},
                 }
 
@@ -131,14 +152,39 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             (market_state.get("basis") or "")[:80],
         )
 
+        # force（「重新生成」）⇒ use_cache=False：三段都不回放结果缓存，
+        # 否则同提示词命中缓存，重算只是 0.1 秒把同一份内容再落一次库（镜像实测撞到的）。
         advice = llm_analyzer.generate_investment_advice_three_stage(
             data["bloggers"],
             data["predictions"],
             viewpoints=data["viewpoints"],
             market_state=market_state,
+            use_cache=not force_generate,
         )
-
         output_check = validate_advice_output(advice, evidence=data)
+
+        # 契约违规（措辞含糊/软闸不一致）⇒ 当场自纠错重试一次：
+        # 把拒绝理由注入 stage3 提示词，提示词一变，结果缓存的键也变，才会重新采样。
+        # 阶段失败/坏 JSON 属结构性失败，重调大概率拿回同一份或本来就缺输入 ⇒ 不重试。
+        if (
+            not output_check.ok
+            and output_check.code in _CONTRACT_VIOLATION_CODES
+        ):
+            logger.warning(
+                "[Advice API] 输出被拒 code=%s，注入纠错指令重试一次 message=%s",
+                output_check.code,
+                output_check.message,
+            )
+            advice = llm_analyzer.generate_investment_advice_three_stage(
+                data["bloggers"],
+                data["predictions"],
+                viewpoints=data["viewpoints"],
+                market_state=market_state,
+                correction_note=output_check.message,
+                use_cache=not force_generate,
+            )
+            output_check = validate_advice_output(advice, evidence=data)
+
         if not output_check.ok:
             _log_advice_rejection(
                 output_check.code, output_check.message, output_check.details
@@ -201,7 +247,7 @@ def generate_advice(request: GenerateAdviceRequest = None, db: Session = Depends
             confidence=normalized.get("confidence"),
             referenced_bloggers=[b["name"] for b in data["bloggers"] if b.get("name")],
             data_hash=data_hash,
-            advice_date=request.date if request else None,
+            advice_date=(request.date if request and request.date else today_beijing),
             reasoning=normalized.get("reasoning"),
             risk_warning=normalized.get("risk_warning"),
             suggested_sectors=normalized.get("suggested_sectors"),

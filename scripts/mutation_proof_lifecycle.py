@@ -87,6 +87,8 @@ VAL_TESTS = 'tests/unit/test_advice_validation.py'
 EVIDENCE_TESTS = 'tests/unit/test_advice_evidence.py'
 EXEC_TESTS = 'tests/unit/test_advice_executable_contract.py'
 GATE_TESTS = 'tests/unit/test_market_state_gate.py'
+# 第 95 批（2026-10-13 生成建议按北京日复用）：路由复用判定 + 自纠错重试 + 日期归属
+DAILY_TESTS = 'tests/unit/test_advice_daily_gate.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -772,6 +774,50 @@ MUTATIONS = [
      '        hit = (get_fund_for_sector(sector) or {}) if sector else {}\n',
      '        hit = {"code": "510300", "name": "沪深300ETF华泰柏瑞"} if sector else {}\n',
      EXEC_TESTS, 'test_attach_sector_fund_targets_maps_known_and_blanks_unknown'),
+    # ── 第 95 批（2026-10-13）：生成建议按北京日复用 + 契约违规自纠错 + 日期归属 ──
+    # M111 复用不看日期、只要库里有一条就返回（老板报的那一族：点生成拿到昨天的结果）。
+    ('M111_reuse_ignores_the_day', ADVICE_ROUTE,
+     '            if latest_advice and latest_advice.get("advice_date") == today_beijing.isoformat():\n',
+     '            if latest_advice and latest_advice.get("advice_date") is not None:\n',
+     DAILY_TESTS, 'test_yesterday_record_is_never_reused_even_if_hash_matches'),
+    # M112 当天已生成也不复用：每次点都重算（老板要的是"复点复用当天首条"）。
+    ('M112_never_reuses_even_within_the_day', ADVICE_ROUTE,
+     '            if latest_advice and latest_advice.get("advice_date") == today_beijing.isoformat():\n',
+     '            if latest_advice and latest_advice.get("advice_date") is None:\n',
+     DAILY_TESTS, 'test_same_day_second_click_returns_today_first_without_llm'),
+    # M113 契约违规不自纠错重试：弱势里 AI 自相矛盾就直接拒，一次不再试。
+    ('M113_contract_violation_is_not_retried', ADVICE_ROUTE,
+     '            and output_check.code in _CONTRACT_VIOLATION_CODES\n',
+     '            and output_check.code not in _CONTRACT_VIOLATION_CODES\n',
+     DAILY_TESTS, 'test_contract_violation_retries_once_with_reason_injected'),
+    # M114 重试不带拒绝理由（correction_note=None）：改了个寂寞，缓存键没变、还是同一份。
+    ('M114_retry_forgot_the_reason', ADVICE_ROUTE,
+     '                correction_note=output_check.message,\n',
+     '                correction_note=None,\n',
+     DAILY_TESTS, 'test_contract_violation_retries_once_with_reason_injected'),
+    # M115 落库日期退回容器墙钟（第 88 轮那族两把钟：UTC 容器凌晨生成的写成"昨天"）。
+    ('M115_the_stamp_reuses_the_wall_clock', ADVICE_SVC,
+     '            advice_date=advice_date or current_as_of(),\n',
+     '            advice_date=advice_date or date.today(),\n',
+     DAILY_TESTS, 'test_service_default_advice_date_uses_beijing_clock'),
+    # M116 同日多条不按生成时刻取最新：重新生成后复用拿到的还是当天最早那条。
+    ('M116_same_day_returns_the_earliest', ADVICE_SVC,
+     '            InvestmentAdvice.created_at.desc(),\n',
+     '            InvestmentAdvice.created_at.asc(),\n',
+     DAILY_TESTS, 'test_same_day_records_return_newest_by_created_at'),
+    # M117 「重新生成」不绕 LLM 结果缓存：同提示词命中缓存，0.1 秒回放同一份再落一条
+    # （镜像 2026-10-13 实测撞到的——按钮名字是"重新生成"，做的却是复读）。
+    # 锚点带上前一行 market_state：两处调用点的 `use_cache=not force_generate,` 子串会重叠
+    # （16 空格行包含 12 空格行）⇒ 单行命中 2 次被 ANCHOR-MISS 正确地拦下。
+    ('M117_replays_the_cache_on_regenerate', ADVICE_ROUTE,
+     '            market_state=market_state,\n            use_cache=not force_generate,\n',
+     '            market_state=market_state,\n            use_cache=True,\n',
+     DAILY_TESTS, 'test_force_passes_use_cache_off_to_three_stage'),
+    # M118 三段里第一段不接 use_cache：重新生成时 stage1 仍回放旧观点摘要 ⇒ 半新半旧。
+    ('M118_stage1_keeps_the_cache_while_others_refresh', ADVICE_LLM,
+     '        viewpoint_summary = self.analyze_viewpoints_stage1(viewpoints, use_cache=use_cache)\n',
+     '        viewpoint_summary = self.analyze_viewpoints_stage1(viewpoints)\n',
+     DAILY_TESTS, 'test_three_stage_propagates_use_cache_to_every_stage'),
 ]
 
 

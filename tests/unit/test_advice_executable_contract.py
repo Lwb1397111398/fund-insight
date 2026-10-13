@@ -95,15 +95,16 @@ def test_three_stage_passes_market_state_to_stage3():
         def __init__(self):
             pass
 
-        def analyze_viewpoints_stage1(self, viewpoints):
+        def analyze_viewpoints_stage1(self, viewpoints, use_cache=True):
             return {"summary": "无观点", "_stage_status": "ok"}
 
-        def analyze_predictions_stage2(self, predictions, viewpoint_summary, bloggers):
+        def analyze_predictions_stage2(self, predictions, viewpoint_summary, bloggers,
+                                       use_cache=True):
             return {"summary": "ok", "_stage_status": "ok", "near_term_trend": "neutral",
                     "mid_term_trend": "neutral", "sector_predictions": {}}
 
         def generate_advice_stage3(self, viewpoint_summary, prediction_analysis, bloggers,
-                                   market_state=None):
+                                   market_state=None, correction_note=None, use_cache=True):
             seen["market_state"] = market_state
             return {"advice_type": "hold", "advice_content": "建议观望",
                     "market_sentiment": "neutral", "confidence": 50,

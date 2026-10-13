@@ -239,11 +239,11 @@ def test_three_stage_marks_stage2_failed_on_empty_predictions():
             # 跳过父类 LLM 客户端初始化
             pass
 
-        def analyze_viewpoints_stage1(self, viewpoints):
+        def analyze_viewpoints_stage1(self, viewpoints, use_cache=True):
             return {"summary": "无观点", "market_sentiment": "neutral", "_stage_status": "ok"}
 
         def generate_advice_stage3(self, viewpoint_summary, prediction_analysis, bloggers,
-                                   market_state=None):
+                                   market_state=None, correction_note=None, use_cache=True):
             # 即使 stage3 成功，整体仍应因 stage2 failed 被标记
             return {
                 "advice_type": "hold",

@@ -1702,8 +1702,8 @@ class LLMAnalyzer:
             "risk_warning": "投资有风险，入市需谨慎"
         }
     
-    def analyze_viewpoints_stage1(self, viewpoints: List[Dict]) -> Dict:
-        """第一阶段：分析观点，生成观点摘要"""
+    def analyze_viewpoints_stage1(self, viewpoints: List[Dict], use_cache: bool = True) -> Dict:
+        """第一阶段：分析观点，生成观点摘要（use_cache=False：「重新生成」时真重算，不回放缓存）"""
         if not viewpoints:
             return {
                 "summary": "暂无市场观点",
@@ -1740,7 +1740,8 @@ class LLMAnalyzer:
 {{"summary":"整体摘要(80字)","market_sentiment":"bullish/bearish/neutral","hot_sectors":["板块"],"risk_sectors":["板块"],"key_points":["观点1","观点2","观点3"],"confidence_avg":0-100}}"""
         
         try:
-            result_text = self._call_llm(prompt, task_type='analysis', max_tokens=800, temperature=0.3)
+            result_text = self._call_llm(prompt, task_type='analysis', max_tokens=800, temperature=0.3,
+                                         use_cache=use_cache)
             result = self._parse_json_with_fallback(result_text)
             if result:
                 result.setdefault("_stage_status", "ok")
@@ -1761,7 +1762,8 @@ class LLMAnalyzer:
             "_stage_reason": "llm_or_parse_failed",
         }
     
-    def analyze_predictions_stage2(self, predictions: List[Dict], viewpoint_summary: Dict, bloggers: List[Dict] = None) -> Dict:
+    def analyze_predictions_stage2(self, predictions: List[Dict], viewpoint_summary: Dict, bloggers: List[Dict] = None,
+                                   use_cache: bool = True) -> Dict:
         """第二阶段：分析预测，结合观点摘要生成预测分析报告"""
         if not predictions:
             return {
@@ -1841,7 +1843,8 @@ class LLMAnalyzer:
         try:
             # max_tokens 需给足：sector_predictions 会逐板块展开，思考型/verbose 模型
             # （如火山 GLM-5.2）输出带缩进，1000 token 会截断 JSON 导致解析失败（finish_reason=length）
-            result_text = self._call_llm(prompt, task_type='analysis', max_tokens=3000, temperature=0.3)
+            result_text = self._call_llm(prompt, task_type='analysis', max_tokens=3000, temperature=0.3,
+                                         use_cache=use_cache)
             result = self._parse_json_with_fallback(result_text)
             if result:
                 result.setdefault("_stage_status", "ok")
@@ -1864,11 +1867,15 @@ class LLMAnalyzer:
         }
     
     def generate_advice_stage3(self, viewpoint_summary: Dict, prediction_analysis: Dict, 
-                                bloggers: List[Dict], market_state: Optional[Dict] = None) -> Dict:
+                                bloggers: List[Dict], market_state: Optional[Dict] = None,
+                                correction_note: Optional[str] = None,
+                                use_cache: bool = True) -> Dict:
         """第三阶段：基于观点摘要、预测分析与系统算出的大盘状态，生成可执行的投资建议。
 
         market_state 来自 src/analyzer/market_state.compute_market_state（纯本地净值计算）；
         缺省/缺失时按 stance=unknown 处理，软闸自动失效但不谎报仓位。
+        correction_note：上一版输出被落库前校验拒绝时的原因。非空则追加到提示词末尾
+        要求按硬性规则修正重出——提示词一变，结果缓存的键也变，才会真正重新采样。
         """
         blogger_info = []
         for b in bloggers[:10]:
@@ -1954,11 +1961,18 @@ class LLMAnalyzer:
 7. 理由要落到实体：谁（博主/等级）在预测、看涨/看跌计数多少、置信度、目标日期，不要只说"板块热度高"。
 8. 短期（1-3天）与中期（1-2周）动作可以不同。参考板块预测汇总：看涨计数多且A级博主集中的板块才值得给 buy/add；中性(N)不算方向；A级博主权重最高。
 """
+        if correction_note:
+            prompt += f"""
+【上一版建议被系统拒绝，原因是】
+{correction_note}
+请严格按上面的硬性规则重新生成一份**合规**的建议，别再犯同样的问题。只返回 JSON，不要解释。
+"""
         
         try:
             # 同 stage2：verbose 模型的分层建议 JSON 可能较长，给足 token 避免截断
             # （v2 契约新增 position 与 sector_actions，输出更长，2000 已不够）
-            result_text = self._call_llm(prompt, task_type='advice', max_tokens=3000, temperature=0.5)
+            result_text = self._call_llm(prompt, task_type='advice', max_tokens=3000, temperature=0.5,
+                                         use_cache=use_cache)
             result = self._parse_json_with_fallback(result_text)
             if result:
                 result.setdefault("_stage_status", "ok")
@@ -2008,22 +2022,29 @@ class LLMAnalyzer:
     
     def generate_investment_advice_three_stage(self, bloggers: List[Dict], predictions: List[Dict],
                                                 viewpoints: List[Dict],
-                                                market_state: Optional[Dict] = None) -> Dict:
-        """三阶段分析生成投资建议（market_state=系统算出的大盘软闸状态）"""
+                                                market_state: Optional[Dict] = None,
+                                                correction_note: Optional[str] = None,
+                                                use_cache: bool = True) -> Dict:
+        """三阶段分析生成投资建议（market_state=系统算出的大盘软闸状态）；
+        correction_note 非空时透传给 stage3（上一版被落库前校验拒绝的原因 ⇒ 要求修正重出）。
+        use_cache=False（「重新生成」）⇒ 三段都不回放结果缓存，真重算。"""
         logger.info("[LLM] 开始三阶段分析...")
         
         # 第一阶段：分析观点
         logger.info("[LLM] 第一阶段：分析观点...")
-        viewpoint_summary = self.analyze_viewpoints_stage1(viewpoints)
+        viewpoint_summary = self.analyze_viewpoints_stage1(viewpoints, use_cache=use_cache)
         
         # 第二阶段：分析预测（传入博主信息）
         logger.info("[LLM] 第二阶段：分析预测...")
-        prediction_analysis = self.analyze_predictions_stage2(predictions, viewpoint_summary, bloggers)
+        prediction_analysis = self.analyze_predictions_stage2(predictions, viewpoint_summary, bloggers,
+                                                              use_cache=use_cache)
         
         # 第三阶段：生成投资建议
         logger.info("[LLM] 第三阶段：生成投资建议...")
         advice = self.generate_advice_stage3(viewpoint_summary, prediction_analysis, bloggers,
-                                             market_state=market_state)
+                                             market_state=market_state,
+                                             correction_note=correction_note,
+                                             use_cache=use_cache)
         
         # 保存中间结果与阶段状态（供 P1 落库前校验）
         advice["viewpoint_summary"] = viewpoint_summary
