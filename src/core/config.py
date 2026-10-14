@@ -137,6 +137,11 @@ class Config:
     MAX_POSTS_PER_FUND = int(os.getenv("MAX_POSTS_PER_FUND", "10"))
     CRAWLER_TIMEOUT = int(os.getenv("CRAWLER_TIMEOUT", "10"))
 
+    # 常驻后台调度器总开关（基金更新 / 预测验证 / 清理 / 观点汇总窗口）。
+    # 默认关：生产（Render）遵守 2026-09-29「不加定时任务」的决定，行为一字不变；
+    # 本地把 .env 设成 true ⇒ 应用一开就补做当日没完成的「基金更新 → 验证」。
+    SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "false").lower() == "true"
+
     FUND_API_TIMEOUT = int(os.getenv("FUND_API_TIMEOUT", "10"))
     FUND_API_MAX_RETRIES = int(os.getenv("FUND_API_MAX_RETRIES", "3"))
 

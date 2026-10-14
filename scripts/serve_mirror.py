@@ -48,6 +48,13 @@ def main():
     if ephemeral:
         print('ACCESS_PASSWORD=%s' % os.environ['ACCESS_PASSWORD'])
     print('http://%s:%d/  （Ctrl+C 停）' % (args.host, args.port))
+    # 镜像探针进程**永不**自动跑调度（第 97 批）：本地 .env 可能设了
+    # SCHEDULER_ENABLED=true，探针若也起调度器，每次调试都会在镜像库上全量打数据源，
+    # 还会跟真实应用互抢「当天已跑」标记。环境变量与已加载的 config 属性两处都钉
+    # （src 包在本脚本导入链里已经求值过一次）。
+    os.environ['SCHEDULER_ENABLED'] = 'false'
+    from src.core import config as _app_config
+    _app_config.SCHEDULER_ENABLED = False
     import uvicorn
     uvicorn.run('src.api.main:app', host=args.host, port=args.port, log_level='warning')
     return 0

@@ -171,9 +171,32 @@ async def lifespan(app: FastAPI):
     logger.info(f"[Startup] LLM API: {'已配置' if config.LLM_API_KEY else '未配置'}")
     logger.info(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
 
+    # 常驻调度器接线（第 97 批）：`start_scheduler()` 以前在全仓没有任何调用点，
+    # 「本地常驻调度器」只是文档里的承诺。现在按 `SCHEDULER_ENABLED` 开关启停 ——
+    # 默认关（生产维持 2026-09-29「不加定时任务」的决定），本地 .env 设 true。
+    scheduler_started = False
+    if getattr(config, "SCHEDULER_ENABLED", False):
+        try:
+            from src.tasks.scheduler import start_scheduler
+            start_scheduler()
+            scheduler_started = True
+            logger.info("[Startup] 常驻调度器: 已启动（启动即补做当日未完成的"
+                        "「基金更新→验证」，此后按北京时间 10:00/11:00/02:00/15:30 窗口）")
+        except Exception as e:
+            logger.error("[Startup] 常驻调度器启动失败: %s", e)
+    else:
+        logger.info("[Startup] 常驻调度器: 未启用（SCHEDULER_ENABLED=false，默认）")
+
     yield
 
     # ========== Shutdown ==========
+    if scheduler_started:
+        try:
+            from src.tasks.scheduler import stop_scheduler
+            stop_scheduler()
+            logger.info("[Shutdown] 常驻调度器已停止")
+        except Exception as e:
+            logger.warning("[Shutdown] 停止常驻调度器失败: %s", e)
     from src.fund.fund_api import fund_api
     fund_api.close()
     logger.info("[Shutdown] 资源已释放")

@@ -91,6 +91,10 @@ GATE_TESTS = 'tests/unit/test_market_state_gate.py'
 DAILY_TESTS = 'tests/unit/test_advice_daily_gate.py'
 # 第 96 批（2026-10-13 同日）：板块自身强弱豁免大盘软闸
 SECTOR_TESTS = 'tests/unit/test_advice_sector_gate.py'
+# 第 97 批（2026-10-14）：常驻调度器接线（SCHEDULER_ENABLED）+ 执行日持久化 + 启动追赶
+SCHED = 'src/tasks/scheduler.py'
+MAIN = 'src/api/main.py'
+SCHED_TESTS = 'tests/unit/test_scheduler_autostart.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -846,6 +850,39 @@ MUTATIONS = [
      '            a["sector_stance"] = st.get("stance") or ""\n',
      '            pass\n',
      SECTOR_TESTS, 'test_attach_sector_targets_carries_own_state'),
+    # ---- 第 97 批（2026-10-14 调度器接线 + 执行日持久化 + 启动追赶）----
+    # M123 开关失灵恒自启：默认关（生产口径）的判定被绕过 ⇒ 测试/生产一起中招。
+    ('M123_switch_ignored_always_starts', MAIN,
+     '    if getattr(config, "SCHEDULER_ENABLED", False):\n'
+     '        try:\n'
+     '            from src.tasks.scheduler import start_scheduler',
+     '    if True:\n'
+     '        try:\n'
+     '            from src.tasks.scheduler import start_scheduler',
+     SCHED_TESTS, 'test_default_off_app_startup_does_not_start_scheduler'),
+    # M124 验证不再排在更新之后：老板点名要的那条顺序（更新→验证）摘掉。
+    ('M124_verify_no_longer_follows_update', SCHED,
+     '        if need_verify:\n'
+     '            if need_update:\n'
+     '                self._run_fund_update()',
+     '        if need_verify:\n'
+     '            if False:\n'
+     '                self._run_fund_update()',
+     SCHED_TESTS, 'test_stale_day_runs_update_before_verify'),
+    # M125 追赶不看"当天跑过没有"：重启/窗口内每 5 分钟全量重放（旧版那笔账的变异形）。
+    ('M125_catchup_replays_finished_steps', SCHED,
+     '            need_verify = self._last_verify_date != today\n'
+     '            need_update = self._last_fund_update_date != today',
+     '            need_verify = True\n'
+     '            need_update = True',
+     SCHED_TESTS, 'test_same_day_replay_is_silent'),
+    # M126 执行日只写内存不提交库：重启后"当天已跑过"全部失忆。
+    ('M126_state_not_committed_to_db', SCHED,
+     '                row.config_value = day.isoformat()\n'
+     '            db.commit()',
+     '                row.config_value = day.isoformat()\n'
+     '            db.rollback()',
+     SCHED_TESTS, 'test_mark_and_load_roundtrip_survives_a_new_instance'),
 ]
 
 

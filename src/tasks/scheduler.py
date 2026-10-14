@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 # 北京时区（UTC+8），天天基金数据使用北京时间
 BEIJING_TZ = timezone(timedelta(hours=8))
 
+# 调度步骤「最后一次执行日」持久化到 `system_config`（北京日字符串 YYYY-MM-DD）。
+# 构造器旁那句"使用持久化状态，避免重启后重置"的注释以前是**纸面话** —— 四个字段纯内存，
+# 每次重启都会把整套窗口重放一遍（白打数据源、容易撞东财限流）。第 97 批让它成真。
+_STATE_KEY_PREFIX = 'scheduler.last_'
+_STATE_ATTRS = {
+    'cleanup': '_last_cleanup_date',
+    'verify': '_last_verify_date',
+    'fund_update': '_last_fund_update_date',
+    'viewpoint_summary': '_last_viewpoint_summary_date',
+}
+
 
 class TaskScheduler:
     """任务调度器"""
@@ -24,7 +35,9 @@ class TaskScheduler:
         self._state_lock = threading.Lock()  # 保护状态变量的独立锁
         self.thread = None
         self.cleanup_interval_hours = 24  # 每天运行一次
-        # 使用持久化状态，避免重启后重置
+        # 「最后一次执行日」先留空：真正的持久化由调度线程起手调
+        # `_load_persisted_dates()` 从 `system_config` 读回（第 97 批，见 _STATE_ATTRS）。
+        # 构造器不碰库 —— 既有用例直接 `TaskScheduler()` 断言这些字段为 None。
         self._last_cleanup_date = None
         self._last_verify_date = None
         self._last_fund_update_date = None
@@ -65,19 +78,104 @@ class TaskScheduler:
                 return (w - current_minute) * 60 - now.second
         return (24 * 60 - current_minute + windows[0]) * 60 - now.second
     
+    def _load_persisted_dates(self):
+        """从 `system_config` 读回四个「最后执行日」（北京日）。
+
+        读失败 ⇒ 当作全部没执行过（fail-open）：宁可今天多补一轮 update+verify，
+        也不要因为读库抖动就让调度线程起手就死（连 `SessionLocal()` 本身都包进来）。
+        """
+        from src.models.database import SessionLocal, SystemConfig
+
+        keys = [_STATE_KEY_PREFIX + k for k in _STATE_ATTRS]
+        found = {}
+        try:
+            db = SessionLocal()
+            try:
+                for row in db.query(SystemConfig).filter(
+                        SystemConfig.config_key.in_(keys)).all():
+                    found[row.config_key] = row.config_value
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("调度器读取持久化状态失败（按当天未执行处理）: %s", e)
+            found = {}
+
+        with self._state_lock:
+            for key, attr in _STATE_ATTRS.items():
+                raw = found.get(_STATE_KEY_PREFIX + key)
+                parsed = None
+                if raw:
+                    try:
+                        parsed = datetime.strptime(raw, "%Y-%m-%d").date()
+                    except ValueError:
+                        parsed = None  # 值坏掉 ⇒ 当作没执行过，让它自然重跑一次
+                setattr(self, attr, parsed)
+
+    def _mark_step_done(self, step_key: str, day):
+        """某步骤今天跑过了：内存 + `system_config` 双写（写库失败只打日志，不抛）。
+
+        「跑过就记」而非「成功才记」：基金更新失败几条时不记会让窗口当天反复重放，
+        等于拿同一批失败代码反复捶数据源；缺的净值由验证侧的按区间补拉自愈。
+        """
+        from src.models.database import SessionLocal, SystemConfig
+
+        with self._state_lock:
+            setattr(self, _STATE_ATTRS[step_key], day)
+        db = SessionLocal()
+        try:
+            cfg_key = _STATE_KEY_PREFIX + step_key
+            row = db.query(SystemConfig).filter(SystemConfig.config_key == cfg_key).first()
+            if row is None:
+                db.add(SystemConfig(config_key=cfg_key, config_value=day.isoformat(),
+                                    description='调度步骤最后执行日（北京）'))
+            else:
+                row.config_value = day.isoformat()
+            db.commit()
+        except Exception as e:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.warning("调度器持久化步骤 %s 失败（重启后可能重跑一次）: %s", step_key, e)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _ensure_verify_cycle(self, now=None):
+        """「更新 → 验证」这一班：只补今天还没做完的部分。
+
+        老板第 97 批点名的规矩在此落实：**验证永远排在全量基金更新之后**。
+        - 验证今天没跑 ⇒ 更新今天没跑就先更新，再验证；
+        - 验证跑过、更新没跑 ⇒ 只补更新；
+        - 两班都跑过 ⇒ 一个网络包都不发（旧版重启必全量重放）。
+        """
+        now = now or datetime.now(BEIJING_TZ)
+        today = now.date()
+        with self._state_lock:
+            need_verify = self._last_verify_date != today
+            need_update = self._last_fund_update_date != today
+        if need_verify:
+            if need_update:
+                self._run_fund_update()
+                self._mark_step_done('fund_update', today)
+            result = self._run_prediction_verify()
+            self._mark_step_done('verify', today)
+            return result
+        if need_update:
+            self._run_fund_update()
+            self._mark_step_done('fund_update', today)
+        return {"skipped": True, "reason": "already_ran_today"}
+
     def _run_scheduler(self):
         """运行调度循环"""
-        # 启动时先更新基金数据，再执行验证
-        self._run_fund_update()
-        self._run_prediction_verify()
-
-        # 初始化状态变量
-        with self._state_lock:
-            now = datetime.now(BEIJING_TZ)
-            self._last_cleanup_date = now.date()
-            self._last_verify_date = now.date()
-            self._last_fund_update_date = now.date()
-            self._last_viewpoint_summary_date = now.date()
+        # 先读回「今天各步骤跑过没有」，再按缺口补做（而不是无脑全量重放）。
+        self._load_persisted_dates()
+        self._ensure_verify_cycle(datetime.now(BEIJING_TZ))
 
         while self.running:
             try:
@@ -85,15 +183,12 @@ class TaskScheduler:
                 current_date = now.date()
                 current_minute = now.hour * 60 + now.minute  # 当前分钟数（0-1439）
 
-                # 每天早上 10:00-10:59 之间执行预测验证（只需执行一次）
+                # 每天上午 10:00-10:59 执行「基金更新 → 预测验证」（只需执行一次）
                 if 600 <= current_minute < 660:
                     with self._state_lock:
                         should_run = self._last_verify_date != current_date
                     if should_run:
-                        self._run_fund_update()
-                        self._run_prediction_verify()
-                        with self._state_lock:
-                            self._last_verify_date = current_date
+                        self._ensure_verify_cycle(now)
 
                 # 每天上午 11:00-11:59 执行观点每日汇总（在观点抓取分析完成后）
                 if 660 <= current_minute < 720:
@@ -101,8 +196,7 @@ class TaskScheduler:
                         should_run = self._last_viewpoint_summary_date != current_date
                     if should_run:
                         self._run_viewpoint_summary()
-                        with self._state_lock:
-                            self._last_viewpoint_summary_date = current_date
+                        self._mark_step_done('viewpoint_summary', current_date)
 
                 # 每天凌晨 2:00-2:59 执行清理任务
                 if 120 <= current_minute < 180:
@@ -110,17 +204,16 @@ class TaskScheduler:
                         should_run = self._last_cleanup_date != current_date
                     if should_run:
                         self._run_cleanup()
-                        with self._state_lock:
-                            self._last_cleanup_date = current_date
+                        self._mark_step_done('cleanup', current_date)
 
-                # 每天下午 15:30-15:59 更新基金数据（收盘后）
+                # 每天下午 15:30-15:59 补一次基金更新（上午没跑过才跑；
+                # 当天 ETF 净值多在晚间才发布，这一班主要兜「上午没开应用」的底）
                 if 930 <= current_minute < 960:
                     with self._state_lock:
                         should_run = self._last_fund_update_date != current_date
                     if should_run:
                         self._run_fund_update()
-                        with self._state_lock:
-                            self._last_fund_update_date = current_date
+                        self._mark_step_done('fund_update', current_date)
 
                 # 计算到下一个调度窗口的秒数，上限300秒
                 sleep_seconds = min(self._seconds_until_next_window(), 300)

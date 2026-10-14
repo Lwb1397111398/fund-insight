@@ -84,6 +84,19 @@ for _stale in (str(_test_db_path), str(_test_db_path) + '-wal', str(_test_db_pat
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db_path.as_posix()}"
 os.environ.pop("ALEMBIC_DATABASE_URL", None)
 os.environ.setdefault("LLM_API_KEY", "test-key")
+# 调度器总开关必须在钉库之前归位：本机 `.env` 现在写着 `SCHEDULER_ENABLED=true`
+# （老板要真实运行时自动「更新 → 验证」），而 `src/core/config.py` 是 **import 时**读环境的
+# ⇒ 不钉这一条，任何起应用的测试（TestClient / lifespan）都会当场把常驻调度器拉起来，
+# 往临时库里插状态行、还会真打天天基金。需要「开启」语义的用例自己 setattr 那个开关。
+os.environ["SCHEDULER_ENABLED"] = "false"
+# 代理变量在测试进程里一律剥掉（第 97 批当场实测）：宿主的 HTTP(S)_PROXY/NO_PROXY 会透进
+# pytest，`LLMAnalyzer()` 起手造 OpenAI/httpx 客户端时 httpx 解析 NO_PROXY 里的
+# `[::1]` 直接 `InvalidURL: Invalid port ':1]'` ⇒ test_optimized_trend 五连炸。
+# 测试本来就不许打真网络（`BlockedRealHttp`），代理留着只会把"哪条红了"变成"环境红了"。
+for _pv in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy",
+            "NO_PROXY", "no_proxy"):
+    os.environ.pop(_pv, None)
 # 上面那行必须**先于任何 `src.*` 导入**执行；这条断言把顺序钉住（第 33 轮我自己破坏了它，
 # 于是 `test_audit_fund_info_identity` 的四条夹具把 INSERT 发到了生产 Supabase）。
 assert 'src' not in sys.modules and 'src.models.database' not in sys.modules, (

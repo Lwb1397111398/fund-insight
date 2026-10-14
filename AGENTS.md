@@ -85,7 +85,10 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 后台任务入口：
 
 - `src/tasks/scheduler.py`：本地常驻调度器，按北京时间窗口运行清理、基金更新、预测验证。
-- `scripts/run_scheduled_tasks.py`：Render Cron 一次性入口，执行 `daily`。
+  第 97 批起由 `SCHEDULER_ENABLED` 开关随 lifespan 启停（默认 false，生产行为不变）；
+  启动是**追赶式**——只补当天没做完的「基金更新 → 验证」，各步骤最后执行日持久化在 `system_config`。
+- `scripts/run_scheduled_tasks.py`：Render Cron 一次性入口，执行 `daily`
+  （步骤顺序 fund_update → prediction_verify，同样保证「验证前基金先更新」）。
 
 ## 核心业务流
 
@@ -296,7 +299,62 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-10-13 **20:1x–20:3x（北京）**，**第 96 批：投资建议软闸板块级豁免——大盘弱≠板块弱**
+最近一次核对（2026-10-14 **15:3x–15:5x（北京）**，**第 97 批：常驻调度器第一次真的接上电**
+（老板问：「待验证观点会自动验证，但基金不会自动更新，验证结果会不会不严谨？能不能验证前自动更新基金」
+—— 探索当场量清：老板的两层担心一层是虚惊、一层是真故障）：
+
+① **探索结论（全部现场实测，不是推的）**：
+- **「验证前拿到最新数据」本来就成立**：`verify_prediction` 对每条预测在判之前先调
+  `fund_api.backfill_history_range(fund_code, 预测日→目标日)` 按区间补拉净值（缺起点/断档/
+  终点缺行才打接口，够密免打），再走 `_check_fund_data_availability` 新鲜度闸门；
+  补不出证据只 `waiting_target_nav` 等待或 `endpoint_lag_unproven` 拒判，**不会拿旧值出终局结论**。
+  调度器、Render Cron（`run_scheduled_tasks.py` 的 fund_update → prediction_verify 步骤顺序）、
+  前端开页补跑（`catchUpOnce` 先 `POST /api/funds/update-all` 轮询到成功落库才发 `verify-all`）
+  三条自动路径也都带「先更新后验证」的顺序。
+- **真故障是「自动」本身**：`start_scheduler()` 全仓唯一调用点是 `scheduler.py` 自己的
+  `__main__` 自测块，`main.py` 的 lifespan 从不启动 ⇒ 「本地常驻调度器」从第一天起是纸面承诺；
+  生产库 `batch_analysis_tasks` 近三周没有任何一条 Cron 应有时刻生成的验证批次（236/241/252 等
+  全是手点/开页形状），与老板「一直是手点」的历史说法互证。
+  另外调度器四个「最后执行日」以前是纯内存（注释谎称持久化）⇒ 每次重启全量重放 update+verify。
+- **当场环境账（第 97 批补的 conftest 消毒有实锤配对）**：本会话注入的
+  `NO_PROXY=localhost,127.0.0.1,::1,[::1]` 让 httpx 在 `LLMAnalyzer()` 构造时报
+  `InvalidURL: Invalid port ':1]'`（`[::1]` 这项被 httpx 的代理解析炸掉）⇒ 同一份代码
+  两种环境两种数：**消毒关**对照 `pytest tests/unit` = `2 failed, 1403 passed, 3 errors`
+  （failed 是 `test_zero_network_guard.py` 的 `test_httpx_leg_is_blocked` 与
+  `test_the_signal_survives_a_broad_except[httpx]`——httpx 构造炸了走不到 BlockedTransport；
+  errors 是 `test_optimized_trend.py` 现读 3 条全在 setup 阶段）；**消毒开** =
+  `1408 passed / 16 skipped / 0 failed`（两份日志 `data/_review_tmp/r97f-unit-realcontrol.log`
+  与 `r97c-unit.log`）。修法在 `tests/conftest.py` 钉库块：pop 全部代理变量
+  （测试本就不许打真网络，`BlockedRealHttp` 才是正门）。上一批基线（1398）在无此注入的
+  shell 跑的，所以那 5 个坏点第一次浮头就是本批。
+
+② **改的层**（`src/` 3 文件 + `scripts/serve_mirror.py` + `tests/conftest.py` + `.env(.example)` + 新判据）：
+- `config.py`：`SCHEDULER_ENABLED`（默认 false ⇒ 生产行为一字不变，遵守 09-29「不加定时任务」决定）。
+- `main.py` lifespan：按开关 `start_scheduler()`/`stop_scheduler()`。
+- `scheduler.py`：状态持久化进 `system_config`（键 `scheduler.last_{cleanup,verify,fund_update,
+  viewpoint_summary}`，北京日字符串）；启动动作改 `_ensure_verify_cycle()` **追赶式**——当天没验证
+  ⇒（当天没更新则先更新）再验证，跑过的部分重启一个网络包不发；读库炸 fail-open 不崩线程。
+- `serve_mirror.py` 双钉（环境变量 + 已加载的 config 实例）false；本地 `.env` 设 true ⇒
+  老板开应用即自动「补做当天没完成的更新+验证」，窗口 02:00/10:00/11:00/15:30 照旧。
+
+③ **判据**：新文件 `tests/unit/test_scheduler_autostart.py` **10 条**
+（`grep -c '^def test_'` 现读）。变异 **M123~M126** 四处（开关失灵恒自启 / 更新不再先于验证 /
+追赶不看日期 / 状态不提交库）逐条 `--only` 都 CONTROL-GREEN ⇒ RED、退 0，回执
+`docs/迭代计划/run-20261014-scheduler-wiring/round97-only-M12*.txt`。注册表现读
+「共 126 处变异，覆盖 23 个用例文件」。⚠ 第 94 批那 7 条仍欠注册（旧欠账照登记）。
+
+④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二 pytest；
+日志 `data/_review_tmp/r97c-unit.log`/`r97c-full.log`）**：`pytest tests/unit -q` →
+**1408 passed / 16 skipped / 0 failed**（427.06s，退 **0**）；`pytest tests/ -q` →
+**1417 passed / 16 skipped / 0 failed**（348.26s，退 **0**）。上一基线 1398/1407（第 96 批）⇒
+各 +10，就是 ③ 那个新文件，逐字闭合。`python scripts/audit_doc_claims.py` → 退 **0**。
+
+⑤ **生产端现状与未决**：生产 `SCHEDULER_ENABLED` 未设 ⇒ 照旧 `scheduler_running:false`，
+推进仍靠老板开页补跑 + 验证侧按区间补拉；Render Cron 那条 `daily` 是否真在跑**仍是 UNMEASURED**
+（batch_analysis_tasks 无其时刻的批次是反证、不是判罪，要看 Render 日志才能定罪）。
+本批生产库一字未写（只做过两条只读 SQL 与两个 GET）。
+
+（上一批：2026-10-13 **20:1x–20:3x（北京）**，**第 96 批：投资建议软闸板块级豁免——大盘弱≠板块弱**
 （老板追问：「即使大盘弱势，仍可能有加仓买入的空间，因为不一定这个板块弱，可能马上雄起了」）：
 
 ① **改的五层**（承接第 95 批同日，`src/` 5 文件 + `web/` 2 文件 + 新判据）：

@@ -1,0 +1,4 @@
+# run @ 2026-10-14T15:22:27+08:00  git=f1fd4bd8bf9b  worktree=dirty(5)  python=3.12.10  共 1 处变异 / 1 个判据文件
+CONTROL                                                    ⇒ CONTROL-GREEN（1 个判据文件在干净代码上全绿）
+M123_switch_ignored_always_starts                          ⇒ RED（判据有效）
+已还原 src/api/main.py
