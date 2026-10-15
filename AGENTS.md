@@ -356,8 +356,12 @@ CONTROL-GREEN ⇒ RED、退 0；**M123** 判据名随改名同步更新引用并
 是**文档条数账自己漂了**——改文件用例数同时改了 AGENTS.md/总览那句当场账，审计逮住"文档写 10/2、
 当场 11"，把两处按现读改对后转绿。`python scripts/audit_doc_claims.py` → 退 **0**（条数 8、数据源 4 行）。
 
-⑤ **生产端**：本批生产库只做过只读查询与两个 GET（写动作留给部署后的调度器自己）。
-Render Cron `daily` 是否真在跑**仍 UNMEASURED**。
+⑤ **生产端定罪（推送后现读，不是推的）**：`GET /api/health/detail` 现读
+`git_commit=bf48c7235650`、**`scheduler_running:true`**（started_at 10-15 16:50 北京，部署即起线程）；
+`system_config` 现读 `scheduler.last_fund_update=2026-10-15 / last_verify=2026-10-15`
+（upd 09:02/09:03 UTC＝北京 17:02/17:03），`batch_analysis_tasks` 256 号 predictions completed
+9/9（09:02 UTC）＝**调度器自己补做的那一班**（9 条到期待验证，当场 0 条出终局结论是设计行为——
+今天目标日的净值要晚间才发布，走 `waiting_target_nav` 等重问）。Render Cron `daily` 是否真在跑**仍 UNMEASURED**。
 
 （上一批：2026-10-14 **15:3x–15:5x（北京）**，**第 97 批：常驻调度器第一次真的接上电**
 （老板问：「待验证观点会自动验证，但基金不会自动更新，验证结果会不会不严谨？能不能验证前自动更新基金」
