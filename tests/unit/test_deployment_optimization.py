@@ -11,13 +11,29 @@ AUTH_HEADERS = {"X-Access-Password": "test_password_123"}
 
 
 def test_render_yaml_defines_daily_cron_service():
-    """Render 配置应包含独立 Cron 服务，避免 Web 进程承担定时任务"""
+    """Render 配置应包含独立 Cron 服务兜底无人值守日（第 98 批起 Web 进程也按
+    SCHEDULER_ENABLED 跑追赶式调度，两条路径同日互不重复：执行日持久化在
+    system_config，谁先跑谁记账，另一条当天自动静默）。"""
     content = Path("render.yaml").read_text(encoding="utf-8")
 
     assert "type: cron" in content
     assert "name: fund-insight-scheduler" in content
     assert "schedule:" in content
     assert "python scripts/run_scheduled_tasks.py daily" in content
+
+
+def test_render_yaml_web_turns_on_scheduler():
+    """第 98 批（2026-10-15 老板改口「我要求基金也自动更新」）：生产 web 服务
+    显式声明 SCHEDULER_ENABLED=true，实例每次唤醒/部署先追赶「基金更新 → 验证」。
+    判据钉的是**蓝图这一行在且只在 web 段**——cron 段是一次性入口，不需要常驻线程。"""
+    content = Path("render.yaml").read_text(encoding="utf-8")
+    web_config, cron_config = content.split("  - type: cron", 1)
+
+    import re
+    assert re.search(r'key: SCHEDULER_ENABLED\s*\n\s*value: "true"', web_config), \
+        "web 段缺 SCHEDULER_ENABLED: \"true\"（老板 2026-10-15 要求生产基金自动更新）"
+    # 默认关的口径没变：代码里 os.getenv 缺省仍是 false（不设该键的环境不许自动跑）
+    assert "key: SCHEDULER_ENABLED" not in cron_config
 
 
 def test_render_web_runs_migrations_before_starting_server():

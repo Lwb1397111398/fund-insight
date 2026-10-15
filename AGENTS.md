@@ -84,9 +84,13 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 后台任务入口：
 
-- `src/tasks/scheduler.py`：本地常驻调度器，按北京时间窗口运行清理、基金更新、预测验证。
-  第 97 批起由 `SCHEDULER_ENABLED` 开关随 lifespan 启停（默认 false，生产行为不变）；
-  启动是**追赶式**——只补当天没做完的「基金更新 → 验证」，各步骤最后执行日持久化在 `system_config`。
+- `src/tasks/scheduler.py`：常驻调度器，按北京时间窗口运行清理、基金更新、预测验证。
+  第 97 批起由 `SCHEDULER_ENABLED` 开关随 lifespan 启停；启动是**追赶式**——只补当天没做完的
+  「基金更新 → 验证」，各步骤最后执行日持久化在 `system_config`（当天跑过 ⇒ 重启零发包）。
+  第 98 批（2026-10-15，老板改口「我要求基金也自动更新」）起 `render.yaml` 生产 web 段显式
+  `SCHEDULER_ENABLED: "true"` ⇒ 网页版实例每次唤醒/部署自动补做基金更新+验证；
+  09-29「不加定时任务」的生产决定已被推翻（清理/观点汇总两窗口仍分别被 HARD_DELETE_DISABLED
+  与 VIEWPOINT_AUTO_SUMMARY_ENABLED 默认关挡住）。
 - `scripts/run_scheduled_tasks.py`：Render Cron 一次性入口，执行 `daily`
   （步骤顺序 fund_update → prediction_verify，同样保证「验证前基金先更新」）。
 
@@ -299,7 +303,49 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-10-14 **15:3x–15:5x（北京）**，**第 97 批：常驻调度器第一次真的接上电**
+最近一次核对（2026-10-15 **15:0x–15:3x（北京）**，**第 98 批：生产蓝图显式开启调度器——网页版基金自动更新**
+（老板反馈：「网页版昨天没有自动更新呀，验证会自动验证，我要求基金也自动更新，投资建议生成时能有最新数据」
+—— 当场实测归因 + 改配置，`src/` 一字未动）：
+
+① **实测归因（不是推的）**：`GET /api/health/detail` 现读 `git_commit=25ba28c3b1fc`（第 97 批
+**已推送且已部署**，started_at 10-15 14:49 北京）但 **`scheduler_running:false`** ⇒ 生产"昨天没自动
+更新"的原因就是第 97 批把开关默认留在关（守的是 09-29 旧决定）；老板这句话即改口。
+同时 `GET /api/stats/evidence` 现读 `nav_as_of=2026-10-14 / lag=1`——净值当天已被**开页补跑**
+（`catchUpOnce` 先 `update-all` 轮询到落库才发 `verify-all`，`batch_analysis_tasks` 255 号
+10-15 06:55 UTC=北京 14:55 的 predictions 批次即其形状）推到最新；老板看到的"验证自动、基金不自动"
+是**补跑触发之前**那一截的状态。生产 `system_config` 现读 `scheduler.last_*` 零行 ⇒ 调度器在生产从未起过。
+
+② **改的两处**：
+- `render.yaml` web 服务 envVars 显式加 `SCHEDULER_ENABLED: "true"`（注释写明老板改口与被推翻的
+  09-29 决定）。效果：生产实例每次唤醒/部署，lifespan 起调度线程并**追赶**当天没做完的
+  「基金更新 → 验证」；执行日持久化在 `system_config`，与开页补跑/Cron 同日互不重复。
+  02:00 清理仍 no-op（`HARD_DELETE_DISABLED`）、11:00 汇总仍默认关——开调度器不引入新删除/新抓取。
+  ⚠ **未决**：Render 服务是手动建的、仪表盘会盖蓝图（先例：`PYTHON_VERSION 3.10.12` 没生效）——
+  这一行蓝图到底同步不同步，**推送后必须现读 `scheduler_running` 定罪**，false 就得让老板在
+  控制台 Environment 页加一行（人话指引），不许拿"蓝图写了"当已生效。
+- `tests/unit/test_deployment_optimization.py`：新增 `test_render_yaml_web_turns_on_scheduler`
+  （键值对须在 web 段、cron 段不许有——cron 是一次性入口）；原 `test_render_yaml_defines_daily_cron_service`
+  的 docstring 同步改口径（两条路径并存、同日互斥）。
+
+③ **判据与变异**：本批 +1 条（`test_deployment_optimization.py` 现读 `grep -c '^def test_'` 加一）。
+变异 **M127**（web 段值拨回 false）`--only` CONTROL-GREEN ⇒ RED、退 0，回执
+`docs/迭代计划/run-20261014-scheduler-wiring/round98-only-M127.txt`；手工反证也做过
+（改 false ⇒ 该条当场 RED，还原 ⇒ 9 passed）。注册表现读「共 127 处变异，覆盖 24 个用例文件」。
+⚠ 第 94 批那 7 条仍欠注册（旧账照登记）。
+
+④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二 pytest；
+日志 `data/_review_tmp/r98-unit.log`/`r98b-full.log`）**：`pytest tests/unit -q` →
+**1425 passed / 0 failed / 0 skipped**（690.89s，退 **0**）；`pytest tests/ -q` →
+**1434 passed / 0 failed / 0 skipped**（681.72s，退 **0**）。与上一基线 1408/1417 差 **+17/+17**，
+逐字闭合：+1 是本批新判据；+16 是**环境口径变化**——那 16 条 `本机没有 node` 跳过的前端用例
+（`test_frontend_fund_update/cold_start` 等，skipif 见现读）在本会话 Git Bash 里 node v24.14.0
+可用，全部真跑且通过，所以 skipped 归零。**引用本批数字时须带这句**，否则下一轮会把
+"skipped 消失"误判成测试被删。`python scripts/audit_doc_claims.py` → 退 **0**（条数 8、数据源 4 行）。
+
+⑤ **生产端**：本批生产库只做过只读查询与两个 GET（写动作留给部署后的调度器自己）。
+Render Cron `daily` 是否真在跑**仍 UNMEASURED**。
+
+（上一批：2026-10-14 **15:3x–15:5x（北京）**，**第 97 批：常驻调度器第一次真的接上电**
 （老板问：「待验证观点会自动验证，但基金不会自动更新，验证结果会不会不严谨？能不能验证前自动更新基金」
 —— 探索当场量清：老板的两层担心一层是虚惊、一层是真故障）：
 

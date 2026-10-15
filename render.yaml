@@ -18,6 +18,14 @@ services:
         value: "/tmp/rustup"
       - key: CRAWLER_ENABLED
         value: "true"
+      # 常驻调度器（第 98 批，2026-10-15 老板改口「我要求基金也自动更新」⇒ 推翻
+      # 2026-09-29「不加定时任务」的生产决定）。作用见 src/tasks/scheduler.py：
+      # 实例每次唤醒/部署起手先追赶「基金更新 → 验证」（当天跑过就零发包，
+      # 执行日持久化在 system_config），10:00/15:30 北京时间窗口实例醒着时照跑。
+      # 02:00 清理是 no-op（HARD_DELETE_DISABLED），11:00 观点汇总仍被
+      # VIEWPOINT_AUTO_SUMMARY_ENABLED 默认关挡住，不会多删数据或多打接口。
+      - key: SCHEDULER_ENABLED
+        value: "true"
       - key: APP_ENV
         value: production
       - key: DB_POOL_SIZE

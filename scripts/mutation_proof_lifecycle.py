@@ -95,6 +95,9 @@ SECTOR_TESTS = 'tests/unit/test_advice_sector_gate.py'
 SCHED = 'src/tasks/scheduler.py'
 MAIN = 'src/api/main.py'
 SCHED_TESTS = 'tests/unit/test_scheduler_autostart.py'
+# 第 98 批（2026-10-15 老板改口：生产 web 蓝图显式开 SCHEDULER_ENABLED）
+RENDER = 'render.yaml'
+DEPLOY_TESTS = 'tests/unit/test_deployment_optimization.py'
 
 MUTATIONS = [
     # label, 文件, 锚点, 改成什么, 用例文件, 用例名
@@ -883,6 +886,14 @@ MUTATIONS = [
      '                row.config_value = day.isoformat()\n'
      '            db.rollback()',
      SCHED_TESTS, 'test_mark_and_load_roundtrip_survives_a_new_instance'),
+    # ---- 第 98 批（2026-10-15 老板改口，生产蓝图显式开调度器）----
+    # M127 生产蓝图把开关拨回 false：网页版基金自动更新这一承诺从部署配置里消失。
+    ('M127_production_web_switches_scheduler_off', RENDER,
+     '      - key: SCHEDULER_ENABLED\n'
+     '        value: "true"',
+     '      - key: SCHEDULER_ENABLED\n'
+     '        value: "false"',
+     DEPLOY_TESTS, 'test_render_yaml_web_turns_on_scheduler'),
 ]
 
 
