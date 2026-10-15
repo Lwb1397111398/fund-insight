@@ -24,6 +24,9 @@ services:
       # 执行日持久化在 system_config），10:00/15:30 北京时间窗口实例醒着时照跑。
       # 02:00 清理是 no-op（HARD_DELETE_DISABLED），11:00 观点汇总仍被
       # VIEWPOINT_AUTO_SUMMARY_ENABLED 默认关挡住，不会多删数据或多打接口。
+      # ⚠ 这一行只是"重新创建服务时的意图声明"：实测仪表盘不跟蓝图同步 envVars
+      # （PYTHON_VERSION 先例 + 本行部署后 app_env 仍报 development），真正兑现生产
+      # 自动更新的是 `src/core/config.py` 里 SCHEDULER_ENABLED 的**缺省值 true**。
       - key: SCHEDULER_ENABLED
         value: "true"
       - key: APP_ENV

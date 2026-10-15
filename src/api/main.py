@@ -172,8 +172,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"[Startup] 爬虫模块: {'已启用' if config.CRAWLER_ENABLED else '已禁用'}")
 
     # 常驻调度器接线（第 97 批）：`start_scheduler()` 以前在全仓没有任何调用点，
-    # 「本地常驻调度器」只是文档里的承诺。现在按 `SCHEDULER_ENABLED` 开关启停 ——
-    # 默认关（生产维持 2026-09-29「不加定时任务」的决定），本地 .env 设 true。
+    # 「本地常驻调度器」只是文档里的承诺。第 98 批（2026-10-15 老板改口「我要求基金
+    # 也自动更新」）后开关**缺省开**——生产 Render 仪表盘不跟蓝图同步 envVars，
+    # 缺省值是唯一能兑现的机制；要关必须显式 `SCHEDULER_ENABLED=false`。
     scheduler_started = False
     if getattr(config, "SCHEDULER_ENABLED", False):
         try:
@@ -185,7 +186,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("[Startup] 常驻调度器启动失败: %s", e)
     else:
-        logger.info("[Startup] 常驻调度器: 未启用（SCHEDULER_ENABLED=false，默认）")
+        logger.info("[Startup] 常驻调度器: 未启用（SCHEDULER_ENABLED=false 显式关闭）")
 
     yield
 

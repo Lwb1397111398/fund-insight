@@ -303,9 +303,9 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 
 ## 当前测试基线
 
-最近一次核对（2026-10-15 **15:0x–15:3x（北京）**，**第 98 批：生产蓝图显式开启调度器——网页版基金自动更新**
+最近一次核对（2026-10-15 **15:0x–16:3x（北京）**，**第 98 批：调度器缺省翻成开——网页版基金自动更新**
 （老板反馈：「网页版昨天没有自动更新呀，验证会自动验证，我要求基金也自动更新，投资建议生成时能有最新数据」
-—— 当场实测归因 + 改配置，`src/` 一字未动）：
+—— 当场实测归因 + 两步改动，`src/` 1 处缺省 + `render.yaml` + 探针文档）：
 
 ① **实测归因（不是推的）**：`GET /api/health/detail` 现读 `git_commit=25ba28c3b1fc`（第 97 批
 **已推送且已部署**，started_at 10-15 14:49 北京）但 **`scheduler_running:false`** ⇒ 生产"昨天没自动
@@ -315,32 +315,46 @@ src/models/database.py  SQLAlchemy ORM，SQLite/PostgreSQL 共用
 10-15 06:55 UTC=北京 14:55 的 predictions 批次即其形状）推到最新；老板看到的"验证自动、基金不自动"
 是**补跑触发之前**那一截的状态。生产 `system_config` 现读 `scheduler.last_*` 零行 ⇒ 调度器在生产从未起过。
 
-② **改的两处**：
-- `render.yaml` web 服务 envVars 显式加 `SCHEDULER_ENABLED: "true"`（注释写明老板改口与被推翻的
-  09-29 决定）。效果：生产实例每次唤醒/部署，lifespan 起调度线程并**追赶**当天没做完的
-  「基金更新 → 验证」；执行日持久化在 `system_config`，与开页补跑/Cron 同日互不重复。
-  02:00 清理仍 no-op（`HARD_DELETE_DISABLED`）、11:00 汇总仍默认关——开调度器不引入新删除/新抓取。
-  ⚠ **未决**：Render 服务是手动建的、仪表盘会盖蓝图（先例：`PYTHON_VERSION 3.10.12` 没生效）——
-  这一行蓝图到底同步不同步，**推送后必须现读 `scheduler_running` 定罪**，false 就得让老板在
-  控制台 Environment 页加一行（人话指引），不许拿"蓝图写了"当已生效。
-- `tests/unit/test_deployment_optimization.py`：新增 `test_render_yaml_web_turns_on_scheduler`
-  （键值对须在 web 段、cron 段不许有——cron 是一次性入口）；原 `test_render_yaml_defines_daily_cron_service`
-  的 docstring 同步改口径（两条路径并存、同日互斥）。
+② **改的层（两步：第一步不生效，第二步才是机制）**：
+- `render.yaml` web 服务 envVars 加 `SCHEDULER_ENABLED: "true"`（注释写明老板改口与被推翻的
+  09-29 决定）。推送部署后**现场定罪：没生效** —— 新构建 `git_commit=9f8e1db` 起来了，
+  `app_env` 却仍报 `development`（蓝图明明写 production）、`scheduler_running:false`
+  ⇒ 仪表盘 envVars 不跟蓝图同步（与 `PYTHON_VERSION 3.10.12 不生效`同一族先例）。
+  该行保留，只作"重建服务时的意图声明"，判据仍钉着。
+- **真正的兑现**：`src/core/config.py` 的 `SCHEDULER_ENABLED` **缺省翻成 true**——生产拿不到
+  任何显式设置，缺省值就是生产行为。要关必须显式 false：`tests/conftest.py`（钉库块）与
+  `scripts/serve_mirror.py`（探针）此前已显式钉 false（第 97 批），不受影响；本地 `.env` true 不变。
+  同步改口径：main.py lifespan 注释、`.env.example` 文档、serve_mirror 注释。
+  效果：Render 实例每次冷启动/唤醒，lifespan 起调度线程并**追赶**当天没做完的「更新 → 验证」，
+  执行日持久化在 `system_config`，与开页补跑/Cron 同日互不重复。02:00 清理仍 no-op、
+  11:00 汇总仍默认关——不引入新删除/新抓取。**调度线程只在 web lifespan 起**：Cron 入口
+  不经 lifespan（全仓调用点现读钉死），缺省翻开不会让 Cron/一次性脚本误起线程。
 
-③ **判据与变异**：本批 +1 条（`test_deployment_optimization.py` 现读 `grep -c '^def test_'` 加一）。
-变异 **M127**（web 段值拨回 false）`--only` CONTROL-GREEN ⇒ RED、退 0，回执
-`docs/迭代计划/run-20261014-scheduler-wiring/round98-only-M127.txt`；手工反证也做过
-（改 false ⇒ 该条当场 RED，还原 ⇒ 9 passed）。注册表现读「共 127 处变异，覆盖 24 个用例文件」。
-⚠ 第 94 批那 7 条仍欠注册（旧账照登记）。
+③ **判据与变异**：本批 +2 条——`test_deployment_optimization.py` 新增
+`test_render_yaml_web_turns_on_scheduler`（键在 web 段、cron 段不许有）；
+`test_scheduler_autostart.py` 原"默认关"用例**改名** `test_explicit_false_app_startup_does_not_start_scheduler`
+（语义随缺省翻转）并**新增** `test_env_unset_defaults_to_on`（没设 ⇒ 缺省开）。
+该新用例当场踩过两个坑并写进注释：① `import src.core.config` 拿到的是 `src/core/__init__`
+`from .config import config` **重绑后的实例**（属性遮蔽子模块），reload 得走 `sys.modules`，
+否则 `TypeError: reload() argument must be a module`；② `config.py` 顶层跑 `load_dotenv()`，
+本机 `.env` 写着 true——不按住 `dotenv.load_dotenv` 的"缺省测验"实际测的是 `.env`，
+变异会被托住打不红（M128 实测拨回 false ⇒ 确实 RED，证明按住生效）。
+变异 **M127**（render.yaml 值拨回 false）与 **M128**（config 缺省拨回 false）逐条 `--only`
+CONTROL-GREEN ⇒ RED、退 0；**M123** 判据名随改名同步更新引用并重跑（CONTROL-GREEN ⇒ RED、
+退 0）。回执 `docs/迭代计划/run-20261014-scheduler-wiring/round98*only-M12*.txt`。
+注册表现读「共 128 处变异，覆盖 24 个用例文件」。⚠ 第 94 批那 7 条仍欠注册（旧账照登记）。
 
 ④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二 pytest；
-日志 `data/_review_tmp/r98-unit.log`/`r98b-full.log`）**：`pytest tests/unit -q` →
-**1425 passed / 0 failed / 0 skipped**（690.89s，退 **0**）；`pytest tests/ -q` →
-**1434 passed / 0 failed / 0 skipped**（681.72s，退 **0**）。与上一基线 1408/1417 差 **+17/+17**，
-逐字闭合：+1 是本批新判据；+16 是**环境口径变化**——那 16 条 `本机没有 node` 跳过的前端用例
-（`test_frontend_fund_update/cold_start` 等，skipif 见现读）在本会话 Git Bash 里 node v24.14.0
-可用，全部真跑且通过，所以 skipped 归零。**引用本批数字时须带这句**，否则下一轮会把
-"skipped 消失"误判成测试被删。`python scripts/audit_doc_claims.py` → 退 **0**（条数 8、数据源 4 行）。
+最终日志 `data/_review_tmp/r98d-unit.log`/`r98d-full.log`）**：`pytest tests/unit -q` →
+**1426 passed / 0 failed / 0 skipped**（581.21s，退 **0**）；`pytest tests/ -q` →
+**1435 passed / 0 failed / 0 skipped**（525.45s，退 **0**）。与上一基线 1408/1417 差 **+18/+18**，
+逐字闭合：+2 是本批新判据（`test_render_yaml_web_turns_on_scheduler` + `test_env_unset_defaults_to_on`）；
++16 是**环境口径变化**——那 16 条 `本机没有 node` 跳过的前端用例（`test_frontend_fund_update/cold_start`
+等，skipif 见现读）在本会话 Git Bash 里 node v24.14.0 可用，全部真跑且通过，所以 skipped 归零。
+**引用本批数字时须带这句**，否则下一轮会把"skipped 消失"误判成测试被删。
+⚠ 中途两轮的 `1 failed`（`test_doc_claims.py::test_the_repository_has_no_stale_doc_counts`）
+是**文档条数账自己漂了**——改文件用例数同时改了 AGENTS.md/总览那句当场账，审计逮住"文档写 10/2、
+当场 11"，把两处按现读改对后转绿。`python scripts/audit_doc_claims.py` → 退 **0**（条数 8、数据源 4 行）。
 
 ⑤ **生产端**：本批生产库只做过只读查询与两个 GET（写动作留给部署后的调度器自己）。
 Render Cron `daily` 是否真在跑**仍 UNMEASURED**。
@@ -383,11 +397,12 @@ Render Cron `daily` 是否真在跑**仍 UNMEASURED**。
 - `serve_mirror.py` 双钉（环境变量 + 已加载的 config 实例）false；本地 `.env` 设 true ⇒
   老板开应用即自动「补做当天没完成的更新+验证」，窗口 02:00/10:00/11:00/15:30 照旧。
 
-③ **判据**：新文件 `tests/unit/test_scheduler_autostart.py` **10 条**
-（`grep -c '^def test_'` 现读）。变异 **M123~M126** 四处（开关失灵恒自启 / 更新不再先于验证 /
+③ **判据**：新文件 `tests/unit/test_scheduler_autostart.py` 现读 **11 条**
+（`grep -c '^def test_'`；第 97 批当场为 10 条，第 98 批把"默认关"用例改名"显式 false ⇒ 不起"
+并新增"没设 ⇒ 缺省开"，净 +1）。变异 **M123~M126** 四处（开关失灵恒自启 / 更新不再先于验证 /
 追赶不看日期 / 状态不提交库）逐条 `--only` 都 CONTROL-GREEN ⇒ RED、退 0，回执
 `docs/迭代计划/run-20261014-scheduler-wiring/round97-only-M12*.txt`。注册表现读
-「共 126 处变异，覆盖 23 个用例文件」。⚠ 第 94 批那 7 条仍欠注册（旧欠账照登记）。
+「共 128 处变异，覆盖 24 个用例文件」。⚠ 第 94 批那 7 条仍欠注册（旧欠账照登记）。
 
 ④ **两个口径（串行、默认 locale cp936、子进程显式 `PYTHONIOENCODING=utf-8`、期间无第二 pytest；
 日志 `data/_review_tmp/r97c-unit.log`/`r97c-full.log`）**：`pytest tests/unit -q` →

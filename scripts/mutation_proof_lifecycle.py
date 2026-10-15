@@ -97,6 +97,7 @@ MAIN = 'src/api/main.py'
 SCHED_TESTS = 'tests/unit/test_scheduler_autostart.py'
 # 第 98 批（2026-10-15 老板改口：生产 web 蓝图显式开 SCHEDULER_ENABLED）
 RENDER = 'render.yaml'
+CONFIG_PY = 'src/core/config.py'
 DEPLOY_TESTS = 'tests/unit/test_deployment_optimization.py'
 
 MUTATIONS = [
@@ -854,7 +855,7 @@ MUTATIONS = [
      '            pass\n',
      SECTOR_TESTS, 'test_attach_sector_targets_carries_own_state'),
     # ---- 第 97 批（2026-10-14 调度器接线 + 执行日持久化 + 启动追赶）----
-    # M123 开关失灵恒自启：默认关（生产口径）的判定被绕过 ⇒ 测试/生产一起中招。
+    # M123 开关失灵恒自启：显式 false 的关闭通道被绕过 ⇒ 测试/镜像探针环境一起中招。
     ('M123_switch_ignored_always_starts', MAIN,
      '    if getattr(config, "SCHEDULER_ENABLED", False):\n'
      '        try:\n'
@@ -862,7 +863,7 @@ MUTATIONS = [
      '    if True:\n'
      '        try:\n'
      '            from src.tasks.scheduler import start_scheduler',
-     SCHED_TESTS, 'test_default_off_app_startup_does_not_start_scheduler'),
+     SCHED_TESTS, 'test_explicit_false_app_startup_does_not_start_scheduler'),
     # M124 验证不再排在更新之后：老板点名要的那条顺序（更新→验证）摘掉。
     ('M124_verify_no_longer_follows_update', SCHED,
      '        if need_verify:\n'
@@ -894,6 +895,12 @@ MUTATIONS = [
      '      - key: SCHEDULER_ENABLED\n'
      '        value: "false"',
      DEPLOY_TESTS, 'test_render_yaml_web_turns_on_scheduler'),
+    # M128 缺省值拨回关：Render 仪表盘不跟蓝图同步 ⇒ 生产实例拿不到显式 true，
+    # 网页版基金自动更新再次落空（第 98 批老板抱怨的病灶正身）。
+    ('M128_scheduler_default_flipped_back_off', CONFIG_PY,
+     'os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"',
+     'os.getenv("SCHEDULER_ENABLED", "false").lower() == "true"',
+     SCHED_TESTS, 'test_env_unset_defaults_to_on'),
 ]
 
 

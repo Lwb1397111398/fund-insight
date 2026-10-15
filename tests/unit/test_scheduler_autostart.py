@@ -149,8 +149,9 @@ def test_state_read_failure_does_not_kill_the_scheduler(monkeypatch):
 
 # ---------------------------------------------------------------- 接线开关
 
-def test_default_off_app_startup_does_not_start_scheduler(monkeypatch):
-    """默认（SCHEDULER_ENABLED=false，生产/测试口径）⇒ lifespan 一个调度线程都不起。"""
+def test_explicit_false_app_startup_does_not_start_scheduler(monkeypatch):
+    """显式 `SCHEDULER_ENABLED=false`（conftest/serve_mirror 钉的就是这一档）
+    ⇒ lifespan 一个调度线程都不起。第 98 批起「关」必须显式写，缺省是开。"""
     from fastapi.testclient import TestClient
     import src.tasks.scheduler as sched_mod
     from src.api import main as api_main
@@ -162,6 +163,36 @@ def test_default_off_app_startup_does_not_start_scheduler(monkeypatch):
     with TestClient(api_main.app):
         pass
     assert rec == []
+
+
+def test_env_unset_defaults_to_on(monkeypatch):
+    """环境变量**没设** ⇒ 缺省开。第 98 批（2026-10-15）实测 Render 仪表盘不跟蓝图同步
+    envVars（部署了 render.yaml 的键，`app_env` 仍报 development、`scheduler_running`
+    仍 false）⇒ 网页版生产拿不到任何显式设置，"老板要求基金自动更新"只能由缺省值兑现。
+    想关的环境（测试、镜像探针、任何新部署）必须显式写 false。
+
+    两格防坑（都在本文件的当场失败里学过）：
+    ① `import src.core.config` 拿到的是 `src/core/__init__.py` 里被
+       `from .config import config` **重绑后的实例**（属性遮蔽了子模块），
+       拿模块必须走 `sys.modules`，否则 reload 报 TypeError；
+    ② `src/core/config.py` 的模块顶层会跑 `load_dotenv()` —— 本机 `.env` 写着
+       SCHEDULER_ENABLED=true，不把它按住的"reload 后缺省"测的是 **.env 而不是缺省值**
+       ⇒ 变异（缺省拨回 false）会被 .env 托住打不红。故先 monkeypatch 掉 load_dotenv。
+    """
+    import importlib
+    import os
+    import sys
+
+    cfg_mod = sys.modules['src.core.config']
+    monkeypatch.setattr('dotenv.load_dotenv', lambda *a, **k: None)
+    saved = os.environ.pop('SCHEDULER_ENABLED', None)
+    try:
+        importlib.reload(cfg_mod)
+        assert cfg_mod.config.SCHEDULER_ENABLED is True
+    finally:
+        if saved is not None:
+            os.environ['SCHEDULER_ENABLED'] = saved
+        importlib.reload(cfg_mod)   # 还原本模块对环境的读法，别污染后面的用例
 
 
 def test_switch_on_app_startup_starts_and_stops_scheduler(monkeypatch):

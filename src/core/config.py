@@ -138,9 +138,12 @@ class Config:
     CRAWLER_TIMEOUT = int(os.getenv("CRAWLER_TIMEOUT", "10"))
 
     # 常驻后台调度器总开关（基金更新 / 预测验证 / 清理 / 观点汇总窗口）。
-    # 默认关：生产（Render）遵守 2026-09-29「不加定时任务」的决定，行为一字不变；
-    # 本地把 .env 设成 true ⇒ 应用一开就补做当日没完成的「基金更新 → 验证」。
-    SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "false").lower() == "true"
+    # **缺省开**（第 98 批 2026-10-15 下午改的）：老板要求网页版基金自动更新，而当场实测
+    # 发现 Render 仪表盘不跟蓝图同步 envVars（deployed 了 render.yaml 的键，`app_env`
+    # 仍报 development、`scheduler_running` 仍 false）⇒ 蓝图声明够不到生产，缺省值就是
+    # 生产的实际行为。想关的环境（测试 conftest、serve_mirror 探针、任何新部署）
+    # 显式写 `SCHEDULER_ENABLED=false`。
+    SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
 
     FUND_API_TIMEOUT = int(os.getenv("FUND_API_TIMEOUT", "10"))
     FUND_API_MAX_RETRIES = int(os.getenv("FUND_API_MAX_RETRIES", "3"))
